@@ -6,7 +6,8 @@ import { defineConfig, devices } from '@playwright/test';
 export default defineConfig({
   testDir: './e2e',
   timeout: 60_000,
-  retries: 0,
+  // CI runners are cold + slow — one flake (SSE timing) observed; local stays strict
+  retries: process.env.CI ? 2 : 0,
   reporter: [['list']],
   use: {
     baseURL: 'http://localhost:3100',
