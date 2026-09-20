@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach } from
 import request from 'supertest';
 import nock from 'nock';
 import { createTestDb, seedAgent, type TestDb } from '../helpers/db.js';
-import { buildTestApp, UPSTREAM, type TestApp } from '../helpers/app.js';
+import { buildTestApp, TEST_KEK, UPSTREAM, type TestApp } from '../helpers/app.js';
 import { generateGatewayToken, hashTokenSecret } from '../../src/crypto/token.js';
 import { listTraces, verifyAgentChain } from '../../src/trace/trace-store.js';
 
@@ -51,6 +51,38 @@ afterAll(async () => {
 });
 
 const CHAT = { model: 'test-model', messages: [{ role: 'user', content: 'should I top up?' }] };
+
+describe('surface split (M-01)', () => {
+  it('the owner app does NOT serve /v1/chat/completions — gateway is loopback-only', async () => {
+    const a = await seedWithToken();
+    const res = await request(t.ownerApp)
+      .post('/v1/chat/completions')
+      .set('authorization', `Bearer ${a.token}`)
+      .send(CHAT);
+    expect(res.status).toBe(404);
+  });
+
+  it('the gateway app serves /v1/chat/completions and nothing else', async () => {
+    const a = await seedWithToken();
+    nock(UPSTREAM).post('/v1/chat/completions').reply(200, COMPLETION);
+    const chat = await request(t.gatewayApp)
+      .post('/v1/chat/completions')
+      .set('authorization', `Bearer ${a.token}`)
+      .send(CHAT);
+    expect(chat.status).toBe(200);
+    const owner = await request(t.gatewayApp).get(`/api/agents/${a.id}`).set('authorization', 'Bearer owner:0x' + 'a1'.repeat(20));
+    expect(owner.status).toBe(404);
+    const health = await request(t.gatewayApp).get('/healthz');
+    expect(health.status).toBe(404);
+  });
+
+  it('the owner app keeps healthz + owner routes', async () => {
+    const health = await request(t.ownerApp).get('/healthz');
+    expect(health.status).toBe(200);
+    const unauthed = await request(t.ownerApp).get('/api/agents/x');
+    expect(unauthed.status).toBe(401); // route exists; Privy auth rejects
+  });
+});
 
 describe('gateway auth', () => {
   it('401 without a token', async () => {
@@ -202,10 +234,42 @@ describe('gateway interception', () => {
     const kinds = traces.map((r) => r.kind);
     expect(kinds.indexOf('consent')).toBeGreaterThanOrEqual(0);
     expect(kinds.indexOf('consent')).toBeLessThan(kinds.indexOf('inference'));
+    // single-append semantics: the decision path appends, the held path does NOT
+    expect(traces.filter((r) => r.kind === 'consent')).toHaveLength(1);
     const consent = traces.find((r) => r.kind === 'consent');
     expect(consent?.decision).toBe('approve');
     expect(consent?.decidedBy).toBe('owner');
     expect(consent?.approvalId).toBe(approvalId);
+  });
+
+  it('approval timeout: 408, row transitions pending → expired, consent trace with decision expired', async () => {
+    const short = buildTestApp(db.pool, {
+      settings: {
+        keyEncryptionSecret: TEST_KEK,
+        approvalTimeoutMs: 300,
+        sessionGasDustWei: 10n ** 15n,
+        defaultTimelockDelay: 900,
+        storageIndexerUrl: 'https://indexer.leash-test.local',
+      },
+    });
+    const a = await seedWithToken({ rules: [{ action: 'require_approval', match: 'topped up' }] });
+    const scope = nock(UPSTREAM).post('/v1/chat/completions').reply(200, COMPLETION);
+
+    const res = await request(short.app)
+      .post('/v1/chat/completions')
+      .set('authorization', `Bearer ${a.token}`)
+      .send({ model: 'm', messages: [{ role: 'user', content: 'keep bob topped up' }] });
+    expect(res.status).toBe(408);
+    expect(scope.isDone()).toBe(false);
+
+    const row = await db.pool.query<{ state: string }>(`SELECT state FROM approvals WHERE agent_id = $1`, [a.id]);
+    expect(row.rows[0]?.state).toBe('expired');
+    const traces = await listTraces(db.pool, a.id);
+    const consents = traces.filter((r) => r.kind === 'consent');
+    expect(consents).toHaveLength(1);
+    expect(consents[0]?.decision).toBe('expired');
+    expect(consents[0]?.decidedBy).toBe('system');
+    expect((await verifyAgentChain(db.pool, a.id)).ok).toBe(true);
   });
 
   it('require-approval + deny: 403, upstream never called, consent traced with deny', async () => {
@@ -249,7 +313,7 @@ describe('gateway interception', () => {
     expect(res.status).toBe(200);
   });
 
-  it('upstream persistent failure returns a generic 502 without upstream detail', async () => {
+  it('upstream persistent failure returns a generic 502 without upstream detail — and traces the failure', async () => {
     const a = await seedWithToken();
     nock(UPSTREAM).post('/v1/chat/completions').times(3).reply(500, { secret: 'internal provider detail' });
     const res = await request(t.app)
@@ -258,6 +322,27 @@ describe('gateway interception', () => {
       .send(CHAT);
     expect(res.status).toBe(502);
     expect(JSON.stringify(res.body)).not.toContain('internal provider detail');
+    const traces = await listTraces(db.pool, a.id);
+    const err = traces.find((r) => r.kind === 'error');
+    expect(err).toBeDefined();
+    expect(err?.originalRequest).toEqual(CHAT);
+    expect(err?.detail).toEqual({ status: 502, reason: 'upstream degraded after retries', upstreamStatus: 500 });
+  });
+
+  it('enqueue-level failure (network errors exhaust retries): 502 with an error trace', async () => {
+    const a = await seedWithToken();
+    nock(UPSTREAM).post('/v1/chat/completions').times(3).replyWithError('connection reset');
+    const res = await request(t.app)
+      .post('/v1/chat/completions')
+      .set('authorization', `Bearer ${a.token}`)
+      .send(CHAT);
+    expect(res.status).toBe(502);
+    const traces = await listTraces(db.pool, a.id);
+    const err = traces.find((r) => r.kind === 'error');
+    expect(err).toBeDefined();
+    expect(err?.originalRequest).toEqual(CHAT);
+    expect(err?.detail).toEqual({ status: 502, reason: 'compute forward failed' });
+    expect((await verifyAgentChain(db.pool, a.id)).ok).toBe(true);
   });
 
   it('rejects unknown gateway paths (exact routing)', async () => {

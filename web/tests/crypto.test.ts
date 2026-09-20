@@ -9,6 +9,7 @@ import {
   decryptBlob,
   encryptWithPassphrase,
   encryptWithSignature,
+  kekSignMessage,
   parseBlob,
   probeDeterministicSignature,
   serializeBlob,
@@ -42,9 +43,27 @@ describe('KEK', () => {
   });
 
   it('determinism guard: deterministic wallet passes, non-deterministic returns null', async () => {
-    expect(await probeDeterministicSignature(async () => SIG)).toBe(SIG);
+    const message = kekSignMessage('0xAbCd000000000000000000000000000000000001', 16602);
+    const seen: string[] = [];
+    expect(
+      await probeDeterministicSignature(async (m) => {
+        seen.push(m);
+        return SIG;
+      }, message),
+    ).toBe(SIG);
+    expect(seen).toEqual([message, message]);
     let i = 0;
-    expect(await probeDeterministicSignature(async () => `0xsig${i++}`)).toBeNull();
+    expect(await probeDeterministicSignature(async () => `0xsig${i++}`, message)).toBeNull();
+  });
+
+  it('sign message is bound to owner address (lowercased) and chain id (M-01)', () => {
+    const msg = kekSignMessage('0xAbCd000000000000000000000000000000000001', 16602);
+    expect(msg).toContain('LEASH audit key v2');
+    expect(msg).toContain('owner: 0xabcd000000000000000000000000000000000001');
+    expect(msg).toContain('chain: 16602');
+    // Different owner or chain ⇒ different message ⇒ different derived KEK.
+    expect(kekSignMessage('0xAbCd000000000000000000000000000000000002', 16602)).not.toBe(msg);
+    expect(kekSignMessage('0xAbCd000000000000000000000000000000000001', 1)).not.toBe(msg);
   });
 });
 

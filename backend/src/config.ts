@@ -15,6 +15,9 @@ const envSchema = z.object({
   LEASH_FACTORY_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
   PORT: z.coerce.number().int().positive().default(8080),
   HOST: z.string().min(1).default('127.0.0.1'), // M-01 dev bind; Render sets 0.0.0.0
+  // M-01: the gateway listens on its OWN server, always bound to 127.0.0.1 —
+  // it must never share the public HOST:PORT surface.
+  GATEWAY_PORT: z.coerce.number().int().positive().default(8081),
   COMPUTE_BASE_URL: z.string().url().default('https://router-api.0g.ai/v1'),
   APPROVAL_TIMEOUT_MS: z.coerce.number().int().positive().default(180_000),
   SESSION_GAS_DUST_WEI: z.string().regex(/^\d{1,30}$/).default('2000000000000000'), // 0.002 0G

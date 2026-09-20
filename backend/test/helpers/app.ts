@@ -1,6 +1,13 @@
 import type { Pool } from 'pg';
 import type { Express } from 'express';
-import { createApp, type AppDeps, type ChainOps, type RuntimeManager } from '../../src/server.js';
+import {
+  createApp,
+  createOwnerApp,
+  createGatewayApp,
+  type AppDeps,
+  type ChainOps,
+  type RuntimeManager,
+} from '../../src/server.js';
 import { ComputeQueue } from '../../src/gateway/compute-queue.js';
 import { SseHub } from '../../src/sse/hub.js';
 import { ApprovalBroker } from '../../src/approvals/broker.js';
@@ -96,7 +103,12 @@ export class FakeRuntime implements RuntimeManager {
 }
 
 export interface TestApp {
+  /** Both surfaces on one app — in-process convenience mirroring the split. */
   app: Express;
+  /** Public surface only (owner API + SSE + healthz) — what HOST:PORT serves. */
+  ownerApp: Express;
+  /** Gateway surface only — what 127.0.0.1:GATEWAY_PORT serves. */
+  gatewayApp: Express;
   hub: SseHub;
   broker: ApprovalBroker;
   chain: FakeChainOps;
@@ -126,5 +138,14 @@ export function buildTestApp(pool: Pool, overrides: Partial<AppDeps> = {}): Test
     },
     ...overrides,
   };
-  return { app: createApp(deps), hub, broker, chain, runtime, deps };
+  return {
+    app: createApp(deps),
+    ownerApp: createOwnerApp(deps),
+    gatewayApp: createGatewayApp(deps),
+    hub,
+    broker,
+    chain,
+    runtime,
+    deps,
+  };
 }

@@ -5,12 +5,16 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 
 /// @title LeashAccount — self-enforcing constrained account for one LEASH agent.
 /// @notice The agent holds only a session key; every spend is checked in-contract:
-///         per-transfer cap, rolling window cap, expiry, allowlist default-deny,
-///         native transfers only (Phase 1: `data.length == 0`). Owner is sole policy
-///         authority; the guardian can only revoke (refuse), never move funds or
-///         change policy. Loosening changes are timelocked; tightening is instant.
-/// @dev    Timelock queues are single-pending slots: a new propose OVERWRITES the
-///         pending item and resets its eta.
+///         per-transfer cap, fixed (tumbling) window cap, expiry, allowlist
+///         default-deny, native transfers only (Phase 1: `data.length == 0`). Owner
+///         is sole policy authority; the guardian can only revoke (refuse), never
+///         move funds or change policy. Loosening changes are timelocked;
+///         tightening is instant.
+/// @dev    The spend window is FIXED (tumbling), not rolling: the counter resets via
+///         lazy rollover on the first spend past the boundary, so the worst-case
+///         burst across a window boundary is <=2x windowCap. Timelock queues are
+///         single-pending slots: a new propose OVERWRITES the pending item and
+///         resets its eta; `revoke()` and `tightenPolicy()` clear ALL pending slots.
 contract LeashAccount is ReentrancyGuard {
     struct Policy {
         uint128 perTransferCap;
@@ -118,7 +122,8 @@ contract LeashAccount is ReentrancyGuard {
         if (data.length != 0) revert CalldataForbidden();
         if (value > p.perTransferCap) revert OverPerTransferCap(value, p.perTransferCap);
 
-        // lazy window rollover
+        // lazy rollover of the FIXED (tumbling) window: first spend past the boundary
+        // resets the counter, so a burst across a boundary can reach <=2x windowCap
         uint64 start = windowStart;
         if (block.timestamp >= uint256(start) + p.windowSeconds) {
             windowStart = uint64(block.timestamp);
@@ -137,9 +142,22 @@ contract LeashAccount is ReentrancyGuard {
 
     // ---------- revoke / re-arm ----------
 
+    /// @dev Clears every pending timelock slot (L-05) so no matured loosening,
+    ///      allowlist addition, or withdraw stays armed after the state change.
+    function _clearPendingTimelocks() internal {
+        delete pendingPolicy;
+        pendingPolicyEta = 0;
+        pendingAllowlistAddr = address(0);
+        pendingAllowlistEta = 0;
+        pendingWithdrawTo = address(0);
+        pendingWithdrawAmount = 0;
+        pendingWithdrawEta = 0;
+    }
+
     function revoke() external {
         if (msg.sender != owner && msg.sender != guardian) revert NotGuardianOrOwner();
         revoked = true;
+        _clearPendingTimelocks();
         emit Revoked(msg.sender);
     }
 
@@ -173,10 +191,13 @@ contract LeashAccount is ReentrancyGuard {
             || p.windowSeconds < cur.windowSeconds || p.expiresAt > cur.expiresAt;
     }
 
+    /// @dev Also clears ALL pending timelock slots: a tightening owner must not
+    ///      leave a matured loosening (or allowlist add / withdraw) armed.
     function tightenPolicy(Policy calldata p) external onlyOwner {
         if (p.windowSeconds == 0) revert InvalidPolicy();
         if (_isLoosening(p)) revert NotTightening();
         policy = p;
+        _clearPendingTimelocks();
         emit PolicyChanged(p);
     }
 

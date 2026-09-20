@@ -14,6 +14,7 @@ import { generateAuditKeypair, hexToBytes } from '@/lib/crypto/audit-key';
 import {
   encryptWithPassphrase,
   encryptWithSignature,
+  kekSignMessage,
   probeDeterministicSignature,
   serializeBlob,
   type EncryptedBlob,
@@ -44,12 +45,15 @@ export default function CreatePage() {
       // 1. Audit keypair, in-browser. Privkey never leaves this device unencrypted.
       const keypair = generateAuditKeypair();
 
-      // 2. KEK: deterministic wallet signature (derive twice + compare), else passphrase.
+      // 2. KEK: deterministic wallet signature over an owner+chain-bound message (derive
+      //    twice + compare), else passphrase.
       let blob: EncryptedBlob;
       if (passphrase) {
         blob = await encryptWithPassphrase(hexToBytes(keypair.privKeyHex), passphrase);
       } else {
-        const sig = await probeDeterministicSignature(wallet.signMessage);
+        if (!wallet.address) throw new Error('Connect your wallet first.');
+        const message = kekSignMessage(wallet.address, config.chainId);
+        const sig = await probeDeterministicSignature(wallet.signMessage, message);
         if (!sig) throw new PassphraseRequiredError();
         blob = await encryptWithSignature(hexToBytes(keypair.privKeyHex), sig);
       }
@@ -84,7 +88,7 @@ export default function CreatePage() {
           )),
       };
     },
-    [api, wallet.signMessage, setAgentId],
+    [api, wallet.address, wallet.signMessage, setAgentId],
   );
 
   // Fund-the-agent hooks for the done screen: a plain native transfer from the owner wallet

@@ -32,7 +32,6 @@ function agentDetail(state: MockState) {
       allowlist: [PAYEE],
     },
     accountBalance: state.accountBalanceWei ?? '250000000000000000',
-    computeBalance: '120000000000000000',
     sessionExpiry: Math.floor(Date.now() / 1000) + 7 * 86400,
     addresses: {
       account: '0x1111111111111111111111111111111111111111',
@@ -90,7 +89,7 @@ export async function installMockApi(page: Page, state: MockState): Promise<void
       return route.fulfill({ status: 200, contentType: 'text/event-stream', body: sseBody(state) });
     }
     if (method === 'GET' && /^\/api\/agents\/[^/]+\/traces/.test(path)) {
-      return json(200, { records: [] });
+      return json(200, { records: [], nextCursor: null, chainVerified: true });
     }
     if (method === 'GET' && /^\/api\/agents\/[^/]+\/audit$/.test(path)) {
       return json(200, []);
@@ -119,7 +118,7 @@ export async function installMockApi(page: Page, state: MockState): Promise<void
     if (method === 'POST' && /\/rotate$/.test(path)) {
       return json(200, { gatewayToken: 'gw_tok_rotated_xyz789' });
     }
-    return json(404, { error: `no mock for ${method} ${path}` });
+    return json(404, { error: { message: `no mock for ${method} ${path}` } });
   });
 }
 

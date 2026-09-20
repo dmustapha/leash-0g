@@ -188,6 +188,26 @@ contract LeashAccountTest is Test {
         vm.stopPrank();
     }
 
+    /// @dev DOCUMENTS accepted semantics (M-02): the window is FIXED (tumbling) with
+    ///      lazy rollover, not rolling. Spending windowCap right before a boundary and
+    ///      windowCap right after it is allowed — worst-case burst is 2x windowCap.
+    function test_execute_boundaryBurst_upToTwiceWindowCap_isAcceptedTumblingSemantics() public {
+        uint256 before = dest.balance;
+        vm.startPrank(session);
+        // fill the window cap at the end of the current window
+        acct.execute(dest, 1 ether, "");
+        acct.execute(dest, 1 ether, "");
+        acct.execute(dest, 1 ether, ""); // spentInWindow == WINDOW_CAP
+        // cross the boundary; lazy rollover resets the counter
+        vm.warp(block.timestamp + WINDOW_SECONDS);
+        acct.execute(dest, 1 ether, "");
+        acct.execute(dest, 1 ether, "");
+        acct.execute(dest, 1 ether, ""); // a second full WINDOW_CAP
+        vm.stopPrank();
+        assertEq(dest.balance, before + 2 * uint256(WINDOW_CAP)); // 2x cap across the boundary
+        assertEq(acct.spentInWindow(), WINDOW_CAP);
+    }
+
     function test_execute_revertsAfterRevoke() public {
         vm.prank(guardian);
         acct.revoke();
@@ -528,6 +548,90 @@ contract LeashAccountTest is Test {
         vm.prank(owner);
         acct.applyWithdraw();
         assertEq(payout.balance, 1 ether);
+    }
+
+    // ---------- L-05: revoke / tightenPolicy clear pending timelocks ----------
+
+    function _proposeAllThree() internal {
+        LeashAccount.Policy memory p = _policy();
+        p.perTransferCap = 2 ether; // loosening
+        vm.startPrank(owner);
+        acct.proposePolicy(p);
+        acct.proposeAllowlist(rando);
+        acct.proposeWithdraw(rando, 1 ether);
+        vm.stopPrank();
+    }
+
+    function test_revoke_clearsPendingPolicy() public {
+        _proposeAllThree();
+        vm.prank(guardian);
+        acct.revoke();
+        vm.warp(block.timestamp + DELAY);
+        vm.prank(owner);
+        vm.expectRevert(LeashAccount.NothingPending.selector);
+        acct.applyPolicy();
+    }
+
+    function test_revoke_clearsPendingAllowlist() public {
+        _proposeAllThree();
+        vm.prank(guardian);
+        acct.revoke();
+        vm.warp(block.timestamp + DELAY);
+        vm.prank(owner);
+        vm.expectRevert(LeashAccount.NothingPending.selector);
+        acct.applyAllowlist();
+        assertFalse(acct.allowlist(rando));
+    }
+
+    function test_revoke_clearsPendingWithdraw() public {
+        _proposeAllThree();
+        vm.prank(guardian);
+        acct.revoke();
+        vm.warp(block.timestamp + DELAY);
+        vm.prank(owner);
+        vm.expectRevert(LeashAccount.NothingPending.selector);
+        acct.applyWithdraw();
+        assertEq(rando.balance, 0);
+    }
+
+    function test_tightenPolicy_clearsPendingPolicy() public {
+        _proposeAllThree();
+        LeashAccount.Policy memory tighter = _policy();
+        tighter.perTransferCap = 0.5 ether;
+        vm.prank(owner);
+        acct.tightenPolicy(tighter);
+        vm.warp(block.timestamp + DELAY);
+        vm.prank(owner);
+        vm.expectRevert(LeashAccount.NothingPending.selector);
+        acct.applyPolicy();
+        (uint128 ptc,,,) = acct.policy();
+        assertEq(ptc, 0.5 ether); // matured loosening did NOT survive the tighten
+    }
+
+    function test_tightenPolicy_clearsPendingAllowlist() public {
+        _proposeAllThree();
+        LeashAccount.Policy memory tighter = _policy();
+        tighter.windowCap = 2 ether;
+        vm.prank(owner);
+        acct.tightenPolicy(tighter);
+        vm.warp(block.timestamp + DELAY);
+        vm.prank(owner);
+        vm.expectRevert(LeashAccount.NothingPending.selector);
+        acct.applyAllowlist();
+        assertFalse(acct.allowlist(rando));
+    }
+
+    function test_tightenPolicy_clearsPendingWithdraw() public {
+        _proposeAllThree();
+        LeashAccount.Policy memory tighter = _policy();
+        tighter.perTransferCap = 0.5 ether;
+        vm.prank(owner);
+        acct.tightenPolicy(tighter);
+        vm.warp(block.timestamp + DELAY);
+        vm.prank(owner);
+        vm.expectRevert(LeashAccount.NothingPending.selector);
+        acct.applyWithdraw();
+        assertEq(rando.balance, 0);
     }
 
     // ---------- fuzz ----------

@@ -61,7 +61,9 @@ export class ComputeQueue {
   }
 
   private async withSlot<T>(fn: () => Promise<T>): Promise<T> {
-    if (this.active >= this.opts.maxConcurrent) {
+    // Re-check after every wake: a newcomer can grab the freed slot before the
+    // woken waiter runs, so acquiring without re-checking would overshoot the cap.
+    while (this.active >= this.opts.maxConcurrent) {
       await new Promise<void>((resolve) => this.waiters.push(resolve));
     }
     this.active += 1;

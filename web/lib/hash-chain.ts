@@ -54,6 +54,35 @@ export function verifyChain(records: TraceRecord[], expectedPrev?: Hex): ChainRe
   return { ok: true, count: records.length };
 }
 
+/** Where a verified batch's chain is anchored: all the way from seq 0, or a mid-chain slice. */
+export type BatchChainResult =
+  | { ok: true; count: number; anchored: 'genesis' | 'slice' }
+  | Extract<ChainResult, { ok: false }>;
+
+/** Anchors left by previously verified batches, keyed by the next expected seq. */
+export type ChainAnchors = Map<number, { lastHash: Hex; fromGenesis: boolean }>;
+
+/**
+ * Verify one decrypted batch, threading expectedPrev across batches: the batch with
+ * seqFrom === 0 anchors at GENESIS_HASH (backend/src/crypto/hashchain.ts); later batches
+ * anchor at the previous batch's last record hash when that batch has been verified.
+ * On success the batch's own tail is recorded in `anchors` for the next batch.
+ */
+export function verifyBatch(
+  records: TraceRecord[],
+  seqFrom: number,
+  anchors: ChainAnchors,
+): BatchChainResult {
+  const anchor =
+    seqFrom === 0 ? { lastHash: GENESIS_HASH, fromGenesis: true } : anchors.get(seqFrom);
+  const result = verifyChain(records, anchor?.lastHash);
+  if (!result.ok) return result;
+  const fromGenesis = anchor?.fromGenesis ?? false;
+  const last = records[records.length - 1];
+  if (last) anchors.set(last.seq + 1, { lastHash: last.hash, fromGenesis });
+  return { ok: true, count: result.count, anchored: fromGenesis ? 'genesis' : 'slice' };
+}
+
 /** Parse a decrypted JSONL audit batch into records (skips blank lines). */
 export function parseJsonl(text: string): TraceRecord[] {
   return text

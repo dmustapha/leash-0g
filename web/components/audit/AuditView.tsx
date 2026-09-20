@@ -5,12 +5,12 @@
 // all happen IN THE BROWSER — the privkey never leaves this device.
 'use client';
 
-import { useState } from 'react';
-import type { AuditBatch, TraceRecord } from '@/lib/types';
-import { decryptBlob, parseBlob, KEK_SIGN_MESSAGE, type EncryptedBlob } from '@/lib/crypto/kek';
+import { useRef, useState } from 'react';
+import type { Address, AuditBatch, TraceRecord } from '@/lib/types';
+import { decryptBlob, parseBlob, kekSignMessage, type EncryptedBlob } from '@/lib/crypto/kek';
 import { decryptAuditCiphertext } from '@/lib/crypto/audit-key';
-import { parseJsonl, verifyChain, type ChainResult } from '@/lib/hash-chain';
-import { STORAGE_EXPLORER_URL } from '@/lib/config';
+import { parseJsonl, verifyBatch, type BatchChainResult, type ChainAnchors } from '@/lib/hash-chain';
+import { config, STORAGE_EXPLORER_URL } from '@/lib/config';
 import { Disclosure } from '@/components/ui/Disclosure';
 
 function toHexStr(bytes: Uint8Array): string {
@@ -21,11 +21,14 @@ export function AuditView({
   batches,
   storedBlob,
   signMessage,
+  ownerAddress,
 }: {
   batches: AuditBatch[];
   /** serialized EncryptedBlob from the backend, if it returns one */
   storedBlob: string | null;
   signMessage: (message: string) => Promise<string>;
+  /** Connected owner wallet — the KEK sign message is bound to it (security M-01). */
+  ownerAddress: Address | null;
 }) {
   const [privKey, setPrivKey] = useState<string | null>(null);
   const [passphrase, setPassphrase] = useState('');
@@ -35,9 +38,11 @@ export function AuditView({
   const [viewing, setViewing] = useState<{
     batchId: string;
     records: TraceRecord[];
-    chain: ChainResult;
+    chain: BatchChainResult;
   } | null>(null);
   const [viewError, setViewError] = useState<string | null>(null);
+  /** Tail hashes of batches verified this session — threads expectedPrev across batches. */
+  const anchorsRef = useRef<ChainAnchors>(new Map());
 
   const blob: EncryptedBlob | null =
     importedBlob ?? (storedBlob ? safeParse(storedBlob) : null);
@@ -55,7 +60,16 @@ export function AuditView({
     setBusy(true);
     setUnlockError(null);
     try {
-      const secret = blob.mode === 'signature' ? await signMessage(KEK_SIGN_MESSAGE) : passphrase;
+      let secret: string;
+      if (blob.mode === 'signature') {
+        if (!ownerAddress) {
+          setUnlockError('Connect the wallet you created this agent with, then try again.');
+          return;
+        }
+        secret = await signMessage(kekSignMessage(ownerAddress, config.chainId));
+      } else {
+        secret = passphrase;
+      }
       const key = await decryptBlob(blob, secret);
       setPrivKey(toHexStr(key));
     } catch {
@@ -95,7 +109,11 @@ export function AuditView({
       const ciphertext = new Uint8Array(await res.arrayBuffer());
       const plaintext = decryptAuditCiphertext(privKey, ciphertext);
       const records = parseJsonl(new TextDecoder().decode(plaintext));
-      setViewing({ batchId: batch.batchId, records, chain: verifyChain(records) });
+      setViewing({
+        batchId: batch.batchId,
+        records,
+        chain: verifyBatch(records, batch.seqFrom, anchorsRef.current),
+      });
     } catch {
       setViewError('Could not decrypt this batch. Check that you unlocked the right key.');
     } finally {
@@ -218,7 +236,11 @@ export function AuditView({
             <h2 style={{ fontSize: '1rem' }}>Batch {viewing.batchId}</h2>
             {viewing.chain.ok ? (
               <span className="pill pill-allow" data-testid="chain-ok">
-                Chain verified · {viewing.chain.count} records
+                {viewing.chain.anchored === 'genesis'
+                  ? 'Chain verified from genesis'
+                  : 'Chain verified (slice only)'}
+                {' · '}
+                {viewing.chain.count} records
               </span>
             ) : (
               <span className="pill pill-deny" data-testid="chain-broken">
@@ -231,7 +253,7 @@ export function AuditView({
               <details key={r.seq} className="panel" style={{ padding: '0.55rem 0.8rem' }}>
                 <summary style={{ cursor: 'pointer', display: 'flex', gap: '0.6rem', alignItems: 'baseline', fontSize: '0.85rem' }}>
                   <span className="badge">#{r.seq}</span>
-                  <span className={`pill ${r.kind === 'block' || r.kind === 'revoke' ? 'pill-deny' : r.kind === 'consent' ? 'pill-accent' : 'pill-idle'}`}>{r.kind}</span>
+                  <span className={`pill ${r.kind === 'block' || r.kind === 'revoke' || r.kind === 'error' ? 'pill-deny' : r.kind === 'consent' ? 'pill-accent' : 'pill-idle'}`}>{r.kind}</span>
                   <span style={{ color: 'var(--color-ink-dim)' }}>{new Date(r.ts).toLocaleString()}</span>
                 </summary>
                 <pre className="code" style={{ marginTop: '0.5rem', overflow: 'auto' }}>{JSON.stringify(r, null, 2)}</pre>

@@ -2,8 +2,8 @@ import type { Json } from './crypto/canonical.js';
 
 export type Hex = `0x${string}`;
 
-/** Core trace types — spec §4, verbatim shape. */
-export type TraceKind = 'inference' | 'action' | 'decision' | 'consent' | 'modify' | 'block' | 'revoke';
+/** Core trace types — spec §4, verbatim shape ('error' added: failed upstream forwards are chain-visible). */
+export type TraceKind = 'inference' | 'action' | 'decision' | 'consent' | 'modify' | 'block' | 'revoke' | 'error';
 
 export interface TraceRecord {
   agentId: string;
@@ -17,8 +17,8 @@ export interface TraceRecord {
   x0gTrace?: X0gTrace;
   hash: string; // hash(prev, canonical(this-without-hash))
   approvalId?: string;
-  decision?: 'approve' | 'deny';
-  decidedBy?: 'owner';
+  decision?: 'approve' | 'deny' | 'expired';
+  decidedBy?: 'owner' | 'system';
   detail?: Json;
 }
 
@@ -31,8 +31,8 @@ export interface X0gTrace {
 export type ConsentRecord = TraceRecord & {
   kind: 'consent';
   approvalId: string;
-  decision: 'approve' | 'deny';
-  decidedBy: 'owner';
+  decision: 'approve' | 'deny' | 'expired';
+  decidedBy: 'owner' | 'system';
 };
 
 export interface PolicyView {
@@ -99,7 +99,7 @@ export interface ApprovalRow {
   id: string;
   agentId: string;
   requestRef: Json;
-  state: 'pending' | 'approved' | 'denied';
+  state: 'pending' | 'approved' | 'denied' | 'expired';
   reason: string | null;
   createdAt: string;
   decidedAt: string | null;

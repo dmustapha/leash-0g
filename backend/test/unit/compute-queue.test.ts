@@ -95,6 +95,24 @@ describe('ComputeQueue', () => {
     expect(fetchFn).toHaveBeenCalledTimes(12);
   });
 
+  it('never overshoots the cap when a waiter wakes as a newcomer takes the slot', async () => {
+    // cap 1: agent A's second call arrives EXACTLY when A1 releases (per-agent
+    // chain), racing the woken waiter B — the waiter must re-check capacity.
+    let inFlight = 0;
+    let peak = 0;
+    const fetchFn = vi.fn(async () => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((r) => setTimeout(r, 15));
+      inFlight -= 1;
+      return jsonResponse(200, { ok: true });
+    });
+    const q = makeQueue(fetchFn, { maxConcurrent: 1 });
+    await Promise.all([q.enqueue('A', { tag: 'a1' }), q.enqueue('A', { tag: 'a2' }), q.enqueue('B', { tag: 'b1' })]);
+    expect(peak).toBe(1);
+    expect(fetchFn).toHaveBeenCalledTimes(3);
+  });
+
   it('retries on network errors', async () => {
     let calls = 0;
     const fetchFn = vi.fn(async () => {

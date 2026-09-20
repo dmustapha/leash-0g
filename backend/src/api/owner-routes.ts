@@ -4,11 +4,11 @@ import { z } from 'zod';
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import type { PrivyVerifier } from './privy.js';
 import type { SseHub } from '../sse/hub.js';
-import { statusEvent } from '../sse/events.js';
+import { statusEvent, traceEvent } from '../sse/events.js';
 import type { ApprovalBroker } from '../approvals/broker.js';
 import { generateGatewayToken, hashTokenSecret } from '../crypto/token.js';
 import { encryptSecret } from '../crypto/keycrypt.js';
-import { listTraces, verifyAgentChain } from '../trace/trace-store.js';
+import { appendTrace, listTraces, verifyAgentChainIncremental } from '../trace/trace-store.js';
 import { getAgentById, insertAgent, rotateAgentToken } from '../store/agents.js';
 import { getApproval, decideApproval } from '../store/approvals.js';
 import { applyRevokeFanout } from '../agents/revoke-fanout.js';
@@ -73,10 +73,12 @@ interface OwnerRequest extends Request {
 
 export function ownerRouter(deps: OwnerApiDeps): Router {
   const router = Router();
-  router.use(json({ limit: 64 * 1024 }));
+  // Scoped to /api (every owner route lives there): non-owner paths fall
+  // through to the app's 404 instead of a misleading 401.
+  router.use('/api', json({ limit: 64 * 1024 }));
 
   // Privy auth on EVERY owner route (M-01: authed /traces included).
-  router.use((req: OwnerRequest, res: Response, next: NextFunction) => {
+  router.use('/api', (req: OwnerRequest, res: Response, next: NextFunction) => {
     deps.privy
       .verify(req.headers.authorization)
       .then(({ ownerAddr }) => {
@@ -217,7 +219,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     const cursor = Number.parseInt(typeof cursorRaw === 'string' ? cursorRaw : '-1', 10);
     const limit = Math.min(Number.parseInt(typeof limitRaw === 'string' ? limitRaw : '50', 10) || 50, 200);
     const records = await listTraces(deps.pool, agent.id, { afterSeq: Number.isNaN(cursor) ? -1 : cursor, limit });
-    const verdict = await verifyAgentChain(deps.pool, agent.id);
+    const verdict = await verifyAgentChainIncremental(deps.pool, agent.id);
     const last = records[records.length - 1];
     res.json({
       records,
@@ -247,6 +249,20 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       res.status(409).json({ error: { message: 'already decided' } });
       return;
     }
+    // The durable consent event is appended HERE, at decision time — strictly
+    // BEFORE the broker notify wakes any held request or paused run, which
+    // preserves consent-seq < action-seq. The held/resume paths never append
+    // (single-append semantics: no double consent record).
+    const consent = await appendTrace(deps.pool, {
+      agentId: agent.id,
+      kind: 'consent',
+      approvalId: approval.id,
+      decision: parsed.data.decision,
+      decidedBy: 'owner',
+      originalRequest: approval.requestRef,
+      ...(parsed.data.reason !== undefined ? { detail: { reason: parsed.data.reason } } : {}),
+    });
+    deps.hub.emit(agent.id, 'trace', traceEvent(consent));
     deps.broker.notify(approval.id, {
       decision: parsed.data.decision,
       ...(parsed.data.reason !== undefined ? { reason: parsed.data.reason } : {}),

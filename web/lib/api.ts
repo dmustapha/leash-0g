@@ -42,8 +42,11 @@ async function request<T>(
   if (!res.ok) {
     let detail = res.statusText;
     try {
-      const j = (await res.json()) as { error?: string; message?: string };
-      detail = j.error ?? j.message ?? detail;
+      // Backend errors are shaped { error: { message } } (owner-routes); tolerate a plain
+      // string error or top-level message too. Never stringify an object into the UI.
+      const j = (await res.json()) as { error?: { message?: string } | string; message?: string };
+      const fromError = typeof j.error === 'string' ? j.error : j.error?.message;
+      detail = fromError ?? j.message ?? detail;
     } catch {
       /* generic error body */
     }
@@ -57,11 +60,11 @@ export function makeApi(getToken: TokenGetter) {
     createAgent: (req: CreateAgentRequest) =>
       request<CreateAgentResponse>(getToken, 'POST', '/api/agents', req),
     getAgent: (id: string) => request<AgentDetail>(getToken, 'GET', `/api/agents/${id}`),
-    getTraces: (id: string, cursor?: string) =>
-      request<{ records: TraceRecord[]; nextCursor?: string }>(
+    getTraces: (id: string, cursor?: number) =>
+      request<{ records: TraceRecord[]; nextCursor: number | null; chainVerified: boolean }>(
         getToken,
         'GET',
-        `/api/agents/${id}/traces${cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''}`,
+        `/api/agents/${id}/traces${cursor !== undefined ? `?cursor=${cursor}` : ''}`,
       ),
     decideApproval: (approvalId: string, decision: ApprovalDecision) =>
       request<{ ok: true }>(getToken, 'POST', `/api/approvals/${approvalId}`, decision),

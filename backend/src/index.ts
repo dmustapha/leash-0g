@@ -1,10 +1,11 @@
 import 'dotenv/config';
 import { createPublicClient, http } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import { loadConfig } from './config.js';
 import { createPool } from './db/pool.js';
 import { migrate } from './db/migrate.js';
-import { createApp } from './server.js';
+import { createOwnerApp, createGatewayApp } from './server.js';
 import { ComputeQueue } from './gateway/compute-queue.js';
 import { SseHub } from './sse/hub.js';
 import { ApprovalBroker } from './approvals/broker.js';
@@ -20,6 +21,12 @@ import { LeashRuntimeManager } from './runtime/manager.js';
 /** Composition root: wire every module, migrate, listen, run the loops. */
 async function main(): Promise<void> {
   const cfg = loadConfig();
+  // Sanity: the configured ops address must be the ops key's address — a
+  // mismatch means the wrong key is deployed (fail fast, before any wiring).
+  const opsAddr = privateKeyToAccount(cfg.OPS_PRIVATE_KEY as `0x${string}`).address;
+  if (opsAddr.toLowerCase() !== cfg.OPS_ADDRESS.toLowerCase()) {
+    throw new Error('OPS_ADDRESS does not match the address derived from OPS_PRIVATE_KEY');
+  }
   const pool = createPool(cfg.DATABASE_URL);
   const applied = await migrate(pool);
   if (applied.length > 0) console.error(`migrations applied: ${applied.join(', ')}`);
@@ -47,13 +54,13 @@ async function main(): Promise<void> {
     settings: {
       keyEncryptionSecret: cfg.KEY_ENCRYPTION_SECRET,
       approvalTimeoutMs: cfg.APPROVAL_TIMEOUT_MS,
-      gatewayUrl: `http://127.0.0.1:${cfg.PORT}`, // the runtime is the gateway's only client
+      gatewayUrl: `http://127.0.0.1:${cfg.GATEWAY_PORT}`, // the runtime is the gateway's only client
       intervalMs: cfg.RUNTIME_INTERVAL_MS,
       defaultModel: cfg.RUNTIME_DEFAULT_MODEL,
     },
   });
 
-  const app = createApp({
+  const appDeps = {
     pool,
     queue,
     hub,
@@ -68,7 +75,11 @@ async function main(): Promise<void> {
       defaultTimelockDelay: cfg.DEFAULT_TIMELOCK_DELAY,
       storageIndexerUrl: cfg.ZERO_G_STORAGE_INDEXER,
     },
-  });
+  };
+  // M-01 split surfaces: the public server carries owner API + SSE + healthz
+  // ONLY; the gateway gets its own server, ALWAYS bound to loopback.
+  const ownerApp = createOwnerApp(appDeps);
+  const gatewayApp = createGatewayApp(appDeps);
 
   const batcher = new AuditBatcher({
     pool,
@@ -87,8 +98,8 @@ async function main(): Promise<void> {
   const watcher = new RevokeWatcher({ pool, hub, runtime, source: viemRevokedLogSource(publicClient) });
   watcher.start();
 
-  const server = app.listen(cfg.PORT, cfg.HOST, () => {
-    console.error(`leash backend listening on ${cfg.HOST}:${cfg.PORT}`);
+  const server = ownerApp.listen(cfg.PORT, cfg.HOST, () => {
+    console.error(`leash owner API listening on ${cfg.HOST}:${cfg.PORT}`);
   });
   // M-01 timeouts. requestTimeout stays 0: SSE streams are long-lived; slow
   // clients are bounded by headersTimeout + the JSON body caps instead.
@@ -96,11 +107,20 @@ async function main(): Promise<void> {
   server.requestTimeout = 0;
   server.keepAliveTimeout = 65_000;
 
+  // Loopback-only gateway server (M-01): never reachable from off-box.
+  const gatewayServer = gatewayApp.listen(cfg.GATEWAY_PORT, '127.0.0.1', () => {
+    console.error(`leash gateway listening on 127.0.0.1:${cfg.GATEWAY_PORT}`);
+  });
+  gatewayServer.headersTimeout = 15_000;
+  gatewayServer.requestTimeout = 0;
+  gatewayServer.keepAliveTimeout = 65_000;
+
   const shutdown = (signal: string): void => {
     console.error(`${signal} received — shutting down`);
     watcher.stop();
     batcher.stop();
     broker.cancelAll();
+    gatewayServer.close();
     server.close(() => {
       void pool.end().finally(() => process.exit(0));
     });

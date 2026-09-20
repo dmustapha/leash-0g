@@ -52,38 +52,67 @@ export interface AppDeps {
   settings: Settings;
 }
 
+interface Surfaces {
+  gateway: boolean;
+  owner: boolean;
+}
+
+/**
+ * Public app (M-01): owner API + SSE + healthz ONLY. In production this is
+ * the sole surface bound to HOST:PORT — the gateway never leaves loopback.
+ */
+export function createOwnerApp(deps: AppDeps): Express {
+  return buildApp(deps, { gateway: false, owner: true });
+}
+
+/** Gateway app (M-01): /v1/chat/completions ONLY — bound to 127.0.0.1 in prod. */
+export function createGatewayApp(deps: AppDeps): Express {
+  return buildApp(deps, { gateway: true, owner: false });
+}
+
+/** Both surfaces on one app — in-process convenience for tests ONLY. */
 export function createApp(deps: AppDeps): Express {
+  return buildApp(deps, { gateway: true, owner: true });
+}
+
+function buildApp(deps: AppDeps, surfaces: Surfaces): Express {
   const app = express();
   app.disable('x-powered-by');
 
-  // CORS for the owner FE (bearer-token auth, no cookies — wildcard is safe;
-  // per-route authz still applies). The gateway's only Phase-1 client is the
-  // co-located runtime, which never preflights.
-  app.use((req: Request, res: Response, next: NextFunction) => {
-    res.setHeader('access-control-allow-origin', '*');
-    res.setHeader('access-control-allow-headers', 'authorization, content-type');
-    res.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS');
-    if (req.method === 'OPTIONS') {
-      res.status(204).end();
-      return;
-    }
-    next();
-  });
+  if (surfaces.owner) {
+    // CORS for the owner FE (bearer-token auth, no cookies — wildcard is safe;
+    // per-route authz still applies). The gateway's only Phase-1 client is the
+    // co-located runtime, which never preflights — no CORS on that surface.
+    app.use((req: Request, res: Response, next: NextFunction) => {
+      res.setHeader('access-control-allow-origin', '*');
+      res.setHeader('access-control-allow-headers', 'authorization, content-type');
+      res.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS');
+      if (req.method === 'OPTIONS') {
+        res.status(204).end();
+        return;
+      }
+      next();
+    });
 
-  app.get('/healthz', (_req, res) => {
-    res.json({ ok: true }); // liveness only, no detail
-  });
+    app.get('/healthz', (_req, res) => {
+      res.json({ ok: true }); // liveness only, no detail
+    });
+  }
 
-  app.use(
-    gatewayRouter({
-      pool: deps.pool,
-      queue: deps.queue,
-      hub: deps.hub,
-      broker: deps.broker,
-      approvalTimeoutMs: deps.settings.approvalTimeoutMs,
-    }),
-  );
-  app.use(ownerRouter(deps));
+  if (surfaces.gateway) {
+    app.use(
+      gatewayRouter({
+        pool: deps.pool,
+        queue: deps.queue,
+        hub: deps.hub,
+        broker: deps.broker,
+        approvalTimeoutMs: deps.settings.approvalTimeoutMs,
+      }),
+    );
+  }
+  if (surfaces.owner) {
+    app.use(ownerRouter(deps));
+  }
 
   // 404 for everything else (exact routing — no fuzzy path matching)
   app.use((_req, res) => {

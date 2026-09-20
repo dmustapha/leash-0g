@@ -4,7 +4,7 @@ import type { ComputeQueue, ComputeResult } from './compute-queue.js';
 import { authenticateAgent } from './agent-auth.js';
 import { evaluateRules } from './interceptor.js';
 import { appendTrace } from '../trace/trace-store.js';
-import { createApproval } from '../store/approvals.js';
+import { createApproval, expireApproval } from '../store/approvals.js';
 import type { ApprovalBroker } from '../approvals/broker.js';
 import type { SseHub } from '../sse/hub.js';
 import { approvalEvent, requestSummary, traceEvent } from '../sse/events.js';
@@ -78,8 +78,11 @@ async function handleCompletion(deps: GatewayDeps, req: Request, res: Response):
 
 /**
  * Hold the request for the owner. Returns true only after the approve consent
- * record is DURABLY persisted — forwarding awaits the consent write (spec:
- * consent strictly before forward).
+ * record is DURABLY persisted — POST /api/approvals/:id appends the consent
+ * record BEFORE notifying the broker, so waking here implies consent is
+ * already durable (spec: consent strictly before forward). This path appends
+ * NO consent record itself (single-append semantics); only the timeout path
+ * writes, transitioning the row pending → expired chain-visibly.
  */
 async function holdForApproval(deps: GatewayDeps, agent: AgentRow, body: Json, res: Response): Promise<boolean> {
   const approval = await createApproval(deps.pool, agent.id, body);
@@ -87,21 +90,23 @@ async function holdForApproval(deps: GatewayDeps, agent: AgentRow, body: Json, r
   const decision = await deps.broker.wait(approval.id, deps.approvalTimeoutMs);
 
   if (decision === 'timeout') {
+    // Terminal state + consent-class record: timeouts are never silent.
+    const expired = await expireApproval(deps.pool, approval.id);
+    if (expired) {
+      const consent = await appendTrace(deps.pool, {
+        agentId: agent.id,
+        kind: 'consent',
+        approvalId: approval.id,
+        decision: 'expired',
+        decidedBy: 'system',
+        originalRequest: body,
+        detail: { reason: 'approval timed out' },
+      });
+      deps.hub.emit(agent.id, 'trace', traceEvent(consent));
+    }
     res.status(408).json({ error: { message: 'approval timed out' } });
     return false;
   }
-
-  // Consent record persisted BEFORE any forwarding — this await is the ordering guarantee.
-  const consent = await appendTrace(deps.pool, {
-    agentId: agent.id,
-    kind: 'consent',
-    approvalId: approval.id,
-    decision: decision.decision,
-    decidedBy: 'owner',
-    originalRequest: body,
-    ...(decision.reason !== undefined ? { detail: { reason: decision.reason } } : {}),
-  });
-  deps.hub.emit(agent.id, 'trace', traceEvent(consent));
 
   if (decision.decision === 'deny') {
     res.status(403).json({ error: { message: 'request denied by owner' } });
@@ -122,12 +127,18 @@ async function forwardAndTrace(deps: GatewayDeps, agent: AgentRow, res: Response
     result = await deps.queue.enqueue(agent.id, spec.effective);
   } catch (err) {
     console.error(`compute forward failed for agent ${agent.id}`, err);
+    // Failed forwards are chain-visible: trace + SSE BEFORE responding.
+    await traceForwardFailure(deps, agent, spec.original, { reason: 'compute forward failed' });
     res.status(502).json({ error: { message: 'upstream error' } });
     return;
   }
   if (result.status >= 500 || result.status === 429) {
     // retries exhausted upstream — generic client error, detail server-side only
     console.error(`compute upstream degraded for agent ${agent.id}: status ${result.status}`);
+    await traceForwardFailure(deps, agent, spec.original, {
+      reason: 'upstream degraded after retries',
+      upstreamStatus: result.status,
+    });
     res.status(502).json({ error: { message: 'upstream error' } });
     return;
   }
@@ -142,4 +153,19 @@ async function forwardAndTrace(deps: GatewayDeps, agent: AgentRow, res: Response
   });
   deps.hub.emit(agent.id, 'trace', traceEvent(rec));
   res.status(result.status).json(result.body);
+}
+
+async function traceForwardFailure(
+  deps: GatewayDeps,
+  agent: AgentRow,
+  original: Json,
+  detail: { reason: string; upstreamStatus?: number },
+): Promise<void> {
+  const rec = await appendTrace(deps.pool, {
+    agentId: agent.id,
+    kind: 'error',
+    originalRequest: original,
+    detail: { status: 502, ...detail },
+  });
+  deps.hub.emit(agent.id, 'trace', traceEvent(rec));
 }

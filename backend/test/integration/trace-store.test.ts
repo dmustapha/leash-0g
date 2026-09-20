@@ -98,3 +98,42 @@ describe('trace store', () => {
     expect(page2[0]?.seq).toBe(last.seq + 1);
   });
 });
+
+describe('incremental chain verification (L-04)', () => {
+  it('verifies incrementally from a cached head and detects a forged new record', async () => {
+    const { verifyAgentChainIncremental, _clearVerifyCache } = await import('../../src/trace/trace-store.js');
+    _clearVerifyCache();
+    const freshAgent = await seedAgent(db.pool, { accountAddr: '0x2222222222222222222222222222222222222222' });
+    for (let i = 0; i < 3; i++) {
+      await appendTrace(db.pool, { agentId: freshAgent, kind: 'inference', detail: { i } });
+    }
+    // first call: full scan, ok, caches head seq 2
+    expect((await verifyAgentChainIncremental(db.pool, freshAgent)).ok).toBe(true);
+
+    // append 2 more, verify again — only new records scanned (behavioral: still ok)
+    await appendTrace(db.pool, { agentId: freshAgent, kind: 'action', detail: { i: 3 } });
+    await appendTrace(db.pool, { agentId: freshAgent, kind: 'action', detail: { i: 4 } });
+    expect((await verifyAgentChainIncremental(db.pool, freshAgent)).ok).toBe(true);
+
+    // forge a NEW record with a broken prevHash link (INSERT is allowed; UPDATE/DELETE are not)
+    await db.pool.query(
+      `INSERT INTO trace_records (agent_id, seq, prev_hash, hash, ts, kind, record)
+       VALUES ($1::uuid, 5, '0xdead', '0xbeef', now(), 'action',
+               jsonb_build_object('agentId',$2::text,'seq',5,'prevHash','0xdead','ts',now()::text,'kind','action','hash','0xbeef'))`,
+      [freshAgent, freshAgent],
+    );
+    const bad = await verifyAgentChainIncremental(db.pool, freshAgent);
+    expect(bad.ok).toBe(false);
+
+    // failure drops the cache → next call re-scans from genesis and still reports the break
+    const again = await verifyAgentChainIncremental(db.pool, freshAgent);
+    expect(again.ok).toBe(false);
+  });
+
+  it('incremental result matches full verifyAgentChain on a clean chain', async () => {
+    const { verifyAgentChainIncremental } = await import('../../src/trace/trace-store.js');
+    const full = await verifyAgentChain(db.pool, agentId);
+    const inc = await verifyAgentChainIncremental(db.pool, agentId);
+    expect(inc.ok).toBe(full.ok);
+  });
+});

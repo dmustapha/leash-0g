@@ -1,6 +1,5 @@
 // File: web/components/cockpit/StatusBar.tsx
-// Status strip: running/paused/revoked, session-expiry countdown, account balance,
-// compute balance when known.
+// Status strip: running/paused/revoked, session-expiry countdown, account balance.
 'use client';
 
 import { useEffect, useState } from 'react';
@@ -29,9 +28,6 @@ export function StatusBar({ detail }: { detail: AgentDetail }) {
         session {countdown(detail.sessionExpiry, now)}
       </span>
       <span className="badge">{weiToOg(detail.accountBalance)} 0G in account</span>
-      {detail.computeBalance !== undefined ? (
-        <span className="badge">{weiToOg(detail.computeBalance)} 0G compute</span>
-      ) : null}
     </section>
   );
 }

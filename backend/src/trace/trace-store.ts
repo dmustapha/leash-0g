@@ -12,8 +12,8 @@ export interface AppendTraceInput {
   response?: Json;
   x0gTrace?: X0gTrace;
   approvalId?: string;
-  decision?: 'approve' | 'deny';
-  decidedBy?: 'owner';
+  decision?: 'approve' | 'deny' | 'expired';
+  decidedBy?: 'owner' | 'system';
   detail?: Json;
 }
 
@@ -92,4 +92,40 @@ export async function verifyAgentChain(db: Pool | PoolClient, agentId: string): 
     [agentId],
   );
   return verifyChain(res.rows.map((r) => r.record as unknown as import('../crypto/hashchain.js').ChainedRecord));
+}
+
+// L-04: /traces polls verification on every request — O(full chain) per poll
+// grows unboundedly. Cache the last VERIFIED head per agent and verify only
+// records appended since. Sound because the DB trigger makes trace_records
+// append-only (UPDATE/DELETE rejected): a verified prefix cannot change.
+// Cache is per-process; a restart or failure just falls back to one full scan.
+const verifiedHeads = new Map<string, { seq: number; hash: string }>();
+
+/** Test hook — reset the per-process verification cache. */
+export function _clearVerifyCache(): void {
+  verifiedHeads.clear();
+}
+
+export async function verifyAgentChainIncremental(
+  db: Pool | PoolClient,
+  agentId: string,
+): Promise<VerifyResult> {
+  const head = verifiedHeads.get(agentId);
+  const res = await db.query<{ record: TraceRecord }>(
+    'SELECT record FROM trace_records WHERE agent_id = $1 AND seq > $2 ORDER BY seq ASC',
+    [agentId, head ? head.seq : -1],
+  );
+  const records = res.rows.map(
+    (r) => r.record as unknown as import('../crypto/hashchain.js').ChainedRecord,
+  );
+  const verdict = head
+    ? verifyChain(records, { expectFirstSeq: head.seq + 1, expectPrevHash: head.hash })
+    : verifyChain(records);
+  if (!verdict.ok) {
+    verifiedHeads.delete(agentId); // next call re-scans from genesis
+    return verdict;
+  }
+  const last = records[records.length - 1];
+  if (last) verifiedHeads.set(agentId, { seq: last.seq, hash: last.hash });
+  return verdict;
 }

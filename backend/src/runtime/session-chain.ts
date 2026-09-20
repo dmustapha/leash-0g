@@ -60,7 +60,13 @@ export class SessionChain implements RuntimeChain {
       functionName: 'execute',
       args: [input.to as Hex, input.valueWei, '0x'],
     });
-    await this.publicClient.waitForTransactionReceipt({ hash: txHash });
+    const receipt = await this.publicClient.waitForTransactionReceipt({ hash: txHash });
+    assertReceiptSuccess(receipt.status, txHash);
     return { txHash };
   }
+}
+
+/** A reverted execute() must never be recorded as an acted transfer. */
+export function assertReceiptSuccess(status: 'success' | 'reverted', txHash: string): void {
+  if (status !== 'success') throw new Error(`execute transfer reverted on-chain: ${txHash}`);
 }

@@ -1,13 +1,19 @@
 // File: web/lib/crypto/kek.ts
 // Key-encryption-key (KEK) for the audit privkey. Two derivation modes (spec §5):
-//  - 'signature': AES-GCM key HKDF-derived from a deterministic owner-wallet signature over a
-//    FIXED message. RFC-6979 wallets sign deterministically; we derive TWICE and compare — if the
+//  - 'signature': AES-GCM key HKDF-derived from a deterministic owner-wallet signature over an
+//    owner+chain-bound message. RFC-6979 wallets sign deterministically; we derive TWICE and compare — if the
 //    two signatures differ, the wallet is non-deterministic and we fall back to a passphrase.
 //  - 'passphrase': PBKDF2 (310k iters, SHA-256) over a user passphrase + random salt.
 // The KEK never leaves the browser; the server stores only the opaque encrypted blob.
 
-export const KEK_SIGN_MESSAGE =
-  'LEASH audit key v1\n\nSign this message to lock or unlock the private key that decrypts your audit trail. Signing is free and sends no transaction.';
+/**
+ * Sign message for KEK derivation, bound to the owner address + chain id (security M-01):
+ * a signature phished on another site/chain, or from another account, derives a different
+ * (useless) key. Address is lowercased so wallet checksum casing never changes the message.
+ */
+export function kekSignMessage(ownerAddress: string, chainId: number): string {
+  return `LEASH audit key v2\nowner: ${ownerAddress.toLowerCase()}\nchain: ${chainId}\n\nSign this message to lock or unlock the private key that decrypts your audit trail. Signing is free and sends no transaction.`;
+}
 
 export type KekMode = 'signature' | 'passphrase';
 
@@ -65,14 +71,15 @@ async function pbkdf2Key(passphrase: string, salt: Uint8Array): Promise<CryptoKe
 }
 
 /**
- * Determinism guard: sign the fixed message twice and compare.
+ * Determinism guard: sign the KEK message (kekSignMessage) twice and compare.
  * Returns the signature if deterministic, or null (→ caller must ask for a passphrase).
  */
 export async function probeDeterministicSignature(
   signMessage: (message: string) => Promise<string>,
+  message: string,
 ): Promise<string | null> {
-  const a = await signMessage(KEK_SIGN_MESSAGE);
-  const b = await signMessage(KEK_SIGN_MESSAGE);
+  const a = await signMessage(message);
+  const b = await signMessage(message);
   return a === b ? a : null;
 }
 

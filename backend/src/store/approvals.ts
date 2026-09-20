@@ -6,7 +6,7 @@ interface DbApprovalRow {
   id: string;
   agent_id: string;
   request_ref: Json;
-  state: 'pending' | 'approved' | 'denied';
+  state: 'pending' | 'approved' | 'denied' | 'expired';
   reason: string | null;
   created_at: Date;
   decided_at: Date | null;
@@ -51,6 +51,16 @@ export async function decideApproval(
     `UPDATE approvals SET state = $2, reason = $3, decided_at = now()
      WHERE id = $1 AND state = 'pending' RETURNING *`,
     [id, decision === 'approve' ? 'approved' : 'denied', reason ?? null],
+  );
+  return res.rows[0] ? mapRow(res.rows[0]) : null;
+}
+
+/** Transition pending → expired (broker timeout); returns null if already decided. */
+export async function expireApproval(pool: Pool, id: string): Promise<ApprovalRow | null> {
+  const res = await pool.query<DbApprovalRow>(
+    `UPDATE approvals SET state = 'expired', decided_at = now()
+     WHERE id = $1 AND state = 'pending' RETURNING *`,
+    [id],
   );
   return res.rows[0] ? mapRow(res.rows[0]) : null;
 }

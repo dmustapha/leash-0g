@@ -20,7 +20,7 @@
     "@0gfoundation/0g-storage-ts-sdk": "1.2.12",
     "@langchain/langgraph": "^0.2.74",
     "@langchain/langgraph-checkpoint-postgres": "^0.0.5",
-    "@privy-io/server-auth": "^1.18.0",
+    "@privy-io/server-auth": "^1.32.5",
     "argon2": "^0.41.1",
     "dotenv": "^16.4.5",
     "eciesjs": "^0.4.11",

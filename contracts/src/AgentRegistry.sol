@@ -4,6 +4,12 @@ pragma solidity 0.8.30;
 /// @title AgentRegistry — minimal on-chain agent identity registry (ERC-7857 deferred).
 /// @notice Records: who the agent is, who owns it, which LeashAccount constrains it,
 ///         which session key acts for it, and which pubkey its audit trail is encrypted to.
+/// @dev    `register` is PERMISSIONLESS and entries are NOT authoritative: anyone can
+///         register any (account, sessionKey) tuple, and in LEASH the registrant
+///         (registry "owner") is the ops key, not the user. The Postgres `owner_addr`
+///         column is the AUTHORITY for owner-API access; the user's wallet governs the
+///         LeashAccount (contract owner) and all owner routes. Treat this registry as
+///         a discovery/index surface only.
 contract AgentRegistry {
     enum Status {
         Active,

@@ -59,11 +59,14 @@ function summarize(rec: TraceRecord, detail: Record<string, Json | undefined>): 
     case 'block':
       return 'request blocked by policy';
     case 'consent':
+      if (rec.decision === 'expired') return 'approval expired (owner did not decide in time)';
       return `owner ${rec.decision === 'approve' ? 'approved' : 'denied'} the request`;
     case 'revoke':
       return 'agent revoked';
     case 'action':
       return 'on-chain action';
+    case 'error':
+      return 'upstream forward failed';
     case 'decision':
       return typeof detail['reason'] === 'string' ? detail['reason'] : 'agent decision';
     default:

@@ -2,7 +2,15 @@
 // Client-side hash-chain verification: valid chains verify green; tampering, relinking, and
 // sequence gaps are flagged at the exact record.
 import { describe, expect, it } from 'vitest';
-import { GENESIS_HASH, canonicalJson, recordHash, verifyChain, parseJsonl } from '@/lib/hash-chain';
+import {
+  GENESIS_HASH,
+  canonicalJson,
+  recordHash,
+  verifyBatch,
+  verifyChain,
+  parseJsonl,
+  type ChainAnchors,
+} from '@/lib/hash-chain';
 import type { Hex, TraceRecord } from '@/lib/types';
 
 function makeChain(n: number): TraceRecord[] {
@@ -80,3 +88,52 @@ describe('hash chain', () => {
     expect(parseJsonl(jsonl)).toHaveLength(2);
   });
 });
+
+describe('anchored batch verification', () => {
+  it('a batch starting at seq 0 anchors at the genesis hash', () => {
+    const anchors: ChainAnchors = new Map();
+    const result = verifyBatch(makeChain(3), 0, anchors);
+    expect(result).toEqual({ ok: true, count: 3, anchored: 'genesis' });
+  });
+
+  it('threads expectedPrev across batches — later batches stay genesis-anchored', () => {
+    const chain = makeChain(6);
+    const anchors: ChainAnchors = new Map();
+    expect(verifyBatch(chain.slice(0, 3), 0, anchors)).toEqual({ ok: true, count: 3, anchored: 'genesis' });
+    expect(verifyBatch(chain.slice(3, 6), 3, anchors)).toEqual({ ok: true, count: 3, anchored: 'genesis' });
+  });
+
+  it('a mid-chain batch with no prior anchor verifies as slice only', () => {
+    const chain = makeChain(6);
+    const anchors: ChainAnchors = new Map();
+    expect(verifyBatch(chain.slice(3, 6), 3, anchors)).toEqual({ ok: true, count: 3, anchored: 'slice' });
+  });
+
+  it('a batch after a slice-anchored batch remains slice-anchored', () => {
+    const chain = makeChain(6);
+    const anchors: ChainAnchors = new Map();
+    verifyBatch(chain.slice(2, 4), 2, anchors);
+    expect(verifyBatch(chain.slice(4, 6), 4, anchors)).toEqual({ ok: true, count: 2, anchored: 'slice' });
+  });
+
+  it('flags a batch whose first record does not link to the previous batch', () => {
+    const chain = makeChain(6);
+    const anchors: ChainAnchors = new Map();
+    verifyBatch(chain.slice(0, 3), 0, anchors);
+    const r3 = chain[3]!;
+    const relinked = { ...r3, prevHash: GENESIS_HASH };
+    const forged = [{ ...relinked, hash: recordHash(relinked) }, ...chain.slice(4, 6)];
+    const result = verifyBatch(forged, 3, anchors);
+    expect(result).toMatchObject({ ok: false, brokenAtSeq: 3, reason: 'link-mismatch' });
+  });
+
+  it('a failed batch does not record an anchor for the next batch', () => {
+    const chain = makeChain(4);
+    const anchors: ChainAnchors = new Map();
+    const r1 = chain[1]!;
+    const tampered = [chain[0]!, { ...r1, response: { text: 'FORGED' } }];
+    expect(verifyBatch(tampered, 0, anchors).ok).toBe(false);
+    expect(anchors.size).toBe(0);
+  });
+});
+

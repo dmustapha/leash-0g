@@ -45,7 +45,6 @@ export type AgentDetail = {
   status: AgentStatus;
   policy: PolicyInput & { allowlist: Address[] };
   accountBalance: string; // wei
-  computeBalance?: string;
   sessionExpiry: number; // unix seconds
   addresses: { account: Address; sessionKey: Address; owner: Address };
   /** Opaque KEK-wrapped audit privkey blob stored blind at create (serialized EncryptedBlob).
@@ -80,7 +79,7 @@ export type TraceRecord = {
   seq: number;
   prevHash: Hex;
   ts: string;
-  kind: 'inference' | 'action' | 'decision' | 'consent' | 'modify' | 'block' | 'revoke';
+  kind: 'inference' | 'action' | 'decision' | 'consent' | 'modify' | 'block' | 'revoke' | 'error';
   originalRequest?: Json;
   effectiveRequest?: Json;
   response?: Json;

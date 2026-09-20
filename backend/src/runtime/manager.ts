@@ -5,7 +5,7 @@ import type { RuntimeManager } from '../server.js';
 import type { SseHub } from '../sse/hub.js';
 import type { ApprovalBroker, ApprovalDecision } from '../approvals/broker.js';
 import { getAgentById } from '../store/agents.js';
-import { getApproval } from '../store/approvals.js';
+import { getApproval, expireApproval } from '../store/approvals.js';
 import { decryptSecret } from '../crypto/keycrypt.js';
 import { appendTrace } from '../trace/trace-store.js';
 import { traceEvent } from '../sse/events.js';
@@ -148,23 +148,33 @@ export class LeashRuntimeManager implements RuntimeManager {
     const { approvalId } = pending.value as { approvalId: string };
 
     loop.pendingApprovalId = approvalId;
-    const decision = await this.awaitDecision(approvalId);
+    let decision = await this.awaitDecision(approvalId);
     loop.pendingApprovalId = null;
 
+    // The owner-decision consent record is appended by POST /api/approvals/:id
+    // at decision time, strictly before the broker notify — so it is durable
+    // before this run resumes (spec §3b: consent-seq < action-seq). This path
+    // appends only the TIMEOUT consent: pending → expired, chain-visible.
+    if (decision === 'timeout') {
+      const expired = await expireApproval(this.deps.pool, approvalId);
+      if (expired) {
+        const consent = await appendTrace(this.deps.pool, {
+          agentId: loop.agent.id,
+          kind: 'consent',
+          approvalId,
+          decision: 'expired',
+          decidedBy: 'system',
+          originalRequest: expired.requestRef,
+          detail: { reason: 'approval timed out' },
+        });
+        this.deps.hub.emit(loop.agent.id, 'trace', traceEvent(consent));
+      } else {
+        // decided at the buzzer — pick the durable decision up instead
+        decision = (await this.decidedInDb(approvalId)) ?? 'timeout';
+      }
+    }
     const resolved: ApprovalDecision =
       decision === 'timeout' ? { decision: 'deny', reason: 'approval timed out' } : decision;
-    if (decision !== 'timeout') {
-      // Ordered consent record persisted BEFORE the resumed run can act (spec §3b).
-      const consent = await appendTrace(this.deps.pool, {
-        agentId: loop.agent.id,
-        kind: 'consent',
-        approvalId,
-        decision: resolved.decision,
-        decidedBy: 'owner',
-        ...(resolved.reason !== undefined ? { detail: { reason: resolved.reason } } : {}),
-      });
-      this.deps.hub.emit(loop.agent.id, 'trace', traceEvent(consent));
-    }
     await loop.graph.invoke(new Command({ resume: resolved }), config);
   }
 
@@ -190,6 +200,15 @@ export class LeashRuntimeManager implements RuntimeManager {
   private async decidedInDb(approvalId: string): Promise<ApprovalDecision | null> {
     const row = await getApproval(this.deps.pool, approvalId);
     if (!row || row.state === 'pending') return null;
+    // The API commits the decision, THEN appends the consent record. Only
+    // resume once the consent is durable — otherwise this poll could act
+    // before consent, breaking consent-seq < action-seq. If the consent is
+    // still in flight, the broker notify (sent after the append) wakes us.
+    const consent = await this.deps.pool.query(
+      `SELECT 1 FROM trace_records WHERE agent_id = $1 AND kind = 'consent' AND record->>'approvalId' = $2`,
+      [row.agentId, approvalId],
+    );
+    if (consent.rowCount === 0) return null;
     return {
       decision: row.state === 'approved' ? 'approve' : 'deny',
       ...(row.reason !== null ? { reason: row.reason } : {}),

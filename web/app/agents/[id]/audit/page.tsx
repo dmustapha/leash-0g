@@ -62,7 +62,12 @@ export default function AuditPage({ params }: { params: Promise<{ id: string }> 
       ) : batches === null ? (
         <p role="status" style={{ color: 'var(--color-ink-dim)' }}>Loading batches…</p>
       ) : (
-        <AuditView batches={batches} storedBlob={storedBlob} signMessage={wallet.signMessage} />
+        <AuditView
+          batches={batches}
+          storedBlob={storedBlob}
+          signMessage={wallet.signMessage}
+          ownerAddress={wallet.address}
+        />
       )}
     </div>
   );

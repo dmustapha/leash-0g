@@ -57,7 +57,7 @@ export function StreamFeed({
               </p>
             ) : (
               <div key={item.id} className="panel" style={{ padding: '0.6rem 0.8rem', display: 'flex', gap: '0.6rem', alignItems: 'baseline', flexWrap: 'wrap' }}>
-                <span className={`pill ${item.event.kind === 'block' || item.event.kind === 'revoke' ? 'pill-deny' : item.event.kind === 'action' ? 'pill-allow' : 'pill-idle'}`}>
+                <span className={`pill ${item.event.kind === 'block' || item.event.kind === 'revoke' || item.event.kind === 'error' ? 'pill-deny' : item.event.kind === 'action' ? 'pill-allow' : 'pill-idle'}`}>
                   {item.event.kind}
                 </span>
                 <span style={{ fontSize: '0.86rem' }}>
