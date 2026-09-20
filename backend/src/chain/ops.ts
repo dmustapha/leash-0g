@@ -10,6 +10,7 @@ import {
   type Account,
   type Hex,
 } from 'viem';
+import { waitReceipt } from './wait-receipt.js';
 import { privateKeyToAccount } from 'viem/accounts';
 import { factoryAbi, registryAbi, leashAccountAbi } from './abis.js';
 import type { ChainOps } from '../server.js';
@@ -83,7 +84,7 @@ export class LeashChainOps implements ChainOps {
           BigInt(input.timelockDelay),
         ],
       });
-      const createReceipt = await this.publicClient.waitForTransactionReceipt({ hash: createHash });
+      const createReceipt = await waitReceipt(this.publicClient, createHash);
       const created = parseEventLogs({ abi: factoryAbi, logs: createReceipt.logs, eventName: 'AccountCreated' })[0];
       if (!created) throw new Error('factory createAccount emitted no AccountCreated event');
       const accountAddr = created.args.account;
@@ -99,7 +100,7 @@ export class LeashChainOps implements ChainOps {
         functionName: 'register',
         args: [accountAddr, input.sessionKeyAddr as Hex, auditPubKeyHex, input.name],
       });
-      const registerReceipt = await this.publicClient.waitForTransactionReceipt({ hash: registerHash });
+      const registerReceipt = await waitReceipt(this.publicClient, registerHash);
       const registered = parseEventLogs({ abi: registryAbi, logs: registerReceipt.logs, eventName: 'AgentRegistered' })[0];
       if (!registered) throw new Error('registry register emitted no AgentRegistered event');
 
@@ -121,7 +122,7 @@ export class LeashChainOps implements ChainOps {
         abi: leashAccountAbi,
         functionName: 'revoke',
       });
-      await this.publicClient.waitForTransactionReceipt({ hash });
+      await waitReceipt(this.publicClient, hash);
       return { txHash: hash };
     });
   }
@@ -134,7 +135,7 @@ export class LeashChainOps implements ChainOps {
         to: addr as Hex,
         value: amountWei,
       });
-      await this.publicClient.waitForTransactionReceipt({ hash });
+      await waitReceipt(this.publicClient, hash);
       return { txHash: hash };
     });
   }

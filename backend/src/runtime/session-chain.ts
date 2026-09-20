@@ -3,6 +3,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { leashAccountAbi } from '../chain/abis.js';
 import { readPolicyView, zeroGChain } from '../chain/ops.js';
 import type { PolicyView } from '../types.js';
+import { waitReceipt } from '../chain/wait-receipt.js';
 
 /**
  * The chain surface the agent runtime needs — reads plus ONE write:
@@ -60,7 +61,7 @@ export class SessionChain implements RuntimeChain {
       functionName: 'execute',
       args: [input.to as Hex, input.valueWei, '0x'],
     });
-    const receipt = await this.publicClient.waitForTransactionReceipt({ hash: txHash });
+    const receipt = await waitReceipt(this.publicClient, txHash);
     assertReceiptSuccess(receipt.status, txHash);
     return { txHash };
   }
