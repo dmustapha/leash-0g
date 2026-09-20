@@ -1,3 +1,12 @@
 packages:
   - backend
   - web
+allowBuilds:
+  '@reown/appkit': false
+  argon2: true
+  bufferutil: true
+  es5-ext: false
+  esbuild: true
+  keccak: true
+  unrs-resolver: true
+  utf-8-validate: true
