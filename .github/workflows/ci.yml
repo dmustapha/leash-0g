@@ -1,0 +1,124 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    name: Contracts (forge test + fmt)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: foundry-rs/foundry-toolchain@v1
+      - name: forge build
+        run: forge build
+        working-directory: contracts
+      - name: forge test (unit + fuzz + invariant)
+        run: forge test -vvv
+        working-directory: contracts
+      - name: forge fmt check
+        run: forge fmt --check
+        working-directory: contracts
+
+  slither:
+    name: Slither static analysis
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: foundry-rs/foundry-toolchain@v1
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install slither-analyzer
+      - name: slither (fails on high/medium not in triage)
+        run: slither . --filter-paths "lib/" --fail-medium
+        working-directory: contracts
+
+  backend:
+    name: Backend (typecheck + lint + unit/integration)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter backend typecheck
+      - run: pnpm --filter backend lint
+      - run: pnpm --filter backend test
+      - name: pnpm audit (high+)
+        run: pnpm audit --audit-level high
+
+  web:
+    name: Web (typecheck + lint + component tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter web typecheck
+      - run: pnpm --filter web lint
+      - run: pnpm --filter web test
+      - run: pnpm --filter web build
+
+  secrets-scan:
+    name: Secrets scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  live-0g:
+    name: 0G live integration (testnet)
+    runs-on: ubuntu-latest
+    # separate lane: required but retryable; uses the dedicated low-value CI wallet
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: live 0G tests (encrypted Storage round-trip + Compute completion + evals)
+        run: pnpm --filter backend test:live
+        env:
+          ZERO_G_COMPUTE_API_KEY: ${{ secrets.ZERO_G_COMPUTE_API_KEY }}
+          CI_WALLET_KEY: ${{ secrets.CI_WALLET_KEY }}
+          ZERO_G_RPC: https://evmrpc-testnet.0g.ai
+          ZERO_G_CHAIN_ID: "16602"
+          ZERO_G_STORAGE_INDEXER: https://indexer-storage-testnet-turbo.0g.ai
+
+  e2e:
+    name: Playwright E2E + axe
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter web exec playwright install --with-deps chromium
+      - run: pnpm --filter web e2e

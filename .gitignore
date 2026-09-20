@@ -1,0 +1,21 @@
+# secrets — NEVER commit
+**/.env
+**/.env.*
+!**/.env.example
+
+# deps / builds
+node_modules/
+dist/
+.next/
+out/
+coverage/
+contracts/out/
+contracts/cache/
+contracts/broadcast/**/dry-run/
+
+# misc
+.DS_Store
+*.log
+.turbo/
+playwright-report/
+test-results/
