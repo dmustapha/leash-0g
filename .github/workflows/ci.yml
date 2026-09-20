@@ -105,6 +105,7 @@ jobs:
       - name: live 0G tests (encrypted Storage round-trip + Compute completion + evals)
         run: pnpm --filter backend test:live
         env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
           ZERO_G_COMPUTE_API_KEY: ${{ secrets.ZERO_G_COMPUTE_API_KEY }}
           # dedicated low-value CI wallet (0x277cD0ee…7375), NOT the ops key
           OPS_PRIVATE_KEY: ${{ secrets.CI_WALLET_KEY }}

@@ -10,3 +10,9 @@ allowBuilds:
   keccak: true
   unrs-resolver: true
   utf-8-validate: true
+overrides:
+  "axios@<1.12.0": ">=1.12.0"
+  "ws@<8.21.0": ">=8.21.0"
+  "postcss@<8.5.18": ">=8.5.18"
+  "langsmith@<0.4.37": ">=0.4.37"
+  "vite@<=6.4.2": ">=6.4.3"
