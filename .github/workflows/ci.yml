@@ -58,6 +58,8 @@ jobs:
       - run: pnpm --filter backend typecheck
       - run: pnpm --filter backend lint
       - run: pnpm --filter backend test
+        env:
+          DATABASE_URL: ${{ secrets.DATABASE_URL }}
       - name: pnpm audit (high+)
         run: pnpm audit --audit-level high
 
@@ -104,7 +106,8 @@ jobs:
         run: pnpm --filter backend test:live
         env:
           ZERO_G_COMPUTE_API_KEY: ${{ secrets.ZERO_G_COMPUTE_API_KEY }}
-          CI_WALLET_KEY: ${{ secrets.CI_WALLET_KEY }}
+          # dedicated low-value CI wallet (0x277cD0ee…7375), NOT the ops key
+          OPS_PRIVATE_KEY: ${{ secrets.CI_WALLET_KEY }}
           ZERO_G_RPC: https://evmrpc-testnet.0g.ai
           ZERO_G_CHAIN_ID: "16602"
           ZERO_G_STORAGE_INDEXER: https://indexer-storage-testnet-turbo.0g.ai
