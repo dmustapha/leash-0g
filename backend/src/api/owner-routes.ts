@@ -14,12 +14,20 @@ import {
   insertAgent,
   rotateAgentToken,
   updateAgentGuardian,
-  countAgentsByOwner,
-  createRateRetryAfter,
   listAgentsByOwner,
   updateAgentRules,
 } from '../store/agents.js';
-import { getApproval, decideApproval } from '../store/approvals.js';
+import { reserveCreate, releaseReservation } from '../store/reservations.js';
+import type { AlertService } from '../alerts/service.js';
+import { listAlerts, getAlert as getAlertRow, markAlertRead, markAllInfoRead, countUnread } from '../alerts/store.js';
+import { listOwnerRecords, verifyOwnerChainIncremental } from '../store/owner-records.js';
+import {
+  getOwnerSettings,
+  patchOwnerSettings,
+  StreamKeyAlreadySetError,
+} from '../store/owner-settings.js';
+import { getApproval } from '../store/approvals.js';
+import { decideApprovalWithConsent } from '../approvals/decide.js';
 import { applyRevokeFanout } from '../agents/revoke-fanout.js';
 import {
   createLink,
@@ -31,6 +39,8 @@ import {
   DuplicateLinkError,
 } from '../coordination/store.js';
 import type { DelegationCoordinator } from '../coordination/coordinator.js';
+import type { TelegramBot } from '../telegram/bot.js';
+import type { DigestService } from '../digest/service.js';
 import type { AgentRow, AuditBatch, Link } from '../types.js';
 import type { Json } from '../crypto/canonical.js';
 import type { ChainOps, RuntimeManager, Settings } from '../server.js';
@@ -43,6 +53,10 @@ export interface OwnerApiDeps {
   chain: ChainOps;
   runtime: RuntimeManager;
   coordinator: DelegationCoordinator;
+  alerts: AlertService;
+  digest: DigestService;
+  /** Present only when the Telegram bot is configured (S9). */
+  telegram?: TelegramBot | undefined;
   settings: Settings;
 }
 
@@ -192,8 +206,8 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     const ownerAddr = req.ownerAddr as string;
 
     // C-1 containment: the deployer key's create gas is the drained resource.
-    // Order: cheap shape caps first, then quota, then rate (all before any
-    // on-chain spend). Error shapes per PHASE-2 spec §4.
+    // Order: cheap shape caps first, then the reservation guard (all before
+    // any on-chain spend). Error shapes per PHASE-2 spec §4.
     if (input.allowlist.length > deps.settings.allowlistMax) {
       res.status(400).json({ error: 'allowlist_too_long', max: deps.settings.allowlistMax });
       return;
@@ -202,19 +216,42 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       res.status(400).json({ error: 'too_many_rules', max: deps.settings.rulesMax });
       return;
     }
-    const owned = await countAgentsByOwner(deps.pool, ownerAddr);
-    if (owned >= deps.settings.createQuotaPerOwner) {
-      // Revoked rows COUNT (07 S6): revoking must not refill an attacker's quota.
-      res.status(403).json({ error: 'quota_exceeded', limit: deps.settings.createQuotaPerOwner });
+    // P3C-3: the sentinel's spend-incapable preset is enforced HERE, not
+    // trusted to the FE — a direct API caller must not mint a spend-capable
+    // "sentinel" (its role exempts it from the topUp≤cap validation, so a
+    // nonzero policy would smuggle real spending power past that check).
+    if (
+      input.goal.type === 'sentinel' &&
+      (BigInt(input.policy.perTransferCapWei) !== 0n ||
+        BigInt(input.policy.windowCapWei) !== 0n ||
+        input.allowlist.length > 0)
+    ) {
+      res.status(400).json({ error: 'sentinel_must_be_spend_incapable' });
       return;
     }
-    const retryAfter = await createRateRetryAfter(deps.pool, ownerAddr, deps.settings.createRatePerHour);
-    if (retryAfter !== null) {
-      res.setHeader('retry-after', String(retryAfter));
-      res.status(429).json({ error: 'rate_limited', retryAfter });
+    // P3C-1: quota + rate are checked AND reserved atomically under a
+    // per-owner advisory lock — a parallel burst can no longer all pass at
+    // t=0 while the slow deploys are in flight. Quota still counts revoked
+    // rows (07 S6); rate counts in-flight reservations.
+    const reserved = await reserveCreate(deps.pool, ownerAddr, {
+      quotaPerOwner: deps.settings.createQuotaPerOwner,
+      ratePerHour: deps.settings.createRatePerHour,
+      reservationTtlMs: deps.settings.reservationTtlMs,
+    });
+    if (!reserved.ok) {
+      if (reserved.reason === 'quota_exceeded') {
+        res.status(403).json({ error: 'quota_exceeded', limit: deps.settings.createQuotaPerOwner });
+      } else {
+        res.setHeader('retry-after', String(reserved.retryAfter));
+        res.status(429).json({ error: 'rate_limited', retryAfter: reserved.retryAfter });
+      }
       return;
     }
 
+    // The reservation is released on BOTH outcomes (finally below): success —
+    // the committed agent row carries the count from then on; failure — the
+    // slot frees, a failed deploy never burns quota/rate. TTL sweep besides.
+    try {
     // Session key EOA is generated server-side and held ONLY encrypted at rest
     // (KEY_ENCRYPTION_SECRET). It is a scoped key: it can act solely within
     // the on-chain policy of the LeashAccount. Owner authority never touches
@@ -262,6 +299,11 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       guardianAddr: deployed.guardianAddr,
     });
 
+    // The committed agent row carries the quota/rate count from here on —
+    // release the reservation NOW, before the response (the finally below is
+    // an idempotent safety net for the failure paths).
+    await releaseReservation(deps.pool, reserved.reservationId);
+
     // Gas dust so the session key can pay execute() gas; funds stay behind the account.
     await deps.chain.fundSessionKey(sessionKeyAddr, deps.settings.sessionGasDustWei);
 
@@ -274,11 +316,31 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       gatewayToken: token.token, // returned ONCE; only the argon2id hash is stored
       txHashes: [deployed.createTx, deployed.registerTx],
     });
+    } finally {
+      await releaseReservation(deps.pool, reserved.reservationId).catch((err: unknown) => {
+        console.error('reservation release failed', err);
+      });
+    }
   }));
+
+  // P3C-5: the fleet list's balance fan-out (N live RPC reads per request)
+  // is an authed amplification surface — cache per account, short TTL.
+  // In-process only (one Render instance; a restart just re-reads). The
+  // agent DETAIL view keeps live reads.
+  const balanceCache = new Map<string, { value: bigint; at: number }>();
+  async function cachedBalance(addr: string): Promise<bigint> {
+    const key = addr.toLowerCase();
+    const hit = balanceCache.get(key);
+    if (hit && Date.now() - hit.at < deps.settings.balanceCacheTtlMs) return hit.value;
+    const value = await deps.chain.getBalance(addr);
+    balanceCache.set(key, { value, at: Date.now() });
+    return value;
+  }
 
   // Fleet list (spec §4): the authed owner's agents, newest-first, keyset
   // cursor `<createdAtISO>_<id>` (documented choice: created_at DESC with id
-  // tiebreak — stable under concurrent creates). Balances are live reads.
+  // tiebreak — stable under concurrent creates). Balances are cached reads
+  // (P3C-5, TTL above).
   router.get('/api/agents', asyncRoute(async (req: OwnerRequest, res) => {
     const cursorRaw = req.query['cursor'];
     const limitRaw = req.query['limit'];
@@ -294,7 +356,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
         status: a.status,
         accountAddr: a.accountAddr,
         sessionKeyAddr: a.sessionKeyAddr,
-        accountBalanceWei: (await deps.chain.getBalance(a.accountAddr)).toString(),
+        accountBalanceWei: (await cachedBalance(a.accountAddr)).toString(),
         createdAt: a.createdAt,
       })),
     );
@@ -411,45 +473,22 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       res.status(403).json({ error: { message: 'forbidden' } });
       return;
     }
-    const decided = await decideApproval(deps.pool, approval.id, parsed.data.decision, parsed.data.reason);
-    if (!decided) {
+    // THE shared decision path (approvals/decide.ts) — the exact rails the
+    // Telegram inline callback rides too (spec §3b): consent durable before
+    // forward, supervised activation after consent (P3C-2 bound), alert
+    // auto-resolve on any channel.
+    const outcome = await decideApprovalWithConsent(
+      { pool: deps.pool, hub: deps.hub, broker: deps.broker, coordinator: deps.coordinator, alerts: deps.alerts },
+      agent,
+      approval,
+      parsed.data.decision,
+      { channel: 'app', reason: parsed.data.reason },
+    );
+    if (!outcome.ok) {
       res.status(409).json({ error: { message: 'already decided' } });
       return;
     }
-    // The durable consent event is appended HERE, at decision time — strictly
-    // BEFORE the broker notify wakes any held request or paused run, which
-    // preserves consent-seq < action-seq. The held/resume paths never append
-    // (single-append semantics: no double consent record).
-    const consent = await appendTrace(deps.pool, {
-      agentId: agent.id,
-      kind: 'consent',
-      approvalId: approval.id,
-      decision: parsed.data.decision,
-      decidedBy: 'owner',
-      originalRequest: approval.requestRef,
-      ...(parsed.data.reason !== undefined ? { detail: { reason: parsed.data.reason } } : {}),
-    });
-    deps.hub.emit(agent.id, 'trace', traceEvent(consent));
-    deps.broker.notify(approval.id, {
-      decision: parsed.data.decision,
-      ...(parsed.data.reason !== undefined ? { reason: parsed.data.reason } : {}),
-    });
-    deps.hub.emit(agent.id, 'approval_decided', {
-      type: 'approval_decided',
-      approvalId: approval.id,
-      decision: parsed.data.decision,
-    });
-    // Supervised handoff (spec §3b): a delegation-class approval activates (or
-    // declines) the envelope — strictly AFTER the consent append above, so
-    // consent-seq < delivery on the issuer's chain.
-    const ref = approval.requestRef;
-    if (ref !== null && typeof ref === 'object' && !Array.isArray(ref) && ref['type'] === 'delegation') {
-      const delegationId = ref['delegationId'];
-      if (typeof delegationId === 'string') {
-        await deps.coordinator.onDelegationApprovalDecision(delegationId, parsed.data.decision);
-      }
-    }
-    res.json({ ok: true, approval: { id: decided.id, state: decided.state } });
+    res.json({ ok: true, approval: { id: approval.id, state: outcome.state } });
   }));
 
   /**
@@ -650,7 +689,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       try {
         const { txHash } = await deps.chain.revoke(fresh.accountAddr, fresh.guardianAddr);
         await applyRevokeFanout(
-          { pool: deps.pool, hub: deps.hub, runtime: deps.runtime, coordinator: deps.coordinator },
+          { pool: deps.pool, hub: deps.hub, runtime: deps.runtime, coordinator: deps.coordinator, alerts: deps.alerts },
           fresh.id,
           'guardian-api',
         );
@@ -673,6 +712,14 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
           },
         });
         deps.hub.emit(fresh.id, 'trace', traceEvent(rec));
+        await deps.alerts.emit(fresh.ownerAddr, {
+          agentId: fresh.id,
+          class: 'info',
+          kind: 'revoke_failed',
+          summary: `One-click revoke failed for ${fresh.name} — revoke from your owner wallet instead (always works)`,
+          refs: { traceSeq: rec.seq },
+          dedupKey: `revoke_failed:${fresh.id}`,
+        });
         results.push({
           agentId: fresh.id,
           ok: false,
@@ -758,7 +805,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     try {
       const { txHash } = await deps.chain.revoke(agent.accountAddr, agent.guardianAddr);
       await applyRevokeFanout(
-        { pool: deps.pool, hub: deps.hub, runtime: deps.runtime, coordinator: deps.coordinator },
+        { pool: deps.pool, hub: deps.hub, runtime: deps.runtime, coordinator: deps.coordinator, alerts: deps.alerts },
         agent.id,
         'guardian-api',
       );
@@ -786,6 +833,16 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
         },
       });
       deps.hub.emit(agent.id, 'trace', traceEvent(rec));
+      // Daily loop: actionable steer — the owner-wallet fallback works even
+      // when LEASH is down (C-2 + spec §3b revoke_failed).
+      await deps.alerts.emit(agent.ownerAddr, {
+        agentId: agent.id,
+        class: 'info',
+        kind: 'revoke_failed',
+        summary: `One-click revoke failed for ${agent.name} — revoke from your owner wallet instead (always works)`,
+        refs: { traceSeq: rec.seq },
+        dedupKey: `revoke_failed:${agent.id}`,
+      });
       res.status(502).json({
         ok: false,
         error: 'guardian_revoke_failed',
@@ -795,6 +852,217 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
           hint: 'Revoke directly from your owner wallet — it works even if LEASH is down.',
         },
       });
+    }
+  }));
+
+  // ------------------------------------------------------------------
+  // Phase 3 — daily loop routes (spec §4)
+  // ------------------------------------------------------------------
+
+  // Owner aggregate SSE (S8): ALL the owner's agents' events tagged agentId,
+  // plus owner-level alert / digest_ready frames.
+  router.get('/api/owner/stream', asyncRoute(async (req: OwnerRequest, res) => {
+    deps.hub.attachOwner(req.ownerAddr as string, res);
+  }));
+
+  const alertListQuery = z.object({
+    class: z.enum(['decision', 'info']).optional(),
+    kind: z.enum(['approval_required', 'limit_hit', 'revoked', 'revoke_failed', 'delegation_terminal', 'runtime_error', 'throttle', 'alert_storm']).optional(),
+    agentId: z.string().uuid().optional(),
+    status: z.enum(['unread', 'read', 'resolved', 'dismissed']).optional(),
+    cursor: z.string().optional(),
+    limit: z.coerce.number().int().positive().max(200).optional(),
+  });
+
+  router.get('/api/alerts', asyncRoute(async (req: OwnerRequest, res) => {
+    const parsed = alertListQuery.safeParse(req.query);
+    if (!parsed.success) {
+      res.status(400).json({ error: { message: 'invalid query' } });
+      return;
+    }
+    const q = parsed.data;
+    const { alerts, nextCursor } = await listAlerts(deps.pool, req.ownerAddr as string, {
+      ...(q.class !== undefined ? { class: q.class } : {}),
+      ...(q.kind !== undefined ? { kind: q.kind } : {}),
+      ...(q.agentId !== undefined ? { agentId: q.agentId } : {}),
+      ...(q.status !== undefined ? { status: q.status } : {}),
+      ...(q.cursor !== undefined ? { cursor: q.cursor } : {}),
+      ...(q.limit !== undefined ? { limit: q.limit } : {}),
+    });
+    const unread = await countUnread(deps.pool, req.ownerAddr as string);
+    res.json({ alerts, unread, ...(nextCursor !== undefined ? { nextCursor } : {}) });
+  }));
+
+  // Registered BEFORE /api/alerts/:id — express matches in order and
+  // 'read-all' would otherwise be swallowed as an :id.
+  router.post('/api/alerts/read-all', asyncRoute(async (req: OwnerRequest, res) => {
+    const n = await markAllInfoRead(deps.pool, req.ownerAddr as string);
+    res.json({ ok: true, marked: n });
+  }));
+
+  const alertActionSchema = z.object({ action: z.enum(['read', 'dismiss']) });
+
+  router.post('/api/alerts/:id', asyncRoute(async (req: OwnerRequest, res) => {
+    const parsed = alertActionSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: { message: 'invalid request body' } });
+      return;
+    }
+    const alert = await getAlertRow(deps.pool, req.params['id'] ?? '');
+    if (!alert || alert.ownerAddr !== req.ownerAddr) {
+      // Same shape for missing and foreign (no existence oracle).
+      res.status(404).json({ error: { message: 'not found' } });
+      return;
+    }
+    if (parsed.data.action === 'read') {
+      const updated = await markAlertRead(deps.pool, alert.id);
+      res.json({ ok: true, alert: updated ?? alert });
+      return;
+    }
+    // Dismiss: approval_required resolves ONLY via its approval (spec §4).
+    const dismissed = await deps.alerts.dismiss(alert.id);
+    if (dismissed === 'not_dismissible') {
+      res.status(409).json({ error: { message: 'decision alerts resolve via their approval' } });
+      return;
+    }
+    res.json({ ok: true, alert: dismissed ?? alert });
+  }));
+
+  // Owner-stream records + audit (mirror /traces and /audit).
+  router.get('/api/owner/records', asyncRoute(async (req: OwnerRequest, res) => {
+    const cursorRaw = req.query['cursor'];
+    const limitRaw = req.query['limit'];
+    const cursor = Number.parseInt(typeof cursorRaw === 'string' ? cursorRaw : '-1', 10);
+    const limit = Math.min(Number.parseInt(typeof limitRaw === 'string' ? limitRaw : '50', 10) || 50, 200);
+    const records = await listOwnerRecords(deps.pool, req.ownerAddr as string, {
+      afterSeq: Number.isNaN(cursor) ? -1 : cursor,
+      limit,
+    });
+    const verdict = await verifyOwnerChainIncremental(deps.pool, req.ownerAddr as string);
+    const last = records[records.length - 1];
+    res.json({ records, nextCursor: last ? last.seq : null, chainVerified: verdict.ok });
+  }));
+
+  router.get('/api/owner/audit', asyncRoute(async (req: OwnerRequest, res) => {
+    const rows = await deps.pool.query<{
+      batch_id: string;
+      seq_from: string;
+      seq_to: string;
+      merkle_root: string;
+      storage_tx: string;
+      created_at: Date;
+    }>(`SELECT * FROM owner_audit_batches WHERE owner_addr = $1 ORDER BY seq_from ASC`, [req.ownerAddr]);
+    const indexer = deps.settings.storageIndexerUrl.replace(/\/$/, '');
+    res.json(
+      rows.rows.map((r) => ({
+        batchId: r.batch_id,
+        ownerAddr: req.ownerAddr,
+        seqFrom: Number(r.seq_from),
+        seqTo: Number(r.seq_to),
+        merkleRoot: r.merkle_root,
+        storageTx: r.storage_tx,
+        createdAt: r.created_at.toISOString(),
+        ciphertextUrl: `${indexer}/file?root=${r.merkle_root}`,
+      })),
+    );
+  }));
+
+  // Digest (spec §4): GET = preview (cursor untouched); POST /mark = generate
+  // + advance cursor + append the owner-stream digest record (one tx,
+  // owner-serialized — a mark racing the scheduled push cannot double-count).
+  router.get('/api/digest', asyncRoute(async (req: OwnerRequest, res) => {
+    const { digest } = await deps.digest.compute(req.ownerAddr as string);
+    res.json({ digest });
+  }));
+
+  router.post('/api/digest/mark', asyncRoute(async (req: OwnerRequest, res) => {
+    const digest = await deps.digest.mark(req.ownerAddr as string);
+    res.json({ ok: true, digest });
+  }));
+
+  // Telegram link flow (spec §4; Privy-authed — the DEEP LINK is the only
+  // thing that leaves this surface). 503 when the bot is not configured.
+  router.post('/api/owner/telegram/link', asyncRoute(async (req: OwnerRequest, res) => {
+    if (!deps.telegram) {
+      res.status(503).json({ error: { message: 'telegram is not configured on this deployment' } });
+      return;
+    }
+    const { url, expiresAt } = await deps.telegram.issueLinkToken(req.ownerAddr as string);
+    res.json({ url, expiresAt });
+  }));
+
+  router.delete('/api/owner/telegram', asyncRoute(async (req: OwnerRequest, res) => {
+    if (!deps.telegram) {
+      res.status(503).json({ error: { message: 'telegram is not configured on this deployment' } });
+      return;
+    }
+    await deps.telegram.unlink(req.ownerAddr as string);
+    res.json({ ok: true });
+  }));
+
+  router.post('/api/owner/telegram/ping', asyncRoute(async (req: OwnerRequest, res) => {
+    if (!deps.telegram) {
+      res.status(503).json({ error: { message: 'telegram is not configured on this deployment' } });
+      return;
+    }
+    const sent = await deps.telegram.ping(req.ownerAddr as string);
+    if (!sent) {
+      res.status(409).json({ error: { message: 'telegram is not linked' } });
+      return;
+    }
+    res.json({ ok: true });
+  }));
+
+  const settingsPatchSchema = z.object({
+    alertPrefs: z.record(z.string(), z.object({ telegram: z.boolean().optional() })).optional(),
+    digestHourUtc: z.number().int().min(0).max(23).nullable().optional(),
+    digestOptout: z.boolean().optional(),
+    // Same accepted pubkey shapes as the agent audit key.
+    streamPubkey: z.string().regex(/^(0x)?0[23][0-9a-fA-F]{64}$|^(0x)?04[0-9a-fA-F]{128}$/).optional(),
+  });
+
+  router.get('/api/owner/settings', asyncRoute(async (req: OwnerRequest, res) => {
+    const s = await getOwnerSettings(deps.pool, req.ownerAddr as string);
+    // telegram_chat_id itself is never exposed — linked-or-not is enough.
+    res.json({
+      alertPrefs: s.alertPrefs,
+      digestHourUtc: s.digestHourUtc,
+      digestOptout: s.digestOptout,
+      telegramLinked: s.telegramChatId !== null,
+      telegramLinkedAt: s.telegramLinkedAt,
+      streamPubkeySet: s.streamPubkey !== null,
+    });
+  }));
+
+  router.patch('/api/owner/settings', asyncRoute(async (req: OwnerRequest, res) => {
+    const parsed = settingsPatchSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: { message: 'invalid request body' } });
+      return;
+    }
+    try {
+      const s = await patchOwnerSettings(deps.pool, req.ownerAddr as string, {
+        ...(parsed.data.alertPrefs !== undefined ? { alertPrefs: parsed.data.alertPrefs } : {}),
+        ...(parsed.data.digestHourUtc !== undefined ? { digestHourUtc: parsed.data.digestHourUtc } : {}),
+        ...(parsed.data.digestOptout !== undefined ? { digestOptout: parsed.data.digestOptout } : {}),
+        ...(parsed.data.streamPubkey !== undefined
+          ? { streamPubkey: parsed.data.streamPubkey.replace(/^0x/, '') }
+          : {}),
+      });
+      res.json({
+        ok: true,
+        alertPrefs: s.alertPrefs,
+        digestHourUtc: s.digestHourUtc,
+        digestOptout: s.digestOptout,
+        telegramLinked: s.telegramChatId !== null,
+        streamPubkeySet: s.streamPubkey !== null,
+      });
+    } catch (err) {
+      if (err instanceof StreamKeyAlreadySetError) {
+        res.status(409).json({ error: { message: 'owner-stream key is already set (rotation is a later slice)' } });
+        return;
+      }
+      throw err;
     }
   }));
 

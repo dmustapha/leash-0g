@@ -7,6 +7,10 @@ import type { PrivyVerifier } from './api/privy.js';
 import type { SseHub } from './sse/hub.js';
 import type { ApprovalBroker } from './approvals/broker.js';
 import type { DelegationCoordinator } from './coordination/coordinator.js';
+import type { AlertService } from './alerts/service.js';
+import { telegramWebhookRouter } from './telegram/routes.js';
+import type { TelegramBot } from './telegram/bot.js';
+import type { DigestService } from './digest/service.js';
 import type { PolicyView } from './types.js';
 
 /**
@@ -61,6 +65,10 @@ export interface Settings {
   /** C-1 limits (07 S6): quota counts ALL rows incl. revoked. */
   createQuotaPerOwner: number;
   createRatePerHour: number;
+  /** P3C-1: in-flight create reservations count against quota/rate until released or TTL-dead. */
+  reservationTtlMs: number;
+  /** P3C-5: fleet-list balance reads are cached per account for this long (authed RPC-amplification bound). */
+  balanceCacheTtlMs: number;
   allowlistMax: number;
   rulesMax: number;
   /** Delegation channel bounds (spec §3b) — see config.ts for rationale. */
@@ -79,6 +87,10 @@ export interface AppDeps {
   chain: ChainOps;
   runtime: RuntimeManager;
   coordinator: DelegationCoordinator;
+  alerts: AlertService;
+  digest: DigestService;
+  /** Present only when TELEGRAM_BOT_TOKEN is configured (S9). */
+  telegram?: { bot: TelegramBot; webhookSecret: string } | undefined;
   settings: Settings;
 }
 
@@ -137,12 +149,19 @@ function buildApp(deps: AppDeps, surfaces: Surfaces): Express {
         queue: deps.queue,
         hub: deps.hub,
         broker: deps.broker,
+        alerts: deps.alerts,
         approvalTimeoutMs: deps.settings.approvalTimeoutMs,
       }),
     );
   }
   if (surfaces.owner) {
-    app.use(ownerRouter(deps));
+    // Webhook BEFORE the owner router: /api/telegram/webhook is secret-token
+    // authed, NOT Privy-authed — mounting order keeps the owner-wide Privy
+    // middleware off this one path (S9).
+    if (deps.telegram) {
+      app.use(telegramWebhookRouter(deps.telegram.bot, deps.telegram.webhookSecret));
+    }
+    app.use(ownerRouter({ ...deps, telegram: deps.telegram?.bot }));
   }
 
   // 404 for everything else (exact routing — no fuzzy path matching)

@@ -1,18 +1,20 @@
 import type { Pool } from 'pg';
 import type { Json } from '../crypto/canonical.js';
 import type { SseHub } from '../sse/hub.js';
+import type { AlertService } from '../alerts/service.js';
 import { approvalEvent, delegationEvent, traceEvent } from '../sse/events.js';
 import { appendTrace } from '../trace/trace-store.js';
 import { createApproval } from '../store/approvals.js';
 import type { AgentRow, Delegation } from '../types.js';
 import {
-  countPendingByLink,
-  countRecentByLink,
-  createDelegation,
+  createDelegationGuarded,
   findActiveLinkFrom,
+  getDelegation,
+  listPendingOnInactiveLinkFor,
   listCancellableByLink,
   listOpenByAgent,
   listOrphanedAccepted,
+  resetDelegationExpiry,
   sweepExpiredDelegations,
   transitionDelegation,
 } from './store.js';
@@ -57,6 +59,8 @@ export interface CoordinatorDeps {
   hub: SseHub;
   /** Delivery-latency nudge only — poll remains the correctness path (spec §3b). */
   runtime: { nudge(agentId: string): void };
+  /** Phase-3 alert engine (optional in coordination-only test setups). */
+  alerts?: AlertService | undefined;
   settings: CoordinatorSettings;
 }
 
@@ -83,43 +87,53 @@ export class DelegationCoordinator {
     if (!link) {
       // No link / paused / removed / wrong direction / cross-owner target —
       // all collapse to "no active channel" (links are the ONLY authorization).
-      await this.traceIssueRejection(input.fromAgent.id, 'delegation_no_active_link', input.kind, input.toAgentId);
+      await this.traceIssueRejection(input.fromAgent.id, 'delegation_no_active_link', input.kind, input.toAgentId, undefined, input.fromAgent.ownerAddr);
       throw new CoordinationError('delegation_no_active_link', 403);
     }
     const payloadBytes = Buffer.byteLength(JSON.stringify(input.payload), 'utf8');
     if (payloadBytes > settings.delegationPayloadMaxBytes) {
-      await this.traceIssueRejection(input.fromAgent.id, 'delegation_payload_too_large', input.kind, link.toAgentId, {
-        payloadBytes,
-        maxBytes: settings.delegationPayloadMaxBytes,
-      });
+      await this.traceIssueRejection(
+        input.fromAgent.id,
+        'delegation_payload_too_large',
+        input.kind,
+        link.toAgentId,
+        { payloadBytes, maxBytes: settings.delegationPayloadMaxBytes },
+        input.fromAgent.ownerAddr,
+      );
       throw new CoordinationError('delegation_payload_too_large', 413);
     }
-    if ((await countPendingByLink(pool, link.id)) >= settings.delegationMaxPendingPerLink) {
-      await this.traceIssueRejection(input.fromAgent.id, 'delegation_max_pending', input.kind, link.toAgentId, {
-        maxPending: settings.delegationMaxPendingPerLink,
-      });
-      throw new CoordinationError('delegation_max_pending', 409);
-    }
-    if ((await countRecentByLink(pool, link.id)) >= settings.delegationRatePerLinkPerHour) {
-      await this.traceIssueRejection(input.fromAgent.id, 'delegation_rate_limited', input.kind, link.toAgentId, {
-        ratePerHour: settings.delegationRatePerLinkPerHour,
-      });
-      throw new CoordinationError('delegation_rate_limited', 429);
-    }
-
     // Supervised link (spec §3b): the envelope exists but is NOT delivered —
     // the owner's approval gates activation. Auto: deliver immediately
     // (autonomy-by-default, 00 §1a).
+    // P3C-1: throttle check + insert are atomic under a per-link advisory
+    // lock (createDelegationGuarded) — a parallel issue burst can no longer
+    // slip past the pending/rate bounds between count and insert.
     const supervised = link.mode === 'supervised';
-    const delegation = await createDelegation(pool, {
-      linkId: link.id,
-      fromAgentId: input.fromAgent.id,
-      toAgentId: link.toAgentId,
-      kind: input.kind,
-      payload: input.payload,
-      status: supervised ? 'pending_approval' : 'pending',
-      expiresAt: new Date(Date.now() + settings.delegationTtlMs),
-    });
+    const guarded = await createDelegationGuarded(
+      pool,
+      {
+        linkId: link.id,
+        fromAgentId: input.fromAgent.id,
+        toAgentId: link.toAgentId,
+        kind: input.kind,
+        payload: input.payload,
+        status: supervised ? 'pending_approval' : 'pending',
+        expiresAt: new Date(Date.now() + settings.delegationTtlMs),
+      },
+      {
+        maxPending: settings.delegationMaxPendingPerLink,
+        ratePerHour: settings.delegationRatePerLinkPerHour,
+      },
+    );
+    if (!guarded.ok) {
+      const detail =
+        guarded.reason === 'delegation_max_pending'
+          ? { maxPending: settings.delegationMaxPendingPerLink }
+          : { ratePerHour: settings.delegationRatePerLinkPerHour };
+      await this.traceIssueRejection(input.fromAgent.id, guarded.reason, input.kind, link.toAgentId, detail, input.fromAgent.ownerAddr);
+      throw new CoordinationError(guarded.reason, guarded.reason === 'delegation_max_pending' ? 409 : 429);
+    }
+    const delegation = guarded.delegation;
 
     if (supervised) {
       const approval = await createApproval(pool, input.fromAgent.id, {
@@ -136,6 +150,16 @@ export class DelegationCoordinator {
           summary: `handoff awaiting your approval: '${input.kind}' from ${input.fromAgent.name} to agent ${link.toAgentId}`,
         }),
       );
+      // Daily loop (spec §3b): supervised handoffs are the third
+      // approval_required source (all three ride the same consent rails).
+      await this.deps.alerts?.emit(input.fromAgent.ownerAddr, {
+        agentId: input.fromAgent.id,
+        linkId: link.id,
+        class: 'decision',
+        kind: 'approval_required',
+        summary: `${input.fromAgent.name} wants to hand off '${input.kind}' — waiting on you`,
+        refs: { approvalId: approval.id, delegationId: delegation.id },
+      });
     } else {
       this.deps.runtime.nudge(link.toAgentId);
     }
@@ -162,8 +186,33 @@ export class DelegationCoordinator {
    * Owner decision on a supervised handoff (called from POST /api/approvals/:id
    * AFTER the consent record is durable — consent-seq strictly precedes
    * delivery). approve → pending + nudge; deny → declined.
+   *
+   * P3C-2: the approval's OWN agent must be the delegation's issuer — the
+   * approval `requestRef` is no longer trusted to name a delegation the
+   * approval actually gates. A mismatch is a no-op + error trace (today it
+   * would be a cross-owner supervised-consent bypass the day external
+   * clients reach the gateway; loopback-only merely hides it).
    */
-  async onDelegationApprovalDecision(delegationId: string, decision: 'approve' | 'deny'): Promise<Delegation | null> {
+  async onDelegationApprovalDecision(
+    delegationId: string,
+    decision: 'approve' | 'deny',
+    approvalAgentId: string,
+  ): Promise<Delegation | null> {
+    const existing = await getDelegation(this.deps.pool, delegationId);
+    if (existing && existing.fromAgentId !== approvalAgentId) {
+      const rec = await appendTrace(this.deps.pool, {
+        agentId: approvalAgentId,
+        kind: 'error',
+        detail: {
+          summary: 'approval/delegation ownership mismatch — decision ignored',
+          reason: 'delegation_approval_mismatch',
+          delegationId,
+          delegationFromAgentId: existing.fromAgentId,
+        },
+      });
+      this.deps.hub.emit(approvalAgentId, 'trace', traceEvent(rec));
+      return null;
+    }
     const d =
       decision === 'approve'
         ? await transitionDelegation(this.deps.pool, delegationId, ['pending_approval'], 'pending')
@@ -171,9 +220,36 @@ export class DelegationCoordinator {
             decidedAt: true,
           });
     if (!d) return null; // raced with expiry/cancel — that transition won, already traced
+    if (decision === 'approve') {
+      // Build note 2: expiry restarts from the DECISION time — an approve at
+      // the buzzer must not deliver an already-expired envelope.
+      await resetDelegationExpiry(this.deps.pool, d.id, this.deps.settings.delegationTtlMs);
+    }
     await this.traceUpdate(d.fromAgentId, d, `owner ${decision === 'approve' ? 'approved' : 'denied'} the handoff`);
     if (decision === 'approve') this.deps.runtime.nudge(d.toAgentId);
     return d;
+  }
+
+  /**
+   * P3C-4: cancel pending envelopes whose link went inactive — called by the
+   * pickup path BEFORE selecting a candidate. Closes the pause-race window
+   * (an envelope inserted while the pause was mid-flight survives the pause's
+   * cancel pass); traced on BOTH agents' chains so either side's audit shows
+   * why the envelope died. Already-accepted envelopes are untouched (spec §4
+   * NOTE: accepted runs to completion).
+   */
+  async cancelInactiveLinkPickups(toAgentId: string): Promise<Delegation[]> {
+    const stale = await listPendingOnInactiveLinkFor(this.deps.pool, toAgentId);
+    const cancelled: Delegation[] = [];
+    for (const row of stale) {
+      const d = await transitionDelegation(this.deps.pool, row.id, ['pending'], 'cancelled', { decidedAt: true });
+      if (!d) continue; // raced — the winning transition already traced
+      const summary = `delegation '${d.kind}' cancelled at pickup: link no longer active`;
+      await this.traceUpdate(d.fromAgentId, d, summary);
+      await this.traceUpdate(d.toAgentId, d, summary);
+      cancelled.push(d);
+    }
+    return cancelled;
   }
 
   /** Receiver picked the envelope up (refusal of expired rows happens at the pickup query). */
@@ -288,12 +364,12 @@ export class DelegationCoordinator {
 
   /** One sweep pass (timer-driven; also called directly by tests). */
   async sweepOnce(): Promise<Delegation[]> {
-    return sweepAndTrace(this.deps.pool, this.deps.hub);
+    return sweepAndTrace(this.deps.pool, this.deps.hub, this.deps.alerts);
   }
 
   /** Shared trace + both-sides SSE for every lifecycle transition. */
   private async traceUpdate(traceAgentId: string, d: Delegation, summary: string): Promise<void> {
-    await traceDelegationUpdate(this.deps.pool, this.deps.hub, traceAgentId, d, summary);
+    await traceDelegationUpdate(this.deps.pool, this.deps.hub, traceAgentId, d, summary, this.deps.alerts);
   }
 
   private emitBothSides(d: Delegation): void {
@@ -306,6 +382,7 @@ export class DelegationCoordinator {
     kind: string,
     toAgentId?: string,
     extra?: Record<string, Json>,
+    ownerAddr?: string,
   ): Promise<void> {
     const rec = await appendTrace(this.deps.pool, {
       agentId,
@@ -319,6 +396,19 @@ export class DelegationCoordinator {
       },
     });
     this.deps.hub.emit(agentId, 'trace', traceEvent(rec));
+    // Daily loop: throttle/quota rejections surface coalesced (spam
+    // containment visibility, spec §3b) — one row per (agent, reason, hour).
+    if (ownerAddr !== undefined && this.deps.alerts) {
+      const hourBucket = new Date().toISOString().slice(0, 13);
+      await this.deps.alerts.emit(ownerAddr, {
+        agentId,
+        class: 'info',
+        kind: 'throttle',
+        summary: `delegation attempts from this agent are being throttled (${reason.replace('delegation_', '').replace('_', ' ')})`,
+        refs: { traceSeq: rec.seq },
+        dedupKey: `throttle:${agentId}:${reason}:${hourBucket}`,
+      });
+    }
   }
 }
 
@@ -333,6 +423,7 @@ async function traceDelegationUpdate(
   traceAgentId: string,
   d: Delegation,
   summary: string,
+  alerts?: AlertService,
 ): Promise<void> {
   const rec = await appendTrace(pool, {
     agentId: traceAgentId,
@@ -348,6 +439,29 @@ async function traceDelegationUpdate(
   });
   hub.emit(traceAgentId, 'trace', traceEvent(rec));
   emitDelegationBothSides(hub, d);
+  // Daily loop (spec §3b taxonomy): failed | expired | declined | cancelled
+  // surface as ONE info alert per envelope (dedup key = the delegation id —
+  // both-sides tracing cannot double-alert). Completions ride the digest, not
+  // the inbox: no chore queue (00 §1a).
+  if (alerts && (d.status === 'failed' || d.status === 'expired' || d.status === 'declined' || d.status === 'cancelled')) {
+    const link = await getLinkOwner(pool, d.linkId);
+    if (link) {
+      await alerts.emit(link, {
+        agentId: d.fromAgentId,
+        linkId: d.linkId,
+        class: 'info',
+        kind: 'delegation_terminal',
+        summary,
+        refs: { delegationId: d.id, traceSeq: rec.seq },
+        dedupKey: `delegation_terminal:${d.id}`,
+      });
+    }
+  }
+}
+
+async function getLinkOwner(pool: Pool, linkId: string): Promise<string | null> {
+  const res = await pool.query<{ owner_addr: string }>(`SELECT owner_addr FROM links WHERE id = $1`, [linkId]);
+  return res.rows[0]?.owner_addr ?? null;
 }
 
 function emitDelegationBothSides(hub: SseHub, d: Delegation): void {
@@ -378,21 +492,21 @@ function emitDelegationBothSides(hub: SseHub, d: Delegation): void {
 }
 
 /** Expire stale envelopes + trace each on the issuer's chain (expiry points B and C). */
-async function sweepAndTrace(pool: Pool, hub: SseHub): Promise<Delegation[]> {
+async function sweepAndTrace(pool: Pool, hub: SseHub, alerts?: AlertService): Promise<Delegation[]> {
   const swept = await sweepExpiredDelegations(pool);
   for (const d of swept) {
-    await traceDelegationUpdate(pool, hub, d.fromAgentId, d, `delegation '${d.kind}' expired`);
+    await traceDelegationUpdate(pool, hub, d.fromAgentId, d, `delegation '${d.kind}' expired`, alerts);
     // Gate finding: a supervised envelope expiring mid-approval leaves its
     // approval card dangling forever (nobody will ever deliver a decision to
     // a terminal delegation). Expire the linked approval chain-visibly, the
     // same shape the approval-timeout paths use.
-    await expireLinkedApprovals(pool, hub, d);
+    await expireLinkedApprovals(pool, hub, d, alerts);
   }
   return swept;
 }
 
 /** Expire pending approval rows that gate a now-terminal delegation. */
-async function expireLinkedApprovals(pool: Pool, hub: SseHub, d: Delegation): Promise<void> {
+async function expireLinkedApprovals(pool: Pool, hub: SseHub, d: Delegation, alerts?: AlertService): Promise<void> {
   const rows = await pool.query<{ id: string; request_ref: Json }>(
     `SELECT id, request_ref FROM approvals
      WHERE agent_id = $1 AND state = 'pending'
@@ -417,6 +531,12 @@ async function expireLinkedApprovals(pool: Pool, hub: SseHub, d: Delegation): Pr
       approvalId: row.id,
       decision: 'expired',
     });
+    await alerts?.resolveByApproval(row.id, {
+      resolution: 'expired',
+      via: 'system',
+      agentId: d.fromAgentId,
+      consentSeq: consent.seq,
+    });
   }
 }
 
@@ -426,8 +546,8 @@ async function expireLinkedApprovals(pool: Pool, hub: SseHub, d: Delegation): Pr
  * terminally and chain-visibly before the loops start. Runs next to
  * sweepOrphanedApprovals in the composition root.
  */
-export async function runBootSweep(pool: Pool, hub: SseHub): Promise<Delegation[]> {
-  const expired = await sweepAndTrace(pool, hub);
+export async function runBootSweep(pool: Pool, hub: SseHub, alerts?: AlertService): Promise<Delegation[]> {
+  const expired = await sweepAndTrace(pool, hub, alerts);
   // Gate finding: an 'accepted' row is an in-flight cycle; after a restart
   // that cycle no longer exists (per-cycle thread ids; pickup takes only
   // 'pending') — without this, the envelope dangles as a zombie forever.
@@ -440,7 +560,7 @@ export async function runBootSweep(pool: Pool, hub: SseHub): Promise<Delegation[
       decidedAt: true,
     });
     if (!d) continue;
-    await traceDelegationUpdate(pool, hub, d.toAgentId, d, `delegation '${d.kind}' failed: orphaned by restart`);
+    await traceDelegationUpdate(pool, hub, d.toAgentId, d, `delegation '${d.kind}' failed: orphaned by restart`, alerts);
     failed.push(d);
   }
   return [...expired, ...failed];

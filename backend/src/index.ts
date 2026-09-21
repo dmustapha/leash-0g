@@ -13,13 +13,19 @@ import { createPrivyVerifier } from './api/privy.js';
 import { LeashChainOps, zeroGChain } from './chain/ops.js';
 import { RevokeWatcher } from './chain/revoke-watcher.js';
 import { viemRevokedLogSource } from './chain/log-source.js';
-import { AuditBatcher } from './audit/batcher.js';
+import { AuditBatcher, StreamBatcher, ownerStreamSource } from './audit/batcher.js';
 import { ZeroGStorage } from './audit/storage.js';
 import { SessionChain } from './runtime/session-chain.js';
 import { LeashRuntimeManager } from './runtime/manager.js';
 import { backfillLegacyGuardian } from './store/agents.js';
+import { sweepStaleReservations } from './store/reservations.js';
 import { sweepOrphanedApprovals } from './approvals/sweep.js';
 import { DelegationCoordinator, runBootSweep } from './coordination/coordinator.js';
+import { AlertService } from './alerts/service.js';
+import { TelegramBot } from './telegram/bot.js';
+import { FetchTelegramApi } from './telegram/api.js';
+import { DigestService } from './digest/service.js';
+import { getAgentById } from './store/agents.js';
 
 /** Composition root: wire every module, migrate, listen, run the loops. */
 async function main(): Promise<void> {
@@ -51,6 +57,16 @@ async function main(): Promise<void> {
   // C-6 startup sweep: orphaned pending approvals → expired, chain-visible.
   const swept = await sweepOrphanedApprovals(pool);
   if (swept.length > 0) console.error(`swept ${swept.length} orphaned pending approval(s)`);
+  // P3C-1 boot sweep: reservations orphaned by a crash mid-create. Counting
+  // already ignores TTL-dead rows; this keeps the table honest.
+  const staleReservations = await sweepStaleReservations(pool, cfg.RESERVATION_TTL_MS);
+  if (staleReservations > 0) console.error(`released ${staleReservations} stale create reservation(s)`);
+  const reservationSweepTimer = setInterval(() => {
+    void sweepStaleReservations(pool, cfg.RESERVATION_TTL_MS).catch((err: unknown) =>
+      console.error('reservation sweep tick failed', err),
+    );
+  }, cfg.RESERVATION_TTL_MS);
+  reservationSweepTimer.unref();
 
   const checkpointer = new PostgresSaver(pool, undefined, { schema: 'public' });
   if (migratePool === pool) {
@@ -62,10 +78,19 @@ async function main(): Promise<void> {
   }
 
   const hub = new SseHub();
+  // S8: owner aggregate fan-out — agent→owner resolved from the DB, cached.
+  hub.setOwnerLookup(async (agentId) => (await getAgentById(pool, agentId))?.ownerAddr ?? null);
   const broker = new ApprovalBroker();
+  // Phase-3 alert engine — constructed BEFORE the boot sweep so boot-swept
+  // delegations surface in the inbox too.
+  const alerts = new AlertService({
+    pool,
+    hub,
+    settings: { alertRatePerOwnerPerHour: cfg.ALERT_RATE_PER_OWNER_PER_HOUR },
+  });
   // C-6 startup sweep, coordination half (expiry point C): orphaned/stale
   // delegations → expired, chain-visibly, before any loop starts.
-  const sweptDelegations = await runBootSweep(pool, hub);
+  const sweptDelegations = await runBootSweep(pool, hub, alerts);
   if (sweptDelegations.length > 0) console.error(`swept ${sweptDelegations.length} orphaned delegation(s)`);
   const queue = new ComputeQueue({ baseUrl: cfg.COMPUTE_BASE_URL, apiKey: cfg.ZERO_G_COMPUTE_API_KEY });
   const chain = new LeashChainOps({
@@ -81,6 +106,7 @@ async function main(): Promise<void> {
     pool,
     hub,
     broker,
+    alerts,
     chain: new SessionChain({ rpcUrl: cfg.ZERO_G_RPC, chainId: cfg.ZERO_G_CHAIN_ID }),
     checkpointer,
     settings: {
@@ -98,6 +124,7 @@ async function main(): Promise<void> {
     pool,
     hub,
     runtime,
+    alerts,
     settings: {
       delegationTtlMs: cfg.DELEGATION_TTL_MS,
       delegationRatePerLinkPerHour: cfg.DELEGATION_RATE_PER_LINK_PER_HOUR,
@@ -109,6 +136,40 @@ async function main(): Promise<void> {
   // the coordinator, which needed the runtime's nudge — wired back here.
   runtime.setCoordinator(coordinator);
 
+  const digest = new DigestService({
+    pool,
+    chain,
+    settings: { digestDefaultHourUtc: cfg.DIGEST_DEFAULT_HOUR_UTC },
+  });
+
+  // Telegram bot (S9): the whole surface exists only when the token is set.
+  // All four env vars are required together — a partial config is a mistake,
+  // fail fast rather than half-run.
+  let telegram: { bot: TelegramBot; webhookSecret: string } | undefined;
+  if (cfg.TELEGRAM_BOT_TOKEN) {
+    if (!cfg.TELEGRAM_WEBHOOK_SECRET || !cfg.TELEGRAM_BOT_USERNAME || !cfg.PUBLIC_BASE_URL) {
+      throw new Error(
+        'TELEGRAM_BOT_TOKEN is set but TELEGRAM_WEBHOOK_SECRET / TELEGRAM_BOT_USERNAME / PUBLIC_BASE_URL are not',
+      );
+    }
+    const bot = new TelegramBot({
+      pool,
+      api: new FetchTelegramApi({ botToken: cfg.TELEGRAM_BOT_TOKEN }),
+      botUsername: cfg.TELEGRAM_BOT_USERNAME,
+      decide: { pool, hub, broker, coordinator, alerts },
+    });
+    alerts.setTelegramDelivery(bot.delivery());
+    // /digest command: mark-and-render on demand (advances the cursor, spec §3b).
+    bot.setDigestProvider(async (ownerAddr) => digest.renderText(await digest.mark(ownerAddr)));
+    telegram = { bot, webhookSecret: cfg.TELEGRAM_WEBHOOK_SECRET };
+    // Idempotent webhook registration at boot (S9).
+    const webhookUrl = `${cfg.PUBLIC_BASE_URL.replace(/\/$/, '')}/api/telegram/webhook`;
+    new FetchTelegramApi({ botToken: cfg.TELEGRAM_BOT_TOKEN })
+      .setWebhook(webhookUrl, cfg.TELEGRAM_WEBHOOK_SECRET)
+      .then(() => console.error(`telegram webhook registered: ${webhookUrl}`))
+      .catch((err: unknown) => console.error('telegram setWebhook failed (alerts still work in-app)', err));
+  }
+
   const appDeps = {
     pool,
     queue,
@@ -118,6 +179,9 @@ async function main(): Promise<void> {
     chain,
     runtime,
     coordinator,
+    alerts,
+    digest,
+    telegram,
     settings: {
       keyEncryptionSecret: cfg.KEY_ENCRYPTION_SECRET,
       approvalTimeoutMs: cfg.APPROVAL_TIMEOUT_MS,
@@ -126,6 +190,8 @@ async function main(): Promise<void> {
       storageIndexerUrl: cfg.ZERO_G_STORAGE_INDEXER,
       createQuotaPerOwner: cfg.CREATE_QUOTA_PER_OWNER,
       createRatePerHour: cfg.CREATE_RATE_PER_HOUR,
+      reservationTtlMs: cfg.RESERVATION_TTL_MS,
+      balanceCacheTtlMs: cfg.BALANCE_CACHE_TTL_MS,
       allowlistMax: cfg.ALLOWLIST_MAX,
       rulesMax: cfg.RULES_MAX,
       delegationTtlMs: cfg.DELEGATION_TTL_MS,
@@ -139,21 +205,35 @@ async function main(): Promise<void> {
   const ownerApp = createOwnerApp(appDeps);
   const gatewayApp = createGatewayApp(appDeps);
 
-  const batcher = new AuditBatcher({
-    pool,
-    uploader: new ZeroGStorage({
-      indexerUrl: cfg.ZERO_G_STORAGE_INDEXER,
-      rpcUrl: cfg.ZERO_G_RPC,
-      opsPrivateKey: cfg.OPS_PRIVATE_KEY,
-    }),
+  const uploader = new ZeroGStorage({
+    indexerUrl: cfg.ZERO_G_STORAGE_INDEXER,
+    rpcUrl: cfg.ZERO_G_RPC,
+    opsPrivateKey: cfg.OPS_PRIVATE_KEY,
   });
+  const batcher = new AuditBatcher({ pool, uploader });
   batcher.start();
+  // §3d: the owner-stream batcher — same machinery, second source. Defers
+  // per owner until the stream pubkey exists, then drains the full backlog.
+  const ownerBatcher = new StreamBatcher({ pool, uploader }, ownerStreamSource);
+  ownerBatcher.start();
+
+  // Digest scheduler tick (spec §3b): 5-min cadence with a catch-up window —
+  // fires when the owner's hour has passed and nothing was sent today.
+  const digestTimer = setInterval(() => {
+    void digest
+      .scheduledTick(new Date(), async (_ownerAddr, chatId, text) => {
+        if (!telegram) return;
+        await telegram.bot.sendTo(chatId, text);
+      })
+      .catch((err: unknown) => console.error('digest scheduler tick failed', err));
+  }, 300_000);
+  digestTimer.unref();
 
   const publicClient = createPublicClient({
     chain: zeroGChain(cfg.ZERO_G_RPC, cfg.ZERO_G_CHAIN_ID),
     transport: http(cfg.ZERO_G_RPC),
   });
-  const watcher = new RevokeWatcher({ pool, hub, runtime, coordinator, source: viemRevokedLogSource(publicClient) });
+  const watcher = new RevokeWatcher({ pool, hub, runtime, coordinator, alerts, source: viemRevokedLogSource(publicClient) });
   watcher.start();
   // Expiry point B: 60s periodic sweeper for stale delegations.
   coordinator.startSweeper();
@@ -179,7 +259,10 @@ async function main(): Promise<void> {
     console.error(`${signal} received — shutting down`);
     watcher.stop();
     batcher.stop();
+    ownerBatcher.stop();
+    clearInterval(digestTimer);
     coordinator.stopSweeper();
+    clearInterval(reservationSweepTimer);
     broker.cancelAll();
     gatewayServer.close();
     server.close(() => {

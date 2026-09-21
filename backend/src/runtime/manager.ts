@@ -12,6 +12,8 @@ import { appendTrace } from '../trace/trace-store.js';
 import { traceEvent } from '../sse/events.js';
 import type { AgentRow } from '../types.js';
 import type { DelegationCoordinator } from '../coordination/coordinator.js';
+import type { AlertService } from '../alerts/service.js';
+import { BoundaryRegistry } from './boundary.js';
 import { listActivatablePendingFor } from '../coordination/store.js';
 import type { RuntimeChain } from './session-chain.js';
 import { buildTreasuryGraph, type TreasuryGraph } from './treasury-graph.js';
@@ -33,6 +35,8 @@ export interface RuntimeManagerDeps {
   broker: ApprovalBroker;
   chain: RuntimeChain;
   checkpointer: BaseCheckpointSaver;
+  /** Phase-3 alert engine (optional in coordination-free test setups). */
+  alerts?: AlertService | undefined;
   settings: RuntimeSettings;
 }
 
@@ -68,6 +72,9 @@ export class LeashRuntimeManager implements RuntimeManager {
    */
   private coordinator: DelegationCoordinator | null = null;
 
+  /** P3C-6(iii): active policy boundaries, shared across cycles (damping). */
+  private readonly boundaries = new BoundaryRegistry();
+
   constructor(private readonly deps: RuntimeManagerDeps) {}
 
   setCoordinator(coordinator: DelegationCoordinator): void {
@@ -88,6 +95,8 @@ export class LeashRuntimeManager implements RuntimeManager {
         gatewayUrl: this.deps.settings.gatewayUrl,
         defaultModel: this.deps.settings.defaultModel,
         getCoordinator: () => this.coordinator,
+        alerts: this.deps.alerts,
+        boundaries: this.boundaries,
         ...(this.deps.settings.fetchFn ? { fetchFn: this.deps.settings.fetchFn } : {}),
       },
       {
@@ -212,6 +221,12 @@ export class LeashRuntimeManager implements RuntimeManager {
           detail: { reason: 'approval timed out' },
         });
         this.deps.hub.emit(loop.agent.id, 'trace', traceEvent(consent));
+        await this.deps.alerts?.resolveByApproval(approvalId, {
+          resolution: 'expired',
+          via: 'system',
+          agentId: loop.agent.id,
+          consentSeq: consent.seq,
+        });
       } else {
         // decided at the buzzer — pick the durable decision up instead
         decision = (await decidedInDb(this.deps.pool, approvalId)) ?? 'timeout';
@@ -231,6 +246,9 @@ export class LeashRuntimeManager implements RuntimeManager {
   private async pickUpInbound(agentId: string): Promise<InboundDelegationInput | null> {
     const coordinator = this.coordinator;
     if (!coordinator) return null;
+    // P3C-4: envelopes whose link went inactive die HERE, chain-visibly —
+    // and the pickup query itself only returns active-link rows.
+    await coordinator.cancelInactiveLinkPickups(agentId);
     const [candidate] = await listActivatablePendingFor(this.deps.pool, agentId, 1);
     if (!candidate) return null;
     const accepted = await coordinator.markAccepted(candidate.id);
@@ -262,6 +280,20 @@ export class LeashRuntimeManager implements RuntimeManager {
         detail: { summary: `cycle failed: ${message}` },
       });
       this.deps.hub.emit(agentId, 'trace', traceEvent(rec));
+      // Daily loop: repeated cycle errors coalesce into ONE alert per
+      // (agent, hour bucket) — count increments, no chore queue (spec §3b).
+      const agent = this.loops.get(agentId)?.agent ?? (await getAgentById(this.deps.pool, agentId));
+      if (agent && this.deps.alerts) {
+        const hourBucket = new Date().toISOString().slice(0, 13);
+        await this.deps.alerts.emit(agent.ownerAddr, {
+          agentId,
+          class: 'info',
+          kind: 'runtime_error',
+          summary: `${agent.name} hit a runtime error: ${message}`,
+          refs: { traceSeq: rec.seq },
+          dedupKey: `runtime_error:${agentId}:${hourBucket}`,
+        });
+      }
     } catch (traceErr) {
       console.error(`failed to record runtime failure for agent ${agentId}`, traceErr);
     }
