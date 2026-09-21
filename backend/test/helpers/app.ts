@@ -30,9 +30,15 @@ export function ownerAuth(addr: string): string {
   return `Bearer owner:${addr}`;
 }
 
+export const FAKE_GUARDIAN_ADDR = '0x' + 'ab'.repeat(20);
+
 export class FakeChainOps implements ChainOps {
   public revoked: string[] = [];
+  /** Guardian addr passed per revoke call — lane-selection assertions (C-1). */
+  public revokeGuardians: Array<string | null> = [];
   public funded: Array<{ addr: string; amountWei: bigint }> = [];
+  /** C-2: set to make revoke() reject like a reverted tx. */
+  public revokeError: Error | null = null;
   private nextAgentId = 100n;
 
   async deployAndRegister(input: { sessionKeyAddr: string }): Promise<{
@@ -40,6 +46,7 @@ export class FakeChainOps implements ChainOps {
     chainAgentId: bigint;
     createTx: string;
     registerTx: string;
+    guardianAddr: string;
   }> {
     void input;
     return {
@@ -47,11 +54,14 @@ export class FakeChainOps implements ChainOps {
       chainAgentId: this.nextAgentId++,
       createTx: '0x' + '11'.repeat(32),
       registerTx: '0x' + '22'.repeat(32),
+      guardianAddr: FAKE_GUARDIAN_ADDR,
     };
   }
 
-  async revoke(accountAddr: string): Promise<{ txHash: string }> {
+  async revoke(accountAddr: string, accountGuardianAddr?: string | null): Promise<{ txHash: string }> {
+    if (this.revokeError) throw this.revokeError;
     this.revoked.push(accountAddr.toLowerCase());
+    this.revokeGuardians.push(accountGuardianAddr ?? null);
     return { txHash: '0x' + '33'.repeat(32) };
   }
 
@@ -116,6 +126,21 @@ export interface TestApp {
   deps: AppDeps;
 }
 
+export function testSettings(overrides: Partial<AppDeps['settings']> = {}): AppDeps['settings'] {
+  return {
+    keyEncryptionSecret: TEST_KEK,
+    approvalTimeoutMs: 10_000,
+    sessionGasDustWei: 10n ** 15n,
+    defaultTimelockDelay: 900,
+    storageIndexerUrl: 'https://indexer.leash-test.local',
+    createQuotaPerOwner: 1000,
+    createRatePerHour: 1000,
+    allowlistMax: 16,
+    rulesMax: 32,
+    ...overrides,
+  };
+}
+
 export function buildTestApp(pool: Pool, overrides: Partial<AppDeps> = {}): TestApp {
   const hub = new SseHub();
   const broker = new ApprovalBroker();
@@ -135,6 +160,10 @@ export function buildTestApp(pool: Pool, overrides: Partial<AppDeps> = {}): Test
       sessionGasDustWei: 10n ** 15n,
       defaultTimelockDelay: 900,
       storageIndexerUrl: 'https://indexer.leash-test.local',
+      createQuotaPerOwner: 1000,
+      createRatePerHour: 1000,
+      allowlistMax: 16,
+      rulesMax: 32,
     },
     ...overrides,
   };

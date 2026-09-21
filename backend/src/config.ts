@@ -8,6 +8,11 @@ const envSchema = z.object({
   ZERO_G_STORAGE_INDEXER: z.string().url(),
   OPS_PRIVATE_KEY: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
   OPS_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
+  // C-1: dedicated guardian key — revoke-ONLY signer with its own nonce space,
+  // so incident response never queues behind creates. Gas-dust-funded; grants
+  // nothing (non-custodial invariant unchanged, spec §3b / 07 S5).
+  GUARDIAN_PRIVATE_KEY: z.string().regex(/^0x[0-9a-fA-F]{64}$/),
+  GUARDIAN_ADDRESS: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
   PRIVY_APP_ID: z.string().min(1),
   PRIVY_APP_SECRET: z.string().min(1),
   KEY_ENCRYPTION_SECRET: z.string().regex(/^[0-9a-fA-F]{64}$/),
@@ -29,6 +34,13 @@ const envSchema = z.object({
   // reasoning_content when content is starved. goal.model overrides per agent;
   // revisit at Phase 4 (real-job slice).
   RUNTIME_DEFAULT_MODEL: z.string().min(1).default('0gm-1.0-35b-a3b'),
+  // C-1 limits (07 S6, config-driven testnet defaults; revisit at first
+  // external users / mainnet). Quota counts ALL created rows incl. revoked —
+  // ops create-gas is the drained resource; revoking must not refill quota.
+  CREATE_QUOTA_PER_OWNER: z.coerce.number().int().positive().default(10),
+  CREATE_RATE_PER_HOUR: z.coerce.number().int().positive().default(5),
+  ALLOWLIST_MAX: z.coerce.number().int().positive().default(16),
+  RULES_MAX: z.coerce.number().int().positive().default(32),
 });
 
 export type Config = z.infer<typeof envSchema>;

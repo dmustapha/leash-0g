@@ -85,6 +85,8 @@ export interface AgentRow {
   encryptedAuditKey: string | null;
   /** Runtime copy of the gateway token, AES-256-GCM under KEY_ENCRYPTION_SECRET. */
   gatewayTokenEnc: string | null;
+  /** Guardian address this account was created with (C-1/S7); null = legacy ops-key guardian pre-backfill. */
+  guardianAddr: string | null;
   createdAt: string;
 }
 

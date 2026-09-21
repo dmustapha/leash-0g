@@ -8,7 +8,11 @@ import type { SseHub } from './sse/hub.js';
 import type { ApprovalBroker } from './approvals/broker.js';
 import type { PolicyView } from './types.js';
 
-/** On-chain operations performed with the LEASH ops key (deployer + guardian). */
+/**
+ * On-chain operations. Two signing lanes (C-1): deployer/ops key for creates,
+ * registry, funding; dedicated guardian key for revoke — independent nonce
+ * spaces so a revoke never queues behind a create burst.
+ */
 export interface ChainOps {
   deployAndRegister(input: {
     ownerAddr: string;
@@ -18,8 +22,13 @@ export interface ChainOps {
     policy: { perTransferCap: bigint; windowCap: bigint; windowSeconds: number; expiresAt: number };
     allowlist: string[];
     timelockDelay: number;
-  }): Promise<{ accountAddr: string; chainAgentId: bigint; createTx: string; registerTx: string }>;
-  revoke(accountAddr: string): Promise<{ txHash: string }>;
+  }): Promise<{ accountAddr: string; chainAgentId: bigint; createTx: string; registerTx: string; guardianAddr: string }>;
+  /**
+   * `accountGuardianAddr` = the guardian recorded for this account at create
+   * (null = legacy ops-key guardian, S7). Rejects (throws) on a reverted tx —
+   * callers must not mark the agent revoked on failure (C-2).
+   */
+  revoke(accountAddr: string, accountGuardianAddr?: string | null): Promise<{ txHash: string }>;
   fundSessionKey(addr: string, amountWei: bigint): Promise<{ txHash: string }>;
   getPolicyView(accountAddr: string, allowlistCandidates: string[]): Promise<PolicyView>;
   getBalance(addr: string): Promise<bigint>;
@@ -39,6 +48,11 @@ export interface Settings {
   defaultTimelockDelay: number;
   /** 0G Storage indexer base URL — used to build public ciphertext download URLs. */
   storageIndexerUrl: string;
+  /** C-1 limits (07 S6): quota counts ALL rows incl. revoked. */
+  createQuotaPerOwner: number;
+  createRatePerHour: number;
+  allowlistMax: number;
+  rulesMax: number;
 }
 
 export interface AppDeps {

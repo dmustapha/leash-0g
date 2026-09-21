@@ -9,7 +9,7 @@ import type { ApprovalBroker } from '../approvals/broker.js';
 import { generateGatewayToken, hashTokenSecret } from '../crypto/token.js';
 import { encryptSecret } from '../crypto/keycrypt.js';
 import { appendTrace, listTraces, verifyAgentChainIncremental } from '../trace/trace-store.js';
-import { getAgentById, insertAgent, rotateAgentToken } from '../store/agents.js';
+import { getAgentById, insertAgent, rotateAgentToken, countAgentsByOwner, createRateRetryAfter } from '../store/agents.js';
 import { getApproval, decideApproval } from '../store/approvals.js';
 import { applyRevokeFanout } from '../agents/revoke-fanout.js';
 import type { AgentRow, AuditBatch } from '../types.js';
@@ -112,6 +112,30 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     const input = parsed.data;
     const ownerAddr = req.ownerAddr as string;
 
+    // C-1 containment: the deployer key's create gas is the drained resource.
+    // Order: cheap shape caps first, then quota, then rate (all before any
+    // on-chain spend). Error shapes per PHASE-2 spec §4.
+    if (input.allowlist.length > deps.settings.allowlistMax) {
+      res.status(400).json({ error: 'allowlist_too_long', max: deps.settings.allowlistMax });
+      return;
+    }
+    if ((input.gatewayRules?.length ?? 0) > deps.settings.rulesMax) {
+      res.status(400).json({ error: 'too_many_rules', max: deps.settings.rulesMax });
+      return;
+    }
+    const owned = await countAgentsByOwner(deps.pool, ownerAddr);
+    if (owned >= deps.settings.createQuotaPerOwner) {
+      // Revoked rows COUNT (07 S6): revoking must not refill an attacker's quota.
+      res.status(403).json({ error: 'quota_exceeded', limit: deps.settings.createQuotaPerOwner });
+      return;
+    }
+    const retryAfter = await createRateRetryAfter(deps.pool, ownerAddr, deps.settings.createRatePerHour);
+    if (retryAfter !== null) {
+      res.setHeader('retry-after', String(retryAfter));
+      res.status(429).json({ error: 'rate_limited', retryAfter });
+      return;
+    }
+
     // Session key EOA is generated server-side and held ONLY encrypted at rest
     // (KEY_ENCRYPTION_SECRET). It is a scoped key: it can act solely within
     // the on-chain policy of the LeashAccount. Owner authority never touches
@@ -156,6 +180,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       // Runtime copy of the token (encrypted at rest) — the co-located runtime
       // is the gateway's only Phase-1 client and needs it at start().
       gatewayTokenEnc: encryptSecret(token.token, deps.settings.keyEncryptionSecret),
+      guardianAddr: deployed.guardianAddr,
     });
 
     // Gas dust so the session key can pay execute() gas; funds stay behind the account.
@@ -336,14 +361,40 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     res.json({ ok: true, running: false });
   }));
 
-  // Guardian revoke path: instant, no wallet ceremony mid-incident. The ops
-  // key can only refuse (revoke), never spend — non-custodial invariant.
+  // Guardian revoke path: instant, no wallet ceremony mid-incident. The
+  // guardian key can only refuse (revoke), never spend — non-custodial
+  // invariant. Lane selection by the account's stored guardian (C-1/S7).
   router.post('/api/agents/:id/revoke', asyncRoute(async (req: OwnerRequest, res) => {
     const agent = await requireOwnedAgent(req, res);
     if (!agent) return;
-    const { txHash } = await deps.chain.revoke(agent.accountAddr);
-    await applyRevokeFanout({ pool: deps.pool, hub: deps.hub, runtime: deps.runtime }, agent.id, 'guardian-api');
-    res.json({ ok: true, txHash, status: 'revoked' });
+    try {
+      const { txHash } = await deps.chain.revoke(agent.accountAddr, agent.guardianAddr);
+      await applyRevokeFanout({ pool: deps.pool, hub: deps.hub, runtime: deps.runtime }, agent.id, 'guardian-api');
+      res.json({ ok: true, txHash, status: 'revoked' });
+    } catch (err) {
+      // C-2: a reverted/failed guardian revoke is NEVER reported ok and the
+      // agent is NOT marked revoked (the hard boundary is still armed).
+      // Defense-in-depth: halt the runtime anyway, trace the failure, steer
+      // the owner to the LEASH-independent wallet revoke (00 §6b).
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`guardian revoke failed for agent ${agent.id}`, err);
+      await deps.runtime.haltForRevoke(agent.id);
+      const rec = await appendTrace(deps.pool, {
+        agentId: agent.id,
+        kind: 'error',
+        detail: { summary: 'guardian revoke failed — agent NOT revoked on-chain', message },
+      });
+      deps.hub.emit(agent.id, 'trace', traceEvent(rec));
+      res.status(502).json({
+        ok: false,
+        error: 'guardian_revoke_failed',
+        ownerRevokeFallback: {
+          accountAddr: agent.accountAddr,
+          method: 'revoke()',
+          hint: 'Revoke directly from your owner wallet — it works even if LEASH is down.',
+        },
+      });
+    }
   }));
 
   return router;
