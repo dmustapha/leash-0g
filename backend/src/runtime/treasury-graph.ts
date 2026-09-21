@@ -12,6 +12,7 @@ import { CoordinationError, type DelegationCoordinator } from '../coordination/c
 import type { AlertService } from '../alerts/service.js';
 import { BoundaryRegistry, policyFingerprint, DAMPABLE_ERRORS, type DampableError } from './boundary.js';
 import { decodeLeashError } from '../chain/errors.js';
+import { formatG, shortAddr, inMinutes } from '../util/format.js';
 import type { DecodedLeashError } from '../types.js';
 import type { RuntimeChain } from './session-chain.js';
 import {
@@ -76,6 +77,8 @@ export interface TreasuryGraphDeps {
   alerts?: AlertService | undefined;
   /** P3C-6(iii) futile-retry damping registry (shared across cycles by the manager). */
   boundaries?: BoundaryRegistry | undefined;
+  /** For the approval-card deadline copy (falls back to a generic line when absent). */
+  approvalTimeoutMs?: number | undefined;
   chain: RuntimeChain;
   gatewayUrl: string;
   defaultModel: string;
@@ -257,15 +260,26 @@ export function buildTreasuryGraph(
         await deps.alerts?.resolveByDedupKey(ctx.agentRow.ownerAddr, refreshed.boundary.dedupKey);
       } else if (refreshed.status === 'active' && (verdict.route === 'act' || verdict.route === 'approval')) {
         const b = refreshed.boundary;
-        const until = b.clearsAtUnix !== null ? ` until ${new Date(b.clearsAtUnix * 1000).toISOString()}` : '';
-        return {
-          decision: {
-            action: 'stand_down',
-            amountWei: '0',
-            reason: `boundary active (${b.errorName})${until} — standing down instead of retrying a doomed send`,
-          },
-          route: 'stand_down',
-        };
+        if (
+          b.errorName === 'OverWindowCap' &&
+          BigInt(verdict.decision.amountWei) <= BigInt(state.policy.remainingWindowWei)
+        ) {
+          // The CURRENT proposal fits the remaining window — the boundary no
+          // longer describes a doomed send. Clear it (resolving its limit_hit
+          // alert) and fall through to normal flow instead of standing down.
+          deps.boundaries.clear(ctx.agentId);
+          await deps.alerts?.resolveByDedupKey(ctx.agentRow.ownerAddr, b.dedupKey);
+        } else {
+          const until = b.clearsAtUnix !== null ? ` until ${new Date(b.clearsAtUnix * 1000).toISOString()}` : '';
+          return {
+            decision: {
+              action: 'stand_down',
+              amountWei: '0',
+              reason: `boundary active (${b.errorName})${until} — standing down instead of retrying a doomed send`,
+            },
+            route: 'stand_down',
+          };
+        }
       }
       // Boundary TOUCHED (00 §1a): the goal wants a transfer but the window
       // is exhausted — the leash is binding whether or not the model politely
@@ -293,18 +307,31 @@ export function buildTreasuryGraph(
         };
       }
       // Pre-flight window detection: a send provably over the remaining
-      // window allowance is doomed REGARDLESS of owner approval — activate
-      // the boundary without burning gas on the revert.
+      // window allowance never reaches the chain (no gas burned on the
+      // revert). The boundary ACTIVATES only when the window is fully
+      // exhausted (remaining === 0) — with allowance left the model can
+      // retry smaller next cycle, so a plain stand-down suffices (no
+      // damping, no limit_hit).
       if (
         (verdict.route === 'act' || verdict.route === 'approval') &&
         BigInt(verdict.decision.amountWei) > BigInt(state.policy.remainingWindowWei)
       ) {
-        await activateBoundary(state, 'OverWindowCap', state.policy.windowResetsAtUnix);
+        if (BigInt(state.policy.remainingWindowWei) === 0n) {
+          await activateBoundary(state, 'OverWindowCap', state.policy.windowResetsAtUnix);
+          return {
+            decision: {
+              action: 'stand_down',
+              amountWei: '0',
+              reason: 'over the remaining window allowance — standing down until the window resets',
+            },
+            route: 'stand_down',
+          };
+        }
         return {
           decision: {
             action: 'stand_down',
             amountWei: '0',
-            reason: 'over the remaining window allowance — standing down until the window resets',
+            reason: 'proposed amount exceeds the remaining window allowance — retry smaller next cycle',
           },
           route: 'stand_down',
         };
@@ -329,14 +356,33 @@ export function buildTreasuryGraph(
         valueWei: verdict.decision.amountWei,
       }),
     );
-    // Daily loop (spec §3b): decision alert on the runtime interrupt boundary.
+    // Daily loop (spec §3b): decision alert on the runtime interrupt
+    // boundary — RICH but strictly server-side facts (amount, recipient,
+    // allowlist status, caps context, deadline). Nothing model-authored.
     if (deps.alerts) {
+      const to = state.effectiveBeneficiary;
+      const allowlisted = state.policy.allowlist.includes(to.toLowerCase());
+      const deadline =
+        deps.approvalTimeoutMs !== undefined
+          ? ` ⏱ Auto-denies ${inMinutes(deps.approvalTimeoutMs)} if you don't answer.`
+          : ' ⏱ Auto-denies if you don\'t answer in time.';
       await deps.alerts.emit(ctx.agentRow.ownerAddr, {
         agentId: ctx.agentId,
         class: 'decision',
         kind: 'approval_required',
-        summary: `${ctx.agentRow.name} wants to send ${verdict.decision.amountWei} wei — over its per-transfer cap`,
-        refs: { approvalId: approval.id },
+        summary:
+          `${ctx.agentRow.name} wants to send ${formatG(verdict.decision.amountWei)} to ${shortAddr(to)}` +
+          `${allowlisted ? ' (✓ on its allowlist)' : ''} — over its per-transfer cap of ${formatG(state.policy.perTransferCapWei)}. ` +
+          `Window used: ${formatG(state.policy.spentInWindowWei)} of ${formatG(state.policy.windowCapWei)}.` +
+          deadline,
+        refs: {
+          approvalId: approval.id,
+          amountWei: verdict.decision.amountWei,
+          to,
+          ...(deps.approvalTimeoutMs !== undefined
+            ? { autoDeniesAtUnix: Math.floor((Date.now() + deps.approvalTimeoutMs) / 1000) }
+            : {}),
+        },
       });
     }
     return { ...verdict, approvalId: approval.id };

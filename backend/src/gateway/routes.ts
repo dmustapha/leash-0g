@@ -7,6 +7,7 @@ import { appendTrace } from '../trace/trace-store.js';
 import { createApproval, expireApproval } from '../store/approvals.js';
 import type { ApprovalBroker } from '../approvals/broker.js';
 import type { AlertService } from '../alerts/service.js';
+import { inMinutes } from '../util/format.js';
 import { awaitApprovalDecision } from '../approvals/rendezvous.js';
 import type { SseHub } from '../sse/hub.js';
 import { approvalEvent, requestSummary, traceEvent } from '../sse/events.js';
@@ -96,18 +97,35 @@ async function handleCompletion(deps: GatewayDeps, req: Request, res: Response):
  * NO consent record itself (single-append semantics); only the timeout path
  * writes, transitioning the row pending → expired chain-visibly.
  */
+/** The owner-authored rule text that triggered the hold (first require_approval match). */
+function outcomeRuleMatch(agent: AgentRow, body: Json): string {
+  const serialized = JSON.stringify(body).toLowerCase();
+  const rule = agent.gatewayRules.find(
+    (r) => r.action === 'require_approval' && serialized.includes(JSON.stringify(r.match).slice(1, -1).toLowerCase()),
+  );
+  return rule?.match ?? 'require approval';
+}
+
 async function holdForApproval(deps: GatewayDeps, agent: AgentRow, body: Json, res: Response): Promise<boolean> {
   const approval = await createApproval(deps.pool, agent.id, body);
   deps.hub.emit(agent.id, 'approval', approvalEvent({ approvalId: approval.id, summary: requestSummary(body) }));
   // Daily loop (spec §3b): the decision alert — actionable inline on both
   // channels; auto-resolves when decided anywhere. Emission never blocks the
   // hold (AlertService.emit swallows its own failures).
+  // M-01 (security gate): the ALERT summary is composed from STRUCTURED,
+  // server-side facts only — the request tail is agent-authored
+  // (attacker-influenceable under prompt injection) and must not ride
+  // Telegram (00 §6b). The matched rule text is OWNER-authored (safe); the
+  // full request stays visible on the cockpit approval card.
+  const matchedRule = outcomeRuleMatch(agent, body);
   await deps.alerts.emit(agent.ownerAddr, {
     agentId: agent.id,
     class: 'decision',
     kind: 'approval_required',
-    summary: `${agent.name} needs your approval: ${requestSummary(body)}`,
-    refs: { approvalId: approval.id },
+    summary:
+      `${agent.name} paused a request because your "${matchedRule}" rule requires approval. ` +
+      `Full request is in the app. ⏱ Auto-denies ${inMinutes(deps.approvalTimeoutMs)} if you don't answer.`,
+    refs: { approvalId: approval.id, autoDeniesAtUnix: Math.floor((Date.now() + deps.approvalTimeoutMs) / 1000) },
   });
   // C-3: shared register→check-durable→wait→recheck rendezvous — closes the
   // approve-recorded-but-never-forwarded race (decision landing durably

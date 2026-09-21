@@ -9,7 +9,9 @@ import type { TelegramApi, SendMessageInput, EditMessageInput } from '../../src/
 import { createApproval, getApproval } from '../../src/store/approvals.js';
 import { getOwnerSettings } from '../../src/store/owner-settings.js';
 import { listTraces } from '../../src/trace/trace-store.js';
-import { getAlert } from '../../src/alerts/store.js';
+import { getAlert, listAlerts } from '../../src/alerts/store.js';
+import { createLink } from '../../src/coordination/store.js';
+import { getAgentById } from '../../src/store/agents.js';
 
 /**
  * D3 Telegram slice (spec §8 "Telegram" row). The TRANSPORT is mocked at the
@@ -204,8 +206,18 @@ describe('inline decide — THE consent rail', () => {
     const card = await pushApprovalCard(h, owner, agentId);
 
     // A held request waits on the broker BEFORE the decision arrives —
-    // the notify must wake it (consent-before-forward is order-asserted below).
+    // the notify must wake it. Consent-before-forward is ORDER-asserted: at
+    // the MOMENT the waiter resolves (i.e. when a held request would forward)
+    // the consent record must ALREADY be durable in trace_records — queried
+    // synchronously inside the wait promise's continuation, before the main
+    // flow awaits anything else.
     const waited = h.t.broker.wait(card.approvalId, 10_000);
+    const consentDurableAtForward = waited.then(async (d) => ({
+      d,
+      consent: (await listTraces(db.pool, agentId)).find(
+        (r) => r.kind === 'consent' && r.approvalId === card.approvalId,
+      ),
+    }));
 
     await h.bot.handleUpdate({
       callback_query: {
@@ -216,14 +228,20 @@ describe('inline decide — THE consent rail', () => {
     });
 
     expect((await getApproval(db.pool, card.approvalId))?.state).toBe('approved');
-    const decision = (await waited) as { decision: string };
+    const atForward = await consentDurableAtForward;
+    const decision = atForward.d as { decision: string };
     expect(decision.decision).toBe('approve');
+    // Durable BEFORE/AT the forward moment, not merely eventually.
+    expect(atForward.consent).toBeDefined();
     // Consent record: durable, channel recorded, seq strictly before any
     // action that would follow the notify.
     const traces = await listTraces(db.pool, agentId);
     const consent = traces.find((r) => r.kind === 'consent' && r.approvalId === card.approvalId);
     expect(consent).toBeDefined();
     expect((consent?.detail as { channel?: string })?.channel).toBe('telegram');
+    for (const action of traces.filter((r) => r.kind === 'action')) {
+      expect(atForward.consent?.seq).toBeLessThan(action.seq);
+    }
     // Alert resolved via telegram + message edited with buttons removed.
     const alert = await getAlert(db.pool, card.alertId);
     expect(alert?.status).toBe('resolved');
@@ -265,8 +283,8 @@ describe('inline decide — THE consent rail', () => {
     });
     expect((await getApproval(db.pool, card.approvalId))?.state).toBe('pending');
 
-    // Wrong chat (forwarded card in a stranger's chat) — token must NOT decide
-    // AND is burned (single-use), so it cannot be replayed from the right chat.
+    // Wrong chat (forwarded card in a stranger's chat) — must NOT decide and
+    // (M-02) must NOT burn the token: the legitimate chat keeps its buttons.
     await h.bot.handleUpdate({
       callback_query: {
         id: 'f2',
@@ -276,7 +294,8 @@ describe('inline decide — THE consent rail', () => {
     });
     expect((await getApproval(db.pool, card.approvalId))?.state).toBe('pending');
 
-    // The burned token now fails even from the linked chat (replay-proof).
+    // The legitimate chat can still use the SAME button after the failed
+    // foreign tap (authorize-before-claim) — and this decides for real.
     await h.bot.handleUpdate({
       callback_query: {
         id: 'f3',
@@ -284,12 +303,13 @@ describe('inline decide — THE consent rail', () => {
         message: { chat: { id: '999' }, message_id: card.messageId },
       },
     });
-    expect((await getApproval(db.pool, card.approvalId))?.state).toBe('pending');
-    // The deny token is untouched — the legitimate chat can still decide.
+    expect((await getApproval(db.pool, card.approvalId))?.state).toBe('approved');
+    // Replay of the used token is refused (single-use claim).
     await h.bot.handleUpdate({
       callback_query: { id: 'f4', data: card.denyData, message: { chat: { id: '999' }, message_id: card.messageId } },
     });
-    expect((await getApproval(db.pool, card.approvalId))?.state).toBe('denied');
+    expect((await getApproval(db.pool, card.approvalId))?.state).toBe('approved');
+    expect(h.api.answers.some((a) => /already decided/i.test(a.text ?? ''))).toBe(true);
   });
 
   it('already-decided (app decided first): callback is a no-op answer', async () => {
@@ -356,6 +376,58 @@ describe('inline decide — THE consent rail', () => {
   });
 });
 
+describe('timeout expiry — the deny-by-default arm resolves everywhere', () => {
+  it('supervised delegation expiring via sweepOnce: approval expired, alert resolved (expired/system), Telegram card edited', async () => {
+    const owner = uniqueOwner();
+    const h = buildTelegramHarness();
+    const fromId = await seedAgent(db.pool, { ownerAddr: owner, name: 'sup-issuer' });
+    const toId = await seedAgent(db.pool, { ownerAddr: owner, name: 'sup-receiver' });
+    await createLink(db.pool, { ownerAddr: owner, fromAgentId: fromId, toAgentId: toId, mode: 'supervised' });
+    await linkOwner(h, owner, '1414');
+    const from = await getAgentById(db.pool, fromId);
+    if (!from) throw new Error('issuer missing');
+
+    // REAL approval path: supervised issuance creates the approval + emits
+    // its approval_required alert, which pushes the Telegram card.
+    const baseline = h.api.sent.length;
+    const d = await h.t.coordinator.issueDelegation({ fromAgent: from, kind: 'task', payload: {} });
+    let start = Date.now();
+    while (h.api.sent.length <= baseline && Date.now() - start < 5000) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    const { alerts } = await listAlerts(db.pool, owner, { kind: 'approval_required', agentId: fromId });
+    const alert = alerts[0];
+    if (!alert) throw new Error('approval_required alert missing');
+    const approvalId = String(alert.refs.approvalId);
+    // The message id lands post-commit (best-effort push) — wait for it.
+    start = Date.now();
+    let messageId: number | undefined;
+    while (messageId === undefined && Date.now() - start < 5000) {
+      const stored = await getAlert(db.pool, alert.id);
+      if (stored?.telegramMessageId !== undefined) messageId = Number(stored.telegramMessageId);
+      else await new Promise((r) => setTimeout(r, 25));
+    }
+    expect(messageId).toBeDefined();
+
+    // REAL expiry path: age the envelope past its TTL, then run the sweeper.
+    await db.pool.query(`UPDATE delegations SET expires_at = now() - interval '1 minute' WHERE id = $1`, [d.id]);
+    await h.t.coordinator.sweepOnce();
+
+    expect((await getApproval(db.pool, approvalId))?.state).toBe('expired');
+    const resolved = await getAlert(db.pool, alert.id);
+    expect(resolved?.status).toBe('resolved');
+    expect(resolved?.resolution).toBe('expired');
+    expect(resolved?.resolvedVia).toBe('system');
+    // The card is EDITED to its outcome (stale phones can't act on it).
+    start = Date.now();
+    while (!h.api.edits.some((e) => e.message_id === messageId) && Date.now() - start < 3000) {
+      await new Promise((r) => setTimeout(r, 25));
+    }
+    const edit = h.api.edits.find((e) => e.message_id === messageId);
+    expect(edit?.text).toMatch(/Expired/);
+  });
+});
+
 describe('prefs (S11 defaults)', () => {
   it('info-class alerts do NOT push by default; explicit pref turns them on', async () => {
     const owner = uniqueOwner();
@@ -377,5 +449,44 @@ describe('prefs (S11 defaults)', () => {
       await new Promise((r) => setTimeout(r, 25));
     }
     expect(h.api.sent.some((m) => m.text === 'now pushed')).toBe(true);
+  });
+});
+
+describe('two-way commands', () => {
+  it('/agents lists each agent with open-decision counts; /pending re-sends fresh working cards', async () => {
+    const owner = uniqueOwner();
+    const h = buildTelegramHarness();
+    const agentId = await seedAgent(db.pool, { ownerAddr: owner, name: 'querybot' });
+    await linkOwner(h, owner, '2020');
+    const card = await pushApprovalCard(h, owner, agentId);
+    void card;
+
+    h.api.sent = [];
+    await h.bot.handleUpdate({ message: { chat: { id: '2020' }, text: '/agents' } });
+    const agentsMsg = h.api.sent.find((m) => m.text.includes('querybot'));
+    expect(agentsMsg?.text).toContain('active');
+    expect(agentsMsg?.text).toContain('1 decision');
+
+    // /pending re-pushes the open card with FRESH single-use buttons that decide.
+    h.api.sent = [];
+    await h.bot.handleUpdate({ message: { chat: { id: '2020' }, text: '/pending' } });
+    const repushed = h.api.sent.find((m) => m.reply_markup);
+    expect(repushed).toBeDefined();
+    const fresh = repushed?.reply_markup?.inline_keyboard[0]?.[0]?.callback_data ?? '';
+    await h.bot.handleUpdate({
+      callback_query: { id: 'q1', data: fresh, message: { chat: { id: '2020' }, message_id: 9999 } },
+    });
+    expect((await getApproval(db.pool, card.approvalId))?.state).toBe('approved');
+  });
+
+  it('/pending with nothing open answers calmly; unlinked chats get the not-linked line', async () => {
+    const owner = uniqueOwner();
+    const h = buildTelegramHarness();
+    await linkOwner(h, owner, '2121');
+    h.api.sent = [];
+    await h.bot.handleUpdate({ message: { chat: { id: '2121' }, text: '/pending' } });
+    expect(h.api.sent.some((m) => /Nothing waiting on you/.test(m.text))).toBe(true);
+    await h.bot.handleUpdate({ message: { chat: { id: 'stranger' }, text: '/agents' } });
+    expect(h.api.sent.some((m) => m.chat_id === 'stranger' && /not linked/.test(m.text))).toBe(true);
   });
 });

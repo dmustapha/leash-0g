@@ -83,8 +83,11 @@ export class AlertService {
       // but the guard runs first so a storm never appends per-emission rows.
       const recent = await countRecentEmissions(client, owner);
       if (recent >= this.deps.settings.alertRatePerOwnerPerHour && input.kind !== 'alert_storm') {
-        // Fold into ONE open storm row; the trip itself is recorded on the
-        // owner stream — nothing silently dropped.
+        // Fold into ONE open storm row. The owner stream records the TRIP
+        // (the storm row's creation) plus a periodic counter every 50th fold
+        // — not one record per folded emission, or the storm would amplify
+        // the append-only stream instead of the inbox. Nothing is lost: the
+        // DURABLE storm row's count carries the folded total.
         const folded = await upsertAlertInTx(client, {
           ownerAddr: owner,
           class: 'info',
@@ -94,13 +97,15 @@ export class AlertService {
           refs: { lastFoldedKind: input.kind },
           dedupKey: 'alert_storm',
         });
-        await appendOwnerRecordInTx(client, owner, 'alert', {
-          alertId: folded.alert.id,
-          kind: 'alert_storm',
-          foldedKind: input.kind,
-          foldedSummary: input.summary,
-          count: folded.alert.count,
-        });
+        if (!folded.deduped || folded.alert.count % 50 === 0) {
+          await appendOwnerRecordInTx(client, owner, 'alert', {
+            alertId: folded.alert.id,
+            kind: 'alert_storm',
+            foldedKind: input.kind,
+            foldedSummary: input.summary,
+            count: folded.alert.count,
+          });
+        }
         await client.query('COMMIT');
         alert = folded.alert;
         stormFolded = true;

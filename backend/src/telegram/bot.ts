@@ -131,6 +131,10 @@ export class TelegramBot {
       await this.handleStart(chatId, text.slice('/start'.length).trim());
     } else if (text === '/status') {
       await this.handleStatus(chatId);
+    } else if (text === '/agents') {
+      await this.handleAgents(chatId);
+    } else if (text === '/pending') {
+      await this.handlePending(chatId);
     } else if (text === '/digest') {
       await this.handleDigest(chatId);
     } else if (text === '/unlink') {
@@ -168,7 +172,13 @@ export class TelegramBot {
     await setTelegramChat(this.deps.pool, owner, chatId);
     await this.safeSend(
       chatId,
-      'Linked. You will get boundary alerts here — approve or deny straight from the message. /status for a fleet snapshot, /digest for activity since you last looked, /unlink to stop.',
+      'Linked. You will get boundary alerts here — approve or deny straight from the message.\n' +
+        'You can also ask me anytime:\n' +
+        '/status — fleet snapshot\n' +
+        '/agents — each agent, its state and open decisions\n' +
+        '/pending — re-send any decisions still waiting on you\n' +
+        '/digest — activity since you last looked\n' +
+        '/unlink — stop alerts here',
     );
   }
 
@@ -191,6 +201,59 @@ export class TelegramBot {
       chatId,
       `Fleet: ${row?.active ?? 0} active of ${row?.n ?? 0} agent(s) · ${open.rows[0]?.n ?? 0} open decision(s).`,
     );
+  }
+
+  /** Two-way query: per-agent state + open decisions (read-only, minimal disclosure). */
+  private async handleAgents(chatId: string): Promise<void> {
+    const owner = await getOwnerByChatId(this.deps.pool, chatId);
+    if (!owner) {
+      await this.safeSend(chatId, 'This chat is not linked to LEASH.');
+      return;
+    }
+    const rows = await this.deps.pool.query<{ id: string; name: string; status: string; open: string }>(
+      `SELECT a.id, a.name, a.status,
+              (SELECT count(*) FROM alerts al
+                WHERE al.agent_id = a.id AND al.class = 'decision' AND al.status IN ('unread','read')) AS open
+       FROM agents a WHERE a.owner_addr = $1 ORDER BY a.created_at ASC`,
+      [owner],
+    );
+    if (rows.rows.length === 0) {
+      await this.safeSend(chatId, 'No agents yet — create one in the LEASH app.');
+      return;
+    }
+    const lines = rows.rows.map((r) => {
+      const open = Number(r.open);
+      const state = r.status === 'revoked' ? 'revoked' : 'active';
+      return `🐕 ${r.name} — ${state}${open > 0 ? ` · ${open} decision${open === 1 ? '' : 's'} waiting on you (send /pending)` : ''}`;
+    });
+    await this.safeSend(chatId, lines.join('\n'));
+  }
+
+  /** Two-way query: re-send fresh decision cards for anything still open. */
+  private async handlePending(chatId: string): Promise<void> {
+    const owner = await getOwnerByChatId(this.deps.pool, chatId);
+    if (!owner) {
+      await this.safeSend(chatId, 'This chat is not linked to LEASH.');
+      return;
+    }
+    const open = await this.deps.pool.query<{ id: string }>(
+      `SELECT id FROM alerts
+       WHERE owner_addr = $1 AND class = 'decision' AND kind = 'approval_required'
+         AND status IN ('unread','read')
+       ORDER BY created_at ASC LIMIT 5`,
+      [owner],
+    );
+    if (open.rows.length === 0) {
+      await this.safeSend(chatId, 'Nothing waiting on you — your agents are running inside their leash.');
+      return;
+    }
+    // Re-push each card through the normal delivery path: fresh single-use
+    // buttons, same consent rails, edit-on-resolve still applies.
+    const { getAlert } = await import('../alerts/store.js');
+    for (const row of open.rows) {
+      const alert = await getAlert(this.deps.pool, row.id);
+      if (alert) await this.pushAlert(owner, alert);
+    }
   }
 
   private async handleDigest(chatId: string): Promise<void> {
@@ -223,19 +286,21 @@ export class TelegramBot {
       await answer('Invalid action.');
       return;
     }
-    // Single-use claim: raced/replayed taps lose atomically at the UPDATE.
-    const claimed = await this.deps.pool.query<{
+    // M-02 (security gate): AUTHORIZE first, CLAIM last — an unauthorized
+    // tap (wrong chat after a re-link race) must not burn the token and kill
+    // the legitimate chat's decision path. The atomic used_at UPDATE stays
+    // the final race-free gate against replay/double-tap.
+    const found = await this.deps.pool.query<{
       owner_addr: string;
       approval_id: string;
       alert_id: string;
       decision: 'approve' | 'deny';
     }>(
-      `UPDATE telegram_callbacks SET used_at = now()
-       WHERE token_hash = $1 AND used_at IS NULL
-       RETURNING owner_addr, approval_id, alert_id, decision`,
+      `SELECT owner_addr, approval_id, alert_id, decision FROM telegram_callbacks
+       WHERE token_hash = $1 AND used_at IS NULL`,
       [sha256(data)],
     );
-    const row = claimed.rows[0];
+    const row = found.rows[0];
     if (!row) {
       await answer('This action is no longer valid.');
       return;
@@ -260,6 +325,15 @@ export class TelegramBot {
     }
     if (approval.state !== 'pending') {
       await answer('Already decided.');
+      return;
+    }
+    // Race-free single-use claim (replay/double-tap loses HERE).
+    const claimed = await this.deps.pool.query(
+      `UPDATE telegram_callbacks SET used_at = now() WHERE token_hash = $1 AND used_at IS NULL`,
+      [sha256(data)],
+    );
+    if (claimed.rowCount === 0) {
+      await answer('This action is no longer valid.');
       return;
     }
     const outcome = await decideApprovalWithConsent(this.deps.decide, agent, approval, row.decision, {

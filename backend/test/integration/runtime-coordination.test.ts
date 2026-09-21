@@ -454,9 +454,13 @@ describe('goal-union create route (spec §3c compatibility)', () => {
   });
 
   it('sentinel creates with an EMPTY allowlist (spend-incapable preset)', async () => {
+    // P3C-3 (Phase 3): the spend-incapable preset is SERVER-enforced now —
+    // zero caps are part of the sentinel shape, not an FE nicety. The old
+    // non-zero-cap body is covered by the 400 pin in gate2-debt.test.ts.
     const res = await create({
       ...base,
       allowlist: [],
+      policy: { ...base.policy, perTransferCapWei: '0', windowCapWei: '0' },
       goal: { type: 'sentinel', beneficiary: BENEFICIARY, targetBalanceWei: (5n * CAP).toString(), topUpWei: (CAP / 2n).toString() },
     });
     expect(res.status).toBe(201);

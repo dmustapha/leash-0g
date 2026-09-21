@@ -9,7 +9,7 @@
 // Pure component — decisions and dismissals bubble up via callbacks.
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import type { Alert } from '@/lib/types';
 import { countdown } from '@/lib/format';
@@ -65,7 +65,17 @@ export function AlertCard({
 
   const decodedPlain = alert.refs.errorName ? plainLeashError(alert.refs.errorName) : null;
   const clearsAt = alert.refs.boundaryClearsAtUnix;
+  const autoDeniesAt = typeof alert.refs.autoDeniesAtUnix === 'number' ? alert.refs.autoDeniesAtUnix : undefined;
   const sessionExpired = alert.refs.errorName === 'SessionExpired';
+
+  // Keep the countdown lines ticking (30s granularity matches countdown()'s
+  // minute-level copy) — without this they freeze at render time.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (clearsAt === undefined && autoDeniesAt === undefined) return;
+    const id = setInterval(() => setTick((n) => n + 1), 30_000);
+    return () => clearInterval(id);
+  }, [clearsAt, autoDeniesAt]);
 
   return (
     <article
@@ -99,6 +109,14 @@ export function AlertCard({
       </div>
 
       <p style={{ fontSize: '0.92rem', margin: 0 }}>{alert.summary}</p>
+
+      {open && alert.kind === 'approval_required' && autoDeniesAt !== undefined ? (
+        <p style={{ fontSize: '0.84rem', margin: 0, color: 'var(--color-ink-dim)' }} data-testid="autodeny-countdown">
+          {countdown(autoDeniesAt) === 'expired'
+            ? 'Time is up — this is denying by default.'
+            : `Denies by default in ${countdown(autoDeniesAt)} if you don't answer.`}
+        </p>
+      ) : null}
 
       {alert.kind === 'limit_hit' && decodedPlain ? (
         <div style={{ display: 'grid', gap: '0.4rem' }}>

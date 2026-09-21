@@ -28,10 +28,9 @@ export default function InboxPage() {
       setAlerts(res.alerts);
       setUnread(res.unread);
       setLoadError(null);
+      setLoaded(true); // only a SUCCESSFUL load counts — a failed first GET must show the error state
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : 'Could not load your inbox.');
-    } finally {
-      setLoaded(true);
     }
   }, [api]);
 
@@ -56,13 +55,15 @@ export default function InboxPage() {
       next[idx] = ev.alert;
       return next;
     });
-    setUnread((prev) => {
-      // Server truth arrives with the next refetch; keep the badge sane meanwhile.
-      const known = alerts.find((a) => a.id === ev.alert.id);
-      if (ev.alert.status === 'unread' && known?.status !== 'unread') return prev + 1;
-      if (ev.alert.status !== 'unread' && known?.status === 'unread') return Math.max(0, prev - 1);
-      return prev;
-    });
+    // Badge truth comes from the server on every alert frame (same pattern as
+    // useUnreadAlerts) — a hand-maintained counter drifts under coalescing
+    // and cross-channel resolution.
+    void api
+      .listAlerts({ limit: 1 })
+      .then((r) => setUnread(r.unread))
+      .catch(() => {
+        /* badge keeps its last value */
+      });
   });
 
   const onDecide = useCallback(
