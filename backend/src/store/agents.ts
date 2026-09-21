@@ -222,3 +222,8 @@ export async function backfillLegacyGuardian(pool: Pool, opsAddr: string): Promi
   ]);
   return res.rowCount ?? 0;
 }
+
+/** M-03: resync the stored guardian to the live on-chain value (revoke lane selection). */
+export async function updateAgentGuardian(pool: Pool, id: string, guardianAddr: string): Promise<void> {
+  await pool.query(`UPDATE agents SET guardian_addr = $2 WHERE id = $1`, [id, guardianAddr.toLowerCase()]);
+}

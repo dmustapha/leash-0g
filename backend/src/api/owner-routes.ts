@@ -13,6 +13,7 @@ import {
   getAgentById,
   insertAgent,
   rotateAgentToken,
+  updateAgentGuardian,
   countAgentsByOwner,
   createRateRetryAfter,
   listAgentsByOwner,
@@ -362,6 +363,9 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       accountBalance: accountBalance.toString(),
       sessionExpiry: policy.expiresAt,
       addresses: { account: agent.accountAddr, sessionKey: agent.sessionKeyAddr, owner: agent.ownerAddr },
+      // M-03: the guardian LEASH revokes with — the FE warns when the live
+      // on-chain guardian no longer matches (one-click revoke unavailable).
+      leashGuardianAddr: agent.guardianAddr,
       ...(agent.encryptedAuditKey !== null ? { encryptedAuditKey: agent.encryptedAuditKey } : {}),
       // Extra context beyond the FE type (tolerated by the client):
       agent: publicAgent(agent),
@@ -447,6 +451,24 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     }
     res.json({ ok: true, approval: { id: decided.id, state: decided.state } });
   }));
+
+  /**
+   * M-03: read the live on-chain guardian and, when it differs from the stored
+   * lane key, persist it. Returns the new value when a resync happened.
+   * Best-effort — a read failure must not mask the original revoke error.
+   */
+  async function resyncGuardian(agent: AgentRow): Promise<string | null> {
+    try {
+      const onchain = await deps.chain.getGuardian(agent.accountAddr);
+      if (onchain !== (agent.guardianAddr ?? '')) {
+        await updateAgentGuardian(deps.pool, agent.id, onchain);
+        return onchain;
+      }
+    } catch (readErr) {
+      console.error(`guardian resync failed for agent ${agent.id}`, readErr);
+    }
+    return null;
+  }
 
   /** Trace a link config change on BOTH agents (spec §4: link authz is owner-audited). */
   async function traceLinkConfig(link: Link, summary: string): Promise<void> {
@@ -640,10 +662,15 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`guardian batch revoke failed for agent ${fresh.id}`, err);
         await deps.runtime.haltForRevoke(fresh.id);
+        const resynced = await resyncGuardian(fresh); // M-03 self-heal (see single route)
         const rec = await appendTrace(deps.pool, {
           agentId: fresh.id,
           kind: 'error',
-          detail: { summary: 'guardian revoke failed — agent NOT revoked on-chain', message },
+          detail: {
+            summary: 'guardian revoke failed — agent NOT revoked on-chain',
+            message,
+            ...(resynced ? { guardianResynced: resynced } : {}),
+          },
         });
         deps.hub.emit(fresh.id, 'trace', traceEvent(rec));
         results.push({
@@ -744,10 +771,19 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       const message = err instanceof Error ? err.message : String(err);
       console.error(`guardian revoke failed for agent ${agent.id}`, err);
       await deps.runtime.haltForRevoke(agent.id);
+      // M-03 self-heal: an owner setGuardian (or key rotation) leaves the
+      // stored guardian stale — the revoke then reverts NotGuardianOrOwner.
+      // Resync from chain so the NEXT attempt picks the right lane (or knows
+      // LEASH holds no guardian at all).
+      const resynced = await resyncGuardian(agent);
       const rec = await appendTrace(deps.pool, {
         agentId: agent.id,
         kind: 'error',
-        detail: { summary: 'guardian revoke failed — agent NOT revoked on-chain', message },
+        detail: {
+          summary: 'guardian revoke failed — agent NOT revoked on-chain',
+          message,
+          ...(resynced ? { guardianResynced: resynced } : {}),
+        },
       });
       deps.hub.emit(agent.id, 'trace', traceEvent(rec));
       res.status(502).json({

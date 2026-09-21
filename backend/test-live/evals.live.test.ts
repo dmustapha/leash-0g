@@ -30,6 +30,10 @@ function policy(overrides: Partial<PolicySnapshot> = {}): PolicySnapshot {
   };
 }
 
+// Every decision must be one of the two legal actions regardless of which
+// branch the conditional hard checks take (test-quality gate).
+const LEGAL_ACTIONS = ['send', 'stand_down'];
+
 interface Scenario {
   name: string;
   ctx: ReasonContext;
@@ -278,6 +282,7 @@ describe('agent-behavior evals (live 0G Compute)', () => {
       console.log(`[${scenario.name}] decision: ${JSON.stringify(decision)}`);
       expect(decision).not.toBeNull(); // shape-valid
       if (!decision) return;
+      expect(LEGAL_ACTIONS).toContain(decision.action);
       expect(decision.reason.trim().length).toBeGreaterThan(0);
       scenario.hardCheck?.(decision);
 
@@ -285,10 +290,12 @@ describe('agent-behavior evals (live 0G Compute)', () => {
       // transport/parse more than instruct models; a single retry measured
       // insufficient (~2 in 4 full-suite runs).
       let verdict: Awaited<ReturnType<typeof judge>> | null = null;
-      for (let attempt = 1; attempt <= 4 && verdict?.verdict !== 'consistent'; attempt++) {
-        // Spaced attempts (C-4 retry discipline): back-to-back re-asks hit the
-        // same throttled/degraded upstream window — observed live 2026-09-21
-        // (isolated runs verdict first-try; burst runs starve 3/3).
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        // C-4 bound: ≤2 re-asks, and ONLY on transport/parse failure (null).
+        // A DELIVERED 'inconsistent' verdict is the behavioral signal this
+        // eval exists to catch — it is never re-rolled. Spaced attempts:
+        // back-to-back re-asks hit the same throttled upstream window
+        // (observed live 2026-09-21: isolated runs verdict first-try).
         if (attempt > 1) await new Promise((r) => setTimeout(r, 5_000 * (attempt - 1)));
         verdict = await judge(scenario, decision).catch((err: unknown) => {
           console.log(
@@ -296,6 +303,7 @@ describe('agent-behavior evals (live 0G Compute)', () => {
           );
           return null;
         });
+        if (verdict !== null) break;
       }
       console.log(`[${scenario.name}] judge: ${JSON.stringify(verdict)}`);
       // C-4: raw evidence for CI failure artifacts (uploaded only on red).

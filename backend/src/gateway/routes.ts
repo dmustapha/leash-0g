@@ -59,7 +59,11 @@ async function handleCompletion(deps: GatewayDeps, req: Request, res: Response):
       agentId: agent.id,
       kind: 'block',
       originalRequest: body,
-      detail: { rule: outcome.rule.match, ...nonText },
+      detail: {
+        rule: outcome.rule.match,
+        ...('escalated' in outcome && outcome.escalated ? { escalated: outcome.escalated } : {}),
+        ...nonText,
+      },
     });
     deps.hub.emit(agent.id, 'trace', traceEvent(rec));
     res.status(403).json({ error: { message: 'request blocked by policy' } });

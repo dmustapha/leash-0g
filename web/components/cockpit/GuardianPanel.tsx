@@ -13,10 +13,13 @@ import { Field } from '@/components/ui/Field';
 
 export function GuardianPanel({
   guardian,
+  leashGuardian,
   onSetGuardian,
 }: {
   /** Current on-chain guardian; ZERO_ADDRESS = none; undefined = still loading/unavailable. */
   guardian: Address | undefined;
+  /** The guardian LEASH revokes with (M-03) — mismatch means one-click revoke is off. */
+  leashGuardian?: Address | null;
   /** Owner-wallet setGuardian tx; returns the tx hash. */
   onSetGuardian: (newGuardian: Address) => Promise<string>;
 }) {
@@ -28,6 +31,13 @@ export function GuardianPanel({
   const [error, setError] = useState<string | null>(null);
 
   const hasGuardian = guardian !== undefined && guardian !== ZERO_ADDRESS;
+  // M-03: the one-click REVOKE button signs with LEASH's guardian key — if the
+  // live guardian is someone else (or removed), that button cannot work and
+  // the owner should know BEFORE an incident, not during one.
+  const autoRevokeOff =
+    guardian !== undefined &&
+    leashGuardian != null &&
+    guardian.toLowerCase() !== leashGuardian.toLowerCase();
 
   async function run(newGuardian: Address) {
     setBusy(true);
@@ -63,6 +73,17 @@ export function GuardianPanel({
         The guardian is an emergency brake LEASH holds for you: it can ONLY cut this agent off,
         never spend or change anything. Your wallet can always revoke directly, guardian or not.
       </p>
+
+      {autoRevokeOff ? (
+        <p
+          className="pill pill-deny"
+          data-testid="guardian-mismatch"
+          style={{ fontSize: '0.82rem', whiteSpace: 'normal' }}
+        >
+          LEASH is no longer this agent&apos;s guardian — the one-click REVOKE here can&apos;t work.
+          Only your wallet can revoke it now.
+        </p>
+      ) : null}
 
       {!editing && !removing ? (
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>

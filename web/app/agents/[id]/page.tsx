@@ -4,7 +4,7 @@
 
 import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import type { Address } from 'viem';
+import type { Address, Hex } from 'viem';
 import { makeApi } from '@/lib/api';
 import { config } from '@/lib/config';
 import { useOwnerWallet } from '@/lib/owner-wallet';
@@ -25,6 +25,7 @@ import {
   setGuardianOnchain,
   tightenPolicyOnchain,
   type PendingEtas,
+  waitForTx,
 } from '@/lib/chain';
 import { StatusBar } from '@/components/cockpit/StatusBar';
 import { FundPanel } from '@/components/cockpit/FundPanel';
@@ -181,7 +182,14 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
       if (!detail || !wallet.address) throw new Error('Connect your wallet first.');
       const provider = await wallet.getProvider();
       const tx = await setGuardianOnchain(provider, wallet.address as Address, detail.addresses.account, newGuardian);
-      setGuardian(newGuardian);
+      // Security-critical display (gate M-03): never show the change before it
+      // is mined — wait for the receipt, then read the truth back from chain.
+      if (!config.e2eMode) {
+        await waitForTx(tx as Hex);
+        setGuardian(await readGuardian(detail.addresses.account));
+      } else {
+        setGuardian(newGuardian);
+      }
       return tx;
     },
     [detail, wallet],
@@ -299,13 +307,9 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
           {detail ? (
             <PolicyPanel detail={detail} onSubmitPolicy={submitPolicy} pending={pending} onApply={applyPending} />
           ) : null}
-          {detail ? <GuardianPanel guardian={guardian} onSetGuardian={setGuardianTx} /> : null}
+          {detail ? <GuardianPanel guardian={guardian} leashGuardian={detail.leashGuardianAddr} onSetGuardian={setGuardianTx} /> : null}
           {detail ? (
-            <RulesEditor
-              key={JSON.stringify(detail.agent?.gatewayRules ?? [])}
-              rules={detail.agent?.gatewayRules ?? []}
-              onSave={saveRules}
-            />
+            <RulesEditor rules={detail.agent?.gatewayRules ?? []} onSave={saveRules} />
           ) : null}
           <RevokeButton
             revoked={detail?.status === 'revoked'}

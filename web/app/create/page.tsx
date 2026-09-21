@@ -10,7 +10,7 @@ import { config } from '@/lib/config';
 import { readAccountBalance, sendNativeOnchain } from '@/lib/chain';
 import { useOwnerWallet } from '@/lib/owner-wallet';
 import { useAgentId } from '@/lib/use-agent-id';
-import { generateAuditKeypair, hexToBytes } from '@/lib/crypto/audit-key';
+import { generateAuditKeypair, hexToBytes, buildAuditBackup } from '@/lib/crypto/audit-key';
 import {
   encryptWithPassphrase,
   encryptWithSignature,
@@ -77,19 +77,10 @@ export default function CreatePage() {
           // Recovery = unwrap the blob with the same wallet signature (or
           // passphrase) the audit page uses; losing BOTH loses the key, which
           // is the self-sovereignty trade recorded in the spec.
-          download(`leash-audit-key-${response.agentId}.json`, JSON.stringify(
-            {
-              warning:
-                'Keep this file private. The encrypted blob plus your wallet signature (or passphrase) decrypts your entire agent audit trail.',
-              agentId: response.agentId,
-              auditPubKey: keypair.pubKeyHex,
-              encryptedBlob: blob,
-              kekMode: blob.mode,
-              createdAt: new Date().toISOString(),
-            },
-            null,
-            2,
-          )),
+          download(
+            `leash-audit-key-${response.agentId}.json`,
+            buildAuditBackup({ agentId: response.agentId, pubKeyHex: keypair.pubKeyHex, blob }),
+          ),
       };
     },
     [api, wallet.address, wallet.signMessage, setAgentId],

@@ -134,6 +134,11 @@ export async function readPendingEtas(account: Address): Promise<PendingEtas> {
   return { policy: Number(policy), allowlist: Number(allowlist), withdraw: Number(withdraw) };
 }
 
+/** Wait until a tx is mined (security-critical UI must not display unmined state). */
+export async function waitForTx(hash: Hex): Promise<void> {
+  await publicClient.waitForTransactionReceipt({ hash });
+}
+
 /** Current guardian address on the account; the zero address means "no guardian". */
 export async function readGuardian(account: Address): Promise<Address> {
   return (await publicClient.readContract({

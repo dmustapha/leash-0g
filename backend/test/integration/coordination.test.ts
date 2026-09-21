@@ -15,7 +15,7 @@ import {
   sweepExpiredDelegations,
   transitionDelegation,
 } from '../../src/coordination/store.js';
-import { CoordinationError } from '../../src/coordination/coordinator.js';
+import { CoordinationError, DelegationCoordinator } from '../../src/coordination/coordinator.js';
 import type { AgentRow, Delegation, DelegationStatus, TraceRecord } from '../../src/types.js';
 
 /**
@@ -1052,5 +1052,129 @@ describe('delegation state machine (transition writer)', () => {
     expect(err.reason).toBe('delegation_rate_limited');
     expect(err.httpStatus).toBe(429);
     expect(err.name).toBe('CoordinationError');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Gate fixes: orphaned-accepted boot sweep · dangling supervised approval ·
+// concurrent markAccepted race · M-03 guardian resync
+// ---------------------------------------------------------------------------
+describe('gate fixes', () => {
+  it('boot sweep fails orphaned ACCEPTED rows (crashed mid-cycle) terminally + traced', async () => {
+    const { a, b, linkId } = await seedPair();
+    const d = await createDelegation(db.pool, {
+      linkId,
+      fromAgentId: a.id,
+      toAgentId: b.id,
+      kind: 'transfer.request',
+      payload: { probe: 'orphan' },
+      status: 'pending',
+      expiresAt: new Date(Date.now() + 600_000),
+    });
+    await t.deps.coordinator.markAccepted(d.id);
+
+    const swept = await runBootSweep(db.pool, t.hub);
+    const mine = swept.find((s) => s.id === d.id);
+    expect(mine?.status).toBe('failed');
+    expect(mine?.result).toEqual({ error: 'orphaned by restart' });
+    const traces = tracesOfKind(await listTraces(db.pool, b.id), 'delegation_update');
+    expect(traces.some((r) => String(detailOf(r)['summary']).includes('orphaned by restart'))).toBe(true);
+  });
+
+  it('sweeping an expired supervised delegation expires its dangling approval chain-visibly', async () => {
+    const { a, b, linkId } = await seedPair('supervised');
+    void b;
+    void linkId;
+    const agentA = await getAgentById(db.pool, a.id);
+    if (!agentA) throw new Error('seed failed');
+    const short = new DelegationCoordinator({
+      pool: db.pool,
+      hub: t.hub,
+      runtime: { nudge: () => undefined },
+      settings: {
+        delegationTtlMs: 100, // expires almost immediately
+        delegationRatePerLinkPerHour: 100,
+        delegationMaxPendingPerLink: 10,
+        delegationPayloadMaxBytes: 16_384,
+      },
+    });
+    const d = await short.issueDelegation({ fromAgent: agentA, kind: 'transfer.request', payload: { x: 1 } });
+    expect(d.status).toBe('pending_approval');
+    const approvalRow = await db.pool.query(
+      `SELECT id FROM approvals WHERE agent_id = $1 AND state = 'pending' AND request_ref->>'delegationId' = $2`,
+      [a.id, d.id],
+    );
+    expect(approvalRow.rowCount).toBe(1);
+
+    await new Promise((r) => setTimeout(r, 200));
+    await short.sweepOnce();
+
+    expect((await getDelegation(db.pool, d.id))?.status).toBe('expired');
+    const after = await db.pool.query(`SELECT state FROM approvals WHERE id = $1`, [approvalRow.rows[0].id]);
+    expect(after.rows[0].state).toBe('expired'); // no dangling card
+    const consents = tracesOfKind(await listTraces(db.pool, a.id), 'consent');
+    expect(
+      consents.some(
+        (c) => c.approvalId === approvalRow.rows[0].id && c.decision === 'expired' && c.decidedBy === 'system',
+      ),
+    ).toBe(true);
+  });
+
+  it('CONCURRENT markAccepted race: exactly one winner (test-quality gate)', async () => {
+    const { a, b, linkId } = await seedPair();
+    const d = await createDelegation(db.pool, {
+      linkId,
+      fromAgentId: a.id,
+      toAgentId: b.id,
+      kind: 'transfer.request',
+      payload: { probe: 'race' },
+      status: 'pending',
+      expiresAt: new Date(Date.now() + 600_000),
+    });
+    const results = await Promise.all([
+      t.deps.coordinator.markAccepted(d.id),
+      t.deps.coordinator.markAccepted(d.id),
+      t.deps.coordinator.markAccepted(d.id),
+    ]);
+    expect(results.filter(Boolean)).toHaveLength(1);
+  });
+
+  it('M-03: a failed guardian revoke resyncs guardian_addr from chain', async () => {
+    const owner = OWNER;
+    const res = await request(t.app)
+      .post('/api/agents')
+      .set('authorization', ownerAuth(owner))
+      .send({
+        name: 'resync-agent',
+        auditPubKey: '04' + 'cd'.repeat(64),
+        policy: {
+          perTransferCapWei: '10000000000000000',
+          windowCapWei: '30000000000000000',
+          windowSeconds: 3600,
+          expiresAt: Math.floor(Date.now() / 1000) + 86_400,
+        },
+        allowlist: ['0x' + '9c'.repeat(20)],
+        goal: { beneficiary: '0x' + '9c'.repeat(20), targetBalanceWei: '1', topUpWei: '1' },
+        encryptedAuditKey: 'blob',
+      });
+    expect(res.status).toBe(201);
+    const agentId = res.body.agentId as string;
+    const accountAddr = (res.body.accountAddr as string).toLowerCase();
+
+    // Owner replaced the guardian on-chain (setGuardian) — LEASH's row is stale.
+    const newGuardian = '0x' + 'fe'.repeat(20);
+    t.chain.onchainGuardians.set(accountAddr, newGuardian);
+    t.chain.revokeError = new Error('execution reverted: NotGuardianOrOwner');
+
+    const rev = await request(t.app)
+      .post(`/api/agents/${agentId}/revoke`)
+      .set('authorization', ownerAuth(owner))
+      .send({});
+    expect(rev.status).toBe(502);
+    expect(rev.body.ok).toBe(false);
+
+    const row = await db.pool.query(`SELECT guardian_addr, status FROM agents WHERE id = $1`, [agentId]);
+    expect(row.rows[0].guardian_addr).toBe(newGuardian); // self-healed
+    expect(row.rows[0].status).toBe('active'); // still NOT marked revoked (C-2)
   });
 });

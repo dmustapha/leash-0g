@@ -33,6 +33,8 @@ export interface ChainOps {
   fundSessionKey(addr: string, amountWei: bigint): Promise<{ txHash: string }>;
   getPolicyView(accountAddr: string, allowlistCandidates: string[]): Promise<PolicyView>;
   getBalance(addr: string): Promise<bigint>;
+  /** Live on-chain guardian (lowercased) — M-03 stale-guardian resync. */
+  getGuardian(accountAddr: string): Promise<string>;
 }
 
 export interface RuntimeManager {

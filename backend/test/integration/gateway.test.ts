@@ -411,3 +411,47 @@ describe('C-3 gateway race injection', () => {
     expect(consent.seq).toBeLessThan(inference.seq);
   });
 });
+
+describe('C-5 trace evidence', () => {
+  it('non-text part types land in the forwarded-request trace detail', async () => {
+    const a = await seedWithToken();
+    nock(UPSTREAM).post('/v1/chat/completions').reply(200, COMPLETION);
+    const res = await request(t.app)
+      .post('/v1/chat/completions')
+      .set('authorization', `Bearer ${a.token}`)
+      .send({
+        model: 'test-model',
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'text', text: 'should I top up?' },
+              { type: 'image_url', image_url: { url: 'https://x/1.png' } },
+            ],
+          },
+        ],
+      });
+    expect(res.status).toBe(200);
+    const traces = await listTraces(db.pool, a.id, { afterSeq: -1, limit: 10 });
+    const inference = traces.find((r) => r.kind === 'inference');
+    expect((inference?.detail as Record<string, unknown>)?.['nonTextPartTypes']).toEqual(['image_url']);
+  });
+
+  it('an escalated modify (unrewritable channel) is traced as a block with the escalation reason', async () => {
+    const a = await seedWithToken({
+      rules: [{ action: 'modify', match: 'secret-phrase', replacement: '[CUT]' }],
+    });
+    const res = await request(t.app)
+      .post('/v1/chat/completions')
+      .set('authorization', `Bearer ${a.token}`)
+      .send({
+        model: 'test-model',
+        messages: [{ role: 'user', content: 'the secret-phrase is here' }],
+        tools: [{ type: 'function', function: { name: 'x', description: 'secret-phrase survives here' } }],
+      });
+    expect(res.status).toBe(403); // fail-closed: forwarding would defeat the rule
+    const traces = await listTraces(db.pool, a.id, { afterSeq: -1, limit: 10 });
+    const block = traces.find((r) => r.kind === 'block');
+    expect((block?.detail as Record<string, unknown>)?.['escalated']).toBe('modify_unrewritable');
+  });
+});
