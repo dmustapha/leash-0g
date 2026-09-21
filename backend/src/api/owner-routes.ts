@@ -9,10 +9,29 @@ import type { ApprovalBroker } from '../approvals/broker.js';
 import { generateGatewayToken, hashTokenSecret } from '../crypto/token.js';
 import { encryptSecret } from '../crypto/keycrypt.js';
 import { appendTrace, listTraces, verifyAgentChainIncremental } from '../trace/trace-store.js';
-import { getAgentById, insertAgent, rotateAgentToken, countAgentsByOwner, createRateRetryAfter } from '../store/agents.js';
+import {
+  getAgentById,
+  insertAgent,
+  rotateAgentToken,
+  countAgentsByOwner,
+  createRateRetryAfter,
+  listAgentsByOwner,
+  updateAgentRules,
+} from '../store/agents.js';
 import { getApproval, decideApproval } from '../store/approvals.js';
 import { applyRevokeFanout } from '../agents/revoke-fanout.js';
-import type { AgentRow, AuditBatch } from '../types.js';
+import {
+  createLink,
+  getLink,
+  listLinksByOwner,
+  setLinkMode,
+  setLinkStatus,
+  listDelegations,
+  DuplicateLinkError,
+} from '../coordination/store.js';
+import type { DelegationCoordinator } from '../coordination/coordinator.js';
+import type { AgentRow, AuditBatch, Link } from '../types.js';
+import type { Json } from '../crypto/canonical.js';
 import type { ChainOps, RuntimeManager, Settings } from '../server.js';
 
 export interface OwnerApiDeps {
@@ -22,11 +41,35 @@ export interface OwnerApiDeps {
   broker: ApprovalBroker;
   chain: ChainOps;
   runtime: RuntimeManager;
+  coordinator: DelegationCoordinator;
   settings: Settings;
 }
 
 const addressSchema = z.string().regex(/^0x[0-9a-fA-F]{40}$/);
 const weiSchema = z.string().regex(/^[0-9]{1,30}$/);
+
+/** ONE rules shape for create AND PATCH /rules — the editors cannot drift apart. */
+const gatewayRuleSchema = z.object({
+  action: z.enum(['block', 'modify', 'require_approval']),
+  match: z.string().min(1),
+  replacement: z.string().optional(),
+});
+
+const rulesPatchSchema = z.object({ rules: z.array(gatewayRuleSchema) });
+
+const linkCreateSchema = z.object({
+  fromAgentId: z.string().uuid(),
+  toAgentId: z.string().uuid(),
+  mode: z.enum(['auto', 'supervised']).default('auto'),
+});
+
+// Spec §4: { action } XOR { mode } — .strict() unions reject both-or-neither.
+const linkUpdateSchema = z.union([
+  z.object({ action: z.enum(['pause', 'resume', 'remove']) }).strict(),
+  z.object({ mode: z.enum(['auto', 'supervised']) }).strict(),
+]);
+
+const revokeBatchSchema = z.object({ agentIds: z.array(z.string().uuid()).min(1).max(16) });
 
 const createAgentSchema = z.object({
   name: z.string().min(1).max(120),
@@ -44,15 +87,7 @@ const createAgentSchema = z.object({
     topUpWei: weiSchema,
     model: z.string().min(1).optional(),
   }),
-  gatewayRules: z
-    .array(
-      z.object({
-        action: z.enum(['block', 'modify', 'require_approval']),
-        match: z.string().min(1),
-        replacement: z.string().optional(),
-      }),
-    )
-    .optional(),
+  gatewayRules: z.array(gatewayRuleSchema).optional(),
   /** Opaque KEK-wrapped audit privkey blob, encrypted in the owner's browser. */
   encryptedAuditKey: z.string().min(1).max(20_000).optional(),
 }).refine((v) => BigInt(v.goal.topUpWei) <= BigInt(v.policy.perTransferCapWei), {
@@ -197,6 +232,61 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     });
   }));
 
+  // Fleet list (spec §4): the authed owner's agents, newest-first, keyset
+  // cursor `<createdAtISO>_<id>` (documented choice: created_at DESC with id
+  // tiebreak — stable under concurrent creates). Balances are live reads.
+  router.get('/api/agents', asyncRoute(async (req: OwnerRequest, res) => {
+    const cursorRaw = req.query['cursor'];
+    const limitRaw = req.query['limit'];
+    const limit = Math.min(Number.parseInt(typeof limitRaw === 'string' ? limitRaw : '50', 10) || 50, 200);
+    const { agents, nextCursor } = await listAgentsByOwner(deps.pool, req.ownerAddr as string, {
+      ...(typeof cursorRaw === 'string' ? { cursor: cursorRaw } : {}),
+      limit,
+    });
+    const summaries = await Promise.all(
+      agents.map(async (a) => ({
+        agentId: a.id,
+        name: a.name,
+        status: a.status,
+        accountAddr: a.accountAddr,
+        sessionKeyAddr: a.sessionKeyAddr,
+        accountBalanceWei: (await deps.chain.getBalance(a.accountAddr)).toString(),
+        createdAt: a.createdAt,
+      })),
+    );
+    res.json({ agents: summaries, ...(nextCursor !== undefined ? { nextCursor } : {}) });
+  }));
+
+  // Rules editor (spec §4, Gate-② parity): replace gatewayRules wholesale,
+  // traced 'config' with BOTH original and effective (original+effective
+  // discipline — same shape the modify path uses).
+  router.patch('/api/agents/:id/rules', asyncRoute(async (req: OwnerRequest, res) => {
+    const agent = await requireOwnedAgent(req, res);
+    if (!agent) return;
+    const parsed = rulesPatchSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: { message: 'invalid request body' } });
+      return;
+    }
+    if (parsed.data.rules.length > deps.settings.rulesMax) {
+      res.status(400).json({ error: 'too_many_rules', max: deps.settings.rulesMax });
+      return;
+    }
+    const original = agent.gatewayRules;
+    await updateAgentRules(deps.pool, agent.id, parsed.data.rules);
+    const rec = await appendTrace(deps.pool, {
+      agentId: agent.id,
+      kind: 'config',
+      // GatewayRule is an interface (no implicit index signature) — safe cast
+      // to the Json it structurally is.
+      originalRequest: { rules: original } as unknown as Json,
+      effectiveRequest: { rules: parsed.data.rules },
+      detail: { summary: 'gateway rules replaced by owner', change: 'gatewayRules' },
+    });
+    deps.hub.emit(agent.id, 'trace', traceEvent(rec));
+    res.json({ ok: true, rules: parsed.data.rules });
+  }));
+
   router.get('/api/agents/:id', asyncRoute(async (req: OwnerRequest, res) => {
     const agent = await requireOwnedAgent(req, res);
     if (!agent) return;
@@ -297,7 +387,230 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       approvalId: approval.id,
       decision: parsed.data.decision,
     });
+    // Supervised handoff (spec §3b): a delegation-class approval activates (or
+    // declines) the envelope — strictly AFTER the consent append above, so
+    // consent-seq < delivery on the issuer's chain.
+    const ref = approval.requestRef;
+    if (ref !== null && typeof ref === 'object' && !Array.isArray(ref) && ref['type'] === 'delegation') {
+      const delegationId = ref['delegationId'];
+      if (typeof delegationId === 'string') {
+        await deps.coordinator.onDelegationApprovalDecision(delegationId, parsed.data.decision);
+      }
+    }
     res.json({ ok: true, approval: { id: decided.id, state: decided.state } });
+  }));
+
+  /** Trace a link config change on BOTH agents (spec §4: link authz is owner-audited). */
+  async function traceLinkConfig(link: Link, summary: string): Promise<void> {
+    for (const agentId of [link.fromAgentId, link.toAgentId]) {
+      const rec = await appendTrace(deps.pool, {
+        agentId,
+        kind: 'config',
+        detail: {
+          summary,
+          change: 'link',
+          linkId: link.id,
+          fromAgentId: link.fromAgentId,
+          toAgentId: link.toAgentId,
+          mode: link.mode,
+          status: link.status,
+        },
+      });
+      deps.hub.emit(agentId, 'trace', traceEvent(rec));
+    }
+  }
+
+  // Links are the ONLY authorization for delegation (spec §3b): same-owner
+  // both sides, directed, unique per (from,to), pausable/removable.
+  router.post('/api/links', asyncRoute(async (req: OwnerRequest, res) => {
+    const parsed = linkCreateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: { message: 'invalid request body' } });
+      return;
+    }
+    const { fromAgentId, toAgentId, mode } = parsed.data;
+    if (fromAgentId === toAgentId) {
+      // Surfaced here instead of via the DB CHECK — clean 403 per spec §4.
+      res.status(403).json({ error: { message: 'self-link not allowed' } });
+      return;
+    }
+    const [from, to] = await Promise.all([getAgentById(deps.pool, fromAgentId), getAgentById(deps.pool, toAgentId)]);
+    if (!from || !to) {
+      res.status(404).json({ error: { message: 'not found' } });
+      return;
+    }
+    if (from.ownerAddr !== req.ownerAddr || to.ownerAddr !== req.ownerAddr) {
+      // Cross-owner linking is the lateral-movement primitive — hard 403 (spec §6).
+      res.status(403).json({ error: { message: 'forbidden' } });
+      return;
+    }
+    try {
+      const link = await createLink(deps.pool, { ownerAddr: req.ownerAddr, fromAgentId, toAgentId, mode });
+      await traceLinkConfig(link, `link created: ${from.name} → ${to.name} (${mode})`);
+      res.status(201).json({ link });
+    } catch (err) {
+      if (err instanceof DuplicateLinkError) {
+        res.status(409).json({ error: { message: 'link already exists' } });
+        return;
+      }
+      throw err;
+    }
+  }));
+
+  router.get('/api/links', asyncRoute(async (req: OwnerRequest, res) => {
+    const links = await listLinksByOwner(deps.pool, req.ownerAddr as string);
+    res.json({ links });
+  }));
+
+  // { action: pause|resume|remove } XOR { mode } (spec §4). pause/remove kill
+  // the channel: pending/pending_approval envelopes are cancelled; accepted
+  // (in-flight) ones run to completion (spec §4 NOTE).
+  router.post('/api/links/:id', asyncRoute(async (req: OwnerRequest, res) => {
+    const link = await getLink(deps.pool, req.params['id'] ?? '');
+    if (!link) {
+      res.status(404).json({ error: { message: 'not found' } });
+      return;
+    }
+    if (link.ownerAddr !== req.ownerAddr) {
+      res.status(403).json({ error: { message: 'forbidden' } });
+      return;
+    }
+    const parsed = linkUpdateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: { message: 'invalid request body' } });
+      return;
+    }
+    if (link.status === 'removed') {
+      // Removed = terminal (spec §4): a dead channel cannot be resumed,
+      // re-moded, or re-paused — create a new link instead.
+      res.status(409).json({ error: { message: 'link is removed' } });
+      return;
+    }
+    let updated: Link | null;
+    let summary: string;
+    if ('mode' in parsed.data) {
+      updated = await setLinkMode(deps.pool, link.id, parsed.data.mode);
+      summary = `link mode changed to ${parsed.data.mode}`;
+    } else if (parsed.data.action === 'pause') {
+      updated = await setLinkStatus(deps.pool, link.id, 'paused');
+      await deps.coordinator.cancelForLink(link.id, 'link paused by owner');
+      summary = 'link paused by owner';
+    } else if (parsed.data.action === 'resume') {
+      updated = await setLinkStatus(deps.pool, link.id, 'active');
+      summary = 'link resumed by owner';
+    } else {
+      updated = await setLinkStatus(deps.pool, link.id, 'removed');
+      await deps.coordinator.cancelForLink(link.id, 'link removed by owner');
+      summary = 'link removed by owner';
+    }
+    if (!updated) {
+      res.status(404).json({ error: { message: 'not found' } });
+      return;
+    }
+    await traceLinkConfig(updated, summary);
+    res.json({ link: updated });
+  }));
+
+  // Owner-scoped delegation feed (spec §4): filter by agent OR link — the
+  // filter target itself is the authz anchor (must be the owner's).
+  router.get('/api/delegations', asyncRoute(async (req: OwnerRequest, res) => {
+    const agentIdRaw = req.query['agentId'];
+    const linkIdRaw = req.query['linkId'];
+    const cursorRaw = req.query['cursor'];
+    const agentId = typeof agentIdRaw === 'string' ? agentIdRaw : undefined;
+    const linkId = typeof linkIdRaw === 'string' ? linkIdRaw : undefined;
+    if (agentId === undefined && linkId === undefined) {
+      res.status(400).json({ error: { message: 'agentId or linkId required' } });
+      return;
+    }
+    if (agentId !== undefined) {
+      const agent = await getAgentById(deps.pool, agentId);
+      if (!agent) {
+        res.status(404).json({ error: { message: 'not found' } });
+        return;
+      }
+      if (agent.ownerAddr !== req.ownerAddr) {
+        res.status(403).json({ error: { message: 'forbidden' } });
+        return;
+      }
+    }
+    if (linkId !== undefined) {
+      const link = await getLink(deps.pool, linkId);
+      if (!link) {
+        res.status(404).json({ error: { message: 'not found' } });
+        return;
+      }
+      if (link.ownerAddr !== req.ownerAddr) {
+        res.status(403).json({ error: { message: 'forbidden' } });
+        return;
+      }
+    }
+    const { delegations, nextCursor } = await listDelegations(deps.pool, {
+      ...(agentId !== undefined ? { agentId } : {}),
+      ...(linkId !== undefined ? { linkId } : {}),
+      ...(typeof cursorRaw === 'string' ? { cursor: cursorRaw } : {}),
+    });
+    res.json({ delegations, ...(nextCursor !== undefined ? { nextCursor } : {}) });
+  }));
+
+  // Pair/batch revoke (spec §4): per-agent guardian-lane revoke + full
+  // fan-out. ALL ids must be the owner's or the WHOLE request 403s (nothing
+  // revoked); per-agent results stay honest on partial failure (C-2).
+  router.post('/api/agents/revoke-batch', asyncRoute(async (req: OwnerRequest, res) => {
+    const parsed = revokeBatchSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: { message: 'invalid request body' } });
+      return;
+    }
+    const loaded = await Promise.all(parsed.data.agentIds.map((id) => getAgentById(deps.pool, id)));
+    if (loaded.some((a) => !a || a.ownerAddr !== req.ownerAddr)) {
+      res.status(403).json({ error: { message: 'forbidden' } });
+      return;
+    }
+    const agents = loaded as AgentRow[];
+    const results: Json[] = [];
+    for (const agent of agents) {
+      // Re-read per iteration: a duplicated id in the batch must go down the
+      // idempotent already-revoked path on its second pass.
+      const fresh = (await getAgentById(deps.pool, agent.id)) ?? agent;
+      if (fresh.status === 'revoked') {
+        results.push({ agentId: fresh.id, ok: true, alreadyRevoked: true });
+        continue;
+      }
+      try {
+        const { txHash } = await deps.chain.revoke(fresh.accountAddr, fresh.guardianAddr);
+        await applyRevokeFanout(
+          { pool: deps.pool, hub: deps.hub, runtime: deps.runtime, coordinator: deps.coordinator },
+          fresh.id,
+          'guardian-api',
+        );
+        results.push({ agentId: fresh.id, ok: true, txHash });
+      } catch (err) {
+        // C-2 semantics, per agent: NOT marked revoked (hard boundary still
+        // armed), runtime halted anyway, failure chain-visible, owner steered
+        // to the LEASH-independent wallet revoke.
+        const message = err instanceof Error ? err.message : String(err);
+        console.error(`guardian batch revoke failed for agent ${fresh.id}`, err);
+        await deps.runtime.haltForRevoke(fresh.id);
+        const rec = await appendTrace(deps.pool, {
+          agentId: fresh.id,
+          kind: 'error',
+          detail: { summary: 'guardian revoke failed — agent NOT revoked on-chain', message },
+        });
+        deps.hub.emit(fresh.id, 'trace', traceEvent(rec));
+        results.push({
+          agentId: fresh.id,
+          ok: false,
+          error: 'guardian_revoke_failed',
+          ownerRevokeFallback: {
+            accountAddr: fresh.accountAddr,
+            method: 'revoke()',
+            hint: 'Revoke directly from your owner wallet — it works even if LEASH is down.',
+          },
+        });
+      }
+    }
+    res.json({ results });
   }));
 
   router.post('/api/agents/:id/rotate', asyncRoute(async (req: OwnerRequest, res) => {
@@ -369,7 +682,11 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     if (!agent) return;
     try {
       const { txHash } = await deps.chain.revoke(agent.accountAddr, agent.guardianAddr);
-      await applyRevokeFanout({ pool: deps.pool, hub: deps.hub, runtime: deps.runtime }, agent.id, 'guardian-api');
+      await applyRevokeFanout(
+        { pool: deps.pool, hub: deps.hub, runtime: deps.runtime, coordinator: deps.coordinator },
+        agent.id,
+        'guardian-api',
+      );
       res.json({ ok: true, txHash, status: 'revoked' });
     } catch (err) {
       // C-2: a reverted/failed guardian revoke is NEVER reported ok and the

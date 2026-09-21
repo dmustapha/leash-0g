@@ -37,6 +37,8 @@ interface Loop {
   stopped: boolean;
   timer: NodeJS.Timeout | null;
   current: Promise<void>;
+  /** True while a cycle is executing — nudge() must not double-schedule then. */
+  busy: boolean;
   pendingApprovalId: string | null;
   graph: TreasuryGraph;
   agent: AgentRow;
@@ -80,7 +82,7 @@ export class LeashRuntimeManager implements RuntimeManager {
       },
       this.deps.checkpointer,
     );
-    const loop: Loop = { stopped: false, timer: null, current: Promise.resolve(), pendingApprovalId: null, graph, agent };
+    const loop: Loop = { stopped: false, timer: null, current: Promise.resolve(), busy: false, pendingApprovalId: null, graph, agent };
     this.loops.set(agentId, loop);
     this.schedule(loop, 0);
   }
@@ -100,6 +102,22 @@ export class LeashRuntimeManager implements RuntimeManager {
   /** Deliver an owner decision to a paused run (same rendezvous the API uses). */
   resume(approvalId: string, decision: ApprovalDecision): boolean {
     return this.deps.broker.notify(approvalId, decision);
+  }
+
+  /**
+   * Delivery-latency nudge (spec §3b): an activated delegation wakes the
+   * receiver's loop NOW instead of on the next poll. Optimization ONLY — the
+   * poll remains the correctness path, so every miss (no loop, stopped, cycle
+   * in flight) is a safe no-op. Race-safety: while a cycle is in flight
+   * (`busy`) we must not schedule — runCycle's finally() already re-schedules
+   * and a second timer would double-run the loop; when idle, the only pending
+   * timer is ours to replace.
+   */
+  nudge(agentId: string): void {
+    const loop = this.loops.get(agentId);
+    if (!loop || loop.stopped || loop.busy) return;
+    if (loop.timer) clearTimeout(loop.timer);
+    this.schedule(loop, 0);
   }
 
   /** Await the in-flight cycle (tests + graceful shutdown). */
@@ -124,9 +142,13 @@ export class LeashRuntimeManager implements RuntimeManager {
   private schedule(loop: Loop, delayMs: number): void {
     if (loop.stopped) return;
     loop.timer = setTimeout(() => {
+      loop.busy = true;
       loop.current = this.runCycle(loop)
         .catch(async (err: unknown) => this.recordFailure(loop.agent.id, err))
-        .finally(() => this.schedule(loop, this.deps.settings.intervalMs));
+        .finally(() => {
+          loop.busy = false;
+          this.schedule(loop, this.deps.settings.intervalMs);
+        });
     }, delayMs);
     loop.timer.unref();
   }

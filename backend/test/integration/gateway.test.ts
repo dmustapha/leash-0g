@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, afterEach, beforeEach } from
 import request from 'supertest';
 import nock from 'nock';
 import { createTestDb, seedAgent, type TestDb } from '../helpers/db.js';
-import { buildTestApp, TEST_KEK, UPSTREAM, type TestApp } from '../helpers/app.js';
+import { buildTestApp, testSettings, UPSTREAM, type TestApp } from '../helpers/app.js';
 import { generateGatewayToken, hashTokenSecret } from '../../src/crypto/token.js';
 import { listTraces, verifyAgentChain } from '../../src/trace/trace-store.js';
 
@@ -244,17 +244,7 @@ describe('gateway interception', () => {
 
   it('approval timeout: 408, row transitions pending → expired, consent trace with decision expired', async () => {
     const short = buildTestApp(db.pool, {
-      settings: {
-        keyEncryptionSecret: TEST_KEK,
-        approvalTimeoutMs: 300,
-        sessionGasDustWei: 10n ** 15n,
-        defaultTimelockDelay: 900,
-        storageIndexerUrl: 'https://indexer.leash-test.local',
-        createQuotaPerOwner: 10,
-        createRatePerHour: 5,
-        allowlistMax: 16,
-        rulesMax: 32,
-      },
+      settings: testSettings({ approvalTimeoutMs: 300, createQuotaPerOwner: 10, createRatePerHour: 5 }),
     });
     const a = await seedWithToken({ rules: [{ action: 'require_approval', match: 'topped up' }] });
     const scope = nock(UPSTREAM).post('/v1/chat/completions').reply(200, COMPLETION);
@@ -386,7 +376,7 @@ describe('C-3 gateway race injection', () => {
     // exactly the approve-recorded-but-never-forwarded window. Old code
     // (bare broker.wait) times out → 408 and never forwards.
     const originalWait = t.broker.wait.bind(t.broker);
-    t.broker.wait = (approvalId: string, _timeoutMs: number) => {
+    t.broker.wait = (approvalId: string) => {
       void (async () => {
         const { decideApproval } = await import('../../src/store/approvals.js');
         const { appendTrace } = await import('../../src/trace/trace-store.js');
@@ -417,8 +407,7 @@ describe('C-3 gateway race injection', () => {
     const traces = await listTraces(db.pool, a.id, { afterSeq: -1, limit: 50 });
     const consent = traces.find((r) => r.kind === 'consent');
     const inference = traces.find((r) => r.kind === 'inference');
-    expect(consent).toBeDefined();
-    expect(inference).toBeDefined();
-    expect(consent!.seq).toBeLessThan(inference!.seq);
+    if (!consent || !inference) throw new Error('consent or inference trace missing');
+    expect(consent.seq).toBeLessThan(inference.seq);
   });
 });
