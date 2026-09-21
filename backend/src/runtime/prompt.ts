@@ -61,6 +61,8 @@ export interface ReasonContext {
 }
 
 const DECISION_CONTRACT = [
+  'Reason BRIEFLY: apply the rules mechanically in order, decide, and answer at once —',
+  'long deliberation is never required and truncates your answer.',
   'Respond with ONLY this JSON object and nothing else:',
   '{"action":"send"|"stand_down","amountWei":"<integer wei as decimal string>","reason":"<one short sentence>"}',
 ];
@@ -71,9 +73,8 @@ const TREASURY_PROMPT = [
   'Rules:',
   '- Each cycle you either send ONE native transfer to the beneficiary, or stand down.',
   '- Never send more than the per-transfer cap. Never exceed the remaining window allowance.',
-  '- policy.remainingWindowWei is the HARD remaining window allowance: if it is 0, or the',
-  '  amount you would send exceeds it, STAND DOWN — the contract will reject the transfer',
-  '  no matter what, and retrying before policy.windowResetsAtUnix only burns gas.',
+  '- If policy.remainingWindowWei is 0 or smaller than your amount: stand down (the contract',
+  '  rejects it regardless; it resets at policy.windowResetsAtUnix).',
   '- Never send if the session is expired or revoked, or the beneficiary is not allowlisted.',
   '- If the beneficiary balance already meets the target, stand down.',
   '- Prefer sending the configured top-up amount, capped at what the target still needs.',
@@ -114,9 +115,8 @@ const EXECUTOR_PROMPT = [
   '- Re-decide the request against YOUR OWN policy: either send ONE native transfer that',
   '  fulfils the request, or stand down.',
   '- Never send more than the per-transfer cap. Never exceed the remaining window allowance.',
-  '- policy.remainingWindowWei is the HARD remaining window allowance: if it is 0, or the',
-  '  amount you would send exceeds it, STAND DOWN — the contract will reject the transfer',
-  '  no matter what, and retrying before policy.windowResetsAtUnix only burns gas.',
+  '- If policy.remainingWindowWei is 0 or smaller than your amount: stand down (the contract',
+  '  rejects it regardless; it resets at policy.windowResetsAtUnix).',
   '- Never send if the session is expired or revoked, or the requested beneficiary is not',
   '  allowlisted.',
   '- If the requested amount exceeds the per-transfer cap, send AT MOST the cap instead',
@@ -140,9 +140,12 @@ export function buildReasonRequest(model: string, ctx: ReasonContext): Json {
     ],
     temperature: 0,
     // Reasoning models (0gm-1.0) think in reasoning_content BEFORE emitting the
-    // JSON decision (PHASE-0 §2); measured live: 512 starves the decision
-    // entirely — 2048 is the floor that reliably leaves room for both.
-    max_tokens: 2048,
+    // JSON decision (PHASE-0 §2); measured live: 512 starves entirely, 2048 was
+    // the Phase-1 floor, and the Phase-3 prompt additions (window stand-down
+    // guidance) moved the floor again — the injection-memo eval (the heaviest
+    // reasoning case) still starved 3/3 at 3072. 4096 matches the judge budget
+    // (C-4, same model class, same reason).
+    max_tokens: 4096,
   };
 }
 
