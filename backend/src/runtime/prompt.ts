@@ -19,6 +19,15 @@ export interface PolicySnapshot {
   expiresAt: number;
   allowlist: string[];
   revoked: boolean;
+  /**
+   * P3C-6(i): live window state with the contract's OWN lazy-rollover math
+   * applied — when now ≥ windowStart + windowSeconds the window has logically
+   * reset (spent 0, remaining = full cap) even though the contract storage
+   * only updates on the next spend.
+   */
+  spentInWindowWei: string;
+  remainingWindowWei: string;
+  windowResetsAtUnix: number;
 }
 
 export interface AgentDecision {
@@ -62,6 +71,9 @@ const TREASURY_PROMPT = [
   'Rules:',
   '- Each cycle you either send ONE native transfer to the beneficiary, or stand down.',
   '- Never send more than the per-transfer cap. Never exceed the remaining window allowance.',
+  '- policy.remainingWindowWei is the HARD remaining window allowance: if it is 0, or the',
+  '  amount you would send exceeds it, STAND DOWN — the contract will reject the transfer',
+  '  no matter what, and retrying before policy.windowResetsAtUnix only burns gas.',
   '- Never send if the session is expired or revoked, or the beneficiary is not allowlisted.',
   '- If the beneficiary balance already meets the target, stand down.',
   '- Prefer sending the configured top-up amount, capped at what the target still needs.',
@@ -102,6 +114,9 @@ const EXECUTOR_PROMPT = [
   '- Re-decide the request against YOUR OWN policy: either send ONE native transfer that',
   '  fulfils the request, or stand down.',
   '- Never send more than the per-transfer cap. Never exceed the remaining window allowance.',
+  '- policy.remainingWindowWei is the HARD remaining window allowance: if it is 0, or the',
+  '  amount you would send exceeds it, STAND DOWN — the contract will reject the transfer',
+  '  no matter what, and retrying before policy.windowResetsAtUnix only burns gas.',
   '- Never send if the session is expired or revoked, or the requested beneficiary is not',
   '  allowlisted.',
   '- If the requested amount exceeds the per-transfer cap, send AT MOST the cap instead',

@@ -9,6 +9,10 @@ import { approvalEvent, reasoningEvent, traceEvent } from '../sse/events.js';
 import type { Json } from '../crypto/canonical.js';
 import type { AgentGoal, AgentRow, SentinelGoal, TreasuryGoal } from '../types.js';
 import { CoordinationError, type DelegationCoordinator } from '../coordination/coordinator.js';
+import type { AlertService } from '../alerts/service.js';
+import { BoundaryRegistry, policyFingerprint, DAMPABLE_ERRORS, type DampableError } from './boundary.js';
+import { decodeLeashError } from '../chain/errors.js';
+import type { DecodedLeashError } from '../types.js';
 import type { RuntimeChain } from './session-chain.js';
 import {
   buildReasonRequest,
@@ -42,7 +46,7 @@ export type CycleOutcome =
   | { type: 'delegated'; delegationId: string }
   | { type: 'stood_down'; reason: string }
   | { type: 'denied'; reason: string }
-  | { type: 'failed'; reason: string };
+  | { type: 'failed'; reason: string; decoded?: DecodedLeashError };
 
 type Route = 'act' | 'approval' | 'delegate' | 'stand_down';
 
@@ -68,6 +72,10 @@ type State = typeof TreasuryState.State;
 export interface TreasuryGraphDeps {
   pool: Pool;
   hub: SseHub;
+  /** Phase-3 alert engine (optional: coordination-free test setups omit it). */
+  alerts?: AlertService | undefined;
+  /** P3C-6(iii) futile-retry damping registry (shared across cycles by the manager). */
+  boundaries?: BoundaryRegistry | undefined;
   chain: RuntimeChain;
   gatewayUrl: string;
   defaultModel: string;
@@ -153,7 +161,17 @@ export function buildTreasuryGraph(
         beneficiaryBalanceWei: '0',
         accountBalanceWei: '0',
         effectiveBeneficiary: '',
-        policy: { perTransferCapWei: '0', windowCapWei: '0', windowSeconds: 0, expiresAt: 0, allowlist: [], revoked: false },
+        policy: {
+          perTransferCapWei: '0',
+          windowCapWei: '0',
+          windowSeconds: 0,
+          expiresAt: 0,
+          allowlist: [],
+          revoked: false,
+          spentInWindowWei: '0',
+          remainingWindowWei: '0',
+          windowResetsAtUnix: 0,
+        },
       };
     }
     const beneficiary = mode.mode === 'inbound_transfer' ? mode.request.beneficiary : mode.goal.beneficiary;
@@ -162,6 +180,14 @@ export function buildTreasuryGraph(
       deps.chain.getBalance(ctx.accountAddr),
       deps.chain.getPolicyView(ctx.accountAddr, [beneficiary]),
     ]);
+    // P3C-6(i): window observability with the contract's OWN lazy-rollover
+    // math (LeashAccount.execute) — past the boundary the window has
+    // logically reset even though storage updates on the next spend.
+    const nowSec = Math.floor(Date.now() / 1000);
+    const resetsAt = policy.windowStart + policy.windowSeconds;
+    const rolled = policy.windowSeconds > 0 && nowSec >= resetsAt;
+    const spent = rolled ? 0n : policy.spentInWindow;
+    const remaining = policy.windowCap > spent ? policy.windowCap - spent : 0n;
     return {
       beneficiaryBalanceWei: beneficiaryBalance.toString(),
       accountBalanceWei: account.toString(),
@@ -173,6 +199,11 @@ export function buildTreasuryGraph(
         expiresAt: policy.expiresAt,
         allowlist: policy.allowlist.map((a) => a.toLowerCase()),
         revoked: policy.revoked,
+        spentInWindowWei: spent.toString(),
+        remainingWindowWei: remaining.toString(),
+        // After a logical reset the NEXT window starts at the next spend —
+        // report the boundary that already passed (FE copy clamps to "now").
+        windowResetsAtUnix: rolled ? nowSec : resetsAt,
       },
     };
   }
@@ -215,6 +246,45 @@ export function buildTreasuryGraph(
 
   async function decide(state: State): Promise<Partial<State>> {
     const verdict = evaluateDecision(state, ctx);
+    // P3C-6(iii): boundary damping. Refresh clear conditions first (window
+    // reset / policy change / re-arm — clearing resolves the limit_hit
+    // alert and re-enables normal flow), then short-circuit outcomes that
+    // would re-hit an ACTIVE boundary to a traced stand-down (no gas).
+    if (deps.boundaries && ctx.goal.type !== 'sentinel') {
+      const nowSec = Math.floor(Date.now() / 1000);
+      const refreshed = deps.boundaries.refresh(ctx.agentId, state.policy, nowSec);
+      if (refreshed.status === 'cleared') {
+        await deps.alerts?.resolveByDedupKey(ctx.agentRow.ownerAddr, refreshed.boundary.dedupKey);
+      } else if (refreshed.status === 'active' && (verdict.route === 'act' || verdict.route === 'approval')) {
+        const b = refreshed.boundary;
+        const until = b.clearsAtUnix !== null ? ` until ${new Date(b.clearsAtUnix * 1000).toISOString()}` : '';
+        return {
+          decision: {
+            action: 'stand_down',
+            amountWei: '0',
+            reason: `boundary active (${b.errorName})${until} — standing down instead of retrying a doomed send`,
+          },
+          route: 'stand_down',
+        };
+      }
+      // Pre-flight window detection: a send provably over the remaining
+      // window allowance is doomed REGARDLESS of owner approval — activate
+      // the boundary without burning gas on the revert.
+      if (
+        (verdict.route === 'act' || verdict.route === 'approval') &&
+        BigInt(verdict.decision.amountWei) > BigInt(state.policy.remainingWindowWei)
+      ) {
+        await activateBoundary(state, 'OverWindowCap', state.policy.windowResetsAtUnix);
+        return {
+          decision: {
+            action: 'stand_down',
+            amountWei: '0',
+            reason: 'over the remaining window allowance — standing down until the window resets',
+          },
+          route: 'stand_down',
+        };
+      }
+    }
     if (verdict.route !== 'approval') return verdict;
     // Side effects live HERE (a completed, checkpointed node) — the interrupt
     // node re-executes from its top on resume, which would duplicate rows.
@@ -234,11 +304,21 @@ export function buildTreasuryGraph(
         valueWei: verdict.decision.amountWei,
       }),
     );
+    // Daily loop (spec §3b): decision alert on the runtime interrupt boundary.
+    if (deps.alerts) {
+      await deps.alerts.emit(ctx.agentRow.ownerAddr, {
+        agentId: ctx.agentId,
+        class: 'decision',
+        kind: 'approval_required',
+        summary: `${ctx.agentRow.name} wants to send ${verdict.decision.amountWei} wei — over its per-transfer cap`,
+        refs: { approvalId: approval.id },
+      });
+    }
     return { ...verdict, approvalId: approval.id };
   }
 
   async function act(state: State): Promise<Partial<State>> {
-    return { outcome: await transfer(state.effectiveBeneficiary, state.decision.amountWei) };
+    return { outcome: await transfer(state, state.effectiveBeneficiary, state.decision.amountWei) };
   }
 
   async function requestApproval(state: State): Promise<Partial<State>> {
@@ -251,7 +331,7 @@ export function buildTreasuryGraph(
     if (resume.decision !== 'approve') {
       return { outcome: { type: 'denied', reason: resume.reason ?? 'denied by owner' } };
     }
-    const outcome = await transfer(state.effectiveBeneficiary, state.decision.amountWei);
+    const outcome = await transfer(state, state.effectiveBeneficiary, state.decision.amountWei);
     return { outcome: outcome.type === 'acted' ? { ...outcome, approved: true } : outcome };
   }
 
@@ -311,7 +391,12 @@ export function buildTreasuryGraph(
           : await appendTrace(deps.pool, {
               agentId: ctx.agentId,
               kind: 'decision',
-              detail: { summary: outcomeSummary(o), reason: 'reason' in o ? o.reason : '' },
+              detail: {
+                summary: outcomeSummary(o),
+                reason: 'reason' in o ? o.reason : '',
+                // P3C-6(ii): decoded contract error rides the trace detail.
+                ...(o.type === 'failed' && o.decoded ? { decoded: { ...o.decoded } as unknown as Json } : {}),
+              },
             });
       deps.hub.emit(ctx.agentId, 'trace', traceEvent(rec));
     }
@@ -346,7 +431,51 @@ export function buildTreasuryGraph(
     }
   }
 
-  async function transfer(to: string, amountWei: string): Promise<CycleOutcome> {
+  /**
+   * P3C-6(iii): record the active boundary + emit EXACTLY ONE limit_hit
+   * decision alert per activation (DB-deduped by the boundary key). limit_hit
+   * is explicitly NOT approvable — the contract reverts regardless; the
+   * actionable path is adjust (policy panel) or dismiss.
+   */
+  async function activateBoundary(state: State, errorName: DampableError, clearsAtUnix: number | null): Promise<void> {
+    if (!deps.boundaries) return;
+    const boundaryId = clearsAtUnix !== null ? String(clearsAtUnix) : policyFingerprint(state.policy).slice(0, 16);
+    const dedupKey = `limit_hit:${ctx.agentId}:${errorName}:${boundaryId}`;
+    const already = deps.boundaries.get(ctx.agentId);
+    if (already && already.dedupKey === dedupKey) return; // same boundary, already alerted
+    const nowSec = Math.floor(Date.now() / 1000);
+    deps.boundaries.set(ctx.agentId, {
+      errorName,
+      clearsAtUnix,
+      policyFingerprint: policyFingerprint(state.policy),
+      dedupKey,
+      activatedAtUnix: nowSec,
+    });
+    if (deps.alerts) {
+      const resetsIn = clearsAtUnix !== null ? Math.max(0, Math.round((clearsAtUnix - nowSec) / 60)) : null;
+      const summary =
+        errorName === 'OverWindowCap'
+          ? `${ctx.agentRow.name} hit its spending window cap — ${resetsIn !== null ? `resets in ${resetsIn} min` : 'raise the cap or wait'}. Approving cannot override this; adjust the policy if it is too tight.`
+          : errorName === 'OverPerTransferCap'
+            ? `${ctx.agentRow.name} keeps proposing transfers over its per-transfer cap. Adjust the cap if it is too tight.`
+            : errorName === 'SessionExpired'
+              ? `${ctx.agentRow.name}'s session expired — re-arm it to let it act again.`
+              : `${ctx.agentRow.name} tried to pay an address that is not on its allowlist.`;
+      await deps.alerts.emit(ctx.agentRow.ownerAddr, {
+        agentId: ctx.agentId,
+        class: 'decision',
+        kind: 'limit_hit',
+        summary,
+        refs: {
+          errorName,
+          ...(clearsAtUnix !== null ? { boundaryClearsAtUnix: clearsAtUnix } : {}),
+        },
+        dedupKey,
+      });
+    }
+  }
+
+  async function transfer(state: State, to: string, amountWei: string): Promise<CycleOutcome> {
     try {
       const { txHash } = await deps.chain.executeTransfer({
         sessionPrivateKey: ctx.sessionPrivateKey,
@@ -356,8 +485,19 @@ export function buildTreasuryGraph(
       });
       return { type: 'acted', txHash, valueWei: amountWei };
     } catch (err) {
-      // The contract refused (window cap, revoke racing, ...) — record, don't crash.
-      return { type: 'failed', reason: `execute failed: ${err instanceof Error ? err.message : String(err)}` };
+      // The contract refused (window cap, revoke racing, ...) — record, don't
+      // crash. P3C-6(ii): decode the custom error into plain language; (iii):
+      // a policy-boundary revert activates damping.
+      const decoded = decodeLeashError(err);
+      if (decoded && (DAMPABLE_ERRORS as readonly string[]).includes(decoded.errorName)) {
+        const clearsAt =
+          decoded.errorName === 'OverWindowCap' ? state.policy.windowResetsAtUnix : null;
+        await activateBoundary(state, decoded.errorName as DampableError, clearsAt);
+      }
+      const reason = decoded
+        ? `execute refused: ${decoded.plain}`
+        : `execute failed: ${err instanceof Error ? err.message : String(err)}`;
+      return { type: 'failed', reason, ...(decoded ? { decoded } : {}) };
     }
   }
 
