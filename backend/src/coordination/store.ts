@@ -186,6 +186,73 @@ export async function createDelegation(pool: Pool, input: CreateDelegationInput)
   return mapDelegation(row);
 }
 
+export interface ChannelBounds {
+  maxPending: number;
+  ratePerHour: number;
+}
+
+export type GuardedDelegationResult =
+  | { ok: true; delegation: Delegation }
+  | { ok: false; reason: 'delegation_max_pending' | 'delegation_rate_limited' };
+
+/**
+ * P3C-1 (throttle half): the channel-throttle checks and the envelope insert
+ * run in ONE transaction under a per-link advisory lock — the standalone
+ * count-then-insert admitted parallel issuances past both bounds (the same
+ * READ-COMMITTED TOCTOU as the create path). Check precedence matches the
+ * coordinator's original order: pending ceiling first, then hourly rate.
+ */
+export async function createDelegationGuarded(
+  pool: Pool,
+  input: CreateDelegationInput,
+  bounds: ChannelBounds,
+): Promise<GuardedDelegationResult> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 42))', [`link:${input.linkId}`]);
+    const counts = await client.query<{ pending: string; recent: string }>(
+      `SELECT
+         (SELECT count(*) FROM delegations
+           WHERE link_id = $1 AND status IN ('pending','pending_approval')) AS pending,
+         (SELECT count(*) FROM delegations
+           WHERE link_id = $1 AND created_at > now() - interval '1 hour') AS recent`,
+      [input.linkId],
+    );
+    if (Number(counts.rows[0]?.pending ?? 0) >= bounds.maxPending) {
+      await client.query('ROLLBACK');
+      return { ok: false, reason: 'delegation_max_pending' };
+    }
+    if (Number(counts.rows[0]?.recent ?? 0) >= bounds.ratePerHour) {
+      await client.query('ROLLBACK');
+      return { ok: false, reason: 'delegation_rate_limited' };
+    }
+    const res = await client.query<DbDelegationRow>(
+      `INSERT INTO delegations (id, link_id, from_agent_id, to_agent_id, kind, payload, status, expires_at)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+      [
+        randomUUID(),
+        input.linkId,
+        input.fromAgentId,
+        input.toAgentId,
+        input.kind,
+        JSON.stringify(input.payload),
+        input.status,
+        input.expiresAt.toISOString(),
+      ],
+    );
+    await client.query('COMMIT');
+    const row = res.rows[0];
+    if (!row) throw new Error('delegation insert failed');
+    return { ok: true, delegation: mapDelegation(row) };
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
 export async function getDelegation(pool: Pool, id: string): Promise<Delegation | null> {
   if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
   const res = await pool.query<DbDelegationRow>(`SELECT * FROM delegations WHERE id = $1`, [id]);
@@ -294,15 +361,35 @@ export async function transitionDelegation(
 
 /**
  * Receiver pickup query (expiry point A of three, spec §3b): pending,
- * addressed to the agent, and NOT expired — an expired envelope is refused at
- * pickup even before the sweeper gets to it.
+ * addressed to the agent, NOT expired — an expired envelope is refused at
+ * pickup even before the sweeper gets to it — and (P3C-4) on a link that is
+ * STILL ACTIVE: an envelope inserted during a pause race, or whose link was
+ * paused/removed after the cancel pass, is never delivered.
  */
 export async function listActivatablePendingFor(pool: Pool, toAgentId: string, limit = 20): Promise<Delegation[]> {
   const res = await pool.query<DbDelegationRow>(
-    `SELECT * FROM delegations
-     WHERE to_agent_id = $1 AND status = 'pending' AND expires_at > now()
-     ORDER BY created_at ASC LIMIT $2`,
+    `SELECT d.* FROM delegations d
+     JOIN links l ON l.id = d.link_id
+     WHERE d.to_agent_id = $1 AND d.status = 'pending' AND d.expires_at > now()
+       AND l.status = 'active'
+     ORDER BY d.created_at ASC LIMIT $2`,
     [toAgentId, Math.min(limit, 100)],
+  );
+  return res.rows.map(mapDelegation);
+}
+
+/**
+ * P3C-4: pending envelopes addressed to the agent whose link is no longer
+ * active — the pickup path CANCELS these (refusal alone would leave them to
+ * dangle until TTL expiry, muddying "paused link = channel dead").
+ */
+export async function listPendingOnInactiveLinkFor(pool: Pool, toAgentId: string): Promise<Delegation[]> {
+  const res = await pool.query<DbDelegationRow>(
+    `SELECT d.* FROM delegations d
+     JOIN links l ON l.id = d.link_id
+     WHERE d.to_agent_id = $1 AND d.status = 'pending' AND l.status <> 'active'
+     ORDER BY d.created_at ASC`,
+    [toAgentId],
   );
   return res.rows.map(mapDelegation);
 }
@@ -327,6 +414,23 @@ export async function sweepExpiredDelegations(pool: Pool): Promise<Delegation[]>
     if (d) swept.push(d); // null = raced with another transition — that writer won
   }
   return swept;
+}
+
+/**
+ * Gate-① build note 2 (supervised TTL interaction): with APPROVAL_TIMEOUT ≈
+ * DELEGATION_TTL (both 600s), an approval decided near its deadline would
+ * activate an envelope at/past its own expiry — the owner's approve then
+ * silently became `expired`. The TTL bounds delivery-to-pickup; while the
+ * envelope waited on the OWNER it was not undelivered — so on approve the
+ * expiry restarts from the DECISION time. Status is untouched (not a CAS
+ * transition; guarded to the just-activated 'pending' row).
+ */
+export async function resetDelegationExpiry(pool: Pool, id: string, ttlMs: number): Promise<void> {
+  await pool.query(
+    `UPDATE delegations SET expires_at = now() + make_interval(secs => $2 / 1000.0)
+     WHERE id = $1 AND status = 'pending'`,
+    [id, ttlMs],
+  );
 }
 
 /** Throttle input: delegations created on the link in the trailing hour (ALL statuses). */

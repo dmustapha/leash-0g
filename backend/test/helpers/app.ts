@@ -12,6 +12,8 @@ import { ComputeQueue } from '../../src/gateway/compute-queue.js';
 import { SseHub } from '../../src/sse/hub.js';
 import { ApprovalBroker } from '../../src/approvals/broker.js';
 import { DelegationCoordinator } from '../../src/coordination/coordinator.js';
+import { AlertService } from '../../src/alerts/service.js';
+import { DigestService } from '../../src/digest/service.js';
 import type { PrivyVerifier } from '../../src/api/privy.js';
 import type { PolicyView } from '../../src/types.js';
 
@@ -83,6 +85,8 @@ export class FakeChainOps implements ChainOps {
     expiresAt: Math.floor(Date.now() / 1000) + 86_400,
     allowlist: [],
     revoked: false,
+    spentInWindow: 0n,
+    windowStart: Math.floor(Date.now() / 1000),
   };
 
   public balances = new Map<string, bigint>();
@@ -142,6 +146,7 @@ export interface TestApp {
   chain: FakeChainOps;
   runtime: FakeRuntime;
   coordinator: DelegationCoordinator;
+  alerts: AlertService;
   deps: AppDeps;
 }
 
@@ -154,6 +159,8 @@ export function testSettings(overrides: Partial<AppDeps['settings']> = {}): AppD
     storageIndexerUrl: 'https://indexer.leash-test.local',
     createQuotaPerOwner: 1000,
     createRatePerHour: 1000,
+    reservationTtlMs: 120_000,
+    balanceCacheTtlMs: 15_000,
     allowlistMax: 16,
     rulesMax: 32,
     // Delegation bounds: the REAL production defaults (spec §5) — throttle
@@ -168,16 +175,32 @@ export function testSettings(overrides: Partial<AppDeps['settings']> = {}): AppD
 
 export function buildTestApp(pool: Pool, overrides: Partial<AppDeps> = {}): TestApp {
   const hub = new SseHub();
+  // S8 owner fan-out — same lookup wiring as the composition root.
+  hub.setOwnerLookup(async (agentId) => {
+    const res = await pool.query<{ owner_addr: string }>(`SELECT owner_addr FROM agents WHERE id = $1`, [agentId]);
+    return res.rows[0]?.owner_addr ?? null;
+  });
   const broker = new ApprovalBroker();
   const chain = new FakeChainOps();
   const runtime = new FakeRuntime();
   const settings = overrides.settings ?? testSettings();
+  const alerts =
+    overrides.alerts ??
+    new AlertService({
+      pool,
+      hub: overrides.hub ?? hub,
+      settings: { alertRatePerOwnerPerHour: 1000 },
+    });
+  const digest =
+    overrides.digest ??
+    new DigestService({ pool, chain: overrides.chain ?? chain, settings: { digestDefaultHourUtc: 8 } });
   const coordinator =
     overrides.coordinator ??
     new DelegationCoordinator({
       pool,
       hub: overrides.hub ?? hub,
       runtime: overrides.runtime ?? runtime,
+      alerts,
       settings,
     });
   const deps: AppDeps = {
@@ -189,6 +212,8 @@ export function buildTestApp(pool: Pool, overrides: Partial<AppDeps> = {}): Test
     chain,
     runtime,
     coordinator,
+    alerts,
+    digest,
     settings,
     ...overrides,
   };
@@ -201,6 +226,7 @@ export function buildTestApp(pool: Pool, overrides: Partial<AppDeps> = {}): Test
     chain,
     runtime,
     coordinator: deps.coordinator,
+    alerts: deps.alerts,
     deps,
   };
 }

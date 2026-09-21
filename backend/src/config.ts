@@ -28,7 +28,10 @@ const envSchema = z.object({
   // it must never share the public HOST:PORT surface.
   GATEWAY_PORT: z.coerce.number().int().positive().default(8081),
   COMPUTE_BASE_URL: z.string().url().default('https://router-api.0g.ai/v1'),
-  APPROVAL_TIMEOUT_MS: z.coerce.number().int().positive().default(180_000),
+  // S11 (rev-2): raised 180s → 600s — a Telegram push answered from a phone
+  // must be able to land inside the deny-by-default window (00 §1a "act from
+  // the notification"); semantics (deny-by-default, C-3 rendezvous) unchanged.
+  APPROVAL_TIMEOUT_MS: z.coerce.number().int().positive().default(600_000),
   SESSION_GAS_DUST_WEI: z.string().regex(/^\d{1,30}$/).default('2000000000000000'), // 0.002 0G
   DEFAULT_TIMELOCK_DELAY: z.coerce.number().int().nonnegative().default(900),
   RUNTIME_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),
@@ -43,6 +46,22 @@ const envSchema = z.object({
   // ops create-gas is the drained resource; revoking must not refill quota.
   CREATE_QUOTA_PER_OWNER: z.coerce.number().int().positive().default(10),
   CREATE_RATE_PER_HOUR: z.coerce.number().int().positive().default(5),
+  // P3C-1 (07 S11): a create reservation past this age counts as dead (its
+  // create evidently crashed) — quota/rate ignore it and the sweep releases it.
+  RESERVATION_TTL_MS: z.coerce.number().int().positive().default(120_000),
+  // P3C-5 (07 S11): GET /api/agents balance fan-out is N live RPC reads per
+  // request — an authed amplification surface. Short per-account cache bounds
+  // it; the agent DETAIL view keeps live reads (freshness where it matters).
+  BALANCE_CACHE_TTL_MS: z.coerce.number().int().positive().default(15_000),
+  // Phase-3 daily loop (07 S11, config-driven testnet values).
+  ALERT_RATE_PER_OWNER_PER_HOUR: z.coerce.number().int().positive().default(60),
+  DIGEST_DEFAULT_HOUR_UTC: z.coerce.number().int().min(0).max(23).default(8),
+  // Telegram (S9) — the whole feature is OFF unless the token is set (local
+  // dev / CI run without a bot; the deployed stack sets all four).
+  TELEGRAM_BOT_TOKEN: z.string().min(1).optional(),
+  TELEGRAM_WEBHOOK_SECRET: z.string().min(16).optional(),
+  TELEGRAM_BOT_USERNAME: z.string().min(1).optional(),
+  PUBLIC_BASE_URL: z.string().url().optional(),
   ALLOWLIST_MAX: z.coerce.number().int().positive().default(16),
   RULES_MAX: z.coerce.number().int().positive().default(32),
   // Coordination channel bounds (spec §3b): zero-authority contains SPENDING,
