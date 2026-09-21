@@ -368,3 +368,57 @@ async function waitFor<T>(fn: () => Promise<T | undefined>, timeoutMs = 8000): P
     await new Promise((r) => setTimeout(r, 50));
   }
 }
+
+describe('C-3 gateway race injection', () => {
+  it('forwards exactly once when the decision lands before the gateway wait registers', async () => {
+    const a = await seedWithToken({ rules: [{ action: 'require_approval', match: 'top up' }] });
+    let upstreamCalls = 0;
+    nock(UPSTREAM)
+      .post('/v1/chat/completions')
+      .times(5) // would surface double-forwards
+      .reply(200, () => {
+        upstreamCalls += 1;
+        return COMPLETION;
+      });
+
+    // Race injection: the broker's wait is wrapped so the owner's decision +
+    // consent become durable BEFORE the shared rendezvous can see a notify —
+    // exactly the approve-recorded-but-never-forwarded window. Old code
+    // (bare broker.wait) times out → 408 and never forwards.
+    const originalWait = t.broker.wait.bind(t.broker);
+    t.broker.wait = (approvalId: string, _timeoutMs: number) => {
+      void (async () => {
+        const { decideApproval } = await import('../../src/store/approvals.js');
+        const { appendTrace } = await import('../../src/trace/trace-store.js');
+        await decideApproval(db.pool, approvalId, 'approve');
+        await appendTrace(db.pool, {
+          agentId: a.id,
+          kind: 'consent',
+          approvalId,
+          decision: 'approve',
+          decidedBy: 'owner',
+          originalRequest: { raced: true },
+        });
+      })();
+      // Short real wait: no notify will ever come — only the durable
+      // check/recheck of the shared rendezvous can save this request.
+      return originalWait(approvalId, 1_500);
+    };
+
+    const res = await request(t.app)
+      .post('/v1/chat/completions')
+      .set('authorization', `Bearer ${a.token}`)
+      .send({ model: 'test-model', messages: [{ role: 'user', content: 'top up please' }] });
+
+    expect(res.status).toBe(200);
+    expect(upstreamCalls).toBe(1);
+
+    // Consent is on the chain BEFORE the forwarded inference record.
+    const traces = await listTraces(db.pool, a.id, { afterSeq: -1, limit: 50 });
+    const consent = traces.find((r) => r.kind === 'consent');
+    const inference = traces.find((r) => r.kind === 'inference');
+    expect(consent).toBeDefined();
+    expect(inference).toBeDefined();
+    expect(consent!.seq).toBeLessThan(inference!.seq);
+  });
+});

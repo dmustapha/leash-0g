@@ -6,6 +6,7 @@ import { evaluateRules } from './interceptor.js';
 import { appendTrace } from '../trace/trace-store.js';
 import { createApproval, expireApproval } from '../store/approvals.js';
 import type { ApprovalBroker } from '../approvals/broker.js';
+import { awaitApprovalDecision } from '../approvals/rendezvous.js';
 import type { SseHub } from '../sse/hub.js';
 import { approvalEvent, requestSummary, traceEvent } from '../sse/events.js';
 import type { Json } from '../crypto/canonical.js';
@@ -87,7 +88,10 @@ async function handleCompletion(deps: GatewayDeps, req: Request, res: Response):
 async function holdForApproval(deps: GatewayDeps, agent: AgentRow, body: Json, res: Response): Promise<boolean> {
   const approval = await createApproval(deps.pool, agent.id, body);
   deps.hub.emit(agent.id, 'approval', approvalEvent({ approvalId: approval.id, summary: requestSummary(body) }));
-  const decision = await deps.broker.wait(approval.id, deps.approvalTimeoutMs);
+  // C-3: shared register→check-durable→wait→recheck rendezvous — closes the
+  // approve-recorded-but-never-forwarded race (decision landing durably
+  // between createApproval and the wait registration).
+  const decision = await awaitApprovalDecision({ pool: deps.pool, broker: deps.broker }, approval.id, deps.approvalTimeoutMs);
 
   if (decision === 'timeout') {
     // Terminal state + consent-class record: timeouts are never silent.
