@@ -27,6 +27,7 @@ const SESSION_PK = '0x' + '6d'.repeat(32);
 const CAP = 10n ** 16n;
 
 const errorAbi = leashAccountAbi.filter((i) => i.type === 'error');
+// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- tsc needs the widening; eslint's project service disagrees
 const OVER_WINDOW_REVERT = encodeErrorResult({
   abi: errorAbi,
   errorName: 'OverWindowCap',

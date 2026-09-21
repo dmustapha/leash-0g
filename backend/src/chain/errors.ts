@@ -114,5 +114,5 @@ export function decodeLeashError(err: unknown): DecodedLeashError | null {
 function jsonify(v: unknown): Json {
   if (typeof v === 'bigint') return v.toString();
   if (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean' || v === null) return v;
-  return String(v);
+  return JSON.stringify(v); // error args are scalars in practice; objects stay inspectable
 }
