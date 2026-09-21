@@ -127,9 +127,11 @@ const createAgentSchema = z.object({
   }
   // FE validates this too, but the API is the enforcement boundary: a top-up
   // chunk above the per-transfer cap would push every cycle into approval.
-  // Applies to treasury AND sentinel (both carry amounts and validate their
-  // own shape); the executor goal has no beneficiary/amounts.
-  if (v.goal.type !== 'executor' && BigInt(v.goal.topUpWei) > BigInt(v.policy.perTransferCapWei)) {
+  // TREASURY ONLY (spec §3c): the sentinel ships the spend-incapable preset
+  // (perTransferCap 0) with a meaningful topUpWei — the amount it ASKS the
+  // executor to send. The sentinel never spends, so its own cap does not
+  // bound its request size; the executor goal has no beneficiary/amounts.
+  if (role === 'treasury' && 'topUpWei' in v.goal && BigInt(v.goal.topUpWei) > BigInt(v.policy.perTransferCapWei)) {
     issues.addIssue({
       code: z.ZodIssueCode.custom,
       message: 'goal.topUpWei must not exceed policy.perTransferCapWei',

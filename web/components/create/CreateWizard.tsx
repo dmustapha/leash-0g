@@ -6,8 +6,9 @@
 
 import { useMemo, useState } from 'react';
 import { isAddress, type Address } from 'viem';
+import { ApiError } from '@/lib/api';
 import { isValidOgAmount, ogToWei, weiToOg } from '@/lib/format';
-import type { CreateAgentResponse, GoalInput, Hex, PolicyInput } from '@/lib/types';
+import type { AgentGoal, CreateAgentResponse, Hex, PolicyInput } from '@/lib/types';
 import { Disclosure } from '@/components/ui/Disclosure';
 import { Field } from '@/components/ui/Field';
 import { CopyButton } from '@/components/ui/CopyButton';
@@ -24,8 +25,11 @@ export type WizardInput = {
   name: string;
   policy: PolicyInput;
   allowlist: Address[];
-  goal: GoalInput;
+  goal: AgentGoal;
 };
+
+/** Role variant chooser (spec §3c): ONE plain-language choice on the goal step. */
+export type AgentRole = 'treasury' | 'sentinel' | 'executor';
 
 export type WizardResult = {
   response: CreateAgentResponse;
@@ -43,13 +47,70 @@ export type CreateWizardProps = {
   };
 };
 
-type Step = 'name' | 'goal' | 'transfer-cap' | 'budget' | 'allowlist' | 'expiry' | 'review' | 'passphrase' | 'creating' | 'done';
+type Step =
+  | 'name'
+  | 'goal'
+  | 'transfer-cap'
+  | 'budget'
+  | 'allowlist'
+  | 'sentinel-policy'
+  | 'expiry'
+  | 'review'
+  | 'passphrase'
+  | 'creating'
+  | 'done';
 
-const STEP_ORDER: Step[] = ['name', 'goal', 'transfer-cap', 'budget', 'allowlist', 'expiry', 'review'];
+/** Step sequence per role (spec §3c): the sentinel swaps the three policy steps for the
+ *  spend-incapable preset explainer; the executor keeps normal policy steps but has no
+ *  goal amount fields. The treasury path is byte-identical to Phase 1. */
+const STEP_ORDERS: Record<AgentRole, Step[]> = {
+  treasury: ['name', 'goal', 'transfer-cap', 'budget', 'allowlist', 'expiry', 'review'],
+  sentinel: ['name', 'goal', 'sentinel-policy', 'expiry', 'review'],
+  executor: ['name', 'goal', 'transfer-cap', 'budget', 'allowlist', 'expiry', 'review'],
+};
+
+const ROLE_OPTIONS: Array<{ value: AgentRole; label: string; explain: string }> = [
+  {
+    value: 'treasury',
+    label: 'Manage an allowance itself',
+    explain: 'It watches a wallet and tops it up on its own, within the limits you set.',
+  },
+  {
+    value: 'sentinel',
+    label: 'Watch and request top-ups',
+    explain: 'It only watches and asks another agent to pay. It can never move money itself.',
+  },
+  {
+    value: 'executor',
+    label: 'Act on requests from another agent',
+    explain: 'It waits for requests over a link you create, checks them against its own limits, then pays.',
+  },
+];
+
+/** Friendly copy for the backend's create guardrails (spec §4 error shapes). */
+function createErrorMessage(e: unknown): string {
+  if (e instanceof ApiError) {
+    if (e.code === 'rate_limited') {
+      const secs = e.retryAfter !== undefined ? ` Try again in about ${e.retryAfter} seconds.` : ' Try again in a little while.';
+      return `You are creating agents a bit fast.${secs}`;
+    }
+    if (e.code === 'quota_exceeded') {
+      const limit = e.limit !== undefined ? ` (${e.limit})` : '';
+      return `You have reached the limit of agents for this wallet${limit}. Revoked agents count too.`;
+    }
+    if (e.code === 'allowlist_too_long') {
+      const max = e.max !== undefined ? ` at most ${e.max} addresses` : ' fewer addresses';
+      return `That allowlist is too long — use${max}.`;
+    }
+  }
+  return e instanceof Error ? e.message : 'Something went wrong. Please try again.';
+}
+
 const DAY = 86_400;
 
 export function CreateWizard({ onCreate, walletReady, fund }: CreateWizardProps) {
   const [step, setStep] = useState<Step>('name');
+  const [role, setRole] = useState<AgentRole>('treasury');
   const [name, setName] = useState('');
   const [beneficiary, setBeneficiary] = useState('');
   const [targetBalance, setTargetBalance] = useState('0.1');
@@ -64,29 +125,56 @@ export function CreateWizard({ onCreate, walletReady, fund }: CreateWizardProps)
   const [result, setResult] = useState<WizardResult | null>(null);
 
   const input = useMemo<WizardInput | null>(() => {
+    if (!name.trim() || !/^\d+$/.test(expiryDays) || Number(expiryDays) < 1) return null;
+    const expiresAt = Math.floor(Date.now() / 1000) + Number(expiryDays) * DAY;
+
+    if (role === 'sentinel') {
+      // Spend-incapable preset (spec §3c): zero caps, empty allowlist. The goal amounts
+      // are what it ASKS the executor to send — its own caps never bound them.
+      if (!isAddress(beneficiary) || !isValidOgAmount(targetBalance) || !isValidOgAmount(topUp)) {
+        return null;
+      }
+      return {
+        name: name.trim(),
+        policy: { perTransferCapWei: '0', windowCapWei: '0', windowSeconds: 24 * 3600, expiresAt },
+        allowlist: [],
+        goal: {
+          type: 'sentinel',
+          beneficiary,
+          targetBalanceWei: ogToWei(targetBalance),
+          topUpWei: ogToWei(topUp),
+        },
+      };
+    }
+
+    // treasury + executor share the normal policy steps.
     if (
-      !name.trim() ||
-      !isAddress(beneficiary) ||
-      !isValidOgAmount(targetBalance) ||
-      !isValidOgAmount(topUp) ||
       !isValidOgAmount(perTransfer) ||
       !isValidOgAmount(windowAmount) ||
       !/^\d+$/.test(windowHours) ||
       Number(windowHours) < 1 ||
-      !isAddress(payee) ||
-      !/^\d+$/.test(expiryDays) ||
-      Number(expiryDays) < 1
+      !isAddress(payee)
     ) {
+      return null;
+    }
+    const policy: PolicyInput = {
+      perTransferCapWei: ogToWei(perTransfer),
+      windowCapWei: ogToWei(windowAmount),
+      windowSeconds: Number(windowHours) * 3600,
+      expiresAt,
+    };
+
+    if (role === 'executor') {
+      return { name: name.trim(), policy, allowlist: [payee], goal: { type: 'executor' } };
+    }
+
+    // Treasury: byte-compatible with Phase 1 — NO type field, validations unchanged.
+    if (!isAddress(beneficiary) || !isValidOgAmount(targetBalance) || !isValidOgAmount(topUp)) {
       return null;
     }
     return {
       name: name.trim(),
-      policy: {
-        perTransferCapWei: ogToWei(perTransfer),
-        windowCapWei: ogToWei(windowAmount),
-        windowSeconds: Number(windowHours) * 3600,
-        expiresAt: Math.floor(Date.now() / 1000) + Number(expiryDays) * DAY,
-      },
+      policy,
       allowlist: [payee],
       goal: {
         beneficiary,
@@ -94,16 +182,19 @@ export function CreateWizard({ onCreate, walletReady, fund }: CreateWizardProps)
         topUpWei: ogToWei(topUp),
       },
     };
-  }, [name, beneficiary, targetBalance, topUp, perTransfer, windowAmount, windowHours, payee, expiryDays]);
+  }, [role, name, beneficiary, targetBalance, topUp, perTransfer, windowAmount, windowHours, payee, expiryDays]);
 
-  // Reviewed constraint: a single top-up is one payment, so it can never exceed the
-  // per-payment cap the chain enforces.
+  // Reviewed constraint (TREASURY only): a single top-up is one payment, so it can never
+  // exceed the per-payment cap the chain enforces. The sentinel never pays (its request
+  // amount is bounded by the EXECUTOR's caps), and the executor has no top-up amount.
   const topUpExceedsCap = useMemo(() => {
+    if (role !== 'treasury') return false;
     if (!isValidOgAmount(topUp) || !isValidOgAmount(perTransfer)) return false;
     return BigInt(ogToWei(topUp)) > BigInt(ogToWei(perTransfer));
-  }, [topUp, perTransfer]);
+  }, [role, topUp, perTransfer]);
 
-  const stepIndex = STEP_ORDER.indexOf(step);
+  const stepOrder = STEP_ORDERS[role];
+  const stepIndex = stepOrder.indexOf(step);
   const fundGetBalance = fund?.getBalance;
 
   async function submit(pass?: string) {
@@ -119,7 +210,7 @@ export function CreateWizard({ onCreate, walletReady, fund }: CreateWizardProps)
         setStep('passphrase');
         return;
       }
-      setError(e instanceof Error ? e.message : 'Something went wrong. Please try again.');
+      setError(createErrorMessage(e));
       setStep('review');
     }
   }
@@ -127,7 +218,7 @@ export function CreateWizard({ onCreate, walletReady, fund }: CreateWizardProps)
   const nav = (next: Step) => (
     <div style={{ display: 'flex', gap: '0.6rem', marginTop: '0.5rem' }}>
       {stepIndex > 0 ? (
-        <button type="button" className="btn btn-ghost" onClick={() => setStep(STEP_ORDER[stepIndex - 1] ?? 'name')}>
+        <button type="button" className="btn btn-ghost" onClick={() => setStep(stepOrder[stepIndex - 1] ?? 'name')}>
           Back
         </button>
       ) : null}
@@ -167,7 +258,7 @@ export function CreateWizard({ onCreate, walletReady, fund }: CreateWizardProps)
     <div className="card" style={{ padding: 'clamp(1.2rem, 3vw, 2rem)', display: 'grid', gap: '1.1rem' }}>
       {step !== 'done' && step !== 'creating' ? (
         <p className="eyebrow" aria-live="polite">
-          {step === 'passphrase' ? 'One more thing' : `Step ${Math.max(stepIndex, 0) + 1} of ${STEP_ORDER.length}`}
+          {step === 'passphrase' ? 'One more thing' : `Step ${Math.max(stepIndex, 0) + 1} of ${stepOrder.length}`}
         </p>
       ) : null}
 
@@ -192,49 +283,110 @@ export function CreateWizard({ onCreate, walletReady, fund }: CreateWizardProps)
 
       {step === 'goal' &&
         stepForm(
-          'transfer-cap',
-          isAddress(beneficiary) && isValidOgAmount(targetBalance) && isValidOgAmount(topUp),
+          stepOrder[stepOrder.indexOf('goal') + 1] ?? 'review',
+          role === 'executor' ||
+            (isAddress(beneficiary) && isValidOgAmount(targetBalance) && isValidOgAmount(topUp)),
           'Enter a valid wallet address and amounts greater than zero, like 0.1.',
           <>
-            <h1 style={{ fontSize: 'var(--text-h1)' }}>Who should it keep topped up?</h1>
-            <Field
-              id="goal-beneficiary"
-              label="Who to keep topped up"
-              hint="The wallet your agent watches and refills. We will also pre-fill it as the allowed recipient a few steps from now."
-              value={beneficiary}
-              onChange={(e) => setBeneficiary(e.target.value)}
-              placeholder="0x…"
-              autoFocus
-            />
-            <Field
-              id="goal-target"
-              label="Keep them at"
-              hint="When their balance dips below this, your agent tops it back up."
-              value={targetBalance}
-              onChange={(e) => setTargetBalance(e.target.value)}
-              inputMode="decimal"
-              suffix="0G"
-            />
-            <Field
-              id="goal-topup"
-              label="Send at most, per top-up"
-              value={topUp}
-              onChange={(e) => setTopUp(e.target.value)}
-              inputMode="decimal"
-              suffix="0G"
-            />
+            <h1 style={{ fontSize: 'var(--text-h1)' }}>What should this agent do?</h1>
+            <fieldset style={{ border: 0, margin: 0, padding: 0, display: 'grid', gap: '0.5rem' }} data-testid="role-chooser">
+              <legend className="label" style={{ color: 'var(--color-ink)', padding: 0, marginBottom: '0.35rem' }}>
+                Pick the job that fits
+              </legend>
+              {ROLE_OPTIONS.map((opt) => (
+                <label key={opt.value} className="panel" style={{ display: 'flex', gap: '0.6rem', alignItems: 'flex-start', cursor: 'pointer', padding: '0.7rem 0.85rem' }}>
+                  <input
+                    type="radio"
+                    name="agent-role"
+                    value={opt.value}
+                    checked={role === opt.value}
+                    onChange={() => setRole(opt.value)}
+                    style={{ marginTop: '0.25rem' }}
+                    data-testid={`role-${opt.value}`}
+                  />
+                  <span style={{ fontSize: '0.9rem' }}>
+                    <strong>{opt.label}</strong>
+                    <span style={{ display: 'block', color: 'var(--color-ink-dim)', fontSize: '0.82rem' }}>
+                      {opt.explain}
+                    </span>
+                  </span>
+                </label>
+              ))}
+            </fieldset>
+
+            {role !== 'executor' ? (
+              <>
+                <Field
+                  id="goal-beneficiary"
+                  label="Who to keep topped up"
+                  hint={
+                    role === 'treasury'
+                      ? 'The wallet your agent watches and refills. We will also pre-fill it as the allowed recipient a few steps from now.'
+                      : 'The wallet this agent watches. When it runs low, the agent asks a linked agent to top it up.'
+                  }
+                  value={beneficiary}
+                  onChange={(e) => setBeneficiary(e.target.value)}
+                  placeholder="0x…"
+                />
+                <Field
+                  id="goal-target"
+                  label="Keep them at"
+                  hint="When their balance dips below this, a top-up is due."
+                  value={targetBalance}
+                  onChange={(e) => setTargetBalance(e.target.value)}
+                  inputMode="decimal"
+                  suffix="0G"
+                />
+                <Field
+                  id="goal-topup"
+                  label={role === 'treasury' ? 'Send at most, per top-up' : 'Ask for at most, per top-up'}
+                  value={topUp}
+                  onChange={(e) => setTopUp(e.target.value)}
+                  inputMode="decimal"
+                  suffix="0G"
+                />
+              </>
+            ) : (
+              <p data-testid="executor-goal-note" style={{ color: 'var(--color-ink-dim)', fontSize: '0.88rem' }}>
+                Nothing else to set here. This agent waits for requests from an agent you link to
+                it, checks each one against its own limits (you set those next), and then pays —
+                or asks you first.
+              </p>
+            )}
             <Disclosure label="How does the agent use this?">
-              This goal is the agent&apos;s standing instruction: watch the beneficiary&apos;s
-              balance and top it up toward the target, never sending more than the per-top-up
-              amount at once. The on-chain caps you set next still bound every single payment,
-              no matter what the agent decides.
+              {role === 'executor'
+                ? 'Requests from other agents carry no authority of their own. This agent re-reasons about every request and its own on-chain caps and allowlist bound anything it pays, no matter what it is asked.'
+                : role === 'sentinel'
+                  ? 'This goal is the standing instruction: watch the balance and request a top-up when it dips below target. The agent itself can never move money — the linked agent that acts checks every request against its own limits.'
+                  : 'This goal is the agent’s standing instruction: watch the beneficiary’s balance and top it up toward the target, never sending more than the per-top-up amount at once. The on-chain caps you set next still bound every single payment, no matter what the agent decides.'}
             </Disclosure>
           </>,
           // The beneficiary is almost always the payee — seed the allowlist step so the
           // user does not retype the address (they can still change it there).
           () => {
-            if (!payee.trim() && isAddress(beneficiary)) setPayee(beneficiary);
+            if (role === 'treasury' && !payee.trim() && isAddress(beneficiary)) setPayee(beneficiary);
           },
+        )}
+
+      {step === 'sentinel-policy' &&
+        stepForm(
+          'expiry',
+          true,
+          '',
+          <>
+            <h1 style={{ fontSize: 'var(--text-h1)' }}>This agent can never move money</h1>
+            <p style={{ color: 'var(--color-ink-dim)', fontSize: '0.92rem' }} data-testid="sentinel-policy-note">
+              Watcher agents get the strictest possible leash, set automatically: it can pay
+              nobody (empty allowlist) and its payment limits are zero. Even if it is tricked,
+              there is nothing to steal — it can only ASK a linked agent to pay, and that agent
+              checks every request against its own limits.
+            </p>
+            <Disclosure label="What exactly is set on-chain?">
+              Its LeashAccount is deployed with a per-payment cap of 0, a budget cap of 0, and an
+              empty allowlist — every execute() reverts. Because it can never spend, there is no
+              account to fund and no gas top-up to make.
+            </Disclosure>
+          </>,
         )}
 
       {step === 'transfer-cap' &&
@@ -302,7 +454,11 @@ export function CreateWizard({ onCreate, walletReady, fund }: CreateWizardProps)
             <Field
               id="payee"
               label="Allowed recipient"
-              hint="Your agent can ONLY send to this address. Everything else is blocked by default. You can add more later from the cockpit."
+              hint={
+                role === 'executor'
+                  ? 'This bounds who this agent can pay: whatever another agent asks for, payments can ONLY go to this address. You can add more later from the cockpit.'
+                  : 'Your agent can ONLY send to this address. Everything else is blocked by default. You can add more later from the cockpit.'
+              }
               value={payee}
               onChange={(e) => setPayee(e.target.value)}
               placeholder="0x…"
@@ -339,12 +495,31 @@ export function CreateWizard({ onCreate, walletReady, fund }: CreateWizardProps)
           <dl style={{ display: 'grid', gap: '0.55rem', margin: 0 }} data-testid="review-summary">
             {[
               ['Name', name.trim()],
-              ['Keeps topped up', beneficiary],
-              ['Keep them at', `${targetBalance} 0G`],
-              ['Per top-up', `${topUp} 0G max`],
-              ['Per payment', `${weiToOg(input?.policy.perTransferCapWei ?? '0')} 0G max`],
-              ['Budget', `${weiToOg(input?.policy.windowCapWei ?? '0')} 0G every ${windowHours} hours`],
-              ['Can pay', payee],
+              [
+                'Job',
+                role === 'treasury'
+                  ? 'manages an allowance itself'
+                  : role === 'sentinel'
+                    ? 'watches and requests top-ups (never pays)'
+                    : 'acts on requests from a linked agent',
+              ],
+              ...(role !== 'executor'
+                ? [
+                    [role === 'sentinel' ? 'Watches' : 'Keeps topped up', beneficiary],
+                    ['Keep them at', `${targetBalance} 0G`],
+                    [role === 'sentinel' ? 'Asks for, per top-up' : 'Per top-up', `${topUp} 0G max`],
+                  ]
+                : []),
+              ...(role === 'sentinel'
+                ? [
+                    ['Per payment', 'nothing — it can never pay'],
+                    ['Can pay', 'nobody (empty allowlist)'],
+                  ]
+                : [
+                    ['Per payment', `${weiToOg(input?.policy.perTransferCapWei ?? '0')} 0G max`],
+                    ['Budget', `${weiToOg(input?.policy.windowCapWei ?? '0')} 0G every ${windowHours} hours`],
+                    ['Can pay', payee],
+                  ]),
               ['Expires', `in ${expiryDays} days`],
             ].map(([k, v]) => (
               <div key={k} style={{ display: 'flex', gap: '0.8rem', justifyContent: 'space-between', borderBottom: '1px solid var(--color-line-soft)', paddingBottom: '0.45rem' }}>
@@ -457,20 +632,27 @@ export function CreateWizard({ onCreate, walletReady, fund }: CreateWizardProps)
               Open the cockpit
             </a>
           </div>
-          <section aria-label="Fund your agent" className="panel" style={{ padding: '0.9rem 1rem', display: 'grid', gap: '0.7rem' }}>
-            <h2 style={{ fontSize: '1rem' }}>Fund your agent</h2>
-            <p style={{ color: 'var(--color-ink-dim)', fontSize: '0.88rem', margin: 0 }}>
-              The agent pays from its own on-chain account, which starts empty. Send some 0G so it
-              can actually top your beneficiary up.
+          {role !== 'sentinel' ? (
+            <section aria-label="Fund your agent" className="panel" style={{ padding: '0.9rem 1rem', display: 'grid', gap: '0.7rem' }}>
+              <h2 style={{ fontSize: '1rem' }}>Fund your agent</h2>
+              <p style={{ color: 'var(--color-ink-dim)', fontSize: '0.88rem', margin: 0 }}>
+                The agent pays from its own on-chain account, which starts empty. Send some 0G so
+                it can actually pay when the time comes.
+              </p>
+              <FundPanel
+                accountAddr={result.response.accountAddr}
+                defaultAmountOg={weiToOg(2n * BigInt(input?.policy.windowCapWei ?? ogToWei(windowAmount)))}
+                onSend={fund ? (valueWei) => fund.send(result.response.accountAddr, valueWei) : undefined}
+                getBalance={fundGetBalance ? () => fundGetBalance(result.response.accountAddr) : undefined}
+                skipHref={`/agents/${result.response.agentId}`}
+              />
+            </section>
+          ) : (
+            <p data-testid="sentinel-no-fund-note" style={{ color: 'var(--color-ink-dim)', fontSize: '0.88rem' }}>
+              Nothing to fund: this watcher can never move money, so its account stays empty.
+              Next, link it to an agent that can act — from the Links page.
             </p>
-            <FundPanel
-              accountAddr={result.response.accountAddr}
-              defaultAmountOg={weiToOg(2n * BigInt(input?.policy.windowCapWei ?? ogToWei(windowAmount)))}
-              onSend={fund ? (valueWei) => fund.send(result.response.accountAddr, valueWei) : undefined}
-              getBalance={fundGetBalance ? () => fundGetBalance(result.response.accountAddr) : undefined}
-              skipHref={`/agents/${result.response.agentId}`}
-            />
-          </section>
+          )}
         </div>
       )}
     </div>

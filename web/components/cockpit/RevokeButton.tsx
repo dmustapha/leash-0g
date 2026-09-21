@@ -23,6 +23,8 @@ export function RevokeButton({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [fallbackTx, setFallbackTx] = useState<string | null>(null);
+  // C-2: the backend answered 502 guardian_revoke_failed — steer HARD to the wallet path.
+  const [guardianFailed, setGuardianFailed] = useState(false);
 
   async function run(fn: () => Promise<unknown>) {
     setBusy(true);
@@ -31,8 +33,14 @@ export function RevokeButton({
       const out = await fn();
       if (typeof out === 'string') setFallbackTx(out);
       setConfirming(false);
+      setGuardianFailed(false);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Revoke failed. Try the wallet fallback below.');
+      if ((e as { code?: string }).code === 'guardian_revoke_failed') {
+        setGuardianFailed(true);
+        setConfirming(false);
+      } else {
+        setError(e instanceof Error ? e.message : 'Revoke failed. Try the wallet fallback below.');
+      }
     } finally {
       setBusy(false);
     }
@@ -126,6 +134,27 @@ export function RevokeButton({
           </div>
         </div>
       )}
+      {guardianFailed ? (
+        <div className="raised" role="alert" data-testid="guardian-revoke-failed" style={{ padding: '0.8rem 0.9rem', display: 'grid', gap: '0.55rem', borderColor: 'rgba(255,93,108,0.5)' }}>
+          <p style={{ fontSize: '0.88rem' }}>
+            <strong>LEASH could not revoke via its guardian.</strong> Revoke directly from your
+            wallet below — this works even if LEASH is down. The agent&apos;s runtime has been
+            halted, but its on-chain account is NOT revoked yet.
+          </p>
+          <div>
+            <button
+              type="button"
+              className="btn btn-danger btn-sm"
+              disabled={busy}
+              onClick={() => void run(onRevokeOnchain)}
+              data-testid="steer-revoke-onchain-btn"
+            >
+              {busy ? 'Waiting for wallet…' : 'Revoke on-chain with my wallet'}
+            </button>
+          </div>
+          {fallbackTx ? <p className="code">tx {fallbackTx}</p> : null}
+        </div>
+      ) : null}
       {error ? (
         <p role="alert" style={{ color: 'var(--color-deny)', fontSize: '0.84rem' }}>
           {error}
