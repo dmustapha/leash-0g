@@ -6,6 +6,7 @@ import { evaluateRules } from './interceptor.js';
 import { appendTrace } from '../trace/trace-store.js';
 import { createApproval, expireApproval } from '../store/approvals.js';
 import type { ApprovalBroker } from '../approvals/broker.js';
+import type { AlertService } from '../alerts/service.js';
 import { awaitApprovalDecision } from '../approvals/rendezvous.js';
 import type { SseHub } from '../sse/hub.js';
 import { approvalEvent, requestSummary, traceEvent } from '../sse/events.js';
@@ -18,6 +19,8 @@ export interface GatewayDeps {
   hub: SseHub;
   broker: ApprovalBroker;
   approvalTimeoutMs: number;
+  /** Phase-3 alert engine — approval_required emission + expiry resolve. */
+  alerts: AlertService;
 }
 
 const BODY_LIMIT = 256 * 1024; // 256KB JSON cap (M-01)
@@ -96,6 +99,16 @@ async function handleCompletion(deps: GatewayDeps, req: Request, res: Response):
 async function holdForApproval(deps: GatewayDeps, agent: AgentRow, body: Json, res: Response): Promise<boolean> {
   const approval = await createApproval(deps.pool, agent.id, body);
   deps.hub.emit(agent.id, 'approval', approvalEvent({ approvalId: approval.id, summary: requestSummary(body) }));
+  // Daily loop (spec §3b): the decision alert — actionable inline on both
+  // channels; auto-resolves when decided anywhere. Emission never blocks the
+  // hold (AlertService.emit swallows its own failures).
+  await deps.alerts.emit(agent.ownerAddr, {
+    agentId: agent.id,
+    class: 'decision',
+    kind: 'approval_required',
+    summary: `${agent.name} needs your approval: ${requestSummary(body)}`,
+    refs: { approvalId: approval.id },
+  });
   // C-3: shared register→check-durable→wait→recheck rendezvous — closes the
   // approve-recorded-but-never-forwarded race (decision landing durably
   // between createApproval and the wait registration).
@@ -115,6 +128,12 @@ async function holdForApproval(deps: GatewayDeps, agent: AgentRow, body: Json, r
         detail: { reason: 'approval timed out' },
       });
       deps.hub.emit(agent.id, 'trace', traceEvent(consent));
+      await deps.alerts.resolveByApproval(approval.id, {
+        resolution: 'expired',
+        via: 'system',
+        agentId: agent.id,
+        consentSeq: consent.seq,
+      });
     }
     res.status(408).json({ error: { message: 'approval timed out' } });
     return false;

@@ -51,6 +51,15 @@ async function main() {
     await client.query(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA ${schema} TO ${ROLE}`);
     // trace_records: append-only for the app role at the GRANT layer too
     await client.query(`REVOKE UPDATE, DELETE, TRUNCATE ON trace_records FROM ${ROLE}`);
+    // owner_records (Phase 3): same append-only discipline. Guarded so the
+    // script still runs against a pre-008 schema.
+    const ownerRecordsExists = await client.query(
+      `SELECT 1 FROM information_schema.tables WHERE table_schema = $1 AND table_name = 'owner_records'`,
+      [schema],
+    );
+    if (ownerRecordsExists.rowCount) {
+      await client.query(`REVOKE UPDATE, DELETE, TRUNCATE ON owner_records FROM ${ROLE}`);
+    }
     // future tables created by admin-run migrations inherit app grants
     await client.query(
       `ALTER DEFAULT PRIVILEGES IN SCHEMA ${schema} GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${ROLE}`,

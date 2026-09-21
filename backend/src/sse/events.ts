@@ -61,6 +61,9 @@ export function traceEvent(rec: TraceRecord): Json {
   const to = typeof detail['to'] === 'string' ? detail['to'] : undefined;
   const valueWei = typeof detail['valueWei'] === 'string' ? detail['valueWei'] : undefined;
   const txHash = typeof detail['txHash'] === 'string' ? detail['txHash'] : undefined;
+  // P3C-6(ii): decoded contract errors ride the live frame too — the cockpit
+  // shows plain language without waiting for a /traces refetch.
+  const decoded = detail['decoded'];
   return {
     type: 'trace',
     kind: rec.kind,
@@ -70,6 +73,7 @@ export function traceEvent(rec: TraceRecord): Json {
     ...(to !== undefined ? { to } : {}),
     ...(valueWei !== undefined ? { valueWei } : {}),
     ...(txHash !== undefined ? { txHash } : {}),
+    ...(decoded !== undefined && decoded !== null ? { decoded } : {}),
   };
 }
 

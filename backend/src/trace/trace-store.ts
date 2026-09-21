@@ -1,5 +1,6 @@
 import type { Pool, PoolClient } from 'pg';
-import { GENESIS_HASH, computeRecordHash, verifyChain, type VerifyResult } from '../crypto/hashchain.js';
+import { verifyChain, type VerifyResult } from '../crypto/hashchain.js';
+import { appendChained, TRACE_CHAIN } from '../store/chained.js';
 import type { Json } from '../crypto/canonical.js';
 import type { TraceKind, TraceRecord, X0gTrace } from '../types.js';
 
@@ -18,41 +19,20 @@ export interface AppendTraceInput {
 }
 
 /**
- * Append one record to the agent's tamper-evident chain: per-agent monotonic
- * seq + hash = sha256(prevHash || canonicalJSON(record)). A transaction-scoped
- * advisory lock on the agentId serializes concurrent appends so seq can never
- * gap or collide. Resolves only after the row is durably committed — callers
- * that must order side effects after the write (consent-before-forward) await
- * this.
+ * Append one record to the agent's tamper-evident chain via the SHARED
+ * chained-append helper (store/chained.ts — one implementation, two tables;
+ * owner_records is the other): per-agent monotonic seq + hash =
+ * sha256(prevHash || canonicalJSON(record)), advisory-lock-serialized.
+ * Resolves only after the row is durably committed — callers that must order
+ * side effects after the write (consent-before-forward) await this.
  */
 export async function appendTrace(pool: Pool, input: AppendTraceInput): Promise<TraceRecord> {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
-    await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 42))', [`trace:${input.agentId}`]);
-    const head = await client.query<{ seq: string; hash: string }>(
-      'SELECT seq, hash FROM trace_records WHERE agent_id = $1 ORDER BY seq DESC LIMIT 1',
-      [input.agentId],
-    );
-    const prevSeq = head.rows[0] ? Number(head.rows[0].seq) : -1;
-    const prevHash = head.rows[0]?.hash ?? GENESIS_HASH;
-    const record = buildRecord(input, prevSeq + 1, prevHash);
-    await client.query(
-      `INSERT INTO trace_records (agent_id, seq, prev_hash, hash, ts, kind, record)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [input.agentId, record.seq, record.prevHash, record.hash, record.ts, record.kind, JSON.stringify(record)],
-    );
-    await client.query('COMMIT');
-    return record;
-  } catch (err) {
-    await client.query('ROLLBACK');
-    throw err;
-  } finally {
-    client.release();
-  }
+  return appendChained<TraceRecord>(pool, TRACE_CHAIN, input.agentId, (seq, prevHash) =>
+    buildRecord(input, seq, prevHash),
+  );
 }
 
-function buildRecord(input: AppendTraceInput, seq: number, prevHash: string): TraceRecord {
+function buildRecord(input: AppendTraceInput, seq: number, prevHash: string): Omit<TraceRecord, 'hash'> {
   const body: Omit<TraceRecord, 'hash'> = {
     agentId: input.agentId,
     seq,
@@ -68,8 +48,7 @@ function buildRecord(input: AppendTraceInput, seq: number, prevHash: string): Tr
     ...(input.decidedBy !== undefined ? { decidedBy: input.decidedBy } : {}),
     ...(input.detail !== undefined ? { detail: input.detail } : {}),
   };
-  const hash = computeRecordHash(prevHash, body);
-  return { ...body, hash };
+  return body;
 }
 
 export interface ListOptions {
