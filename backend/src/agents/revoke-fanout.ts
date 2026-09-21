@@ -1,5 +1,6 @@
 import type { Pool } from 'pg';
-import { setAgentStatus } from '../store/agents.js';
+import { setAgentStatus, getAgentById } from '../store/agents.js';
+import type { AlertService } from '../alerts/service.js';
 import { appendTrace } from '../trace/trace-store.js';
 import type { SseHub } from '../sse/hub.js';
 import { statusEvent, traceEvent } from '../sse/events.js';
@@ -15,6 +16,8 @@ export interface RevokeFanoutDeps {
    * trigger paths (guardian API + on-chain watcher) pass it.
    */
   coordinator?: { cancelForRevokedAgent(agentId: string): Promise<void> };
+  /** Phase-3 daily loop: the revoked info alert (optional for older tests). */
+  alerts?: AlertService | undefined;
 }
 
 /**
@@ -37,4 +40,16 @@ export async function applyRevokeFanout(
   deps.hub.emit(agentId, 'trace', traceEvent(rec));
   deps.hub.emit(agentId, 'status', statusEvent('revoked'));
   if (deps.coordinator) await deps.coordinator.cancelForRevokedAgent(agentId);
+  if (deps.alerts) {
+    const agent = await getAgentById(deps.pool, agentId);
+    if (agent) {
+      await deps.alerts.emit(agent.ownerAddr, {
+        agentId,
+        class: 'info',
+        kind: 'revoked',
+        summary: `${agent.name} was revoked (${source === 'guardian-api' ? 'one-click revoke' : 'owner wallet, seen on-chain'})`,
+        refs: { traceSeq: rec.seq },
+      });
+    }
+  }
 }

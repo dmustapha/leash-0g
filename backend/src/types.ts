@@ -57,6 +57,9 @@ export interface PolicyView {
   expiresAt: number;
   allowlist: string[];
   revoked: boolean;
+  /** P3C-6(i): raw window state from the contract's public getters. */
+  spentInWindow: bigint;
+  windowStart: number;
 }
 
 export interface AuditBatch {
@@ -206,6 +209,80 @@ export interface DelegationEvent {
   counterpartyAgentId: string;
   direction: 'outbound' | 'inbound';
   ts: string;
+}
+
+/**
+ * Phase-3 alert engine (spec §4 types). Shapes are AGENT-GENERIC (generality
+ * guard): kinds reference machinery — approvals, boundaries, delegations,
+ * revokes, throttles — never goal schemas; role-specific text appears only in
+ * the edge-composed `summary` string.
+ */
+export type AlertClass = 'decision' | 'info';
+export type AlertKind =
+  | 'approval_required' // decision — actionable approve/deny on both channels
+  | 'limit_hit' // decision — NOT approvable (the contract reverts regardless); adjust/dismiss
+  | 'revoked' // info
+  | 'revoke_failed' // info — actionable steer to owner-wallet fallback
+  | 'delegation_terminal' // info — failed | expired | declined | cancelled
+  | 'runtime_error' // info, coalesced per (agent, hour)
+  | 'throttle' // info, coalesced
+  | 'alert_storm'; // info — the rate guard tripped; counts suppressed emissions
+export type AlertStatus = 'unread' | 'read' | 'resolved' | 'dismissed';
+export type AlertResolution = 'approve' | 'deny' | 'expired' | 'dismissed';
+export type AlertChannel = 'app' | 'telegram' | 'system';
+
+export interface Alert {
+  id: string;
+  ownerAddr: string;
+  agentId?: string;
+  linkId?: string;
+  class: AlertClass;
+  kind: AlertKind;
+  status: AlertStatus;
+  /** Plain-language, composed at the edge (00 §2c). */
+  summary: string;
+  refs: {
+    approvalId?: string;
+    delegationId?: string;
+    traceSeq?: number;
+    errorName?: string;
+    boundaryClearsAtUnix?: number;
+    [key: string]: Json | undefined;
+  };
+  /** Coalesced kinds increment this. */
+  count: number;
+  dedupKey?: string;
+  telegramMessageId?: string;
+  createdAt: string;
+  resolvedAt?: string;
+  resolution?: AlertResolution;
+  resolvedVia?: AlertChannel;
+}
+
+/** Owner aggregate SSE payloads (spec §4): agent events re-emitted owner-level, tagged. */
+export type OwnerStreamEvent =
+  | { type: 'agent_event'; agentId: string; event: Json }
+  | { type: 'alert'; alert: Alert }
+  | { type: 'digest_ready'; digestId: string };
+
+/** Owner-stream hash-chained record kinds (spec §3d). */
+export type OwnerRecordKind = 'alert' | 'alert_resolved' | 'digest';
+
+export interface OwnerRecord {
+  ownerAddr: string;
+  seq: number;
+  prevHash: string;
+  ts: string;
+  kind: OwnerRecordKind;
+  record: Json;
+  hash: string;
+}
+
+/** Decoded LeashAccount custom error (P3C-6 ii). */
+export interface DecodedLeashError {
+  errorName: string;
+  args: Json;
+  plain: string;
 }
 
 export interface ApprovalRow {
