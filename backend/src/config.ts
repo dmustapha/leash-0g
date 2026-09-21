@@ -45,6 +45,14 @@ const envSchema = z.object({
   CREATE_RATE_PER_HOUR: z.coerce.number().int().positive().default(5),
   ALLOWLIST_MAX: z.coerce.number().int().positive().default(16),
   RULES_MAX: z.coerce.number().int().positive().default(32),
+  // Coordination channel bounds (spec §3b): zero-authority contains SPENDING,
+  // not resource burn — a hijacked A could still spam envelopes (compute-burn
+  // on B + approval-fatigue on supervised links). These caps bound that
+  // surface; all config-driven testnet defaults (07 S6 revisit trigger).
+  DELEGATION_TTL_MS: z.coerce.number().int().positive().default(600_000),
+  DELEGATION_RATE_PER_LINK_PER_HOUR: z.coerce.number().int().positive().default(12),
+  DELEGATION_MAX_PENDING_PER_LINK: z.coerce.number().int().positive().default(3),
+  DELEGATION_PAYLOAD_MAX_BYTES: z.coerce.number().int().positive().default(16_384),
 });
 
 export type Config = z.infer<typeof envSchema>;

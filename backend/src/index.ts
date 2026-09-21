@@ -19,6 +19,7 @@ import { SessionChain } from './runtime/session-chain.js';
 import { LeashRuntimeManager } from './runtime/manager.js';
 import { backfillLegacyGuardian } from './store/agents.js';
 import { sweepOrphanedApprovals } from './approvals/sweep.js';
+import { DelegationCoordinator, runBootSweep } from './coordination/coordinator.js';
 
 /** Composition root: wire every module, migrate, listen, run the loops. */
 async function main(): Promise<void> {
@@ -62,6 +63,10 @@ async function main(): Promise<void> {
 
   const hub = new SseHub();
   const broker = new ApprovalBroker();
+  // C-6 startup sweep, coordination half (expiry point C): orphaned/stale
+  // delegations → expired, chain-visibly, before any loop starts.
+  const sweptDelegations = await runBootSweep(pool, hub);
+  if (sweptDelegations.length > 0) console.error(`swept ${sweptDelegations.length} orphaned delegation(s)`);
   const queue = new ComputeQueue({ baseUrl: cfg.COMPUTE_BASE_URL, apiKey: cfg.ZERO_G_COMPUTE_API_KEY });
   const chain = new LeashChainOps({
     rpcUrl: cfg.ZERO_G_RPC,
@@ -87,6 +92,20 @@ async function main(): Promise<void> {
     },
   });
 
+  // Coordination layer (spec §3b): links/delegations lifecycle + channel
+  // throttles + expiry sweeper. The nudge is delivery-latency only.
+  const coordinator = new DelegationCoordinator({
+    pool,
+    hub,
+    runtime,
+    settings: {
+      delegationTtlMs: cfg.DELEGATION_TTL_MS,
+      delegationRatePerLinkPerHour: cfg.DELEGATION_RATE_PER_LINK_PER_HOUR,
+      delegationMaxPendingPerLink: cfg.DELEGATION_MAX_PENDING_PER_LINK,
+      delegationPayloadMaxBytes: cfg.DELEGATION_PAYLOAD_MAX_BYTES,
+    },
+  });
+
   const appDeps = {
     pool,
     queue,
@@ -95,6 +114,7 @@ async function main(): Promise<void> {
     privy: createPrivyVerifier(cfg.PRIVY_APP_ID, cfg.PRIVY_APP_SECRET),
     chain,
     runtime,
+    coordinator,
     settings: {
       keyEncryptionSecret: cfg.KEY_ENCRYPTION_SECRET,
       approvalTimeoutMs: cfg.APPROVAL_TIMEOUT_MS,
@@ -105,6 +125,10 @@ async function main(): Promise<void> {
       createRatePerHour: cfg.CREATE_RATE_PER_HOUR,
       allowlistMax: cfg.ALLOWLIST_MAX,
       rulesMax: cfg.RULES_MAX,
+      delegationTtlMs: cfg.DELEGATION_TTL_MS,
+      delegationRatePerLinkPerHour: cfg.DELEGATION_RATE_PER_LINK_PER_HOUR,
+      delegationMaxPendingPerLink: cfg.DELEGATION_MAX_PENDING_PER_LINK,
+      delegationPayloadMaxBytes: cfg.DELEGATION_PAYLOAD_MAX_BYTES,
     },
   };
   // M-01 split surfaces: the public server carries owner API + SSE + healthz
@@ -126,8 +150,10 @@ async function main(): Promise<void> {
     chain: zeroGChain(cfg.ZERO_G_RPC, cfg.ZERO_G_CHAIN_ID),
     transport: http(cfg.ZERO_G_RPC),
   });
-  const watcher = new RevokeWatcher({ pool, hub, runtime, source: viemRevokedLogSource(publicClient) });
+  const watcher = new RevokeWatcher({ pool, hub, runtime, coordinator, source: viemRevokedLogSource(publicClient) });
   watcher.start();
+  // Expiry point B: 60s periodic sweeper for stale delegations.
+  coordinator.startSweeper();
 
   const server = ownerApp.listen(cfg.PORT, cfg.HOST, () => {
     console.error(`leash owner API listening on ${cfg.HOST}:${cfg.PORT}`);
@@ -150,6 +176,7 @@ async function main(): Promise<void> {
     console.error(`${signal} received — shutting down`);
     watcher.stop();
     batcher.stop();
+    coordinator.stopSweeper();
     broker.cancelAll();
     gatewayServer.close();
     server.close(() => {

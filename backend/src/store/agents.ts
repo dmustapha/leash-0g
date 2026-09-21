@@ -128,6 +128,61 @@ export async function listActiveAgents(pool: Pool): Promise<AgentRow[]> {
   return res.rows.map(mapRow);
 }
 
+export interface ListAgentsByOwnerOptions {
+  /** Keyset cursor `<createdAtISO>_<id>` from a previous page. */
+  cursor?: string;
+  limit?: number;
+}
+
+/**
+ * Fleet list (spec §4 GET /api/agents): the owner's agents newest-first,
+ * keyset-paginated on (created_at, id) — stable under concurrent creates,
+ * unlike offset paging (pagination-from-day-one, spec §11).
+ */
+export async function listAgentsByOwner(
+  pool: Pool,
+  ownerAddr: string,
+  opts: ListAgentsByOwnerOptions = {},
+): Promise<{ agents: AgentRow[]; nextCursor?: string }> {
+  const limit = Math.min(opts.limit ?? 50, 200);
+  const params: unknown[] = [ownerAddr.toLowerCase()];
+  let where = `owner_addr = $1`;
+  const cursor = opts.cursor !== undefined ? parseAgentCursor(opts.cursor) : null;
+  if (cursor) {
+    params.push(cursor.createdAt, cursor.id);
+    // ms-truncated on BOTH sides: the cursor round-trips through a JS Date
+    // (ms precision) — comparing it against the µs-precise column would skip
+    // rows sharing the boundary millisecond. Order and compare the same key.
+    where += ` AND (date_trunc('milliseconds', created_at), id) < ($2::timestamptz, $3::uuid)`;
+  }
+  params.push(limit + 1);
+  const res = await pool.query<DbAgentRow>(
+    `SELECT ${COLS} FROM agents WHERE ${where}
+     ORDER BY date_trunc('milliseconds', created_at) DESC, id DESC LIMIT $${params.length}`,
+    params,
+  );
+  const page = res.rows.slice(0, limit).map(mapRow);
+  const last = page[page.length - 1];
+  return {
+    agents: page,
+    ...(res.rows.length > limit && last ? { nextCursor: `${last.createdAt}_${last.id}` } : {}),
+  };
+}
+
+function parseAgentCursor(raw: string): { createdAt: string; id: string } | null {
+  const sep = raw.lastIndexOf('_');
+  if (sep <= 0) return null;
+  const createdAt = raw.slice(0, sep);
+  const id = raw.slice(sep + 1);
+  if (Number.isNaN(Date.parse(createdAt)) || !/^[0-9a-f-]{36}$/i.test(id)) return null;
+  return { createdAt, id };
+}
+
+/** Replace gateway_rules wholesale (PATCH /api/agents/:id/rules — traced 'config' by the route). */
+export async function updateAgentRules(pool: Pool, id: string, rules: GatewayRule[]): Promise<void> {
+  await pool.query(`UPDATE agents SET gateway_rules = $2 WHERE id = $1`, [id, JSON.stringify(rules)]);
+}
+
 /** C-1 quota: ALL created rows count, incl. revoked (no quota refill by revoking). */
 export async function countAgentsByOwner(pool: Pool, ownerAddr: string): Promise<number> {
   const res = await pool.query<{ n: string }>(`SELECT count(*) AS n FROM agents WHERE owner_addr = $1`, [

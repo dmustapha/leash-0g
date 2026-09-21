@@ -1,5 +1,5 @@
 import type { Json } from '../crypto/canonical.js';
-import type { TraceRecord } from '../types.js';
+import type { DelegationEvent, DelegationStatus, TraceRecord } from '../types.js';
 
 /**
  * FE stream-event contract (web/lib/types.ts StreamEvent): the FE SSE client
@@ -24,6 +24,30 @@ export function approvalEvent(input: { approvalId: string; summary: string; to?:
     summary: input.summary,
     ...(input.to !== undefined ? { to: input.to } : {}),
     ...(input.valueWei !== undefined ? { valueWei: input.valueWei } : {}),
+    ts: new Date().toISOString(),
+  };
+}
+
+/**
+ * Delegation lifecycle event (spec §4 DelegationEvent) — emitted on BOTH
+ * agents' streams at every transition, direction flipped per side.
+ */
+export function delegationEvent(input: {
+  delegationId: string;
+  linkId: string;
+  status: DelegationStatus;
+  kind: string;
+  counterpartyAgentId: string;
+  direction: 'outbound' | 'inbound';
+}): DelegationEvent {
+  return {
+    type: 'delegation',
+    delegationId: input.delegationId,
+    linkId: input.linkId,
+    status: input.status,
+    kind: input.kind,
+    counterpartyAgentId: input.counterpartyAgentId,
+    direction: input.direction,
     ts: new Date().toISOString(),
   };
 }

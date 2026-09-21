@@ -6,6 +6,7 @@ import { ownerRouter } from './api/owner-routes.js';
 import type { PrivyVerifier } from './api/privy.js';
 import type { SseHub } from './sse/hub.js';
 import type { ApprovalBroker } from './approvals/broker.js';
+import type { DelegationCoordinator } from './coordination/coordinator.js';
 import type { PolicyView } from './types.js';
 
 /**
@@ -39,6 +40,13 @@ export interface RuntimeManager {
   stop(agentId: string): Promise<void>;
   isRunning(agentId: string): boolean;
   haltForRevoke(agentId: string): Promise<void>;
+  /**
+   * Delivery-latency optimization ONLY (spec §3b): wake the agent's loop so an
+   * activated delegation is picked up now instead of on the next poll. The
+   * poll remains the correctness path — a missed/no-op nudge (agent stopped,
+   * cycle in flight) loses nothing.
+   */
+  nudge(agentId: string): void;
 }
 
 export interface Settings {
@@ -53,6 +61,11 @@ export interface Settings {
   createRatePerHour: number;
   allowlistMax: number;
   rulesMax: number;
+  /** Delegation channel bounds (spec §3b) — see config.ts for rationale. */
+  delegationTtlMs: number;
+  delegationRatePerLinkPerHour: number;
+  delegationMaxPendingPerLink: number;
+  delegationPayloadMaxBytes: number;
 }
 
 export interface AppDeps {
@@ -63,6 +76,7 @@ export interface AppDeps {
   privy: PrivyVerifier;
   chain: ChainOps;
   runtime: RuntimeManager;
+  coordinator: DelegationCoordinator;
   settings: Settings;
 }
 
@@ -100,7 +114,8 @@ function buildApp(deps: AppDeps, surfaces: Surfaces): Express {
     app.use((req: Request, res: Response, next: NextFunction) => {
       res.setHeader('access-control-allow-origin', '*');
       res.setHeader('access-control-allow-headers', 'authorization, content-type');
-      res.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS');
+      // PATCH: the rules editor (PATCH /api/agents/:id/rules) preflights from the FE.
+      res.setHeader('access-control-allow-methods', 'GET, POST, PATCH, OPTIONS');
       if (req.method === 'OPTIONS') {
         res.status(204).end();
         return;

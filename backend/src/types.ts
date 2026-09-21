@@ -7,7 +7,18 @@ export type Hex = `0x${string}`;
 // (failed forwards / failed revokes are chain-visible) — it is not in the
 // Phase-1 spec's TraceKind list. Phase 2 adds the coordination kinds
 // 'delegate' | 'delegation_update' | 'config' per spec §4.
-export type TraceKind = 'inference' | 'action' | 'decision' | 'consent' | 'modify' | 'block' | 'revoke' | 'error';
+export type TraceKind =
+  | 'inference'
+  | 'action'
+  | 'decision'
+  | 'consent'
+  | 'modify'
+  | 'block'
+  | 'revoke'
+  | 'error'
+  | 'delegate' // issuer side: envelope issued (payload rides in the encrypted trace record)
+  | 'delegation_update' // either side: accepted/completed/failed/declined/cancelled/expired
+  | 'config'; // owner config change (gatewayRules, link changes) — original+effective
 
 export interface TraceRecord {
   agentId: string;
@@ -99,6 +110,62 @@ export interface AgentGoal {
   targetBalanceWei: string;
   topUpWei: string;
   model?: string | undefined;
+}
+
+/**
+ * Coordination layer (spec §4). Links are the ONLY authorization for
+ * delegation; delegations carry ZERO authority (00 §6c — the leash is on the
+ * hands): kind/payload stay opaque to the platform (generality guard).
+ */
+export type LinkMode = 'auto' | 'supervised';
+
+export interface Link {
+  id: string;
+  /** Lowercased owner address — codebase convention (AgentRow.ownerAddr). */
+  ownerAddr: string;
+  fromAgentId: string;
+  toAgentId: string;
+  mode: LinkMode;
+  status: 'active' | 'paused' | 'removed';
+  createdAt: string;
+}
+
+export type DelegationStatus =
+  | 'pending_approval'
+  | 'pending'
+  | 'accepted'
+  | 'completed'
+  | 'failed'
+  | 'declined'
+  | 'cancelled'
+  | 'expired';
+
+export interface Delegation {
+  id: string;
+  linkId: string;
+  fromAgentId: string;
+  toAgentId: string;
+  kind: string;
+  /** Opaque to the platform (generality guard). */
+  payload: Json;
+  status: DelegationStatus;
+  /** e.g. {txHash} on completed, {error} on failed — set by the receiver. */
+  result?: Json;
+  createdAt: string;
+  decidedAt?: string;
+  expiresAt: string;
+}
+
+/** SSE event emitted on BOTH agents' streams at every lifecycle transition (spec §4). */
+export interface DelegationEvent {
+  type: 'delegation';
+  delegationId: string;
+  linkId: string;
+  status: DelegationStatus;
+  kind: string;
+  counterpartyAgentId: string;
+  direction: 'outbound' | 'inbound';
+  ts: string;
 }
 
 export interface ApprovalRow {

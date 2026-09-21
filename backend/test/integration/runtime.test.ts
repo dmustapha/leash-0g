@@ -326,4 +326,25 @@ describe('agent runtime', () => {
     await manager.start(id).catch(() => undefined); // not startable → throws
     expect(manager.isRunning(id)).toBe(false);
   });
+
+  it('nudge wakes an IDLE loop immediately; unknown/stopped agents are safe no-ops (spec §3b)', async () => {
+    const id = await seedRuntimeAgent();
+    mockModelDecision(JSON.stringify({ action: 'send', amountWei: (CAP / 2n).toString(), reason: 'below target' }));
+
+    await start(id);
+    await waitFor(() => fakeChain.executed.length === 1);
+    await manager.settle(id);
+    // intervalMs is 1h — without a nudge the second cycle is an hour away.
+    mockModelDecision(JSON.stringify({ action: 'send', amountWei: (CAP / 2n).toString(), reason: 'again' }));
+    manager.nudge(id);
+    await waitFor(() => fakeChain.executed.length === 2);
+    await manager.settle(id);
+    expect(fakeChain.executed).toHaveLength(2);
+
+    // no-ops: never-started and stopped agents (poll remains the correctness path)
+    manager.nudge('00000000-0000-4000-8000-000000000000');
+    await manager.stop(id);
+    manager.nudge(id);
+    expect(manager.isRunning(id)).toBe(false);
+  });
 });

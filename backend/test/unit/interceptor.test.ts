@@ -95,10 +95,10 @@ describe('C-5 modify on structured content', () => {
     expect(outcome.action).toBe('modify');
     if (outcome.action !== 'modify') return;
     const msgs = (outcome.effective as { messages: Array<{ content: Array<{ type: string; text?: string }> }> }).messages;
-    const textPart = msgs[0]!.content.find((p) => p.type === 'text');
+    const textPart = msgs[0]?.content.find((p) => p.type === 'text');
     expect(textPart?.text).toBe('the [CUT] is here');
     // non-text part passes through untouched
-    expect(msgs[0]!.content.some((p) => p.type === 'image_url')).toBe(true);
+    expect(msgs[0]?.content.some((p) => p.type === 'image_url')).toBe(true);
   });
 
   it('BYPASS CORPUS: a needle split across adjacent text parts is replaced (parts merged)', () => {
@@ -109,7 +109,7 @@ describe('C-5 modify on structured content', () => {
     expect(outcome.action).toBe('modify');
     if (outcome.action !== 'modify') return;
     const msgs = (outcome.effective as { messages: Array<{ content: Array<{ type: string; text?: string }> }> }).messages;
-    const texts = msgs[0]!.content.filter((p) => p.type === 'text').map((p) => p.text);
+    const texts = (msgs[0]?.content ?? []).filter((p) => p.type === 'text').map((p) => p.text);
     expect(texts.join('')).toBe('the [CUT] is here');
     expect(texts.join('')).not.toContain('secret-phrase');
   });
@@ -122,6 +122,6 @@ describe('C-5 modify on structured content', () => {
     expect(outcome.action).toBe('modify');
     if (outcome.action !== 'modify') return;
     const msgs = (outcome.effective as { messages: Array<{ content: string }> }).messages;
-    expect(msgs[0]!.content).toBe('bar and bar');
+    expect(msgs[0]?.content).toBe('bar and bar');
   });
 });

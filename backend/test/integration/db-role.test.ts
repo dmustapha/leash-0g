@@ -32,14 +32,16 @@ describe('C-6 trace hardening (migration 007 + restricted role + startup sweep)'
   });
 
   it('provision script creates a runtime role that can run the app but not mutate history or DDL', async () => {
-    const url = process.env['DATABASE_URL']!;
+    const url = process.env['DATABASE_URL'];
+    if (!url) throw new Error('DATABASE_URL required');
     // Test-scoped role name — never rotate the real runtime role's password
     // from CI (the cluster is shared with the deployed stack).
     const out = execFileSync(process.execPath, [SCRIPT, url, db.schema], {
       env: { ...process.env, RUNTIME_ROLE_NAME: 'leash_runtime_test' },
       encoding: 'utf8',
     });
-    const runtimeUrl = out.trim().split('\n').at(-1)!;
+    const runtimeUrl = out.trim().split('\n').at(-1);
+    if (!runtimeUrl) throw new Error('provision script printed no runtime URL');
     expect(runtimeUrl).toContain('leash_runtime_test');
 
     rolePool = createPool(runtimeUrl, db.schema);

@@ -11,6 +11,7 @@ import {
 import { ComputeQueue } from '../../src/gateway/compute-queue.js';
 import { SseHub } from '../../src/sse/hub.js';
 import { ApprovalBroker } from '../../src/approvals/broker.js';
+import { DelegationCoordinator } from '../../src/coordination/coordinator.js';
 import type { PrivyVerifier } from '../../src/api/privy.js';
 import type { PolicyView } from '../../src/types.js';
 
@@ -39,6 +40,8 @@ export class FakeChainOps implements ChainOps {
   public funded: Array<{ addr: string; amountWei: bigint }> = [];
   /** C-2: set to make revoke() reject like a reverted tx. */
   public revokeError: Error | null = null;
+  /** Per-account forced revert (lowercased addrs) — revoke-batch partial failure. */
+  public revokeErrorFor = new Set<string>();
   private nextAgentId = 100n;
 
   async deployAndRegister(input: { sessionKeyAddr: string }): Promise<{
@@ -60,6 +63,9 @@ export class FakeChainOps implements ChainOps {
 
   async revoke(accountAddr: string, accountGuardianAddr?: string | null): Promise<{ txHash: string }> {
     if (this.revokeError) throw this.revokeError;
+    if (this.revokeErrorFor.has(accountAddr.toLowerCase())) {
+      throw new Error(`guardian revoke tx reverted on-chain for ${accountAddr}`);
+    }
     this.revoked.push(accountAddr.toLowerCase());
     this.revokeGuardians.push(accountGuardianAddr ?? null);
     return { txHash: '0x' + '33'.repeat(32) };
@@ -93,6 +99,8 @@ export class FakeChainOps implements ChainOps {
 export class FakeRuntime implements RuntimeManager {
   public running = new Set<string>();
   public halted: string[] = [];
+  /** Delegation delivery nudges, in order (spec §3b — latency optimization only). */
+  public nudges: string[] = [];
 
   async start(agentId: string): Promise<void> {
     this.running.add(agentId);
@@ -110,6 +118,10 @@ export class FakeRuntime implements RuntimeManager {
     this.running.delete(agentId);
     this.halted.push(agentId);
   }
+
+  nudge(agentId: string): void {
+    this.nudges.push(agentId);
+  }
 }
 
 export interface TestApp {
@@ -123,6 +135,7 @@ export interface TestApp {
   broker: ApprovalBroker;
   chain: FakeChainOps;
   runtime: FakeRuntime;
+  coordinator: DelegationCoordinator;
   deps: AppDeps;
 }
 
@@ -137,6 +150,12 @@ export function testSettings(overrides: Partial<AppDeps['settings']> = {}): AppD
     createRatePerHour: 1000,
     allowlistMax: 16,
     rulesMax: 32,
+    // Delegation bounds: the REAL production defaults (spec §5) — throttle
+    // tests must exercise what ships; individual tests override deliberately.
+    delegationTtlMs: 600_000,
+    delegationRatePerLinkPerHour: 12,
+    delegationMaxPendingPerLink: 3,
+    delegationPayloadMaxBytes: 16_384,
     ...overrides,
   };
 }
@@ -146,6 +165,15 @@ export function buildTestApp(pool: Pool, overrides: Partial<AppDeps> = {}): Test
   const broker = new ApprovalBroker();
   const chain = new FakeChainOps();
   const runtime = new FakeRuntime();
+  const settings = overrides.settings ?? testSettings();
+  const coordinator =
+    overrides.coordinator ??
+    new DelegationCoordinator({
+      pool,
+      hub: overrides.hub ?? hub,
+      runtime: overrides.runtime ?? runtime,
+      settings,
+    });
   const deps: AppDeps = {
     pool,
     queue: new ComputeQueue({ baseUrl: `${UPSTREAM}/v1`, apiKey: 'upstream-key', baseDelayMs: 5, maxRetries: 2 }),
@@ -154,17 +182,8 @@ export function buildTestApp(pool: Pool, overrides: Partial<AppDeps> = {}): Test
     privy: fakePrivy,
     chain,
     runtime,
-    settings: {
-      keyEncryptionSecret: TEST_KEK,
-      approvalTimeoutMs: 10_000,
-      sessionGasDustWei: 10n ** 15n,
-      defaultTimelockDelay: 900,
-      storageIndexerUrl: 'https://indexer.leash-test.local',
-      createQuotaPerOwner: 1000,
-      createRatePerHour: 1000,
-      allowlistMax: 16,
-      rulesMax: 32,
-    },
+    coordinator,
+    settings,
     ...overrides,
   };
   return {
@@ -175,6 +194,7 @@ export function buildTestApp(pool: Pool, overrides: Partial<AppDeps> = {}): Test
     broker,
     chain,
     runtime,
+    coordinator: deps.coordinator,
     deps,
   };
 }

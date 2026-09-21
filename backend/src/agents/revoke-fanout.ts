@@ -8,6 +8,13 @@ export interface RevokeFanoutDeps {
   pool: Pool;
   hub: SseHub;
   runtime: { haltForRevoke(agentId: string): Promise<void> };
+  /**
+   * Phase-2 coordination fan-out (spec §3b): cancels the revoked agent's open
+   * delegations (outbound cancelled, inbound declined/failed, all traced).
+   * Optional so pre-coordination callers/tests stay valid — BOTH production
+   * trigger paths (guardian API + on-chain watcher) pass it.
+   */
+  coordinator?: { cancelForRevokedAgent(agentId: string): Promise<void> };
 }
 
 /**
@@ -24,7 +31,10 @@ export async function applyRevokeFanout(
 ): Promise<void> {
   await deps.runtime.haltForRevoke(agentId);
   await setAgentStatus(deps.pool, agentId, 'revoked');
+  // Coordination fan-out BEFORE the revoke trace would also be defensible;
+  // after keeps the 'revoke' record first on the chain (cause before effects).
   const rec = await appendTrace(deps.pool, { agentId, kind: 'revoke', detail: { source } });
   deps.hub.emit(agentId, 'trace', traceEvent(rec));
   deps.hub.emit(agentId, 'status', statusEvent('revoked'));
+  if (deps.coordinator) await deps.coordinator.cancelForRevokedAgent(agentId);
 }

@@ -76,11 +76,9 @@ function collectNonTextPartTypes(messages: ChatMessage[]): string[] {
     if (!Array.isArray(m.content)) continue;
     for (const part of m.content) {
       if (textOfPart(part) !== null) continue;
-      const t =
-        part && typeof part === 'object' && !Array.isArray(part)
-          ? String((part as { type?: unknown }).type ?? 'unknown')
-          : 'unknown';
-      types.add(t);
+      const rawType =
+        part && typeof part === 'object' && !Array.isArray(part) ? (part as { type?: unknown }).type : undefined;
+      types.add(typeof rawType === 'string' ? rawType : 'unknown');
     }
   }
   return [...types].sort();
