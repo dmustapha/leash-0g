@@ -109,6 +109,9 @@ jobs:
           ZERO_G_COMPUTE_API_KEY: ${{ secrets.ZERO_G_COMPUTE_API_KEY }}
           # dedicated low-value CI wallet (0x277cD0ee…7375), NOT the ops key
           OPS_PRIVATE_KEY: ${{ secrets.CI_WALLET_KEY }}
+          # C-1 guardian lane key (revoke-only, gas dust)
+          GUARDIAN_PRIVATE_KEY: ${{ secrets.GUARDIAN_PRIVATE_KEY }}
+          GUARDIAN_ADDRESS: ${{ secrets.GUARDIAN_ADDRESS }}
           ZERO_G_RPC: https://evmrpc-testnet.0g.ai
           ZERO_G_CHAIN_ID: "16602"
           ZERO_G_STORAGE_INDEXER: https://indexer-storage-testnet-turbo.0g.ai

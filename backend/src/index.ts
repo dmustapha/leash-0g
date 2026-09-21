@@ -17,6 +17,7 @@ import { AuditBatcher } from './audit/batcher.js';
 import { ZeroGStorage } from './audit/storage.js';
 import { SessionChain } from './runtime/session-chain.js';
 import { LeashRuntimeManager } from './runtime/manager.js';
+import { backfillLegacyGuardian } from './store/agents.js';
 
 /** Composition root: wire every module, migrate, listen, run the loops. */
 async function main(): Promise<void> {
@@ -27,9 +28,21 @@ async function main(): Promise<void> {
   if (opsAddr.toLowerCase() !== cfg.OPS_ADDRESS.toLowerCase()) {
     throw new Error('OPS_ADDRESS does not match the address derived from OPS_PRIVATE_KEY');
   }
+  // C-1: same fail-fast for the guardian lane key.
+  const guardianAddr = privateKeyToAccount(cfg.GUARDIAN_PRIVATE_KEY as `0x${string}`).address;
+  if (guardianAddr.toLowerCase() !== cfg.GUARDIAN_ADDRESS.toLowerCase()) {
+    throw new Error('GUARDIAN_ADDRESS does not match the address derived from GUARDIAN_PRIVATE_KEY');
+  }
+  if (guardianAddr.toLowerCase() === opsAddr.toLowerCase()) {
+    throw new Error('guardian key must be distinct from the ops key (independent nonce lanes, C-1)');
+  }
   const pool = createPool(cfg.DATABASE_URL);
   const applied = await migrate(pool);
   if (applied.length > 0) console.error(`migrations applied: ${applied.join(', ')}`);
+  // S7: legacy Phase-1 rows get their real (ops-key) guardian recorded so the
+  // revoke lane selection is explicit, not inferred from NULL.
+  const backfilled = await backfillLegacyGuardian(pool, opsAddr);
+  if (backfilled > 0) console.error(`legacy guardian_addr backfilled on ${backfilled} agent(s)`);
 
   const checkpointer = new PostgresSaver(pool, undefined, { schema: 'public' });
   await checkpointer.setup();
@@ -41,6 +54,7 @@ async function main(): Promise<void> {
     rpcUrl: cfg.ZERO_G_RPC,
     chainId: cfg.ZERO_G_CHAIN_ID,
     opsPrivateKey: cfg.OPS_PRIVATE_KEY,
+    guardianPrivateKey: cfg.GUARDIAN_PRIVATE_KEY,
     factoryAddr: cfg.LEASH_FACTORY_ADDR,
     registryAddr: cfg.AGENT_REGISTRY_ADDR,
   });
@@ -74,6 +88,10 @@ async function main(): Promise<void> {
       sessionGasDustWei: BigInt(cfg.SESSION_GAS_DUST_WEI),
       defaultTimelockDelay: cfg.DEFAULT_TIMELOCK_DELAY,
       storageIndexerUrl: cfg.ZERO_G_STORAGE_INDEXER,
+      createQuotaPerOwner: cfg.CREATE_QUOTA_PER_OWNER,
+      createRatePerHour: cfg.CREATE_RATE_PER_HOUR,
+      allowlistMax: cfg.ALLOWLIST_MAX,
+      rulesMax: cfg.RULES_MAX,
     },
   };
   // M-01 split surfaces: the public server carries owner API + SSE + healthz

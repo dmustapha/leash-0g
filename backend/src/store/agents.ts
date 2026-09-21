@@ -17,6 +17,7 @@ interface DbAgentRow {
   goal: AgentGoal;
   encrypted_audit_key: string | null;
   gateway_token_enc: string | null;
+  guardian_addr: string | null;
   created_at: Date;
 }
 
@@ -37,13 +38,14 @@ function mapRow(r: DbAgentRow): AgentRow {
     goal: r.goal,
     encryptedAuditKey: r.encrypted_audit_key,
     gatewayTokenEnc: r.gateway_token_enc,
+    guardianAddr: r.guardian_addr,
     createdAt: r.created_at.toISOString(),
   };
 }
 
 const COLS = `id, chain_agent_id, owner_addr, account_addr, session_key_addr, session_key_enc,
   audit_pubkey, token_id, token_hash, name, status, gateway_rules, goal, encrypted_audit_key,
-  gateway_token_enc, created_at`;
+  gateway_token_enc, guardian_addr, created_at`;
 
 export async function getAgentById(pool: Pool, id: string): Promise<AgentRow | null> {
   if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
@@ -70,14 +72,16 @@ export interface InsertAgentInput {
   goal: AgentGoal;
   encryptedAuditKey?: string;
   gatewayTokenEnc?: string;
+  /** Guardian address the account was created with (C-1). */
+  guardianAddr: string;
 }
 
 export async function insertAgent(pool: Pool, input: InsertAgentInput): Promise<string> {
   const res = await pool.query<{ id: string }>(
     `INSERT INTO agents (chain_agent_id, owner_addr, account_addr, session_key_addr, session_key_enc,
                          audit_pubkey, token_id, token_hash, name, gateway_rules, goal, encrypted_audit_key,
-                         gateway_token_enc)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
+                         gateway_token_enc, guardian_addr)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
     [
       input.chainAgentId.toString(),
       input.ownerAddr.toLowerCase(),
@@ -92,6 +96,7 @@ export async function insertAgent(pool: Pool, input: InsertAgentInput): Promise<
       JSON.stringify(input.goal),
       input.encryptedAuditKey ?? null,
       input.gatewayTokenEnc ?? null,
+      input.guardianAddr.toLowerCase(),
     ],
   );
   const row = res.rows[0];
@@ -121,4 +126,44 @@ export async function rotateAgentToken(
 export async function listActiveAgents(pool: Pool): Promise<AgentRow[]> {
   const res = await pool.query<DbAgentRow>(`SELECT ${COLS} FROM agents WHERE status = 'active'`);
   return res.rows.map(mapRow);
+}
+
+/** C-1 quota: ALL created rows count, incl. revoked (no quota refill by revoking). */
+export async function countAgentsByOwner(pool: Pool, ownerAddr: string): Promise<number> {
+  const res = await pool.query<{ n: string }>(`SELECT count(*) AS n FROM agents WHERE owner_addr = $1`, [
+    ownerAddr.toLowerCase(),
+  ]);
+  return Number(res.rows[0]?.n ?? 0);
+}
+
+/**
+ * C-1 rate limit (5/h default): durable sliding window over agents.created_at
+ * — restart-proof, unlike an in-memory token bucket. Returns how many seconds
+ * until the oldest in-window create ages out (the Retry-After hint), or null
+ * when under the limit.
+ */
+export async function createRateRetryAfter(
+  pool: Pool,
+  ownerAddr: string,
+  perHour: number,
+): Promise<number | null> {
+  const res = await pool.query<{ created_at: Date }>(
+    `SELECT created_at FROM agents
+     WHERE owner_addr = $1 AND created_at > now() - interval '1 hour'
+     ORDER BY created_at ASC`,
+    [ownerAddr.toLowerCase()],
+  );
+  if (res.rowCount === null || res.rowCount < perHour) return null;
+  const oldest = res.rows[0];
+  if (!oldest) return null;
+  const agesOutMs = oldest.created_at.getTime() + 3_600_000 - Date.now();
+  return Math.max(1, Math.ceil(agesOutMs / 1000));
+}
+
+/** Startup backfill (S7): legacy rows get the ops-key guardian recorded explicitly. */
+export async function backfillLegacyGuardian(pool: Pool, opsAddr: string): Promise<number> {
+  const res = await pool.query(`UPDATE agents SET guardian_addr = $1 WHERE guardian_addr IS NULL`, [
+    opsAddr.toLowerCase(),
+  ]);
+  return res.rowCount ?? 0;
 }

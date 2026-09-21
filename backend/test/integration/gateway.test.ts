@@ -250,6 +250,10 @@ describe('gateway interception', () => {
         sessionGasDustWei: 10n ** 15n,
         defaultTimelockDelay: 900,
         storageIndexerUrl: 'https://indexer.leash-test.local',
+        createQuotaPerOwner: 10,
+        createRatePerHour: 5,
+        allowlistMax: 16,
+        rulesMax: 32,
       },
     });
     const a = await seedWithToken({ rules: [{ action: 'require_approval', match: 'topped up' }] });

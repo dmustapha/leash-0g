@@ -3,7 +3,7 @@ import request from 'supertest';
 import nock from 'nock';
 import { PrivateKey } from 'eciesjs';
 import { createTestDb, type TestDb } from '../helpers/db.js';
-import { buildTestApp, ownerAuth, UPSTREAM, TEST_KEK, type TestApp } from '../helpers/app.js';
+import { buildTestApp, testSettings, ownerAuth, UPSTREAM, TEST_KEK, FAKE_GUARDIAN_ADDR, type TestApp } from '../helpers/app.js';
 import { listTraces } from '../../src/trace/trace-store.js';
 import { decryptSecret } from '../../src/crypto/keycrypt.js';
 
@@ -295,5 +295,116 @@ describe('revoke fan-out', () => {
       .set('authorization', `Bearer ${a.token}`)
       .send({ model: 'm', messages: [{ role: 'user', content: 'hi' }] });
     expect(gw.status).toBe(403);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// C-1: create quota / rate limit / allowlist cap + guardian lane recording
+// C-2: reverted guardian revoke is never reported ok
+// ---------------------------------------------------------------------------
+describe('C-1 create hardening', () => {
+  it('rejects an allowlist longer than ALLOWLIST_MAX with the spec error shape', async () => {
+    const body = {
+      ...CREATE_BODY,
+      allowlist: Array.from({ length: 17 }, (_, i) => '0x' + i.toString(16).padStart(2, '0').repeat(20)),
+    };
+    const res = await request(t.app).post('/api/agents').set('authorization', ownerAuth(OWNER)).send(body);
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: 'allowlist_too_long', max: 16 });
+  });
+
+  it('rejects more than RULES_MAX gateway rules', async () => {
+    const body = {
+      ...CREATE_BODY,
+      gatewayRules: Array.from({ length: 33 }, (_, i) => ({ action: 'block' as const, match: `rule-${i}` })),
+    };
+    const res = await request(t.app).post('/api/agents').set('authorization', ownerAuth(OWNER)).send(body);
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: 'too_many_rules', max: 32 });
+  });
+
+  it('enforces the per-owner quota — revoked rows still count (no quota refill)', async () => {
+    const quotaOwner = '0x' + '7c'.repeat(20);
+    const freshOwner = '0x' + '7d'.repeat(20);
+    t = buildTestApp(db.pool, { settings: testSettings({ createQuotaPerOwner: 3, createRatePerHour: 100 }) });
+    const mk = () =>
+      request(t.app).post('/api/agents').set('authorization', ownerAuth(quotaOwner)).send(CREATE_BODY);
+    const created: string[] = [];
+    for (let i = 0; i < 3; i++) {
+      const r = await mk();
+      expect(r.status).toBe(201);
+      created.push(r.body.agentId);
+    }
+    // Revoke one — the quota must NOT refill.
+    const rev = await request(t.app)
+      .post(`/api/agents/${created[0]}/revoke`)
+      .set('authorization', ownerAuth(quotaOwner))
+      .send({});
+    expect(rev.status).toBe(200);
+    const res = await mk();
+    expect(res.status).toBe(403);
+    expect(res.body).toEqual({ error: 'quota_exceeded', limit: 3 });
+    // A different owner is unaffected (per-owner scoping).
+    const other = await request(t.app)
+      .post('/api/agents')
+      .set('authorization', ownerAuth(freshOwner))
+      .send(CREATE_BODY);
+    expect(other.status).toBe(201);
+  });
+
+  it('rate-limits creates per owner with a Retry-After hint', async () => {
+    const rateOwner = '0x' + '7e'.repeat(20);
+    t = buildTestApp(db.pool, { settings: testSettings({ createRatePerHour: 2, createQuotaPerOwner: 100 }) });
+    const mk = () =>
+      request(t.app).post('/api/agents').set('authorization', ownerAuth(rateOwner)).send(CREATE_BODY);
+    expect((await mk()).status).toBe(201);
+    expect((await mk()).status).toBe(201);
+    const res = await mk();
+    expect(res.status).toBe(429);
+    expect(res.body.error).toBe('rate_limited');
+    expect(res.body.retryAfter).toBeGreaterThan(0);
+    expect(res.body.retryAfter).toBeLessThanOrEqual(3600);
+    expect(Number(res.headers['retry-after'])).toBe(res.body.retryAfter);
+  });
+
+  it('records the guardian address the account was created with (guardian lane, S5/S7)', async () => {
+    const a = await createAgent();
+    const row = await db.pool.query(`SELECT guardian_addr FROM agents WHERE id = $1`, [a.id]);
+    expect(row.rows[0].guardian_addr).toBe(FAKE_GUARDIAN_ADDR.toLowerCase());
+    // Revoke passes the stored guardian to the chain layer for lane selection.
+    const rev = await request(t.app)
+      .post(`/api/agents/${a.id}/revoke`)
+      .set('authorization', ownerAuth(OWNER))
+      .send({});
+    expect(rev.status).toBe(200);
+    expect(t.chain.revokeGuardians).toEqual([FAKE_GUARDIAN_ADDR.toLowerCase()]);
+  });
+});
+
+describe('C-2 revoke receipt guard', () => {
+  it('a failed guardian revoke: not ok, DB NOT revoked, runtime halted, error traced, FE steer', async () => {
+    const a = await createAgent();
+    await request(t.app).post(`/api/agents/${a.id}/start`).set('authorization', ownerAuth(OWNER)).send({});
+    t.chain.revokeError = new Error('guardian revoke tx reverted on-chain: 0xdead');
+
+    const res = await request(t.app)
+      .post(`/api/agents/${a.id}/revoke`)
+      .set('authorization', ownerAuth(OWNER))
+      .send({});
+    expect(res.status).toBe(502);
+    expect(res.body.ok).toBe(false);
+    expect(res.body.error).toBe('guardian_revoke_failed');
+    expect(res.body.ownerRevokeFallback.accountAddr).toBe(a.accountAddr);
+
+    // DB must still say active — the hard boundary is still armed.
+    const row = await db.pool.query(`SELECT status FROM agents WHERE id = $1`, [a.id]);
+    expect(row.rows[0].status).toBe('active');
+    // Runtime halted anyway (defense-in-depth).
+    expect(t.runtime.halted).toContain(a.id);
+    // Failure is chain-visible.
+    const traces = await listTraces(db.pool, a.id, { afterSeq: -1, limit: 50 });
+    const errRec = traces.find((r) => r.kind === 'error');
+    const detail = errRec?.detail as { summary?: string } | undefined;
+    expect(detail?.summary).toContain('guardian revoke failed');
   });
 });
