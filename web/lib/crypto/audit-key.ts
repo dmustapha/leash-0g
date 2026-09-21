@@ -40,6 +40,33 @@ export function decryptAuditCiphertext(privKeyHex: string, ciphertext: Uint8Arra
  * C-6: the downloadable backup contains the ENCRYPTED blob only — never the
  * plaintext privkey. Pure builder so tests can pin the no-plaintext property.
  */
+/**
+ * Owner-stream key backup (S10): same C-6 discipline as the agent audit key — the file holds
+ * the ENCRYPTED blob only, never the plaintext privkey. Unlike the agent key, LEASH stores
+ * NOTHING for this key besides the pubkey, so this file (plus the wallet signature or
+ * passphrase) is the ONLY way to read the owner-stream audit trail.
+ */
+export function buildOwnerStreamBackup(input: {
+  ownerAddr: string;
+  pubKeyHex: string;
+  blob: { mode: 'signature' | 'passphrase' } & Record<string, unknown>;
+}): string {
+  return JSON.stringify(
+    {
+      warning:
+        'Keep this file private. It is the ONLY copy of your owner-stream key — LEASH stores just the public half. This file plus your wallet signature (or passphrase) decrypts your daily-loop audit trail.',
+      keyKind: 'owner-stream',
+      ownerAddr: input.ownerAddr,
+      streamPubKey: input.pubKeyHex,
+      encryptedBlob: input.blob,
+      kekMode: input.blob.mode,
+      createdAt: new Date().toISOString(),
+    },
+    null,
+    2,
+  );
+}
+
 export function buildAuditBackup(input: {
   agentId: string;
   pubKeyHex: string;

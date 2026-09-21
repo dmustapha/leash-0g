@@ -7,6 +7,7 @@ import { usePathname } from 'next/navigation';
 import { useOwnerWallet } from '@/lib/owner-wallet';
 import { useAgentId } from '@/lib/use-agent-id';
 import { shortAddr } from '@/lib/format';
+import { UnreadBadge } from '@/components/inbox/UnreadBadge';
 
 export function Wordmark({ height = 26 }: { height?: number }) {
   return (
@@ -31,9 +32,12 @@ export default function SiteNav() {
   const wallet = useOwnerWallet();
   const { agentId } = useAgentId();
 
-  const links: { href: string; label: string }[] = [
+  const links: { href: string; label: string; badge?: boolean }[] = [
     { href: '/create', label: 'Create agent' },
     { href: '/links', label: 'Links' },
+    { href: '/inbox', label: 'Inbox', badge: true },
+    { href: '/digest', label: 'Digest' },
+    { href: '/settings/alerts', label: 'Alerts' },
     ...(agentId
       ? [
           { href: `/agents/${agentId}`, label: 'Cockpit' },
@@ -50,6 +54,7 @@ export default function SiteNav() {
         {links.map((l) => (
           <Link key={l.href} href={l.href} className="nav-link" aria-current={path === l.href ? 'page' : undefined}>
             {l.label}
+            {l.badge ? <UnreadBadge /> : null}
           </Link>
         ))}
         {wallet.ready && !wallet.authenticated ? (

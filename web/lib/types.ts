@@ -150,6 +150,8 @@ export type StreamEvent =
       valueWei?: string;
       txHash?: Hex;
       ts?: string;
+      /** P3C-6(ii): decoded LeashAccount error, when the trace carries one. */
+      decoded?: DecodedLeashError;
     }
   | {
       type: 'approval';
@@ -208,3 +210,118 @@ export type AuditBatch = {
 };
 
 export type ApprovalDecision = { decision: 'approve' | 'deny'; reason?: string };
+
+// ————— Phase 3 (spec §4): alerts, owner stream, digest, settings —————
+
+export type AlertClass = 'decision' | 'info';
+export type AlertKind =
+  | 'approval_required' // decision — inline approve/deny
+  | 'limit_hit' // decision — NOT approvable; adjust/dismiss
+  | 'revoked' // info
+  | 'revoke_failed' // info — steer to owner-wallet fallback
+  | 'delegation_terminal' // info
+  | 'runtime_error' // info, coalesced
+  | 'throttle' // info, coalesced
+  | 'alert_storm'; // info — rate guard tripped
+export type AlertStatus = 'unread' | 'read' | 'resolved' | 'dismissed';
+export type AlertResolution = 'approve' | 'deny' | 'expired' | 'dismissed';
+export type AlertChannel = 'app' | 'telegram' | 'system';
+
+export type Alert = {
+  id: string;
+  ownerAddr: string;
+  agentId?: string;
+  linkId?: string;
+  class: AlertClass;
+  kind: AlertKind;
+  status: AlertStatus;
+  /** Plain-language, composed at the edge (00 §2c). */
+  summary: string;
+  refs: {
+    approvalId?: string;
+    delegationId?: string;
+    traceSeq?: number;
+    errorName?: string;
+    boundaryClearsAtUnix?: number;
+  };
+  /** Coalesced kinds increment this. */
+  count: number;
+  dedupKey?: string;
+  createdAt: string;
+  resolvedAt?: string;
+  resolution?: AlertResolution;
+  resolvedVia?: AlertChannel;
+};
+
+/** Owner aggregate SSE (spec §4): agent events re-emitted owner-level, tagged. */
+export type OwnerStreamEvent =
+  | { type: 'agent_event'; agentId: string; event: StreamEvent }
+  | { type: 'alert'; alert: Alert }
+  | { type: 'digest_ready'; digestId: string };
+
+/** Decoded LeashAccount custom error (P3C-6 ii). */
+export type DecodedLeashError = { errorName: string; args: Json; plain: string };
+
+export type AgentDigest = {
+  agentId: string;
+  name: string;
+  status: string;
+  spendWei: string;
+  balanceWei: string;
+  /** null until a snapshot exists (first digest has no baseline — honest). */
+  balanceChangeWei: string | null;
+  actions: number;
+  blocks: number;
+  modifies: number;
+  approvals: { approved: number; denied: number; expired: number };
+  delegationsTerminal: Record<string, number>;
+};
+
+export type LinkDigest = {
+  linkId: string;
+  fromAgentId: string;
+  toAgentId: string;
+  byStatus: Record<string, number>;
+};
+
+export type Digest = {
+  generatedAt: string;
+  since: string | null;
+  agents: AgentDigest[];
+  links: LinkDigest[];
+  totals: { spendWei: string; actions: number; decisions: number };
+  empty: boolean;
+};
+
+/** Per-kind channel toggles — in-app is always on; only Telegram is optional. */
+export type AlertPrefs = Record<string, { telegram?: boolean }>;
+
+export type OwnerSettingsView = {
+  alertPrefs: AlertPrefs;
+  digestHourUtc: number | null;
+  digestOptout: boolean;
+  telegramLinked: boolean;
+  telegramLinkedAt: string | null;
+  streamPubkeySet: boolean;
+};
+
+export type OwnerSettingsPatch = {
+  alertPrefs?: AlertPrefs;
+  digestHourUtc?: number;
+  digestOptout?: boolean;
+  /** Set-once — the backend answers 409 on overwrite. */
+  streamPubkey?: string;
+};
+
+/** Owner-stream hash-chained record (spec §3d) — mirrors TraceRecord discipline. */
+export type OwnerRecord = {
+  ownerAddr: string;
+  seq: number;
+  prevHash: Hex;
+  ts: string;
+  kind: 'alert' | 'alert_resolved' | 'digest';
+  record: Json;
+  hash: Hex;
+};
+
+export type OwnerAuditBatch = AuditBatch & { ownerAddr: string; createdAt: string };

@@ -20,7 +20,10 @@ export function canonicalJson(value: unknown): string {
   return `{${keys.map((k) => `${JSON.stringify(k)}:${canonicalJson(obj[k])}`).join(',')}}`;
 }
 
-export function recordHash(record: Omit<TraceRecord, 'hash'>): Hex {
+/** Anything hash-chained the backend way: trace records AND Phase-3 owner records. */
+export type ChainedRecord = { seq: number; prevHash: Hex; hash: Hex };
+
+export function recordHash(record: { prevHash: Hex } & Record<string, unknown>): Hex {
   const prev = hexToBytes(record.prevHash as Hex); // 32 raw bytes, backend contract
   const body = new TextEncoder().encode(canonicalJson(record));
   const bytes = new Uint8Array(prev.length + body.length);
@@ -34,7 +37,7 @@ export type ChainResult =
   | { ok: false; brokenAtSeq: number; reason: 'hash-mismatch' | 'link-mismatch' | 'seq-gap' };
 
 /** Verify an ordered slice of records. `prevHash` of the first record links to what came before. */
-export function verifyChain(records: TraceRecord[], expectedPrev?: Hex): ChainResult {
+export function verifyChain<T extends ChainedRecord>(records: T[], expectedPrev?: Hex): ChainResult {
   let prev = expectedPrev;
   let lastSeq: number | undefined;
   for (const r of records) {
@@ -45,7 +48,8 @@ export function verifyChain(records: TraceRecord[], expectedPrev?: Hex): ChainRe
       return { ok: false, brokenAtSeq: r.seq, reason: 'link-mismatch' };
     }
     const { hash, ...body } = r;
-    if (recordHash(body) !== hash) {
+    // Safe: T extends ChainedRecord, so `body` always carries prevHash.
+    if (recordHash(body as { prevHash: Hex } & Record<string, unknown>) !== hash) {
       return { ok: false, brokenAtSeq: r.seq, reason: 'hash-mismatch' };
     }
     prev = hash;
@@ -68,8 +72,8 @@ export type ChainAnchors = Map<number, { lastHash: Hex; fromGenesis: boolean }>;
  * anchor at the previous batch's last record hash when that batch has been verified.
  * On success the batch's own tail is recorded in `anchors` for the next batch.
  */
-export function verifyBatch(
-  records: TraceRecord[],
+export function verifyBatch<T extends ChainedRecord>(
+  records: T[],
   seqFrom: number,
   anchors: ChainAnchors,
 ): BatchChainResult {
@@ -84,10 +88,10 @@ export function verifyBatch(
 }
 
 /** Parse a decrypted JSONL audit batch into records (skips blank lines). */
-export function parseJsonl(text: string): TraceRecord[] {
+export function parseJsonl<T = TraceRecord>(text: string): T[] {
   return text
     .split('\n')
     .map((l) => l.trim())
     .filter(Boolean)
-    .map((l) => JSON.parse(l) as TraceRecord);
+    .map((l) => JSON.parse(l) as T);
 }

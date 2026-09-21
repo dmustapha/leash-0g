@@ -8,6 +8,7 @@ import type { StreamEvent } from '@/lib/types';
 import { shortAddr, weiToOg } from '@/lib/format';
 import { txUrl } from '@/lib/chain';
 import type { Hex } from '@/lib/types';
+import { Disclosure } from '@/components/ui/Disclosure';
 
 export type FeedItem =
   | { kind: 'reasoning'; text: string; id: string }
@@ -80,6 +81,18 @@ export function StreamFeed({
                   <a className="link-tx" href={txUrl(item.event.txHash as Hex)} target="_blank" rel="noreferrer">
                     view tx
                   </a>
+                ) : null}
+                {item.event.decoded ? (
+                  // P3C-6(ii): plain language on the surface, raw error name behind
+                  // progressive disclosure — never a raw selector.
+                  <div style={{ flexBasis: '100%', display: 'grid', gap: '0.35rem' }} data-testid="trace-decoded">
+                    <span style={{ fontSize: '0.84rem', color: 'var(--color-ink-dim)' }}>
+                      {item.event.decoded.plain}
+                    </span>
+                    <Disclosure label="Technical detail">
+                      Contract error: <code className="code">{item.event.decoded.errorName}</code>
+                    </Disclosure>
+                  </div>
                 ) : null}
               </div>
             ),
