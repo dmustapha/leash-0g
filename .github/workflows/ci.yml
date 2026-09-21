@@ -102,8 +102,17 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # C-4: one lane-level retry on top of the in-test bounded re-asks —
+      # 0G Compute nondeterminism (starved reasoning output, transient 5xx)
+      # is external roughness, not a code signal. Two full-suite failures in
+      # a row IS a signal → lane red.
       - name: live 0G tests (encrypted Storage round-trip + Compute completion + evals)
-        run: pnpm --filter backend test:live
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 25
+          max_attempts: 2
+          retry_wait_seconds: 60
+          command: pnpm --filter backend test:live
         env:
           DATABASE_URL: ${{ secrets.DATABASE_URL }}
           ZERO_G_COMPUTE_API_KEY: ${{ secrets.ZERO_G_COMPUTE_API_KEY }}
@@ -115,6 +124,14 @@ jobs:
           ZERO_G_RPC: https://evmrpc-testnet.0g.ai
           ZERO_G_CHAIN_ID: "16602"
           ZERO_G_STORAGE_INDEXER: https://indexer-storage-testnet-turbo.0g.ai
+      # C-4: raw model output per eval scenario, for diagnosing a red lane
+      - name: upload eval artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-eval-artifacts
+          path: backend/test-live/artifacts/
+          if-no-files-found: ignore
 
   e2e:
     name: Playwright E2E + axe

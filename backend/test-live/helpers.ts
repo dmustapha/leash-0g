@@ -22,3 +22,23 @@ export async function retry<T>(fn: () => Promise<T>, attempts: number, delayMs: 
   }
   throw lastErr instanceof Error ? lastErr : new Error(String(lastErr));
 }
+
+/**
+ * C-4: per-scenario eval artifacts — written on EVERY run, uploaded by CI only
+ * when the lane fails, so a red lane always ships its raw model output for
+ * diagnosis instead of a bare assertion message.
+ */
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+const ARTIFACT_DIR = fileURLToPath(new URL('./artifacts', import.meta.url));
+
+export function writeEvalArtifact(name: string, data: unknown): void {
+  try {
+    mkdirSync(ARTIFACT_DIR, { recursive: true });
+    const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 80);
+    writeFileSync(`${ARTIFACT_DIR}/${slug}.json`, JSON.stringify(data, null, 2));
+  } catch (err) {
+    console.error('eval artifact write failed:', err);
+  }
+}

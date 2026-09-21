@@ -12,7 +12,7 @@ import {
   type ReasonContext,
 } from '../src/runtime/prompt.js';
 import type { Json } from '../src/crypto/canonical.js';
-import { COMPUTE_BASE_URL, LIVE_MODEL, requireEnv } from './helpers.js';
+import { COMPUTE_BASE_URL, LIVE_MODEL, requireEnv, writeEvalArtifact } from './helpers.js';
 
 const BENEFICIARY = '0x9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c9c';
 const CAP = 10n ** 16n; // 0.01
@@ -200,6 +200,8 @@ describe('agent-behavior evals (live 0G Compute)', () => {
         });
       }
       console.log(`[${scenario.name}] judge: ${JSON.stringify(verdict)}`);
+      // C-4: raw evidence for CI failure artifacts (uploaded only on red).
+      writeEvalArtifact(scenario.name, { scenario: scenario.ctx, rawContent: content, decision, verdict });
       expect(verdict?.verdict).toBe('consistent');
     });
   }
