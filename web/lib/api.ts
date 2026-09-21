@@ -6,15 +6,24 @@ import { config } from './config';
 import type {
   AgentDetail,
   AgentSummary,
+  Alert,
+  AlertClass,
+  AlertKind,
+  AlertStatus,
   ApprovalDecision,
   AuditBatch,
   CreateAgentRequest,
   CreateAgentResponse,
   Delegation,
+  Digest,
   GatewayRule,
   Link,
   LinkMode,
+  OwnerAuditBatch,
+  OwnerRecord,
   OwnerRevokeFallback,
+  OwnerSettingsPatch,
+  OwnerSettingsView,
   RevokeBatchResult,
   TraceRecord,
 } from './types';
@@ -59,7 +68,7 @@ export class ApiError extends Error {
 
 async function request<T>(
   getToken: TokenGetter,
-  method: 'GET' | 'POST' | 'PATCH',
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
   path: string,
   body?: unknown,
 ): Promise<T> {
@@ -142,6 +151,57 @@ export function makeApi(getToken: TokenGetter) {
       request<{ results: RevokeBatchResult[] }>(getToken, 'POST', '/api/agents/revoke-batch', {
         agentIds,
       }),
+
+    // — Phase 3 (spec §4): alerts, owner stream, digest, settings, telegram —
+    ownerStreamUrl: () => `${config.apiUrl}/api/owner/stream`,
+    listAlerts: (filter?: {
+      class?: AlertClass;
+      kind?: AlertKind;
+      agentId?: string;
+      status?: AlertStatus;
+      cursor?: string;
+      limit?: number;
+    }) => {
+      const q = new URLSearchParams();
+      if (filter?.class !== undefined) q.set('class', filter.class);
+      if (filter?.kind !== undefined) q.set('kind', filter.kind);
+      if (filter?.agentId !== undefined) q.set('agentId', filter.agentId);
+      if (filter?.status !== undefined) q.set('status', filter.status);
+      if (filter?.cursor !== undefined) q.set('cursor', filter.cursor);
+      if (filter?.limit !== undefined) q.set('limit', String(filter.limit));
+      const qs = q.toString();
+      return request<{ alerts: Alert[]; unread: number; nextCursor?: string }>(
+        getToken,
+        'GET',
+        `/api/alerts${qs ? `?${qs}` : ''}`,
+      );
+    },
+    alertAction: (id: string, action: 'read' | 'dismiss') =>
+      request<{ ok: true; alert: Alert }>(getToken, 'POST', `/api/alerts/${id}`, { action }),
+    markAllAlertsRead: () =>
+      request<{ ok: true; marked: number }>(getToken, 'POST', '/api/alerts/read-all'),
+    getOwnerRecords: (cursor?: number) =>
+      request<{ records: OwnerRecord[]; nextCursor: number | null; chainVerified: boolean }>(
+        getToken,
+        'GET',
+        `/api/owner/records${cursor !== undefined ? `?cursor=${cursor}` : ''}`,
+      ),
+    getOwnerAudit: () => request<OwnerAuditBatch[]>(getToken, 'GET', '/api/owner/audit'),
+    getDigest: () => request<{ digest: Digest }>(getToken, 'GET', '/api/digest'),
+    markDigest: () =>
+      request<{ ok: true; digest: Digest }>(getToken, 'POST', '/api/digest/mark'),
+    getOwnerSettings: () => request<OwnerSettingsView>(getToken, 'GET', '/api/owner/settings'),
+    patchOwnerSettings: (patch: OwnerSettingsPatch) =>
+      request<{ ok: true } & Omit<OwnerSettingsView, 'telegramLinkedAt'>>(
+        getToken,
+        'PATCH',
+        '/api/owner/settings',
+        patch,
+      ),
+    telegramLink: () =>
+      request<{ url: string; expiresAt: string }>(getToken, 'POST', '/api/owner/telegram/link'),
+    telegramUnlink: () => request<{ ok: true }>(getToken, 'DELETE', '/api/owner/telegram'),
+    telegramPing: () => request<{ ok: true }>(getToken, 'POST', '/api/owner/telegram/ping'),
   };
 }
 

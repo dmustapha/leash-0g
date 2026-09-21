@@ -38,6 +38,32 @@ export type MockDelegation = {
   expiresAt: string;
 };
 
+export type MockAlert = {
+  id: string;
+  ownerAddr: string;
+  agentId?: string;
+  linkId?: string;
+  class: 'decision' | 'info';
+  kind: string;
+  status: 'unread' | 'read' | 'resolved' | 'dismissed';
+  summary: string;
+  refs: Record<string, unknown>;
+  count: number;
+  createdAt: string;
+  resolvedAt?: string;
+  resolution?: string;
+  resolvedVia?: string;
+};
+
+export type MockOwnerSettings = {
+  alertPrefs: Record<string, { telegram?: boolean }>;
+  digestHourUtc: number | null;
+  digestOptout: boolean;
+  telegramLinked: boolean;
+  telegramLinkedAt: string | null;
+  streamPubkeySet: boolean;
+};
+
 export type MockState = {
   agentId: string;
   status: 'running' | 'paused' | 'revoked';
@@ -61,6 +87,15 @@ export type MockState = {
   rulesBody?: Record<string, unknown>;
   linkActions: Array<{ linkId: string; body: Record<string, unknown> }>;
   revokeBatchBody?: Record<string, unknown>;
+  // — Phase 3 —
+  alerts: MockAlert[];
+  ownerSettings: MockOwnerSettings;
+  settingsPatches: Array<Record<string, unknown>>;
+  /** POST /api/owner/telegram/* answers 503 when false (bot unconfigured). */
+  telegramConfigured: boolean;
+  /** GET /api/digest serves this; POST /mark swaps in the empty digest. */
+  digest: Record<string, unknown>;
+  digestMarked: boolean;
 };
 
 export function mockAgent(agentId: string, name: string, over: Partial<MockAgent> = {}): MockAgent {
@@ -76,6 +111,58 @@ export function mockAgent(agentId: string, name: string, over: Partial<MockAgent
   };
 }
 
+export function mockAlert(id: string, over: Partial<MockAlert> = {}): MockAlert {
+  return {
+    id,
+    ownerAddr: '0x3333333333333333333333333333333333333333',
+    agentId: 'agent-1',
+    class: 'info',
+    kind: 'revoked',
+    status: 'unread',
+    summary: 'Something happened with your agent.',
+    refs: {},
+    count: 1,
+    createdAt: new Date().toISOString(),
+    ...over,
+  };
+}
+
+export function emptyDigest(): Record<string, unknown> {
+  return {
+    generatedAt: new Date().toISOString(),
+    since: new Date(Date.now() - 3600_000).toISOString(),
+    agents: [],
+    links: [],
+    totals: { spendWei: '0', actions: 0, decisions: 0 },
+    empty: true,
+  };
+}
+
+export function sampleDigest(): Record<string, unknown> {
+  return {
+    generatedAt: new Date().toISOString(),
+    since: new Date(Date.now() - 86_400_000).toISOString(),
+    agents: [
+      {
+        agentId: 'agent-1',
+        name: 'Treasury helper',
+        status: 'running',
+        spendWei: '20000000000000000',
+        balanceWei: '230000000000000000',
+        balanceChangeWei: '-20000000000000000',
+        actions: 2,
+        blocks: 1,
+        modifies: 0,
+        approvals: { approved: 1, denied: 0, expired: 0 },
+        delegationsTerminal: {},
+      },
+    ],
+    links: [],
+    totals: { spendWei: '20000000000000000', actions: 2, decisions: 1 },
+    empty: false,
+  };
+}
+
 export function freshState(): MockState {
   return {
     agentId: 'agent-1',
@@ -88,6 +175,19 @@ export function freshState(): MockState {
     delegationEvents: {},
     failRevokeIds: [],
     linkActions: [],
+    alerts: [],
+    ownerSettings: {
+      alertPrefs: {},
+      digestHourUtc: 8,
+      digestOptout: false,
+      telegramLinked: false,
+      telegramLinkedAt: null,
+      streamPubkeySet: false,
+    },
+    settingsPatches: [],
+    telegramConfigured: true,
+    digest: sampleDigest(),
+    digestMarked: false,
   };
 }
 
@@ -235,6 +335,99 @@ export async function installMockApi(page: Page, state: MockState): Promise<void
     if (method === 'GET' && path === '/api/delegations') {
       return json(200, { delegations: state.delegations });
     }
+    // — Phase 3: owner stream, alerts, digest, settings, telegram —
+    if (method === 'GET' && path === '/api/owner/stream') {
+      const frames = state.alerts.map((alert) => ({ type: 'alert', alert }));
+      return route.fulfill({
+        status: 200,
+        contentType: 'text/event-stream',
+        body: frames.map((f) => `data: ${JSON.stringify(f)}\n\n`).join(''),
+      });
+    }
+    if (method === 'GET' && path === '/api/alerts') {
+      const unread = state.alerts.filter((a) => a.status === 'unread').length;
+      return json(200, {
+        alerts: [...state.alerts].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1)),
+        unread,
+      });
+    }
+    if (method === 'POST' && path === '/api/alerts/read-all') {
+      let marked = 0;
+      for (const a of state.alerts) {
+        if (a.class === 'info' && a.status === 'unread') {
+          a.status = 'read';
+          marked += 1;
+        }
+      }
+      return json(200, { ok: true, marked });
+    }
+    if (method === 'POST' && /^\/api\/alerts\/[^/]+$/.test(path)) {
+      const id = path.split('/').pop() ?? '';
+      const body = route.request().postDataJSON() as { action: 'read' | 'dismiss' };
+      const alert = state.alerts.find((a) => a.id === id);
+      if (!alert) return json(404, { error: { message: 'not found' } });
+      if (body.action === 'dismiss' && alert.kind === 'approval_required') {
+        return json(409, { error: { message: 'decision alerts resolve via their approval' } });
+      }
+      if (body.action === 'read') alert.status = 'read';
+      else {
+        alert.status = 'dismissed';
+        alert.resolution = 'dismissed';
+        alert.resolvedAt = new Date().toISOString();
+      }
+      return json(200, { ok: true, alert });
+    }
+    if (method === 'GET' && path === '/api/digest') {
+      return json(200, { digest: state.digestMarked ? emptyDigest() : state.digest });
+    }
+    if (method === 'POST' && path === '/api/digest/mark') {
+      state.digestMarked = true;
+      return json(200, { ok: true, digest: state.digest });
+    }
+    if (method === 'GET' && path === '/api/owner/settings') {
+      return json(200, state.ownerSettings);
+    }
+    if (method === 'PATCH' && path === '/api/owner/settings') {
+      const body = route.request().postDataJSON() as Record<string, unknown>;
+      state.settingsPatches.push(body);
+      if (typeof body['streamPubkey'] === 'string') {
+        if (state.ownerSettings.streamPubkeySet) {
+          return json(409, { error: { message: 'owner-stream key is already set' } });
+        }
+        state.ownerSettings.streamPubkeySet = true;
+      }
+      if (body['alertPrefs']) {
+        state.ownerSettings.alertPrefs = body['alertPrefs'] as Record<string, { telegram?: boolean }>;
+      }
+      if (typeof body['digestHourUtc'] === 'number') state.ownerSettings.digestHourUtc = body['digestHourUtc'];
+      if (typeof body['digestOptout'] === 'boolean') state.ownerSettings.digestOptout = body['digestOptout'];
+      return json(200, { ok: true, ...state.ownerSettings });
+    }
+    if (method === 'POST' && path === '/api/owner/telegram/link') {
+      if (!state.telegramConfigured) {
+        return json(503, { error: { message: 'telegram is not configured on this deployment' } });
+      }
+      return json(200, {
+        url: 'https://t.me/leash_test_bot?start=e2e-token',
+        expiresAt: new Date(Date.now() + 300_000).toISOString(),
+      });
+    }
+    if (method === 'DELETE' && path === '/api/owner/telegram') {
+      state.ownerSettings.telegramLinked = false;
+      state.ownerSettings.telegramLinkedAt = null;
+      return json(200, { ok: true });
+    }
+    if (method === 'POST' && path === '/api/owner/telegram/ping') {
+      if (!state.ownerSettings.telegramLinked) return json(409, { error: { message: 'telegram is not linked' } });
+      return json(200, { ok: true });
+    }
+    if (method === 'GET' && path === '/api/owner/records') {
+      return json(200, { records: [], nextCursor: null, chainVerified: true });
+    }
+    if (method === 'GET' && path === '/api/owner/audit') {
+      return json(200, []);
+    }
+
     if (method === 'GET' && /^\/api\/agents\/[^/]+\/stream$/.test(path)) {
       const agentId = path.split('/')[3] ?? '';
       return route.fulfill({ status: 200, contentType: 'text/event-stream', body: sseBody(state, agentId) });
@@ -249,8 +442,18 @@ export async function installMockApi(page: Page, state: MockState): Promise<void
       return json(200, agentDetail(state));
     }
     if (method === 'POST' && /^\/api\/approvals\//.test(path)) {
+      const approvalId = path.split('/').pop() ?? '';
       state.approvalDecided = route.request().postDataJSON() as { decision: string; reason?: string };
       state.approvalPending = false;
+      // Phase 3: the decision auto-resolves its alert (any channel — here, the app).
+      for (const a of state.alerts) {
+        if (a.kind === 'approval_required' && a.refs['approvalId'] === approvalId) {
+          a.status = 'resolved';
+          a.resolution = state.approvalDecided.decision;
+          a.resolvedVia = 'app';
+          a.resolvedAt = new Date().toISOString();
+        }
+      }
       return json(200, { ok: true });
     }
     if (method === 'POST' && /\/revoke$/.test(path)) {

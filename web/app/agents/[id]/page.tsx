@@ -35,6 +35,7 @@ import { PolicyPanel } from '@/components/cockpit/PolicyPanel';
 import { RevokeButton } from '@/components/cockpit/RevokeButton';
 import { AgentControls } from '@/components/cockpit/AgentControls';
 import { GuardianPanel } from '@/components/cockpit/GuardianPanel';
+import { MigrateGuardianBanner } from '@/components/cockpit/MigrateGuardianBanner';
 import { RulesEditor } from '@/components/cockpit/RulesEditor';
 
 type Approval = Extract<StreamEvent, { type: 'approval' }>;
@@ -256,6 +257,8 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
     >
       {detail ? (
         <>
+          {/* M-02 carry: same mismatch condition GuardianPanel warns on, surfaced up top. */}
+          <MigrateGuardianBanner guardian={guardian} leashGuardian={detail.leashGuardianAddr} />
           <StatusBar detail={detail} chainVerified={chainVerified} />
           <AgentControls
             status={detail.status}
@@ -307,9 +310,17 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
         <StreamFeed items={items} connection={connection} />
         <div style={{ display: 'grid', gap: '1rem' }}>
           {detail ? (
-            <PolicyPanel detail={detail} onSubmitPolicy={submitPolicy} pending={pending} onApply={applyPending} />
+            // Anchor for the inbox limit_hit "Adjust policy" deep-link (spec §3c).
+            <div id="policy-panel">
+              <PolicyPanel detail={detail} onSubmitPolicy={submitPolicy} pending={pending} onApply={applyPending} />
+            </div>
           ) : null}
-          {detail ? <GuardianPanel guardian={guardian} leashGuardian={detail.leashGuardianAddr} onSetGuardian={setGuardianTx} /> : null}
+          {detail ? (
+            // Anchor for the migrate-guardian banner CTA (M-02 carry).
+            <div id="guardian-panel">
+              <GuardianPanel guardian={guardian} leashGuardian={detail.leashGuardianAddr} onSetGuardian={setGuardianTx} />
+            </div>
+          ) : null}
           {detail ? (
             <RulesEditor rules={detail.agent?.gatewayRules ?? []} onSave={saveRules} />
           ) : null}
