@@ -2,6 +2,7 @@ import type { Pool } from 'pg';
 import type { Json } from '../crypto/canonical.js';
 import { appendOwnerRecordInTx } from '../store/owner-records.js';
 import { getOwnerSettings, listDigestSchedulable } from '../store/owner-settings.js';
+import { formatG } from '../util/format.js';
 
 /**
  * The digest (spec §3b "Digest service", D4): spend + balance change +
@@ -270,26 +271,55 @@ export class DigestService {
     }
   }
 
-  /** Plain-language Telegram rendering (00 §2c; minimal disclosure — amounts + counts only). */
+  /**
+   * Plain-language Telegram rendering (00 §2c; minimal disclosure — names,
+   * amounts, counts only). Reads like a standup briefing, not a changelog:
+   * one lead sentence, per-agent lines only where something happened, and an
+   * attention line only when something deserves a look.
+   */
   renderText(digest: Digest): string {
-    if (digest.empty) return 'Nothing new since you last looked.';
-    const lines: string[] = ['Your agents since you last looked:'];
+    if (digest.empty) return 'Nothing new since you last looked — your agents are quiet.';
+
+    const decisions = digest.totals.decisions;
+    const lead =
+      digest.totals.actions === 0
+        ? 'Since you last looked: no money moved, but there was some activity.'
+        : `Since you last looked: ${plural(digest.totals.actions, 'transfer')} went out, ` +
+          `${formatG(digest.totals.spendWei)} total` +
+          (decisions > 0 ? `, and ${plural(decisions, 'decision')} came to you.` : '.');
+
+    const lines: string[] = [lead, ''];
     for (const a of digest.agents) {
-      const parts: string[] = [];
-      if (a.actions > 0) parts.push(`${a.actions} action(s), spent ${formatWei(a.spendWei)}`);
+      const bits: string[] = [];
+      if (a.actions > 0) bits.push(`sent ${formatG(a.spendWei)} in ${plural(a.actions, 'transfer')}`);
       if (a.balanceChangeWei !== null && a.balanceChangeWei !== '0') {
-        parts.push(`balance change ${formatWei(a.balanceChangeWei, true)}`);
+        bits.push(`balance ${formatG(a.balanceWei)} (${formatG(a.balanceChangeWei, true)})`);
       }
       const decided = a.approvals.approved + a.approvals.denied + a.approvals.expired;
-      if (decided > 0) parts.push(`${decided} decision(s)`);
-      if (a.blocks > 0) parts.push(`${a.blocks} blocked`);
-      const terminal = Object.entries(a.delegationsTerminal)
-        .map(([k, v]) => `${v} ${k}`)
-        .join(', ');
-      if (terminal) parts.push(`handoffs: ${terminal}`);
-      if (parts.length > 0) lines.push(`• ${a.name}: ${parts.join(' · ')}`);
+      if (decided > 0) {
+        const parts: string[] = [];
+        if (a.approvals.approved > 0) parts.push(`${a.approvals.approved} approved`);
+        if (a.approvals.denied > 0) parts.push(`${a.approvals.denied} denied`);
+        if (a.approvals.expired > 0) parts.push(`${a.approvals.expired} expired unanswered`);
+        bits.push(parts.join(', '));
+      }
+      const done = a.delegationsTerminal['completed'] ?? 0;
+      const rough = ['failed', 'declined', 'cancelled', 'expired']
+        .map((k) => a.delegationsTerminal[k] ?? 0)
+        .reduce((x, y) => x + y, 0);
+      if (done > 0) bits.push(`${plural(done, 'handoff')} completed`);
+      if (rough > 0) bits.push(`${plural(rough, 'handoff')} didn't go through`);
+      if (bits.length > 0) lines.push(`🐕 ${a.name} — ${bits.join(' · ')}`);
     }
-    lines.push(`Total spend: ${formatWei(digest.totals.spendWei)}.`);
+
+    const attention: string[] = [];
+    for (const a of digest.agents) {
+      if (a.blocks > 0) attention.push(`${a.name} had ${plural(a.blocks, 'request')} blocked by your rules`);
+      if (a.approvals.expired > 0) attention.push(`${a.name} had approvals expire unanswered`);
+    }
+    if (attention.length > 0) {
+      lines.push('', `Worth a look: ${attention.join('; ')}.`);
+    }
     return lines.join('\n');
   }
 
@@ -329,22 +359,21 @@ export class DigestService {
   }
 
   private async markPushDateOnly(ownerAddr: string, date: string): Promise<void> {
-    const cursor = (await this.loadCursor(ownerAddr)) ?? { ts: new Date(0).toISOString(), agents: {} };
-    cursor.lastPushDate = date;
+    // L-01 (security gate): an atomic jsonb MERGE — a read-modify-write here
+    // could clobber a cursor advanced by a concurrent mark (no lock needed
+    // when only the one key is merged).
     await this.deps.pool.query(
-      `INSERT INTO owner_settings (owner_addr, digest_cursor) VALUES ($1, $2)
-       ON CONFLICT (owner_addr) DO UPDATE SET digest_cursor = $2, updated_at = now()`,
-      [ownerAddr.toLowerCase(), JSON.stringify(cursor)],
+      `INSERT INTO owner_settings (owner_addr, digest_cursor)
+       VALUES ($1, jsonb_build_object('ts', to_jsonb(to_char(to_timestamp(0), 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')), 'agents', '{}'::jsonb, 'lastPushDate', to_jsonb($2::text)))
+       ON CONFLICT (owner_addr) DO UPDATE
+         SET digest_cursor = COALESCE(owner_settings.digest_cursor, '{"ts":"1970-01-01T00:00:00.000Z","agents":{}}'::jsonb)
+                             || jsonb_build_object('lastPushDate', to_jsonb($2::text)),
+             updated_at = now()`,
+      [ownerAddr.toLowerCase(), date],
     );
   }
 }
 
-function formatWei(wei: string, signed = false): string {
-  const neg = wei.startsWith('-');
-  const abs = neg ? wei.slice(1) : wei;
-  const padded = abs.padStart(19, '0');
-  const whole = padded.slice(0, -18).replace(/^0+(?=\d)/, '') || '0';
-  const frac = padded.slice(-18).replace(/0+$/, '').slice(0, 6);
-  const num = frac ? `${whole}.${frac}` : whole;
-  return `${neg ? '-' : signed ? '+' : ''}${num} 0G`;
+function plural(n: number, noun: string): string {
+  return `${n} ${noun}${n === 1 ? '' : 's'}`;
 }

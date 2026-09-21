@@ -343,7 +343,7 @@ export async function transitionDelegation(
   id: string,
   fromStatuses: DelegationStatus[],
   to: DelegationStatus,
-  patch?: { result?: Json; decidedAt?: boolean },
+  patch?: { result?: Json; decidedAt?: boolean; resetExpiryMs?: number },
 ): Promise<Delegation | null> {
   const from = fromStatuses.filter((s) => !TERMINAL_STATUSES.has(s));
   if (from.length === 0) return null;
@@ -351,10 +351,20 @@ export async function transitionDelegation(
     `UPDATE delegations
      SET status = $3,
          result = COALESCE($4::jsonb, result),
-         decided_at = CASE WHEN $5 THEN now() ELSE decided_at END
+         decided_at = CASE WHEN $5 THEN now() ELSE decided_at END,
+         expires_at = CASE WHEN $6::float8 IS NOT NULL
+                           THEN now() + make_interval(secs => $6 / 1000.0)
+                           ELSE expires_at END
      WHERE id = $1 AND status = ANY($2)
      RETURNING *`,
-    [id, from, to, patch?.result !== undefined ? JSON.stringify(patch.result) : null, patch?.decidedAt === true],
+    [
+      id,
+      from,
+      to,
+      patch?.result !== undefined ? JSON.stringify(patch.result) : null,
+      patch?.decidedAt === true,
+      patch?.resetExpiryMs ?? null,
+    ],
   );
   return res.rows[0] ? mapDelegation(res.rows[0]) : null;
 }
@@ -414,23 +424,6 @@ export async function sweepExpiredDelegations(pool: Pool): Promise<Delegation[]>
     if (d) swept.push(d); // null = raced with another transition — that writer won
   }
   return swept;
-}
-
-/**
- * Gate-① build note 2 (supervised TTL interaction): with APPROVAL_TIMEOUT ≈
- * DELEGATION_TTL (both 600s), an approval decided near its deadline would
- * activate an envelope at/past its own expiry — the owner's approve then
- * silently became `expired`. The TTL bounds delivery-to-pickup; while the
- * envelope waited on the OWNER it was not undelivered — so on approve the
- * expiry restarts from the DECISION time. Status is untouched (not a CAS
- * transition; guarded to the just-activated 'pending' row).
- */
-export async function resetDelegationExpiry(pool: Pool, id: string, ttlMs: number): Promise<void> {
-  await pool.query(
-    `UPDATE delegations SET expires_at = now() + make_interval(secs => $2 / 1000.0)
-     WHERE id = $1 AND status = 'pending'`,
-    [id, ttlMs],
-  );
 }
 
 /** Throttle input: delegations created on the link in the trailing hour (ALL statuses). */

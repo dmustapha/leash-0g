@@ -243,6 +243,10 @@ export type Alert = {
     traceSeq?: number;
     errorName?: string;
     boundaryClearsAtUnix?: number;
+    /** Approval decision deadline (deny-by-default) — countdown on the card. */
+    autoDeniesAtUnix?: number;
+    amountWei?: string;
+    to?: string;
   };
   /** Coalesced kinds increment this. */
   count: number;

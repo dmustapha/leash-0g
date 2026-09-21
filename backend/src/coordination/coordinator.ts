@@ -6,6 +6,8 @@ import { approvalEvent, delegationEvent, traceEvent } from '../sse/events.js';
 import { appendTrace } from '../trace/trace-store.js';
 import { createApproval } from '../store/approvals.js';
 import type { AgentRow, Delegation } from '../types.js';
+import { getAgentById } from '../store/agents.js';
+import { inMinutes } from '../util/format.js';
 import {
   createDelegationGuarded,
   findActiveLinkFrom,
@@ -14,7 +16,6 @@ import {
   listCancellableByLink,
   listOpenByAgent,
   listOrphanedAccepted,
-  resetDelegationExpiry,
   sweepExpiredDelegations,
   transitionDelegation,
 } from './store.js';
@@ -152,14 +153,26 @@ export class DelegationCoordinator {
       );
       // Daily loop (spec §3b): supervised handoffs are the third
       // approval_required source (all three ride the same consent rails).
-      await this.deps.alerts?.emit(input.fromAgent.ownerAddr, {
-        agentId: input.fromAgent.id,
-        linkId: link.id,
-        class: 'decision',
-        kind: 'approval_required',
-        summary: `${input.fromAgent.name} wants to hand off '${input.kind}' — waiting on you`,
-        refs: { approvalId: approval.id, delegationId: delegation.id },
-      });
+      // Rich card, server facts only: both agent NAMES, the envelope kind,
+      // and the real deadline (the delegation's own TTL — this approval
+      // expires with the envelope, not with APPROVAL_TIMEOUT).
+      if (this.deps.alerts) {
+        const toAgent = await getAgentById(pool, link.toAgentId);
+        await this.deps.alerts.emit(input.fromAgent.ownerAddr, {
+          agentId: input.fromAgent.id,
+          linkId: link.id,
+          class: 'decision',
+          kind: 'approval_required',
+          summary:
+            `${input.fromAgent.name} wants to hand a '${input.kind}' task to ${toAgent?.name ?? 'its linked agent'} — ` +
+            `it only proceeds if you approve. ⏱ Expires ${inMinutes(settings.delegationTtlMs)} if you don't answer.`,
+          refs: {
+            approvalId: approval.id,
+            delegationId: delegation.id,
+            autoDeniesAtUnix: Math.floor(new Date(delegation.expiresAt).getTime() / 1000),
+          },
+        });
+      }
     } else {
       this.deps.runtime.nudge(link.toAgentId);
     }
@@ -213,18 +226,21 @@ export class DelegationCoordinator {
       this.deps.hub.emit(approvalAgentId, 'trace', traceEvent(rec));
       return null;
     }
+    // Build note 2 (supervised TTL interaction): with APPROVAL_TIMEOUT ≈
+    // DELEGATION_TTL, an approve at the buzzer must not deliver an already-
+    // expired envelope — the TTL bounds delivery-to-pickup, and while the
+    // envelope waited on the OWNER it was not undelivered. So the expiry
+    // restarts from the DECISION time, atomically WITH the approve transition
+    // (a separate post-transition reset raced the sweeper at the buzzer).
     const d =
       decision === 'approve'
-        ? await transitionDelegation(this.deps.pool, delegationId, ['pending_approval'], 'pending')
+        ? await transitionDelegation(this.deps.pool, delegationId, ['pending_approval'], 'pending', {
+            resetExpiryMs: this.deps.settings.delegationTtlMs,
+          })
         : await transitionDelegation(this.deps.pool, delegationId, ['pending_approval'], 'declined', {
             decidedAt: true,
           });
     if (!d) return null; // raced with expiry/cancel — that transition won, already traced
-    if (decision === 'approve') {
-      // Build note 2: expiry restarts from the DECISION time — an approve at
-      // the buzzer must not deliver an already-expired envelope.
-      await resetDelegationExpiry(this.deps.pool, d.id, this.deps.settings.delegationTtlMs);
-    }
     await this.traceUpdate(d.fromAgentId, d, `owner ${decision === 'approve' ? 'approved' : 'denied'} the handoff`);
     if (decision === 'approve') this.deps.runtime.nudge(d.toAgentId);
     return d;

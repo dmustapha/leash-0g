@@ -77,7 +77,11 @@ export class FetchTelegramApi implements TelegramApi {
         }
       }
     }
-    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+    // L-03 (security gate): network-layer errors can embed the request URL,
+    // which contains the bot token (Telegram's API design) — sanitize before
+    // the error escapes into any log.
+    const msg = lastError instanceof Error ? lastError.message : String(lastError);
+    throw new Error(msg.replaceAll(this.opts.botToken, '<bot-token>'));
   }
 
   async sendMessage(input: SendMessageInput): Promise<{ message_id: number }> {

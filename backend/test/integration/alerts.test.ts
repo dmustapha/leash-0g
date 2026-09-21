@@ -192,13 +192,17 @@ describe('D2 — dedup, resolve, storm, atomicity', () => {
     const all = await listAlerts(db.pool, owner, {});
     const storm = all.alerts.filter((a) => a.kind === 'alert_storm');
     expect(storm).toHaveLength(1);
-    // 3 admitted + the storm row itself; 5 emissions minus the one that created the storm folded into it
+    // 3 admitted; the 5 guarded emissions ALL fold into the durable storm row
+    // (its count is the folded total — nothing lost from the alert row).
     expect(storm[0]?.count).toBe(5);
     const records = await listOwnerRecords(db.pool, owner);
     const stormRecords = records.filter(
       (r) => (r.record as { kind?: string }).kind === 'alert_storm',
     );
-    expect(stormRecords.length).toBe(5); // every folded emission recorded — nothing dropped
+    // Owner stream records the TRIP only (plus a periodic counter every 50th
+    // fold) — the storm must not amplify the append-only stream.
+    expect(stormRecords.length).toBe(1);
+    expect((stormRecords[0]?.record as { count?: number }).count).toBe(1);
     const verdict = await verifyOwnerChainIncremental(db.pool, owner);
     expect(verdict.ok).toBe(true);
   });

@@ -258,6 +258,12 @@ describe('D8 — boundary damping', () => {
     expect(alerts[0]?.refs.errorName).toBe('OverWindowCap');
     const alertId = alerts[0]?.id ?? '';
 
+    // The getter catches up with the chain (rollup lag over): remaining is
+    // now truly 0 — a fitting-amount observation would legitimately clear
+    // the boundary (regression below), so damping is asserted with a
+    // CONSISTENT exhausted window.
+    fakeChain.policyView.spentInWindow = 3n * CAP;
+
     // Three more cycles: ZERO act attempts (damped stand-downs, no gas).
     const executeAttemptsBefore = fakeChain.executed.length;
     for (let i = 0; i < 3; i++) await runOneCycle(id);
@@ -275,6 +281,34 @@ describe('D8 — boundary damping', () => {
     // normal flow resumes and the limit_hit alert auto-resolves.
     fakeChain.revertAllExecutes = false;
     fakeChain.policyView = { ...fakeChain.policyView, windowCap: 30n * CAP };
+    await runOneCycle(id);
+    await waitFor(() => fakeChain.executed.length === 1);
+    const resolved = await getAlert(db.pool, alertId);
+    expect(resolved?.status).toBe('resolved');
+  }, 240_000);
+
+  it('an ACTIVE OverWindowCap boundary clears when the current proposal fits the remaining window (no over-suppression)', async () => {
+    const id = await seedRuntimeAgent();
+    // Activate via pre-flight: window fully exhausted (remaining = 0).
+    fakeChain.policyView.spentInWindow = 3n * CAP;
+    fakeChain.policyView.windowStart = Math.floor(Date.now() / 1000) - 60;
+    mockModelDecision(SEND, 4);
+    await manager.start(id);
+    startedAgents.push(id);
+    await manager.settle(id);
+    await waitFor(async () => {
+      const { alerts } = await listAlerts(db.pool, OWNER, { kind: 'limit_hit', agentId: id });
+      return alerts.length === 1;
+    });
+    const { alerts } = await listAlerts(db.pool, OWNER, { kind: 'limit_hit', agentId: id });
+    const alertId = alerts[0]?.id ?? '';
+    expect(fakeChain.executed).toHaveLength(0);
+
+    // Allowance returns WITHOUT a policy change (same fingerprint — caps,
+    // window seconds, expiry, allowlist all unchanged) and BEFORE the window
+    // boundary passes: the fitting proposal itself must clear the boundary,
+    // resume normal flow, and resolve the limit_hit alert.
+    fakeChain.policyView = { ...fakeChain.policyView, spentInWindow: 0n };
     await runOneCycle(id);
     await waitFor(() => fakeChain.executed.length === 1);
     const resolved = await getAlert(db.pool, alertId);

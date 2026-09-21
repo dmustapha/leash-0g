@@ -5,6 +5,7 @@ import { createTestDb, seedAgent, type TestDb } from '../helpers/db.js';
 import { buildTestApp, testSettings, UPSTREAM, type TestApp } from '../helpers/app.js';
 import { generateGatewayToken, hashTokenSecret } from '../../src/crypto/token.js';
 import { listTraces, verifyAgentChain } from '../../src/trace/trace-store.js';
+import { listAlerts } from '../../src/alerts/store.js';
 
 let db: TestDb;
 let t: TestApp;
@@ -263,6 +264,16 @@ describe('gateway interception', () => {
     expect(consents).toHaveLength(1);
     expect(consents[0]?.decision).toBe('expired');
     expect(consents[0]?.decidedBy).toBe('system');
+    // Deny-by-default arm: the approval_required alert is resolved by the
+    // timeout, not left dangling in the inbox.
+    const { alerts } = await listAlerts(db.pool, '0x' + 'a1'.repeat(20), {
+      kind: 'approval_required',
+      agentId: a.id,
+    });
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]?.status).toBe('resolved');
+    expect(alerts[0]?.resolution).toBe('expired');
+    expect(alerts[0]?.resolvedVia).toBe('system');
     expect((await verifyAgentChain(db.pool, a.id)).ok).toBe(true);
   });
 

@@ -97,6 +97,7 @@ export class LeashRuntimeManager implements RuntimeManager {
         getCoordinator: () => this.coordinator,
         alerts: this.deps.alerts,
         boundaries: this.boundaries,
+        approvalTimeoutMs: this.deps.settings.approvalTimeoutMs,
         ...(this.deps.settings.fetchFn ? { fetchFn: this.deps.settings.fetchFn } : {}),
       },
       {
@@ -285,11 +286,15 @@ export class LeashRuntimeManager implements RuntimeManager {
       const agent = this.loops.get(agentId)?.agent ?? (await getAgentById(this.deps.pool, agentId));
       if (agent && this.deps.alerts) {
         const hourBucket = new Date().toISOString().slice(0, 13);
+        // L-02 (security gate): third-party error text is unbounded and
+        // runtime-influenced — truncate before it reaches any notification
+        // surface (the full message stays on the trace record).
+        const brief = message.length > 200 ? `${message.slice(0, 197)}...` : message;
         await this.deps.alerts.emit(agent.ownerAddr, {
           agentId,
           class: 'info',
           kind: 'runtime_error',
-          summary: `${agent.name} hit a runtime error: ${message}`,
+          summary: `${agent.name} hit a runtime error: ${brief}`,
           refs: { traceSeq: rec.seq },
           dedupKey: `runtime_error:${agentId}:${hourBucket}`,
         });
