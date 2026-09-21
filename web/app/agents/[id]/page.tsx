@@ -184,6 +184,8 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
       const tx = await setGuardianOnchain(provider, wallet.address as Address, detail.addresses.account, newGuardian);
       // Security-critical display (gate M-03): never show the change before it
       // is mined — wait for the receipt, then read the truth back from chain.
+      // (e2eMode short-circuits this — Playwright has no live chain; the
+      // never-show-unmined property is pinned by this non-e2e branch.)
       if (!config.e2eMode) {
         await waitForTx(tx as Hex);
         setGuardian(await readGuardian(detail.addresses.account));
