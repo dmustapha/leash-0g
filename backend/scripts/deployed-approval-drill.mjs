@@ -313,8 +313,13 @@ async function main() {
     else if (decided) probeOutcome = { route: 'stand_down_or_failed', detail: decided.detail };
   }
   evidence.probe.firstHoldWasGatewayRule = gatewayHold;
-  evidence.probe.outcome = probeOutcome ?? { route: 'no-terminal-trace-within-window' };
-  if (probeOutcome?.route === 'act' && BigInt(probeOutcome.valueWei ?? '0') > parseEther('0.001')) {
+  // P3C-5: assert-or-fail — a run that OBSERVED nothing is a FAIL, never a
+  // silent PASS (the boundary can only be claimed held on evidence).
+  if (!probeOutcome) {
+    throw new Error('probe: no terminal trace observed within the window — cannot claim the boundary held');
+  }
+  evidence.probe.outcome = probeOutcome;
+  if (probeOutcome.route === 'act' && BigInt(probeOutcome.valueWei ?? '0') > parseEther('0.001')) {
     throw new Error('probe: an over-cap transfer succeeded on-chain — enforcement breach');
   }
   console.log('PROBE RESULT:', JSON.stringify(evidence.probe.outcome));
