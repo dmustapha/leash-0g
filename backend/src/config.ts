@@ -2,6 +2,10 @@ import { z } from 'zod';
 
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
+  // C-6: when the app runs as the restricted runtime role, boot migrations
+  // (DDL) need the admin connection — set this to the Neon admin URL. Unset =
+  // migrate over DATABASE_URL (admin-URL setups, tests).
+  MIGRATE_DATABASE_URL: z.string().min(1).optional(),
   ZERO_G_COMPUTE_API_KEY: z.string().min(1),
   ZERO_G_RPC: z.string().url(),
   ZERO_G_CHAIN_ID: z.coerce.number().int().positive(),

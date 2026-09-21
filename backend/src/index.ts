@@ -18,6 +18,7 @@ import { ZeroGStorage } from './audit/storage.js';
 import { SessionChain } from './runtime/session-chain.js';
 import { LeashRuntimeManager } from './runtime/manager.js';
 import { backfillLegacyGuardian } from './store/agents.js';
+import { sweepOrphanedApprovals } from './approvals/sweep.js';
 
 /** Composition root: wire every module, migrate, listen, run the loops. */
 async function main(): Promise<void> {
@@ -37,15 +38,27 @@ async function main(): Promise<void> {
     throw new Error('guardian key must be distinct from the ops key (independent nonce lanes, C-1)');
   }
   const pool = createPool(cfg.DATABASE_URL);
-  const applied = await migrate(pool);
+  // C-6: DDL (migrations + checkpointer setup) runs on the ADMIN connection
+  // when the app itself is the restricted runtime role.
+  const migratePool = cfg.MIGRATE_DATABASE_URL ? createPool(cfg.MIGRATE_DATABASE_URL) : pool;
+  const applied = await migrate(migratePool);
   if (applied.length > 0) console.error(`migrations applied: ${applied.join(', ')}`);
   // S7: legacy Phase-1 rows get their real (ops-key) guardian recorded so the
   // revoke lane selection is explicit, not inferred from NULL.
   const backfilled = await backfillLegacyGuardian(pool, opsAddr);
   if (backfilled > 0) console.error(`legacy guardian_addr backfilled on ${backfilled} agent(s)`);
+  // C-6 startup sweep: orphaned pending approvals → expired, chain-visible.
+  const swept = await sweepOrphanedApprovals(pool);
+  if (swept.length > 0) console.error(`swept ${swept.length} orphaned pending approval(s)`);
 
   const checkpointer = new PostgresSaver(pool, undefined, { schema: 'public' });
-  await checkpointer.setup();
+  if (migratePool === pool) {
+    await checkpointer.setup();
+  } else {
+    // setup() is DDL — run it on the admin pool, then release it.
+    await new PostgresSaver(migratePool, undefined, { schema: 'public' }).setup();
+    await migratePool.end();
+  }
 
   const hub = new SseHub();
   const broker = new ApprovalBroker();

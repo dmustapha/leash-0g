@@ -3,6 +3,10 @@ import type { Json } from './crypto/canonical.js';
 export type Hex = `0x${string}`;
 
 /** Core trace types — spec §4, verbatim shape ('error' added: failed upstream forwards are chain-visible). */
+// RECORDED SPEC-DRIFT (C-6): 'error' was added during the Phase-1 gate fixes
+// (failed forwards / failed revokes are chain-visible) — it is not in the
+// Phase-1 spec's TraceKind list. Phase 2 adds the coordination kinds
+// 'delegate' | 'delegation_update' | 'config' per spec §4.
 export type TraceKind = 'inference' | 'action' | 'decision' | 'consent' | 'modify' | 'block' | 'revoke' | 'error';
 
 export interface TraceRecord {
