@@ -61,6 +61,11 @@ contract AgentRegistry {
         emit AgentRegistered(agentId, msg.sender, account, sessionKey);
     }
 
+    /// @dev RECORDED SPEC-DRIFT (C-6): register() is called by the LEASH ops
+    ///      key, so the registry "owner" of every agent — and therefore the
+    ///      setStatus authority — is ops, not the user wallet. The registry is
+    ///      explicitly NON-AUTHORITATIVE (the LeashAccount is the boundary);
+    ///      documented rather than changed, per the no-contract-changes rule.
     function setStatus(uint256 agentId, Status s) external onlyAgentOwner(agentId) {
         _agents[agentId].status = s;
         emit AgentStatusChanged(agentId, s);

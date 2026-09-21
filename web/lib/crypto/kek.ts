@@ -49,6 +49,10 @@ async function hkdfKeyFromSignature(signature: string): Promise<CryptoKey> {
     'deriveKey',
   ]);
   return crypto.subtle.deriveKey(
+    // RECORDED SPEC-DRIFT (C-6, do NOT change): the salt string still says
+    // "v1" while the signed KEK message is v2 (owner+chain bound). Changing
+    // the salt would brick every existing encrypted audit-key blob — the salt
+    // is a domain-separation constant here, not a version marker.
     { name: 'HKDF', hash: 'SHA-256', salt: enc.encode('leash-audit-kek-v1'), info: enc.encode('aes-gcm-256') },
     raw,
     { name: 'AES-GCM', length: 256 },

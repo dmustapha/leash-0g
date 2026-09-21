@@ -73,14 +73,18 @@ export default function CreatePage() {
         response,
         kekMode: blob.mode,
         downloadBackup: () =>
+          // C-6: encrypted blob ONLY — no plaintext privkey ever touches disk.
+          // Recovery = unwrap the blob with the same wallet signature (or
+          // passphrase) the audit page uses; losing BOTH loses the key, which
+          // is the self-sovereignty trade recorded in the spec.
           download(`leash-audit-key-${response.agentId}.json`, JSON.stringify(
             {
               warning:
-                'Keep this file private. auditPrivKey decrypts your entire agent audit trail.',
+                'Keep this file private. The encrypted blob plus your wallet signature (or passphrase) decrypts your entire agent audit trail.',
               agentId: response.agentId,
-              auditPrivKey: keypair.privKeyHex,
               auditPubKey: keypair.pubKeyHex,
               encryptedBlob: blob,
+              kekMode: blob.mode,
               createdAt: new Date().toISOString(),
             },
             null,

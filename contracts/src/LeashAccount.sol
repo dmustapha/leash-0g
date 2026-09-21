@@ -116,6 +116,10 @@ contract LeashAccount is ReentrancyGuard {
         if (msg.sender != sessionKey) revert NotSessionKey();
         if (revoked) revert AccountRevoked();
         Policy memory p = policy;
+        // RECORDED SEMANTIC (C-6): strict `>` — a transfer in the exact
+        // `expiresAt` second is still accepted (inclusive-at-expiry). Kept as
+        // deployed (no redeploy for a 1-second boundary); pinned by
+        // test_execute_atExactExpirySecond_isAcceptedInclusiveSemantics.
         if (block.timestamp > p.expiresAt) revert SessionExpired();
         if (to == address(0)) revert ZeroAddress();
         if (!allowlist[to]) revert NotAllowlisted(to);

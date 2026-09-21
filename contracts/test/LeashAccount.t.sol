@@ -155,6 +155,57 @@ contract LeashAccountTest is Test {
         acct.execute(dest, 0.1 ether, "");
     }
 
+    /// C-6 pin: the deployed strict-`>` check means a transfer in the EXACT
+    /// expiresAt second is still accepted (inclusive-at-expiry). Recorded
+    /// semantic — this test failing means the boundary silently changed.
+    function test_execute_atExactExpirySecond_isAcceptedInclusiveSemantics() public {
+        uint64 expiry = _policy().expiresAt;
+        vm.warp(expiry); // block.timestamp == expiresAt
+        vm.prank(session);
+        acct.execute(dest, 0.1 ether, "");
+        assertEq(dest.balance, 0.1 ether);
+        // one second later: default-deny
+        vm.warp(uint256(expiry) + 1);
+        vm.prank(session);
+        vm.expectRevert(LeashAccount.SessionExpired.selector);
+        acct.execute(dest, 0.1 ether, "");
+    }
+
+    /// Phase-2 spend-incapable preset (sentinel-A): zero caps + empty
+    /// allowlist ⇒ EVERY execute reverts — the account informs, never spends.
+    function test_spendIncapablePolicy_zeroCaps_anyExecuteReverts() public {
+        address[] memory emptyList = new address[](0);
+        LeashAccount incapable = new LeashAccount(
+            owner,
+            guardian,
+            session,
+            LeashAccount.Policy({
+                perTransferCap: 0, windowCap: 0, windowSeconds: 1 hours, expiresAt: uint64(block.timestamp + 30 days)
+            }),
+            emptyList,
+            DELAY
+        );
+        vm.deal(address(incapable), 1 ether);
+        vm.startPrank(session);
+        // off-allowlist (default-deny) — even 1 wei to anyone
+        vm.expectRevert(abi.encodeWithSelector(LeashAccount.NotAllowlisted.selector, dest));
+        incapable.execute(dest, 1, "");
+        vm.expectRevert(abi.encodeWithSelector(LeashAccount.NotAllowlisted.selector, rando));
+        incapable.execute(rando, 1, "");
+        vm.stopPrank();
+        // even after the owner allowlists a destination (timelocked add), the
+        // ZERO per-transfer cap still refuses every amount — layered default-deny
+        vm.startPrank(owner);
+        incapable.proposeAllowlist(dest);
+        vm.warp(block.timestamp + DELAY + 1);
+        incapable.applyAllowlist();
+        vm.stopPrank();
+        vm.prank(session);
+        vm.expectRevert(abi.encodeWithSelector(LeashAccount.OverPerTransferCap.selector, 1, 0));
+        incapable.execute(dest, 1, "");
+        assertEq(address(incapable).balance, 1 ether); // nothing ever moved
+    }
+
     function test_execute_revertsOverWindowCap() public {
         vm.startPrank(session);
         acct.execute(dest, 1 ether, "");
