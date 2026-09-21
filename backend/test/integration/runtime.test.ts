@@ -30,6 +30,8 @@ class FakeRuntimeChain implements RuntimeChain {
     expiresAt: Math.floor(Date.now() / 1000) + 86_400,
     allowlist: [BENEFICIARY],
     revoked: false,
+    spentInWindow: 0n,
+    windowStart: Math.floor(Date.now() / 1000),
   };
 
   async getBalance(addr: string): Promise<bigint> {

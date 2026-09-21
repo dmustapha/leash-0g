@@ -221,9 +221,11 @@ export async function readPolicyView(
   allowlistCandidates: string[],
 ): Promise<PolicyView> {
   const address = accountAddr as Hex;
-  const [policy, revoked] = await Promise.all([
+  const [policy, revoked, spentInWindow, windowStart] = await Promise.all([
     client.readContract({ address, abi: leashAccountAbi, functionName: 'policy' }),
     client.readContract({ address, abi: leashAccountAbi, functionName: 'revoked' }),
+    client.readContract({ address, abi: leashAccountAbi, functionName: 'spentInWindow' }),
+    client.readContract({ address, abi: leashAccountAbi, functionName: 'windowStart' }),
   ]);
   const allowlist: string[] = [];
   for (const candidate of allowlistCandidates) {
@@ -242,5 +244,7 @@ export async function readPolicyView(
     expiresAt: Number(policy[3]),
     allowlist,
     revoked,
+    spentInWindow,
+    windowStart: Number(windowStart),
   };
 }
