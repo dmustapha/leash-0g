@@ -9,7 +9,7 @@ import { makeApi } from '@/lib/api';
 import { config } from '@/lib/config';
 import { useOwnerWallet } from '@/lib/owner-wallet';
 import { connectSse } from '@/lib/sse';
-import type { AgentDetail, StreamEvent } from '@/lib/types';
+import type { AgentDetail, GatewayRule, StreamEvent } from '@/lib/types';
 import { weiToOg } from '@/lib/format';
 import {
   applyAllowlistOnchain,
@@ -17,10 +17,12 @@ import {
   applyWithdrawOnchain,
   proposePolicyOnchain,
   readAccountBalance,
+  readGuardian,
   readPendingEtas,
   rearmOnchain,
   revokeOnchain,
   sendNativeOnchain,
+  setGuardianOnchain,
   tightenPolicyOnchain,
   type PendingEtas,
 } from '@/lib/chain';
@@ -31,6 +33,8 @@ import { ApprovalCard } from '@/components/cockpit/ApprovalCard';
 import { PolicyPanel } from '@/components/cockpit/PolicyPanel';
 import { RevokeButton } from '@/components/cockpit/RevokeButton';
 import { AgentControls } from '@/components/cockpit/AgentControls';
+import { GuardianPanel } from '@/components/cockpit/GuardianPanel';
+import { RulesEditor } from '@/components/cockpit/RulesEditor';
 
 type Approval = Extract<StreamEvent, { type: 'approval' }>;
 type Connection = 'connecting' | 'open' | 'reconnecting' | 'closed';
@@ -46,6 +50,8 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [connection, setConnection] = useState<Connection>('connecting');
   const [pending, setPending] = useState<PendingEtas>({ policy: 0, allowlist: 0, withdraw: 0 });
+  const [chainVerified, setChainVerified] = useState<boolean | undefined>(undefined);
+  const [guardian, setGuardian] = useState<Address | undefined>(undefined);
   const seqRef = useRef(0);
 
   const refresh = useCallback(async () => {
@@ -53,13 +59,26 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
       const d = await api.getAgent(id);
       setDetail(d);
       setLoadError(null);
-      // Timelock queues live on-chain, not in the backend. Skipped in E2E (no live chain);
-      // a transient RPC failure keeps the last known etas rather than blanking the cards.
+      // Server-verified pill (Gate-② parity): LEASH's own integrity check of the trace
+      // chain, surfaced honestly next to the status. Tolerate a failed fetch silently —
+      // the pill simply stays absent.
+      try {
+        setChainVerified((await api.getTraces(id)).chainVerified);
+      } catch {
+        /* pill stays absent */
+      }
+      // Timelock queues + guardian live on-chain, not in the backend. Skipped in E2E (no
+      // live chain); a transient RPC failure keeps the last known values.
       if (!config.e2eMode) {
         try {
           setPending(await readPendingEtas(d.addresses.account));
         } catch {
           /* keep last known pending etas */
+        }
+        try {
+          setGuardian(await readGuardian(d.addresses.account));
+        } catch {
+          /* keep last known guardian */
         }
       }
     } catch (e) {
@@ -91,6 +110,8 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
           );
         } else if (ev.type === 'status') {
           setDetail((prev) => (prev ? { ...prev, status: ev.status } : prev));
+        } else if (ev.type === 'delegation') {
+          setItems((prev) => [...prev.slice(-199), { kind: 'delegation', event: ev, id: nid }]);
         }
       },
     });
@@ -155,6 +176,25 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
     return tx;
   }, [detail, wallet, refresh]);
 
+  const setGuardianTx = useCallback(
+    async (newGuardian: Address) => {
+      if (!detail || !wallet.address) throw new Error('Connect your wallet first.');
+      const provider = await wallet.getProvider();
+      const tx = await setGuardianOnchain(provider, wallet.address as Address, detail.addresses.account, newGuardian);
+      setGuardian(newGuardian);
+      return tx;
+    },
+    [detail, wallet],
+  );
+
+  const saveRules = useCallback(
+    async (rules: GatewayRule[]) => {
+      await api.patchRules(id, rules);
+      await refresh();
+    },
+    [api, id, refresh],
+  );
+
   const fundAgent = useCallback(
     async (valueWei: bigint) => {
       if (!detail || !wallet.address) throw new Error('Connect your wallet first.');
@@ -206,7 +246,7 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
     >
       {detail ? (
         <>
-          <StatusBar detail={detail} />
+          <StatusBar detail={detail} chainVerified={chainVerified} />
           <AgentControls
             status={detail.status}
             onStart={async () => {
@@ -258,6 +298,14 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
         <div style={{ display: 'grid', gap: '1rem' }}>
           {detail ? (
             <PolicyPanel detail={detail} onSubmitPolicy={submitPolicy} pending={pending} onApply={applyPending} />
+          ) : null}
+          {detail ? <GuardianPanel guardian={guardian} onSetGuardian={setGuardianTx} /> : null}
+          {detail ? (
+            <RulesEditor
+              key={JSON.stringify(detail.agent?.gatewayRules ?? [])}
+              rules={detail.agent?.gatewayRules ?? []}
+              onSave={saveRules}
+            />
           ) : null}
           <RevokeButton
             revoked={detail?.status === 'revoked'}

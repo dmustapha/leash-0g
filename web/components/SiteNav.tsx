@@ -33,6 +33,7 @@ export default function SiteNav() {
 
   const links: { href: string; label: string }[] = [
     { href: '/create', label: 'Create agent' },
+    { href: '/links', label: 'Links' },
     ...(agentId
       ? [
           { href: `/agents/${agentId}`, label: 'Cockpit' },

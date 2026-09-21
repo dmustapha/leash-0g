@@ -1,8 +1,8 @@
 // File: web/e2e/a11y.spec.ts
-// axe accessibility checks on all three pages: no serious/critical violations.
+// axe accessibility checks on every page (Phase 1 + Phase 2): no serious/critical violations.
 import AxeBuilder from '@axe-core/playwright';
 import { expect, test, type Page } from '@playwright/test';
-import { freshState, installMockApi } from './mocks';
+import { freshState, installMockApi, mockAgent, type MockState } from './mocks';
 
 async function expectNoSeriousViolations(page: Page) {
   const results = await new AxeBuilder({ page }).analyze();
@@ -33,5 +33,54 @@ test('audit page has no serious/critical a11y violations', async ({ page }) => {
   await installMockApi(page, freshState());
   await page.goto('/agents/agent-1/audit');
   await expect(page.getByRole('heading', { name: 'Audit trail' })).toBeVisible();
+  await expectNoSeriousViolations(page);
+});
+
+function pairState(): MockState {
+  const state = freshState();
+  state.agents.push(mockAgent('agent-2', 'Executor'));
+  state.links.push({
+    id: 'link-1',
+    ownerAddr: '0x3333333333333333333333333333333333333333',
+    fromAgentId: 'agent-1',
+    toAgentId: 'agent-2',
+    mode: 'supervised',
+    status: 'active',
+    createdAt: new Date().toISOString(),
+    delegationCount: 1,
+  });
+  state.delegations.push({
+    id: 'del-1',
+    linkId: 'link-1',
+    fromAgentId: 'agent-1',
+    toAgentId: 'agent-2',
+    kind: 'transfer.request',
+    payload: {},
+    status: 'pending',
+    createdAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 600_000).toISOString(),
+  });
+  return state;
+}
+
+test('home fleet list has no serious/critical a11y violations', async ({ page }) => {
+  await installMockApi(page, pairState());
+  await page.goto('/');
+  await expect(page.getByTestId('fleet-list')).toBeVisible();
+  await expectNoSeriousViolations(page);
+});
+
+test('links page has no serious/critical a11y violations', async ({ page }) => {
+  await installMockApi(page, pairState());
+  await page.goto('/links');
+  await expect(page.getByTestId('link-row-link-1')).toBeVisible();
+  await expectNoSeriousViolations(page);
+});
+
+test('pair view has no serious/critical a11y violations', async ({ page }) => {
+  await installMockApi(page, pairState());
+  await page.goto('/links/link-1');
+  await expect(page.getByTestId('delegation-timeline')).toBeVisible();
+  await expect(page.getByTestId('delegation-del-1')).toBeVisible();
   await expectNoSeriousViolations(page);
 });

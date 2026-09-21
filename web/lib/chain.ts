@@ -134,6 +134,28 @@ export async function readPendingEtas(account: Address): Promise<PendingEtas> {
   return { policy: Number(policy), allowlist: Number(allowlist), withdraw: Number(withdraw) };
 }
 
+/** Current guardian address on the account; the zero address means "no guardian". */
+export async function readGuardian(account: Address): Promise<Address> {
+  return (await publicClient.readContract({
+    address: account,
+    abi: LEASH_ACCOUNT_ABI,
+    functionName: 'guardian',
+  })) as Address;
+}
+
+export const ZERO_ADDRESS = '0x0000000000000000000000000000000000000000' as Address;
+
+/** Owner-wallet setGuardian tx. Pass ZERO_ADDRESS to remove the guardian entirely —
+ *  the escape hatch: after that, only the owner wallet can revoke. */
+export function setGuardianOnchain(
+  provider: EIP1193Provider,
+  owner: Address,
+  account: Address,
+  newGuardian: Address,
+) {
+  return writeAccount(provider, owner, account, 'setGuardian', [newGuardian]);
+}
+
 /** Plain native transfer from the owner wallet — used to fund the agent's account. */
 export async function sendNativeOnchain(
   provider: EIP1193Provider,

@@ -470,10 +470,13 @@ describe('goal-union create route (spec §3c compatibility)', () => {
       goal: { beneficiary: BENEFICIARY, targetBalanceWei: '1', topUpWei: '1' },
     });
     expect(badTreasury.status).toBe(400);
-    // sentinel still validates topUp ≤ cap on its own shape
-    const badSentinel = await create({
+    // Sentinel is NOT bound by topUp ≤ its own cap (spec §3c): the FE preset ships
+    // perTransferCap 0 with a meaningful topUpWei — the amount it ASKS the executor
+    // to send. The EXECUTOR's own caps bound the actual payment.
+    const sentinelAboveOwnCap = await create({
       ...base,
       allowlist: [],
+      policy: { ...base.policy, perTransferCapWei: '0', windowCapWei: '0' },
       goal: {
         type: 'sentinel',
         beneficiary: BENEFICIARY,
@@ -481,6 +484,6 @@ describe('goal-union create route (spec §3c compatibility)', () => {
         topUpWei: (2n * CAP).toString(),
       },
     });
-    expect(badSentinel.status).toBe(400);
+    expect(sentinelAboveOwnCap.status).toBe(201);
   });
 });

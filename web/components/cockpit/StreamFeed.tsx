@@ -11,7 +11,8 @@ import type { Hex } from '@/lib/types';
 
 export type FeedItem =
   | { kind: 'reasoning'; text: string; id: string }
-  | { kind: 'trace'; event: Extract<StreamEvent, { type: 'trace' }>; id: string };
+  | { kind: 'trace'; event: Extract<StreamEvent, { type: 'trace' }>; id: string }
+  | { kind: 'delegation'; event: Extract<StreamEvent, { type: 'delegation' }>; id: string };
 
 export function StreamFeed({
   items,
@@ -55,6 +56,15 @@ export function StreamFeed({
               <p key={item.id} className="code" style={{ color: 'var(--color-ink-dim)' }}>
                 {item.text}
               </p>
+            ) : item.kind === 'delegation' ? (
+              <div key={item.id} className="panel" style={{ padding: '0.6rem 0.8rem', display: 'flex', gap: '0.6rem', alignItems: 'baseline', flexWrap: 'wrap' }}>
+                <span className={`pill ${item.event.status === 'completed' ? 'pill-allow' : item.event.status === 'failed' || item.event.status === 'declined' ? 'pill-deny' : 'pill-accent'}`}>
+                  handoff
+                </span>
+                <span style={{ fontSize: '0.86rem' }}>
+                  {item.event.direction === 'outbound' ? 'asked another agent' : 'was asked'} · {item.event.kind} · {item.event.status.replace('_', ' ')}
+                </span>
+              </div>
             ) : (
               <div key={item.id} className="panel" style={{ padding: '0.6rem 0.8rem', display: 'flex', gap: '0.6rem', alignItems: 'baseline', flexWrap: 'wrap' }}>
                 <span className={`pill ${item.event.kind === 'block' || item.event.kind === 'revoke' || item.event.kind === 'error' ? 'pill-deny' : item.event.kind === 'action' ? 'pill-allow' : 'pill-idle'}`}>
