@@ -37,8 +37,14 @@ export function evaluateRules(rules: GatewayRule[], body: Json): InterceptOutcom
   for (const rule of rules) {
     if (!rule.match) continue;
     const needle = rule.match.toLowerCase();
+    // Needles containing `"`, `\`, or control chars appear JSON-ESCAPED in the
+    // serialized body — match the escaped spelling too, or a quoted phrase
+    // hidden in a tool description slips the backstop (final-gate finding).
+    const escapedNeedle = JSON.stringify(rule.match).slice(1, -1).toLowerCase();
     const hit =
-      messages.some((m) => messageText(m).toLowerCase().includes(needle)) || serialized.includes(needle);
+      messages.some((m) => messageText(m).toLowerCase().includes(needle)) ||
+      serialized.includes(needle) ||
+      serialized.includes(escapedNeedle);
     if (!hit) continue;
     if (rule.action === 'block') return { action: 'block', rule, nonTextPartTypes };
     if (rule.action === 'require_approval') return { action: 'require_approval', rule, nonTextPartTypes };
@@ -51,9 +57,11 @@ export function evaluateRules(rules: GatewayRule[], body: Json): InterceptOutcom
       // (fail-closed), traced as such. Survival uses the SAME predicate as
       // matching so nothing that matched can slip through unrewritten.
       const effectiveMessages = extractMessages(effective);
+      const effectiveSerialized = JSON.stringify(effective ?? null).toLowerCase();
       const survives =
         effectiveMessages.some((m) => messageText(m).toLowerCase().includes(needle)) ||
-        JSON.stringify(effective ?? null).toLowerCase().includes(needle);
+        effectiveSerialized.includes(needle) ||
+        effectiveSerialized.includes(escapedNeedle);
       if (survives) {
         return { action: 'block', rule, escalated: 'modify_unrewritable', nonTextPartTypes };
       }
