@@ -105,11 +105,51 @@ export interface AgentRow {
   createdAt: string;
 }
 
-export interface AgentGoal {
+/**
+ * Role/goal config (spec §3b): a runtime-discriminated union interpreted ONLY
+ * by the runtime layer — contracts, APIs, and coordination tables never see
+ * the discriminator semantics (generality guard). It lives in agents.goal
+ * JSONB. Phase-1 rows carry NO `type` field: missing type ⇒ treasury, so the
+ * Phase-1 autonomous mode stays fully supported for solo agents.
+ */
+export interface TreasuryGoal {
+  type?: 'treasury' | undefined;
   beneficiary: string;
   targetBalanceWei: string;
   topUpWei: string;
   model?: string | undefined;
+}
+
+/**
+ * Sentinel (specimen A): watches the beneficiary balance and DELEGATES
+ * `transfer.request` envelopes instead of acting — its account is deployed
+ * spend-incapable, and the runtime never routes it to `act`.
+ */
+export interface SentinelGoal {
+  type: 'sentinel';
+  beneficiary: string;
+  targetBalanceWei: string;
+  topUpWei: string;
+  model?: string | undefined;
+}
+
+/**
+ * Executor (specimen B): INBOUND-DRIVEN ONLY — the autonomous top-up decide
+ * is disabled (closes the double-actor duplicate-spend hazard, spec §1a); it
+ * only processes inbound delegations against its OWN policy.
+ */
+export interface ExecutorGoal {
+  type: 'executor';
+  model?: string | undefined;
+}
+
+export type AgentGoal = TreasuryGoal | SentinelGoal | ExecutorGoal;
+
+export type AgentRole = 'treasury' | 'sentinel' | 'executor';
+
+/** Missing discriminator ⇒ treasury (Phase-1 rows predate the union). */
+export function goalRole(goal: AgentGoal): AgentRole {
+  return goal.type ?? 'treasury';
 }
 
 /**

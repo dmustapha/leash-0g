@@ -105,6 +105,9 @@ async function main(): Promise<void> {
       delegationPayloadMaxBytes: cfg.DELEGATION_PAYLOAD_MAX_BYTES,
     },
   });
+  // Late-bind (spec §3b): the runtime's delegate route + inbound channel need
+  // the coordinator, which needed the runtime's nudge — wired back here.
+  runtime.setCoordinator(coordinator);
 
   const appDeps = {
     pool,

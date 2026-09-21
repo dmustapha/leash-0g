@@ -71,6 +71,34 @@ const linkUpdateSchema = z.union([
 
 const revokeBatchSchema = z.object({ agentIds: z.array(z.string().uuid()).min(1).max(16) });
 
+// Role/goal union (spec §3b): the discriminator is interpreted ONLY by the
+// runtime layer — this schema just admits the three shapes. Phase-1 FE bodies
+// carry NO `type` and must keep working unchanged, so `treasury` (with its
+// optional literal) goes LAST in the union; the explicit literals reject
+// mismatched types, so ordering is safe.
+const treasuryGoalSchema = z.object({
+  type: z.literal('treasury').optional(),
+  beneficiary: addressSchema,
+  targetBalanceWei: weiSchema,
+  topUpWei: weiSchema,
+  model: z.string().min(1).optional(),
+});
+
+const sentinelGoalSchema = z.object({
+  type: z.literal('sentinel'),
+  beneficiary: addressSchema,
+  targetBalanceWei: weiSchema,
+  topUpWei: weiSchema,
+  model: z.string().min(1).optional(),
+});
+
+const executorGoalSchema = z.object({
+  type: z.literal('executor'),
+  model: z.string().min(1).optional(),
+});
+
+const goalSchema = z.union([sentinelGoalSchema, executorGoalSchema, treasuryGoalSchema]);
+
 const createAgentSchema = z.object({
   name: z.string().min(1).max(120),
   auditPubKey: z.string().regex(/^(0x)?0[23][0-9a-fA-F]{64}$|^(0x)?04[0-9a-fA-F]{128}$/),
@@ -80,21 +108,34 @@ const createAgentSchema = z.object({
     windowSeconds: z.number().int().positive(),
     expiresAt: z.number().int().positive(),
   }),
-  allowlist: z.array(addressSchema).min(1),
-  goal: z.object({
-    beneficiary: addressSchema,
-    targetBalanceWei: weiSchema,
-    topUpWei: weiSchema,
-    model: z.string().min(1).optional(),
-  }),
+  // min(1) enforced per role below: the spend-incapable sentinel preset and
+  // the inbound-driven executor legitimately create with an EMPTY allowlist
+  // (spec §3c) — treasury keeps the Phase-1 requirement unchanged.
+  allowlist: z.array(addressSchema),
+  goal: goalSchema,
   gatewayRules: z.array(gatewayRuleSchema).optional(),
   /** Opaque KEK-wrapped audit privkey blob, encrypted in the owner's browser. */
   encryptedAuditKey: z.string().min(1).max(20_000).optional(),
-}).refine((v) => BigInt(v.goal.topUpWei) <= BigInt(v.policy.perTransferCapWei), {
+}).superRefine((v, issues) => {
+  const role = v.goal.type ?? 'treasury';
+  if (role === 'treasury' && v.allowlist.length < 1) {
+    issues.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'allowlist must not be empty for a treasury agent',
+      path: ['allowlist'],
+    });
+  }
   // FE validates this too, but the API is the enforcement boundary: a top-up
   // chunk above the per-transfer cap would push every cycle into approval.
-  message: 'goal.topUpWei must not exceed policy.perTransferCapWei',
-  path: ['goal', 'topUpWei'],
+  // Applies to treasury AND sentinel (both carry amounts and validate their
+  // own shape); the executor goal has no beneficiary/amounts.
+  if (v.goal.type !== 'executor' && BigInt(v.goal.topUpWei) > BigInt(v.policy.perTransferCapWei)) {
+    issues.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'goal.topUpWei must not exceed policy.perTransferCapWei',
+      path: ['goal', 'topUpWei'],
+    });
+  }
 });
 
 const decisionSchema = z.object({
@@ -291,7 +332,12 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     const agent = await requireOwnedAgent(req, res);
     if (!agent) return;
     const [policy, accountBalance] = await Promise.all([
-      deps.chain.getPolicyView(agent.accountAddr, [agent.goal.beneficiary]),
+      // Executor goals carry no beneficiary (spec §3b) — no allowlist
+      // candidate to resolve; the view still returns caps/expiry/revoked.
+      deps.chain.getPolicyView(
+        agent.accountAddr,
+        agent.goal.type !== 'executor' ? [agent.goal.beneficiary] : [],
+      ),
       deps.chain.getBalance(agent.accountAddr),
     ]);
     // Shape = FE AgentDetail (web/lib/types.ts): running|paused|revoked, wei-string

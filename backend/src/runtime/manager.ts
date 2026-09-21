@@ -11,8 +11,11 @@ import { decryptSecret } from '../crypto/keycrypt.js';
 import { appendTrace } from '../trace/trace-store.js';
 import { traceEvent } from '../sse/events.js';
 import type { AgentRow } from '../types.js';
+import type { DelegationCoordinator } from '../coordination/coordinator.js';
+import { listActivatablePendingFor } from '../coordination/store.js';
 import type { RuntimeChain } from './session-chain.js';
 import { buildTreasuryGraph, type TreasuryGraph } from './treasury-graph.js';
+import type { InboundDelegationInput } from './prompt.js';
 
 export interface RuntimeSettings {
   keyEncryptionSecret: string;
@@ -56,7 +59,20 @@ interface Loop {
 export class LeashRuntimeManager implements RuntimeManager {
   private readonly loops = new Map<string, Loop>();
 
+  /**
+   * Late-bound (spec §3b): the coordinator is constructed AFTER the manager
+   * (it needs the manager's nudge), so the composition root wires it back in
+   * via setCoordinator(). Graphs capture a getter, never the instance —
+   * loops started before binding still see it. Null = coordination-free
+   * setup: the inbound channel is idle and the delegate route fails traced.
+   */
+  private coordinator: DelegationCoordinator | null = null;
+
   constructor(private readonly deps: RuntimeManagerDeps) {}
+
+  setCoordinator(coordinator: DelegationCoordinator): void {
+    this.coordinator = coordinator;
+  }
 
   async start(agentId: string): Promise<void> {
     if (this.loops.has(agentId)) return;
@@ -71,12 +87,14 @@ export class LeashRuntimeManager implements RuntimeManager {
         chain: this.deps.chain,
         gatewayUrl: this.deps.settings.gatewayUrl,
         defaultModel: this.deps.settings.defaultModel,
+        getCoordinator: () => this.coordinator,
         ...(this.deps.settings.fetchFn ? { fetchFn: this.deps.settings.fetchFn } : {}),
       },
       {
         agentId: agent.id,
         accountAddr: agent.accountAddr,
         goal: agent.goal,
+        agentRow: agent,
         sessionPrivateKey: decryptSecret(agent.sessionKeyEnc, keyEncryptionSecret),
         gatewayToken: decryptSecret(agent.gatewayTokenEnc, keyEncryptionSecret),
       },
@@ -161,8 +179,11 @@ export class LeashRuntimeManager implements RuntimeManager {
       await this.halt(loop.agent.id, 'agent no longer active');
       return;
     }
+    // Inbound-delegation input channel (spec §3b): this cycle consumes at most
+    // ONE activated envelope addressed to this agent, as sensed input.
+    const inbound = await this.pickUpInbound(loop.agent.id);
     const config = { configurable: { thread_id: `${loop.agent.id}:${randomUUID()}` } };
-    await loop.graph.invoke({}, config);
+    await loop.graph.invoke(inbound ? { inboundDelegation: inbound } : {}, config);
 
     const snapshot = await loop.graph.getState(config);
     // 0.2.x: pending interrupts live on tasks[].interrupts, NOT result.__interrupt__ (PHASE-0 §1b).
@@ -199,6 +220,27 @@ export class LeashRuntimeManager implements RuntimeManager {
     const resolved: ApprovalDecision =
       decision === 'timeout' ? { decision: 'deny', reason: 'approval timed out' } : decision;
     await loop.graph.invoke(new Command({ resume: resolved }), config);
+  }
+
+  /**
+   * Fetch ONE activatable pending delegation (FIFO; expiry refused at the
+   * pickup query — point A of three, spec §3b) and accept it BEFORE reasoning:
+   * markAccepted is the single serialized transition writer, so a second
+   * racing cycle gets null and skips — double-processing is impossible.
+   */
+  private async pickUpInbound(agentId: string): Promise<InboundDelegationInput | null> {
+    const coordinator = this.coordinator;
+    if (!coordinator) return null;
+    const [candidate] = await listActivatablePendingFor(this.deps.pool, agentId, 1);
+    if (!candidate) return null;
+    const accepted = await coordinator.markAccepted(candidate.id);
+    if (!accepted) return null; // raced — another writer settled the row first
+    return {
+      delegationId: accepted.id,
+      kind: accepted.kind,
+      payload: accepted.payload,
+      fromAgentId: accepted.fromAgentId,
+    };
   }
 
   /** C-3: the SHARED register→check→wait→recheck rendezvous (approvals/rendezvous.ts). */
