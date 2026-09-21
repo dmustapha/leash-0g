@@ -42,6 +42,7 @@ describe('P3C-6(ii) — decodeLeashError over all 17 errors', () => {
 
   for (const fixture of FIXTURES) {
     it(`decodes ${fixture.name} from real revert data with plain-language copy`, () => {
+      // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-assertion -- tsc needs the widening; eslint's project service disagrees
       const data = encodeErrorResult({
         abi: errorAbi,
         errorName: fixture.name,

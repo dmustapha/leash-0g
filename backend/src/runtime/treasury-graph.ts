@@ -267,6 +267,31 @@ export function buildTreasuryGraph(
           route: 'stand_down',
         };
       }
+      // Boundary TOUCHED (00 §1a): the goal wants a transfer but the window
+      // is exhausted — the leash is binding whether or not the model politely
+      // stands down on its own. One limit_hit tells the owner; damping holds
+      // until the window resets or policy changes. (windowCap 0 = the
+      // spend-incapable shape — never a window boundary.)
+      const mode = classifyCycle(ctx.goal, state.inboundDelegation);
+      const wantsTransfer =
+        mode.mode === 'inbound_transfer' ||
+        (mode.mode === 'autonomous' &&
+          BigInt(state.beneficiaryBalanceWei) < BigInt(mode.goal.targetBalanceWei));
+      if (
+        wantsTransfer &&
+        BigInt(state.policy.windowCapWei) > 0n &&
+        BigInt(state.policy.remainingWindowWei) === 0n
+      ) {
+        await activateBoundary(state, 'OverWindowCap', state.policy.windowResetsAtUnix);
+        return {
+          decision: {
+            action: 'stand_down',
+            amountWei: '0',
+            reason: 'spending window exhausted — standing down until it resets',
+          },
+          route: 'stand_down',
+        };
+      }
       // Pre-flight window detection: a send provably over the remaining
       // window allowance is doomed REGARDLESS of owner approval — activate
       // the boundary without burning gas on the revert.
