@@ -367,3 +367,16 @@ export async function listOpenByAgent(pool: Pool, agentId: string): Promise<Dele
   );
   return res.rows.map(mapDelegation);
 }
+
+/**
+ * Boot-only (gate finding): 'accepted' rows are in-flight cycles — after a
+ * crash/restart that cycle is gone forever (thread ids are per-cycle; pickup
+ * takes only 'pending'), so a surviving accepted row would dangle as a
+ * zombie. Fail them terminally; NEVER run this while loops are live.
+ */
+export async function listOrphanedAccepted(pool: Pool): Promise<Delegation[]> {
+  const res = await pool.query<DbDelegationRow>(
+    `SELECT * FROM delegations WHERE status = 'accepted' ORDER BY created_at ASC`,
+  );
+  return res.rows.map(mapDelegation);
+}

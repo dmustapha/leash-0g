@@ -12,9 +12,11 @@ import {
   findActiveLinkFrom,
   listCancellableByLink,
   listOpenByAgent,
+  listOrphanedAccepted,
   sweepExpiredDelegations,
   transitionDelegation,
 } from './store.js';
+import { expireApproval } from '../store/approvals.js';
 
 /**
  * Delegation coordinator (spec §3b "Coordination layer"). Owns the envelope
@@ -380,8 +382,42 @@ async function sweepAndTrace(pool: Pool, hub: SseHub): Promise<Delegation[]> {
   const swept = await sweepExpiredDelegations(pool);
   for (const d of swept) {
     await traceDelegationUpdate(pool, hub, d.fromAgentId, d, `delegation '${d.kind}' expired`);
+    // Gate finding: a supervised envelope expiring mid-approval leaves its
+    // approval card dangling forever (nobody will ever deliver a decision to
+    // a terminal delegation). Expire the linked approval chain-visibly, the
+    // same shape the approval-timeout paths use.
+    await expireLinkedApprovals(pool, hub, d);
   }
   return swept;
+}
+
+/** Expire pending approval rows that gate a now-terminal delegation. */
+async function expireLinkedApprovals(pool: Pool, hub: SseHub, d: Delegation): Promise<void> {
+  const rows = await pool.query<{ id: string; request_ref: Json }>(
+    `SELECT id, request_ref FROM approvals
+     WHERE agent_id = $1 AND state = 'pending'
+       AND request_ref->>'type' = 'delegation' AND request_ref->>'delegationId' = $2`,
+    [d.fromAgentId, d.id],
+  );
+  for (const row of rows.rows) {
+    const expired = await expireApproval(pool, row.id);
+    if (!expired) continue; // raced with a decision — that path already traced consent
+    const consent = await appendTrace(pool, {
+      agentId: d.fromAgentId,
+      kind: 'consent',
+      approvalId: row.id,
+      decision: 'expired',
+      decidedBy: 'system',
+      originalRequest: row.request_ref,
+      detail: { reason: 'supervised delegation expired before a decision' },
+    });
+    hub.emit(d.fromAgentId, 'trace', traceEvent(consent));
+    hub.emit(d.fromAgentId, 'approval_decided', {
+      type: 'approval_decided',
+      approvalId: row.id,
+      decision: 'expired',
+    });
+  }
 }
 
 /**
@@ -391,5 +427,21 @@ async function sweepAndTrace(pool: Pool, hub: SseHub): Promise<Delegation[]> {
  * sweepOrphanedApprovals in the composition root.
  */
 export async function runBootSweep(pool: Pool, hub: SseHub): Promise<Delegation[]> {
-  return sweepAndTrace(pool, hub);
+  const expired = await sweepAndTrace(pool, hub);
+  // Gate finding: an 'accepted' row is an in-flight cycle; after a restart
+  // that cycle no longer exists (per-cycle thread ids; pickup takes only
+  // 'pending') — without this, the envelope dangles as a zombie forever.
+  // BOOT ONLY: while loops are live, accepted rows are legitimately in flight.
+  const orphans = await listOrphanedAccepted(pool);
+  const failed: Delegation[] = [];
+  for (const row of orphans) {
+    const d = await transitionDelegation(pool, row.id, ['accepted'], 'failed', {
+      result: { error: 'orphaned by restart' },
+      decidedAt: true,
+    });
+    if (!d) continue;
+    await traceDelegationUpdate(pool, hub, d.toAgentId, d, `delegation '${d.kind}' failed: orphaned by restart`);
+    failed.push(d);
+  }
+  return [...expired, ...failed];
 }

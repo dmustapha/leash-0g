@@ -3,7 +3,7 @@ import type { GatewayRule } from '../types.js';
 
 export type InterceptOutcome = (
   | { action: 'observe' }
-  | { action: 'block'; rule: GatewayRule }
+  | { action: 'block'; rule: GatewayRule; escalated?: 'modify_unrewritable' }
   | { action: 'modify'; rule: GatewayRule; effective: Json }
   | { action: 'require_approval'; rule: GatewayRule }
 ) & {
@@ -28,15 +28,36 @@ interface ChatMessage {
 export function evaluateRules(rules: GatewayRule[], body: Json): InterceptOutcome {
   const messages = extractMessages(body);
   const nonTextPartTypes = collectNonTextPartTypes(messages);
+  // Security-gate M-01: the model treats MORE than messages[].content as
+  // instructions (tools[].function.description, tool_calls arguments, name
+  // fields…). The serialized whole body is the conservative backstop channel:
+  // a needle anywhere in the request matches. Conservative = fail-closed —
+  // a false positive costs one held/blocked request, never a bypass.
+  const serialized = JSON.stringify(body ?? null).toLowerCase();
   for (const rule of rules) {
     if (!rule.match) continue;
     const needle = rule.match.toLowerCase();
-    const hit = messages.some((m) => messageText(m).toLowerCase().includes(needle));
+    const hit =
+      messages.some((m) => messageText(m).toLowerCase().includes(needle)) || serialized.includes(needle);
     if (!hit) continue;
     if (rule.action === 'block') return { action: 'block', rule, nonTextPartTypes };
     if (rule.action === 'require_approval') return { action: 'require_approval', rule, nonTextPartTypes };
     if (rule.action === 'modify') {
-      return { action: 'modify', rule, effective: applyModify(body, rule), nonTextPartTypes };
+      const effective = applyModify(body, rule);
+      // A replacement can only rewrite message TEXT. If the needle survives
+      // anywhere in the effective request — a non-message channel, or text
+      // split around a non-text part (still matched via concatenation but
+      // not mergeable) — forwarding would defeat the rule: escalate to block
+      // (fail-closed), traced as such. Survival uses the SAME predicate as
+      // matching so nothing that matched can slip through unrewritten.
+      const effectiveMessages = extractMessages(effective);
+      const survives =
+        effectiveMessages.some((m) => messageText(m).toLowerCase().includes(needle)) ||
+        JSON.stringify(effective ?? null).toLowerCase().includes(needle);
+      if (survives) {
+        return { action: 'block', rule, escalated: 'modify_unrewritable', nonTextPartTypes };
+      }
+      return { action: 'modify', rule, effective, nonTextPartTypes };
     }
   }
   return { action: 'observe', nonTextPartTypes };

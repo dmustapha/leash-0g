@@ -35,3 +35,27 @@ export function generateAuditKeypair(): AuditKeypair {
 export function decryptAuditCiphertext(privKeyHex: string, ciphertext: Uint8Array): Uint8Array {
   return new Uint8Array(eciesDecrypt(hexToBytes(privKeyHex) as Buffer | Uint8Array, ciphertext as Buffer | Uint8Array));
 }
+
+/**
+ * C-6: the downloadable backup contains the ENCRYPTED blob only — never the
+ * plaintext privkey. Pure builder so tests can pin the no-plaintext property.
+ */
+export function buildAuditBackup(input: {
+  agentId: string;
+  pubKeyHex: string;
+  blob: { mode: 'signature' | 'passphrase' } & Record<string, unknown>;
+}): string {
+  return JSON.stringify(
+    {
+      warning:
+        'Keep this file private. The encrypted blob plus your wallet signature (or passphrase) decrypts your entire agent audit trail.',
+      agentId: input.agentId,
+      auditPubKey: input.pubKeyHex,
+      encryptedBlob: input.blob,
+      kekMode: input.blob.mode,
+      createdAt: new Date().toISOString(),
+    },
+    null,
+    2,
+  );
+}

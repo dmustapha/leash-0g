@@ -199,6 +199,16 @@ export class LeashChainOps implements ChainOps {
     return this.publicClient.getBalance({ address: addr as Hex });
   }
 
+  /** Live on-chain guardian of an account (M-03: resync after owner setGuardian). */
+  async getGuardian(accountAddr: string): Promise<string> {
+    const g = await this.publicClient.readContract({
+      address: accountAddr as Hex,
+      abi: leashAccountAbi,
+      functionName: 'guardian',
+    });
+    return (g as string).toLowerCase();
+  }
+
   async getPolicyView(accountAddr: string, allowlistCandidates: string[]): Promise<PolicyView> {
     return readPolicyView(this.publicClient, accountAddr, allowlistCandidates);
   }

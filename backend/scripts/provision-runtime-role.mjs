@@ -18,8 +18,13 @@ import { randomBytes } from 'node:crypto';
 import pg from 'pg';
 
 const adminUrl = process.argv[2] ?? process.env.DATABASE_URL;
-const schema = process.argv[3] ?? 'public';
-const ROLE = process.env.RUNTIME_ROLE_NAME ?? 'leash_runtime';
+// Operator-run admin script, but quote identifiers anyway (gate L-02).
+const ident = (raw) => {
+  if (!/^[a-z_][a-z0-9_]*$/.test(raw)) throw new Error(`invalid identifier: ${raw}`);
+  return raw;
+};
+const schema = ident(process.argv[3] ?? 'public');
+const ROLE = ident(process.env.RUNTIME_ROLE_NAME ?? 'leash_runtime');
 if (!adminUrl) {
   console.error('usage: node scripts/provision-runtime-role.mjs "<ADMIN_DATABASE_URL>" [schema]');
   process.exit(1);

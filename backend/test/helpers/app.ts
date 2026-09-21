@@ -86,9 +86,15 @@ export class FakeChainOps implements ChainOps {
   };
 
   public balances = new Map<string, bigint>();
+  /** M-03: live on-chain guardian per account (lowercased addrs). */
+  public onchainGuardians = new Map<string, string>();
 
   async getPolicyView(): Promise<PolicyView> {
     return this.policyView;
+  }
+
+  async getGuardian(accountAddr: string): Promise<string> {
+    return this.onchainGuardians.get(accountAddr.toLowerCase()) ?? FAKE_GUARDIAN_ADDR;
   }
 
   async getBalance(addr: string): Promise<bigint> {

@@ -4,7 +4,7 @@
 // audit trail (traced as a 'config' record).
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { GatewayRule } from '@/lib/types';
 import { Disclosure } from '@/components/ui/Disclosure';
 
@@ -27,13 +27,24 @@ export function RulesEditor({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const dirty = useRef(false);
+
+  // Sync from props when the server-side rules change (post-save refresh or an
+  // external edit) WITHOUT remounting — a parent `key` remount destroyed the
+  // saved-confirmation state (gate finding). Mid-edit drafts are never clobbered.
+  const rulesKey = JSON.stringify(rules);
+  useEffect(() => {
+    if (!dirty.current) setDraft(JSON.parse(rulesKey) as GatewayRule[]);
+  }, [rulesKey]);
 
   function update(i: number, patch: Partial<GatewayRule>) {
+    dirty.current = true;
     setSaved(false);
     setDraft((prev) => prev.map((r, j) => (j === i ? { ...r, ...patch } : r)));
   }
 
   function addRow() {
+    dirty.current = true;
     setSaved(false);
     if (draft.length >= RULES_MAX) {
       setError(`You can have at most ${RULES_MAX} rules.`);
@@ -44,6 +55,7 @@ export function RulesEditor({
   }
 
   function removeRow(i: number) {
+    dirty.current = true;
     setSaved(false);
     setError(null);
     setDraft((prev) => prev.filter((_, j) => j !== i));
@@ -70,6 +82,7 @@ export function RulesEditor({
             : {}),
         })),
       );
+      dirty.current = false;
       setSaved(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Could not save the rules. Try again.');

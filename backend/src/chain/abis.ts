@@ -20,6 +20,7 @@ export const leashAccountAbi = parseAbi([
   'function revoke()',
   'function revoked() view returns (bool)',
   'function sessionKey() view returns (address)',
+  'function guardian() view returns (address)',
   'function policy() view returns (uint128 perTransferCap, uint128 windowCap, uint32 windowSeconds, uint64 expiresAt)',
   'function allowlist(address) view returns (bool)',
   'function spentInWindow() view returns (uint128)',

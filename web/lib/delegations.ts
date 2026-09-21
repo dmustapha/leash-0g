@@ -30,11 +30,26 @@ export const DELEGATION_STATUS_LABEL: Record<DelegationStatus, string> = {
  * state); unknown id → prepend a stub row so the timeline shows activity before the next
  * refetch fills in payload details. Returns a new array; never mutates.
  */
+/** Lifecycle rank: both agents' streams emit every transition, so duplicate/
+ *  out-of-order frames are normal — a lower-ranked status never overwrites a
+ *  higher one (gate nit: late 'pending' after 'accepted' must not regress). */
+const STATUS_RANK: Record<Delegation['status'], number> = {
+  pending_approval: 0,
+  pending: 1,
+  accepted: 2,
+  completed: 3,
+  failed: 3,
+  declined: 3,
+  cancelled: 3,
+  expired: 3,
+};
+
 export function applyDelegationEvent(list: Delegation[], ev: DelegationEvent): Delegation[] {
   const idx = list.findIndex((d) => d.id === ev.delegationId);
   if (idx >= 0) {
     const existing = list[idx] as Delegation;
     if (TERMINAL_STATUSES.has(existing.status)) return list;
+    if (STATUS_RANK[ev.status] <= STATUS_RANK[existing.status]) return list;
     const next = [...list];
     next[idx] = { ...existing, status: ev.status, decidedAt: ev.ts };
     return next;

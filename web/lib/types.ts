@@ -123,6 +123,9 @@ export type AgentDetail = {
   accountBalance: string; // wei
   sessionExpiry: number; // unix seconds
   addresses: { account: Address; sessionKey: Address; owner: Address };
+  /** The guardian LEASH revokes with (M-03): when the live on-chain guardian differs,
+   *  one-click revoke is unavailable and the FE warns. Null = legacy pre-backfill. */
+  leashGuardianAddr?: Address | null;
   /** Opaque KEK-wrapped audit privkey blob stored blind at create (serialized EncryptedBlob).
    *  Not in the §4 table; the FE also accepts the downloaded backup file as the unlock source. */
   encryptedAuditKey?: string;

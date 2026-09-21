@@ -6,6 +6,7 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { GuardianPanel } from '@/components/cockpit/GuardianPanel';
 import { ZERO_ADDRESS } from '@/lib/chain';
+import type { Address } from 'viem';
 
 const GUARDIAN = '0x4444444444444444444444444444444444444444' as const;
 const NEW_GUARDIAN = '0x5555555555555555555555555555555555555555' as const;
@@ -58,5 +59,33 @@ describe('GuardianPanel', () => {
     expect(onSetGuardian).not.toHaveBeenCalled();
     await user.click(screen.getByTestId('guardian-remove-confirm-btn'));
     expect(onSetGuardian).toHaveBeenCalledWith(ZERO_ADDRESS);
+  });
+});
+
+describe('M-03 guardian mismatch warning', () => {
+  it('warns when the on-chain guardian is not LEASH (one-click revoke unavailable)', () => {
+    render(
+      <GuardianPanel
+        guardian={'0x' + 'fe'.repeat(20) as Address}
+        leashGuardian={'0x' + 'ab'.repeat(20) as Address}
+        onSetGuardian={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('guardian-mismatch')).toBeInTheDocument();
+  });
+
+  it('no warning when LEASH is the guardian, or when unknown', () => {
+    const { rerender } = render(
+      <GuardianPanel
+        guardian={'0x' + 'ab'.repeat(20) as Address}
+        leashGuardian={'0x' + 'AB'.repeat(20) as Address} // case-insensitive
+        onSetGuardian={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('guardian-mismatch')).not.toBeInTheDocument();
+    rerender(<GuardianPanel guardian={undefined} leashGuardian={'0x' + 'ab'.repeat(20) as Address} onSetGuardian={vi.fn()} />);
+    expect(screen.queryByTestId('guardian-mismatch')).not.toBeInTheDocument();
+    rerender(<GuardianPanel guardian={'0x' + 'fe'.repeat(20) as Address} leashGuardian={null} onSetGuardian={vi.fn()} />);
+    expect(screen.queryByTestId('guardian-mismatch')).not.toBeInTheDocument();
   });
 });
