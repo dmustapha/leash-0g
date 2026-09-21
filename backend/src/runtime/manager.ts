@@ -5,7 +5,8 @@ import type { RuntimeManager } from '../server.js';
 import type { SseHub } from '../sse/hub.js';
 import type { ApprovalBroker, ApprovalDecision } from '../approvals/broker.js';
 import { getAgentById } from '../store/agents.js';
-import { getApproval, expireApproval } from '../store/approvals.js';
+import { expireApproval } from '../store/approvals.js';
+import { awaitApprovalDecision, decidedInDb } from '../approvals/rendezvous.js';
 import { decryptSecret } from '../crypto/keycrypt.js';
 import { appendTrace } from '../trace/trace-store.js';
 import { traceEvent } from '../sse/events.js';
@@ -170,7 +171,7 @@ export class LeashRuntimeManager implements RuntimeManager {
         this.deps.hub.emit(loop.agent.id, 'trace', traceEvent(consent));
       } else {
         // decided at the buzzer — pick the durable decision up instead
-        decision = (await this.decidedInDb(approvalId)) ?? 'timeout';
+        decision = (await decidedInDb(this.deps.pool, approvalId)) ?? 'timeout';
       }
     }
     const resolved: ApprovalDecision =
@@ -178,41 +179,13 @@ export class LeashRuntimeManager implements RuntimeManager {
     await loop.graph.invoke(new Command({ resume: resolved }), config);
   }
 
-  /**
-   * Rendezvous with the owner's decision. The broker only wakes a LIVE
-   * waiter — a decision can land durably in Postgres BEFORE this waiter
-   * registers (the API notifies into the void while the graph is still
-   * checkpointing its interrupt). So: register the waiter first, then check
-   * the durable state, and re-check once more on timeout.
-   */
+  /** C-3: the SHARED register→check→wait→recheck rendezvous (approvals/rendezvous.ts). */
   private async awaitDecision(approvalId: string): Promise<ApprovalDecision | 'timeout'> {
-    const waited = this.deps.broker.wait(approvalId, this.deps.settings.approvalTimeoutMs);
-    const early = await this.decidedInDb(approvalId);
-    if (early) {
-      this.deps.broker.notify(approvalId, early); // settle the dangling waiter
-      return early;
-    }
-    const decision = await waited;
-    if (decision !== 'timeout') return decision;
-    return (await this.decidedInDb(approvalId)) ?? 'timeout';
-  }
-
-  private async decidedInDb(approvalId: string): Promise<ApprovalDecision | null> {
-    const row = await getApproval(this.deps.pool, approvalId);
-    if (!row || row.state === 'pending') return null;
-    // The API commits the decision, THEN appends the consent record. Only
-    // resume once the consent is durable — otherwise this poll could act
-    // before consent, breaking consent-seq < action-seq. If the consent is
-    // still in flight, the broker notify (sent after the append) wakes us.
-    const consent = await this.deps.pool.query(
-      `SELECT 1 FROM trace_records WHERE agent_id = $1 AND kind = 'consent' AND record->>'approvalId' = $2`,
-      [row.agentId, approvalId],
+    return awaitApprovalDecision(
+      { pool: this.deps.pool, broker: this.deps.broker },
+      approvalId,
+      this.deps.settings.approvalTimeoutMs,
     );
-    if (consent.rowCount === 0) return null;
-    return {
-      decision: row.state === 'approved' ? 'approve' : 'deny',
-      ...(row.reason !== null ? { reason: row.reason } : {}),
-    };
   }
 
   private async recordFailure(agentId: string, err: unknown): Promise<void> {
