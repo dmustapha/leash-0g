@@ -50,12 +50,16 @@ async function handleCompletion(deps: GatewayDeps, req: Request, res: Response):
   const body = req.body as Json;
   const outcome = evaluateRules(agent.gatewayRules, body);
 
+  // C-5: non-text parts can't be scanned by rules — record their presence on
+  // every trace this request produces rather than silently ignoring them.
+  const nonText = outcome.nonTextPartTypes.length > 0 ? { nonTextPartTypes: outcome.nonTextPartTypes } : {};
+
   if (outcome.action === 'block') {
     const rec = await appendTrace(deps.pool, {
       agentId: agent.id,
       kind: 'block',
       originalRequest: body,
-      detail: { rule: outcome.rule.match },
+      detail: { rule: outcome.rule.match, ...nonText },
     });
     deps.hub.emit(agent.id, 'trace', traceEvent(rec));
     res.status(403).json({ error: { message: 'request blocked by policy' } });
@@ -65,16 +69,16 @@ async function handleCompletion(deps: GatewayDeps, req: Request, res: Response):
   if (outcome.action === 'require_approval') {
     const approved = await holdForApproval(deps, agent, body, res);
     if (!approved) return; // response already sent (deny/timeout)
-    await forwardAndTrace(deps, agent, res, { kind: 'inference', original: body, effective: body });
+    await forwardAndTrace(deps, agent, res, { kind: 'inference', original: body, effective: body, detail: nonText });
     return;
   }
 
   if (outcome.action === 'modify') {
-    await forwardAndTrace(deps, agent, res, { kind: 'modify', original: body, effective: outcome.effective });
+    await forwardAndTrace(deps, agent, res, { kind: 'modify', original: body, effective: outcome.effective, detail: nonText });
     return;
   }
 
-  await forwardAndTrace(deps, agent, res, { kind: 'inference', original: body, effective: body });
+  await forwardAndTrace(deps, agent, res, { kind: 'inference', original: body, effective: body, detail: nonText });
 }
 
 /**
@@ -123,6 +127,8 @@ interface ForwardSpec {
   kind: 'inference' | 'modify';
   original: Json;
   effective: Json;
+  /** Extra trace detail (e.g. C-5 nonTextPartTypes); empty object = omitted. */
+  detail?: Record<string, Json>;
 }
 
 async function forwardAndTrace(deps: GatewayDeps, agent: AgentRow, res: Response, spec: ForwardSpec): Promise<void> {
@@ -154,6 +160,7 @@ async function forwardAndTrace(deps: GatewayDeps, agent: AgentRow, res: Response
     ...(spec.kind === 'modify' ? { effectiveRequest: spec.effective } : {}),
     response: result.body,
     ...(result.x0gTrace ? { x0gTrace: result.x0gTrace } : {}),
+    ...(spec.detail && Object.keys(spec.detail).length > 0 ? { detail: spec.detail } : {}),
   });
   deps.hub.emit(agent.id, 'trace', traceEvent(rec));
   res.status(result.status).json(result.body);
