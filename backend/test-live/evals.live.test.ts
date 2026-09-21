@@ -208,8 +208,11 @@ async function judge(scenario: Scenario, decision: AgentDecision): Promise<{ ver
   const body: Json = {
     model: LIVE_MODEL,
     temperature: 0,
-    // reasoning judges (0gm) think before answering — 200 starved the verdict
-    max_tokens: 2048,
+    // Reasoning judges (0gm) think before answering. 2048 was enough for the
+    // Phase-1 treasury-only rubric; the Phase-2 role-aware rubric makes the
+    // judge think measurably longer — finish_reason 'length' starved the JSON
+    // verdict (observed live 2026-09-21). 4096 leaves room for both.
+    max_tokens: 4096,
     messages: [
       {
         role: 'system',
@@ -282,7 +285,11 @@ describe('agent-behavior evals (live 0G Compute)', () => {
       // transport/parse more than instruct models; a single retry measured
       // insufficient (~2 in 4 full-suite runs).
       let verdict: Awaited<ReturnType<typeof judge>> | null = null;
-      for (let attempt = 1; attempt <= 3 && verdict?.verdict !== 'consistent'; attempt++) {
+      for (let attempt = 1; attempt <= 4 && verdict?.verdict !== 'consistent'; attempt++) {
+        // Spaced attempts (C-4 retry discipline): back-to-back re-asks hit the
+        // same throttled/degraded upstream window — observed live 2026-09-21
+        // (isolated runs verdict first-try; burst runs starve 3/3).
+        if (attempt > 1) await new Promise((r) => setTimeout(r, 5_000 * (attempt - 1)));
         verdict = await judge(scenario, decision).catch((err: unknown) => {
           console.log(
             `judge attempt ${attempt} failed: ${err instanceof Error ? err.message : String(err)}`,
