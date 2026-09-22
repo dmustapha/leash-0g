@@ -1,0 +1,212 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LEASH — Let your AI agent spend real money. Keep the leash.</title>
+    <meta
+      name="description"
+      content="LEASH watches your agent think, holds hard limits it can't change, and writes a proof of everything it did."
+    />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="alternate icon" href="/favicon.ico" />
+    <link rel="stylesheet" href="/src/b.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="topbar">
+      <a class="brand" href="/b/">
+        <img src="/logo.svg" alt="" width="30" height="30" />
+        <span>LEASH</span>
+      </a>
+      <a class="cta-btn cta-small" href="https://leash-0g-web.vercel.app">Open the cockpit</a>
+    </header>
+
+    <main id="main">
+      <!-- HERO -->
+      <section class="hero" aria-labelledby="hero-title">
+        <p class="kicker">Live on 0G testnet</p>
+        <h1 id="hero-title">
+          Let your AI agent<br />spend real money.<br />
+          <span class="hero-accent">Keep the leash.</span>
+        </h1>
+        <p class="hero-sub">
+          LEASH watches your agent think, holds hard limits it can't change, and writes a proof of
+          everything it did.
+        </p>
+        <div class="hero-ctas">
+          <a class="cta-btn" href="https://leash-0g-web.vercel.app">Open the cockpit</a>
+          <a class="cta-ghost" href="mailto:damilolamustaphaa@gmail.com?subject=LEASH%20access"
+            >Request access to the repo</a
+          >
+        </div>
+      </section>
+
+      <!-- the leash rail wraps everything below the hero -->
+      <div class="leashed">
+        <div class="rail" aria-hidden="true">
+          <svg id="leash-svg" width="100%" height="100%" role="presentation" focusable="false">
+            <path id="leash-main" fill="none" />
+            <path id="leash-chain" fill="none" />
+            <g id="leash-clip-mark" opacity="0">
+              <circle r="7" fill="none" />
+              <line x1="-4" y1="-4" x2="4" y2="4" />
+              <line x1="-4" y1="4" x2="4" y2="-4" />
+            </g>
+          </svg>
+        </div>
+
+        <div class="col">
+          <!-- PROBLEM -->
+          <section class="block reveal" aria-labelledby="problem-title" id="sec-problem">
+            <h2 id="problem-title" class="display">Unleashed agents<br />already cost real money.</h2>
+            <div class="incidents">
+              <article class="incident">
+                <p class="incident-num">$27–30M</p>
+                <p>
+                  moved by Step Finance trading agents with no human gate.
+                  <span class="dim">January 2026.</span>
+                </p>
+              </article>
+              <article class="incident">
+                <p class="incident-num">~$150–200k</p>
+                <p>
+                  drained from Grok/Bankr via prompt injection.
+                  <span class="dim"
+                    >The guardrail that was supposed to stop it had been silently rewritten.</span
+                  >
+                </p>
+              </article>
+            </div>
+            <p class="pull">Instructions don't survive a clever prompt. <strong>Contracts do.</strong></p>
+          </section>
+
+          <!-- 01 BIND (slack) -->
+          <section class="block reveal" aria-labelledby="bind-title" id="sec-bind">
+            <p class="stepmark">01 · Bind</p>
+            <h2 id="bind-title" class="display">Clip the leash on.</h2>
+            <p class="lede">
+              Point your agent's wallet at a LEASH account. Set a per-transfer cap, a spending
+              window, an allowlist, and an expiry. The agent cannot change any of them.
+            </p>
+          </section>
+
+          <!-- 02 WATCH (slack) + daily loop -->
+          <section class="block reveal" aria-labelledby="watch-title" id="sec-watch">
+            <p class="stepmark">02 · Watch</p>
+            <h2 id="watch-title" class="display">Let it run. See it think.</h2>
+            <p class="lede">
+              Watch it reason live and step in before it acts. Autonomous by default: you get the
+              rare decision, not a chore queue.
+            </p>
+            <div class="loop-cards">
+              <article class="loop-card" aria-label="Example boundary alert">
+                <p class="loop-card-tag">boundary alert</p>
+                <p>
+                  <strong>treasury-bot</strong> wants to send <code>0.002 0G</code> to
+                  <code>0x9c…9c9c</code> <span class="ok">allowlisted ✓</span>, over its per-transfer
+                  cap of <code>0.001 0G</code>.
+                </p>
+                <p class="loop-timer">⏱ Denies by default in 10 min</p>
+                <p class="loop-fakebtns"><span class="fb fb-ok">Approve</span><span class="fb fb-no">Deny</span></p>
+              </article>
+              <article class="loop-card" aria-label="Example daily digest">
+                <p class="loop-card-tag">daily digest</p>
+                <p class="mono-line">Since you last looked: 3 transfers went out, 0.006 0G total.</p>
+                <p class="dim">One line a day when everything stayed inside the leash.</p>
+              </article>
+              <article class="loop-card" aria-label="Telegram alerts">
+                <p class="loop-card-tag">telegram</p>
+                <p>The same card lands on your phone. Approve or deny from anywhere.</p>
+              </article>
+            </div>
+          </section>
+
+          <!-- 03 CONTAIN (taut) -->
+          <section class="block reveal" aria-labelledby="contain-title" id="sec-contain">
+            <p class="stepmark">03 · Contain</p>
+            <h2 id="contain-title" class="display">Then it pulls.<br />The leash holds.</h2>
+            <p class="lede">
+              The contract refuses anything outside the leash, no matter what the agent was tricked
+              into asking for. Four limits, enforced by a contract on 0G Chain:
+            </p>
+            <ul class="limits">
+              <li><strong>Per-transfer cap.</strong> No single send above your number.</li>
+              <li><strong>Spending window.</strong> A budget per period, not a blank check.</li>
+              <li><strong>Allowlist.</strong> Only addresses you approved, ever.</li>
+              <li><strong>Expiry.</strong> The leash outlives your attention, not your intent.</li>
+            </ul>
+          </section>
+
+          <!-- REVOKE (snap) -->
+          <section class="block reveal snap-block" aria-labelledby="revoke-title" id="sec-revoke">
+            <h2 id="revoke-title" class="display display-deny">One move<br />ends everything.</h2>
+            <p class="lede">
+              Revoke is a single transaction. After it, the contract refuses every act, even ones
+              already queued. We ran it live: it fail-closed.
+            </p>
+          </section>
+
+          <!-- 04 PROVE (dotted chain) -->
+          <section class="block reveal" aria-labelledby="prove-title" id="sec-prove">
+            <p class="stepmark">04 · Prove</p>
+            <h2 id="prove-title" class="display">Every decision,<br />on the record.</h2>
+            <p class="lede">
+              Every decision hash-chained, encrypted to you alone, anchored on 0G. A tamper-evident
+              record of what it did and why, with attested inference where you choose TEE providers.
+            </p>
+            <ul class="proofs">
+              <li class="proof">
+                <p class="proof-k">AgentRegistry · sourcify-verified · 0G testnet 16602</p>
+                <a href="https://chainscan-galileo.0g.ai/address/0xA74d573F43CFDA890713Bd348186ab80736642C3"
+                  >0xA74d573F43CFDA890713Bd348186ab80736642C3</a
+                >
+              </li>
+              <li class="proof">
+                <p class="proof-k">LeashAccountFactory · sourcify-verified</p>
+                <a href="https://chainscan-galileo.0g.ai/address/0x5100f7a9661F56842342C21aAAc15169A7fD3c52"
+                  >0x5100f7a9661F56842342C21aAAc15169A7fD3c52</a
+                >
+              </li>
+              <li class="proof">
+                <p class="proof-k">A real coordinated agent-to-agent act</p>
+                <a href="https://chainscan-galileo.0g.ai/tx/0xf3e61c52be3442b850752252a9f4a881ffd53d198ee534468caa220bc965a34f"
+                  >0xf3e61c52be3442b850752252a9f4a881ffd53d198ee534468caa220bc965a34f</a
+                >
+              </li>
+              <li class="proof">
+                <p class="proof-k">A real revoke that fail-closed</p>
+                <p class="proof-v">one move, everything after it refused</p>
+              </li>
+            </ul>
+            <details class="fine">
+              <summary>Where each piece of 0G actually sits</summary>
+              <p>
+                Every reasoning call is served by 0G Compute. The tamper-evident record lives on 0G
+                Storage. The limits are enforced by a contract on 0G Chain.
+              </p>
+            </details>
+          </section>
+
+          <!-- CTA -->
+          <section class="block reveal cta-block" aria-labelledby="cta-title">
+            <h2 id="cta-title" class="display">Put your agent<br />on a leash.</h2>
+            <div class="hero-ctas">
+              <a class="cta-btn" href="https://leash-0g-web.vercel.app">Open the cockpit</a>
+              <a class="cta-ghost" href="mailto:damilolamustaphaa@gmail.com?subject=LEASH%20access"
+                >Request access to the repo</a
+              >
+            </div>
+          </section>
+        </div>
+      </div>
+    </main>
+
+    <footer class="foot">
+      <p>Built on 0G. Reasoning by 0G Compute, record on 0G Storage, enforcement on 0G Chain.</p>
+    </footer>
+
+    <script type="module" src="/src/b.js"></script>
+  </body>
+</html>

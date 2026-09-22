@@ -1,0 +1,65 @@
+{
+  "reference": "https://family.co",
+  "measuredAt": "2026-09-21T23:11:08.180Z",
+  "viewport": "1440x900",
+  "page": {
+    "title": "Family",
+    "bg": "rgba(0, 0, 0, 0)",
+    "bodyFont": {
+      "tag": "body",
+      "fontFamily": "Inter, -apple-system, \"system-ui\", \"Segoe UI\", Helvetica, \"Apple Color Emoji\", Arial, sans-serif, \"Segoe UI Emoji\", \"Segoe UI Symbol\"",
+      "fontSize": "16px",
+      "fontWeight": "400",
+      "lineHeight": "normal",
+      "letterSpacing": "normal",
+      "color": "rgb(71, 70, 69)",
+      "textTransform": "none"
+    }
+  },
+  "h1": {
+    "tag": "h1",
+    "fontFamily": "Family, -apple-system, \"system-ui\", \"Segoe UI\", Helvetica, \"Apple Color Emoji\", Arial, sans-serif, \"Segoe UI Emoji\", \"Segoe UI Symbol\"",
+    "fontSize": "68px",
+    "fontWeight": "500",
+    "lineHeight": "74.8px",
+    "letterSpacing": "-1.36px",
+    "color": "color(display-p3 0.203922 0.203922 0.2)",
+    "textTransform": "none"
+  },
+  "h2": null,
+  "paragraph": {
+    "tag": "p",
+    "fontFamily": "Inter, -apple-system, \"system-ui\", \"Segoe UI\", Helvetica, \"Apple Color Emoji\", Arial, sans-serif, \"Segoe UI Emoji\", \"Segoe UI Symbol\"",
+    "fontSize": "14px",
+    "fontWeight": "400",
+    "lineHeight": "20px",
+    "letterSpacing": "-0.09px",
+    "color": "rgb(132, 130, 129)",
+    "textTransform": "none"
+  },
+  "smallLabel": {
+    "tag": "a",
+    "fontFamily": "Inter, -apple-system, \"system-ui\", \"Segoe UI\", Helvetica, \"Apple Color Emoji\", Arial, sans-serif, \"Segoe UI Emoji\", \"Segoe UI Symbol\"",
+    "fontSize": "15px",
+    "fontWeight": "500",
+    "lineHeight": "10px",
+    "letterSpacing": "normal",
+    "color": "rgb(40, 38, 36)",
+    "textTransform": "none"
+  },
+  "sectionPadding": {
+    "paddingTop": "120px",
+    "paddingBottom": "96px"
+  },
+  "containerWidth": 1072,
+  "button": {
+    "bg": "rgb(246, 244, 239)",
+    "color": "rgb(18, 18, 18)",
+    "radius": "32px",
+    "padding": "0px 14px",
+    "fontSize": "15px",
+    "fontWeight": "500",
+    "border": "0px none rgb(18, 18, 18)"
+  },
+  "borders": null
+}

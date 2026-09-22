@@ -1,0 +1,467 @@
+/* Proposal C — "Receipts or it didn't happen."
+   Receipt-ticket wall hero + claim↔receipt annotated ledger.
+   JetBrains Mono dominant + Source Sans 3 for the plain-language column.
+   Zero scroll animation; hover lifts a ticket. */
+@import './tokens.css';
+@import '@fontsource/jetbrains-mono/400.css';
+@import '@fontsource/jetbrains-mono/500.css';
+@import '@fontsource/jetbrains-mono/700.css';
+@import '@fontsource/source-sans-3/400.css';
+@import '@fontsource/source-sans-3/600.css';
+
+body {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  /* faint paper-fiber texture: two offset dot grids, no gradients */
+  background-image: radial-gradient(rgba(244, 244, 239, 0.022) 1px, transparent 1px),
+    radial-gradient(rgba(244, 244, 239, 0.014) 1px, transparent 1px);
+  background-size: 22px 22px, 22px 22px;
+  background-position: 0 0, 11px 11px;
+}
+
+/* ---------- shell ---------- */
+.topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.75rem clamp(1rem, 5vw, 3rem);
+  border-bottom: 1px dashed var(--line);
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-decoration: none;
+}
+
+.btn-solid {
+  display: inline-flex;
+  align-items: center;
+  min-height: 46px;
+  padding: 0.65rem 1.4rem;
+  background: var(--accent);
+  color: #0a0a0b;
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  font-size: 0.92rem;
+  text-decoration: none;
+  border-radius: var(--radius-sm);
+  transition: transform 150ms var(--ease-out), box-shadow 150ms ease;
+}
+
+@media (hover: hover) {
+  .btn-solid:hover {
+    transform: translateY(-1px);
+    box-shadow: var(--shadow-accent);
+  }
+}
+
+.btn-small {
+  min-height: 38px;
+  padding: 0.4rem 0.9rem;
+  font-size: 0.8rem;
+}
+
+.btn-line {
+  display: inline-flex;
+  align-items: center;
+  min-height: 46px;
+  padding: 0.65rem 1.4rem;
+  border: 1px dashed var(--line);
+  color: var(--ink);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.92rem;
+  text-decoration: none;
+  border-radius: var(--radius-sm);
+  transition: border-color 150ms ease, background 150ms ease;
+}
+
+@media (hover: hover) {
+  .btn-line:hover {
+    border-color: var(--ink-dim);
+    background: var(--surface-1);
+  }
+}
+
+/* ---------- tickets ---------- */
+.ticket {
+  position: relative;
+  width: 100%;
+  max-width: 340px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  padding: 1.9rem 1.15rem;
+  box-shadow: var(--shadow-1);
+  font-size: 0.78rem;
+  line-height: 1.6;
+  transition: transform 220ms var(--ease-out), box-shadow 220ms ease;
+}
+
+/* perforated edges: punched holes of page background along top + bottom */
+.ticket::before,
+.ticket::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  height: 10px;
+  background-image: radial-gradient(circle at 7px 5px, var(--base) 4px, transparent 4.6px);
+  background-size: 16px 10px;
+  background-repeat: repeat-x;
+}
+
+.ticket::before {
+  top: -1px;
+}
+
+.ticket::after {
+  bottom: -1px;
+}
+
+@media (hover: hover) {
+  .ticket:hover {
+    transform: translateY(-6px) rotate(0deg) !important;
+    box-shadow: var(--shadow-2);
+    z-index: 5;
+  }
+}
+
+.tk-head {
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--ink);
+  border-bottom: 1px dashed var(--line);
+  padding-bottom: 0.55rem;
+  margin-bottom: 0.7rem;
+}
+
+.tk-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  color: var(--ink);
+}
+
+.tk-row span {
+  color: var(--ink-faint);
+}
+
+.tk-row em,
+.tk-body em {
+  font-style: normal;
+}
+
+.ok {
+  color: var(--allow);
+}
+
+.bad {
+  color: var(--deny);
+}
+
+.tk-hash {
+  margin-top: 0.6rem;
+}
+
+.tk-hash a,
+.ticket a {
+  color: var(--accent);
+  overflow-wrap: anywhere;
+  font-size: 0.72rem;
+  text-decoration: underline;
+  text-decoration-color: rgba(198, 242, 77, 0.35);
+  text-underline-offset: 3px;
+}
+
+@media (hover: hover) {
+  .ticket a:hover {
+    text-decoration-color: var(--accent);
+  }
+}
+
+.tk-foot {
+  margin-top: 0.75rem;
+  padding-top: 0.55rem;
+  border-top: 1px dashed var(--line);
+  font-size: 0.62rem;
+  letter-spacing: 0.12em;
+  color: var(--ink-faint);
+}
+
+.tk-body {
+  color: var(--ink);
+  margin-bottom: 0.4rem;
+}
+
+.tk-btns {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+
+.tb {
+  flex: 1;
+  text-align: center;
+  padding: 0.45rem 0.8rem;
+  border-radius: var(--radius-sm);
+  font-weight: 700;
+  font-size: 0.78rem;
+}
+
+.tb-ok {
+  background: var(--allow-soft);
+  color: var(--allow);
+  border: 1px solid rgba(79, 208, 138, 0.4);
+}
+
+.tb-no {
+  background: var(--deny-soft);
+  color: var(--deny);
+  border: 1px solid rgba(255, 93, 108, 0.4);
+}
+
+.ticket-bad .tk-head {
+  color: var(--deny);
+}
+
+/* ---------- hero wall ---------- */
+.hero {
+  padding: clamp(2rem, 6vw, 4rem) clamp(1rem, 5vw, 3rem) clamp(3rem, 7vw, 5rem);
+  max-width: 1160px;
+  margin-inline: auto;
+}
+
+.wall {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 1rem;
+  margin-bottom: -1.5rem;
+}
+
+.tk-1 {
+  transform: rotate(-2.4deg) translateY(6px);
+}
+
+.tk-2 {
+  transform: rotate(1.6deg) translateY(-4px);
+}
+
+.tk-3 {
+  transform: rotate(-1deg) translateY(10px);
+}
+
+.hero-overlay {
+  position: relative;
+  z-index: 2;
+  max-width: 46rem;
+  margin: 2.5rem auto 0;
+  text-align: center;
+  background: color-mix(in oklab, var(--base) 88%, transparent);
+  backdrop-filter: blur(4px);
+  padding: 1.5rem clamp(0.5rem, 3vw, 2rem) 0;
+}
+
+.overline {
+  font-size: 0.7rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--allow);
+  margin-bottom: 1.1rem;
+}
+
+h1 {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: clamp(1.55rem, 5vw, 2.7rem);
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  line-height: 1.18;
+}
+
+h1 em {
+  font-style: normal;
+  color: var(--accent);
+  background: var(--accent-soft);
+  padding: 0 0.25em;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.hero-sub {
+  font-family: 'Source Sans 3', system-ui, sans-serif;
+  font-size: 1.08rem;
+  color: var(--ink-dim);
+  max-width: 34rem;
+  margin: 1.1rem auto 0;
+}
+
+.hero-ctas {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.8rem;
+  margin-top: 1.8rem;
+}
+
+/* ---------- ledger ---------- */
+.ledger {
+  max-width: 1160px;
+  margin-inline: auto;
+  padding: 0 clamp(1rem, 5vw, 3rem) clamp(2rem, 5vw, 3rem);
+}
+
+.ledger-head {
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  border-bottom: 1px dashed var(--line);
+  padding-bottom: 0.8rem;
+}
+
+.entry {
+  display: grid;
+  gap: 1.6rem;
+  padding-block: clamp(2.4rem, 6vw, 4rem);
+  border-bottom: 1px dashed var(--line);
+}
+
+@media (min-width: 860px) {
+  .entry {
+    grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+    gap: clamp(2rem, 5vw, 4.5rem);
+    align-items: start;
+  }
+}
+
+.claim {
+  font-family: 'Source Sans 3', system-ui, sans-serif;
+  font-size: 1.05rem;
+}
+
+.claim h3 {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: clamp(1.15rem, 2.6vw, 1.55rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  line-height: 1.25;
+  margin-bottom: 0.9rem;
+}
+
+.claim p {
+  color: var(--ink-dim);
+  max-width: 34rem;
+}
+
+.claim p + p {
+  margin-top: 0.8rem;
+}
+
+.claim-pull {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  color: var(--ink) !important;
+  border-left: 3px solid var(--accent);
+  padding-left: 0.9rem;
+  margin-top: 1.2rem !important;
+}
+
+.claim-steps {
+  margin: 0;
+  padding-left: 1.2rem;
+  display: grid;
+  gap: 0.7rem;
+  color: var(--ink-dim);
+}
+
+.claim-steps li::marker {
+  font-family: 'JetBrains Mono', monospace;
+  font-weight: 700;
+  color: var(--accent);
+}
+
+.claim-steps strong {
+  color: var(--ink);
+}
+
+.ticket-inline {
+  justify-self: start;
+  max-width: 380px;
+}
+
+.claim-receipts {
+  display: grid;
+  gap: 1.2rem;
+  justify-items: start;
+}
+
+.claim-receipts .ticket:nth-child(1) {
+  transform: rotate(-1.2deg);
+}
+
+.claim-receipts .ticket:nth-child(2) {
+  transform: rotate(0.9deg);
+}
+
+.entry > .ticket-inline {
+  transform: rotate(-1deg);
+}
+
+.entry:nth-of-type(even) > .ticket-inline {
+  transform: rotate(1.2deg);
+}
+
+.fine {
+  margin-top: 1.4rem;
+  border: 1px dashed var(--line);
+  border-radius: var(--radius-sm);
+  padding: 0.7rem 0.9rem;
+  max-width: 34rem;
+}
+
+.fine summary {
+  cursor: pointer;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.78rem;
+  color: var(--ink-faint);
+}
+
+.fine p {
+  margin-top: 0.6rem;
+  font-size: 0.95rem;
+}
+
+/* ---------- cta + footer ---------- */
+.cta {
+  max-width: 1160px;
+  margin-inline: auto;
+  padding: clamp(3rem, 8vw, 5.5rem) clamp(1rem, 5vw, 3rem);
+  text-align: center;
+}
+
+.cta h2 {
+  font-size: clamp(1.3rem, 3.5vw, 2rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.cta-sub {
+  font-family: 'Source Sans 3', system-ui, sans-serif;
+  color: var(--ink-dim);
+  margin-top: 0.5rem;
+}
+
+.foot {
+  border-top: 1px dashed var(--line);
+  padding: 2rem clamp(1rem, 5vw, 3rem) 2.6rem;
+  text-align: center;
+  color: var(--ink-faint);
+  font-size: 0.75rem;
+}

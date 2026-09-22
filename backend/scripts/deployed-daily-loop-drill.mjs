@@ -148,13 +148,20 @@ async function main() {
   console.log('privy SIWE login OK');
 
   // ---------- 1. Telegram link (interactive) ----------
-  const link = await api('/api/owner/telegram/link', { method: 'POST', body: '{}' });
-  if (link.status !== 200) throw new Error(`telegram link failed ${link.status}: ${JSON.stringify(link.body)} — is the bot configured on Render?`);
-  console.log('\n=== ACTION REQUIRED (phone) ===');
-  console.log('Open this link in Telegram and tap START:');
-  console.log('  ' + link.body.url);
-  console.log('===============================\n');
-  await waitUntil('telegram linked', 300_000, async () => (await api('/api/owner/settings')).body.telegramLinked);
+  // Tokens are single-use with a 5-min TTL (security posture unchanged) —
+  // the drill simply re-issues a FRESH link every 4 minutes until the
+  // operator taps one, for up to 30 minutes.
+  let linked = false;
+  for (let round = 0; round < 60 && !linked; round++) {
+    const link = await api('/api/owner/telegram/link', { method: 'POST', body: '{}' });
+    if (link.status !== 200) throw new Error(`telegram link failed ${link.status}: ${JSON.stringify(link.body)} — is the bot configured on Render?`);
+    console.log('\n=== ACTION REQUIRED (phone) ===');
+    console.log('Open this link in Telegram and tap START (fresh link, valid 5 min):');
+    console.log('  ' + link.body.url);
+    console.log('===============================\n');
+    linked = await waitUntil('telegram linked', 240_000, async () => (await api('/api/owner/settings')).body.telegramLinked).catch(() => false);
+  }
+  if (!linked) throw new Error('timed out waiting for: telegram linked (4 h of fresh links)');
   evidence.telegramLinked = true;
   console.log('telegram linked ✓');
 
@@ -170,7 +177,7 @@ async function main() {
   console.log('agent A started — the boundary alert should push to your phone within ~1 min.');
   console.log('\n=== ACTION REQUIRED (phone) ===\nTap ✅ APPROVE on the LEASH card when it arrives.\n===============================\n');
 
-  const approvedConsent = await waitUntil('telegram APPROVE consent + on-chain act', 600_000, async () => {
+  const approvedConsent = await waitUntil('telegram APPROVE consent + on-chain act', 7_200_000, async () => {
     const t1 = await traces(agentA);
     const consent = t1.find((r) => r.kind === 'consent' && r.decision === 'approve' && r.detail?.channel === 'telegram');
     const act = t1.find((r) => r.kind === 'action' && r.detail?.txHash);
@@ -188,7 +195,7 @@ async function main() {
 
   // ---------- 3. inline DENY ----------
   console.log('\n=== ACTION REQUIRED (phone) ===\nTap ❌ DENY on the NEXT LEASH card (next cycle, ~30s).\n===============================\n');
-  const denied = await waitUntil('telegram DENY consent + no act after it', 600_000, async () => {
+  const denied = await waitUntil('telegram DENY consent + no act after it', 7_200_000, async () => {
     const t1 = await traces(agentA);
     const consent = t1.find((r) => r.kind === 'consent' && r.decision === 'deny' && r.detail?.channel === 'telegram');
     if (!consent) return null;
@@ -201,7 +208,7 @@ async function main() {
 
   // ---------- 4. /digest on demand + scheduled push ----------
   console.log('\n=== ACTION REQUIRED (phone) ===\nSend /digest to the bot. You should get the activity summary.\nPress nothing here — the script detects the cursor advance.\n===============================\n');
-  await waitUntil('/digest advanced the cursor (owner-stream digest record)', 300_000, async () => {
+  await waitUntil('/digest advanced the cursor (owner-stream digest record)', 3_600_000, async () => {
     const r = await api('/api/owner/records?limit=200');
     return (r.body.records ?? []).some((rec) => rec.kind === 'digest');
   });

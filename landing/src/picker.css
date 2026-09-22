@@ -1,0 +1,77 @@
+@import './tokens.css';
+@import '@fontsource/space-grotesk/500.css';
+@import '@fontsource/space-grotesk/700.css';
+@import '@fontsource/ibm-plex-mono/400.css';
+
+body {
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  display: grid;
+  place-items: center;
+  min-height: 100vh;
+  padding: 1.5rem;
+}
+
+.picker {
+  max-width: 640px;
+  width: 100%;
+}
+
+.picker-logo {
+  margin-bottom: 1.25rem;
+}
+
+.picker h1 {
+  font-size: clamp(1.6rem, 4vw, 2.2rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.picker-sub {
+  color: var(--ink-dim);
+  margin-top: 0.5rem;
+}
+
+.picker-list {
+  display: grid;
+  gap: 1rem;
+  margin-top: 2rem;
+}
+
+.picker-card {
+  display: grid;
+  gap: 0.35rem;
+  padding: 1.25rem 1.4rem;
+  background: var(--surface-1);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
+  text-decoration: none;
+  transition: transform 200ms var(--ease-out), border-color 200ms ease, box-shadow 200ms ease;
+}
+
+@media (hover: hover) {
+  .picker-card:hover {
+    transform: translateY(-2px);
+    border-color: rgba(198, 242, 77, 0.45);
+    box-shadow: var(--shadow-2);
+  }
+}
+
+.picker-kicker {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 0.72rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.picker-name {
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.picker-desc {
+  color: var(--ink-dim);
+  font-size: 0.92rem;
+}
