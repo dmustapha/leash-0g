@@ -67,7 +67,7 @@ export default function LinksPage() {
       <div style={{ display: 'flex', alignItems: 'baseline', gap: '1rem' }}>
         <h1 style={{ fontSize: 'var(--text-h1)' }}>Links</h1>
         <span style={{ flex: 1 }} />
-        <Link href="/" className="nav-link">
+        <Link href="/app" className="nav-link">
           ← Your agents
         </Link>
       </div>

@@ -211,7 +211,10 @@ describe('P3C-1 revoke lane under burst', () => {
           .set('authorization', ownerAuth(owner))
           .send(createBody(`lane-${i}`))
           .then((r) => {
-            burstCompleted += 1;
+            // Count only creates that actually SUCCEEDED — a fast guard rejection
+            // (409/429) settling within the window is not a completed deploy and
+            // must not race the assertion.
+            if (r.status < 300) burstCompleted += 1;
             return r;
           }),
       ),
