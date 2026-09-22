@@ -1,0 +1,46 @@
+{
+  "phase": "Phase-3 daily loop — deployed drill (D11)",
+  "stack": "Render backend + Neon prod + real Privy SIWE + real Telegram bot (@leashapp_bot) + 0G Galileo chain 16602",
+  "api": "https://leash-0g-backend.onrender.com",
+  "partA_telegram": {
+    "note": "Operator tapped the deep link, Approve, Deny on a real phone; consent recorded BEFORE the act; approve produced a REAL on-chain transfer; deny produced no act. Captured from drill-8 run log.",
+    "linked": true,
+    "approve": {
+      "channel": "telegram",
+      "consentSeq": 0,
+      "actSeq": 2,
+      "consentBeforeAct": true,
+      "txHash": "0xbba00e63386936a4a5bc84fe19eae75e28774e2df9a19b72aa910138cf3679b8"
+    },
+    "deny": {
+      "channel": "telegram",
+      "consentSeq": 3,
+      "noActAfter": true
+    },
+    "digest": {
+      "note": "Operator sent /digest and received the rendered activity summary on Telegram. The digest owner-record was written by mark(). Auto-detection in the same run was blocked by an expired Privy SIWE token (drill fetched it once at login and the run outlived the ~1h TTL) — fixed: api() now re-logs-in on 401.",
+      "performed": true,
+      "renderVerifiedLocally": true
+    }
+  },
+  "partB_limitHit_damping": {
+    "note": "Fully automated (no phone). Agent acts once in-policy, owner instant-tightens windowCap on-chain below the next send, deterministic OverWindowCap → exactly ONE limit_hit alert + damping (zero futile retries).",
+    "agentId": "3e35d3bd-d0f7-4667-8bbd-b15933fd5314",
+    "accountAddr": "0x5b83A37fde99cef0C8EDd2B50B1626f2d106Ae7b",
+    "inPolicyActTx": "0x9e509da2f95deee5c5ad30a7f6defc366bff8cca7385aec9f2dfcd8feb674aa7",
+    "tightenTx": "0x8deb7c8786c262e6a846d330a25849f9d11080e3c559db4ec718fc6a4af4c675",
+    "alertId": "0a2b3483-0e44-410a-8c83-61e935d5e099",
+    "boundaryErrorName": "OverWindowCap",
+    "limitHitAlerts": 1,
+    "actsBeforeBoundary": 1,
+    "futileActsAfterBoundary": 0,
+    "dampedStandDowns": 4,
+    "result": "PASS"
+  },
+  "drillFixesLandedThisRun": [
+    "api() re-authenticates once on 401 (Privy token expiry — drill-7/8 root cause)",
+    "waitReceipt() retries waitForTransactionReceipt on transient 0G RPC not-found",
+    "tightenPolicy reads current on-chain policy and changes ONLY windowCap (never extends expiresAt → no NotTightening revert)",
+    "PART_B_ONLY flag runs the headless limit_hit proof without the phone flow"
+  ]
+}

@@ -51,6 +51,24 @@ describe('AlertCard', () => {
     expect(onDecide).toHaveBeenCalledWith('apr-1', 'approve');
   });
 
+  it('approval_required: agent intent renders labeled unverified, quarantined from verified facts', () => {
+    render(
+      <AlertCard
+        alert={{ ...APPROVAL_ALERT, refs: { approvalId: 'apr-1', agentIntent: 'Rebalancing into treasury reserve' } }}
+        onDecide={vi.fn()}
+        onDismiss={vi.fn()}
+      />,
+    );
+    const block = screen.getByTestId('agent-intent');
+    expect(block).toHaveTextContent(/unverified/i);
+    expect(block).toHaveTextContent('Rebalancing into treasury reserve');
+  });
+
+  it('approval_required: no intent block when the agent gave no purpose', () => {
+    render(<AlertCard alert={APPROVAL_ALERT} onDecide={vi.fn()} onDismiss={vi.fn()} />);
+    expect(screen.queryByTestId('agent-intent')).not.toBeInTheDocument();
+  });
+
   it('approval_required: resolved alert shows the outcome and no buttons', () => {
     render(
       <AlertCard

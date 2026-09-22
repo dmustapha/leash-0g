@@ -394,9 +394,13 @@ export class TelegramBot {
         ],
       };
     }
+    // Agent's stated purpose (00 §6b): server-sanitized, carried in refs, shown
+    // as a clearly-labeled UNVERIFIED line, quarantined below the verified facts.
+    const intent = typeof alert.refs.agentIntent === 'string' ? alert.refs.agentIntent : '';
+    const text = intent ? `${alert.summary}\n\n🤖 Agent says (unverified): "${intent}"` : alert.summary;
     const sent = await this.deps.api.sendMessage({
       chat_id: settings.telegramChatId,
-      text: alert.summary,
+      text,
       reply_markup: replyMarkup,
     });
     await setTelegramMessageId(this.deps.pool, alert.id, String(sent.message_id));

@@ -179,6 +179,50 @@ describe('link flow', () => {
   });
 });
 
+describe('approval card — agent intent', () => {
+  it('appends the agent purpose as a labeled UNVERIFIED line, separated from the verified summary', async () => {
+    const owner = uniqueOwner();
+    const h = buildTelegramHarness();
+    const agentId = await seedAgent(db.pool, { ownerAddr: owner, name: 'purposeful' });
+    await linkOwner(h, owner, '888');
+    const baseline = h.api.sent.length;
+    await h.t.alerts.emit(owner, {
+      agentId,
+      class: 'decision',
+      kind: 'approval_required',
+      summary: 'purposeful wants to send 0.006 0G to 0xabcd…ef01 — over its cap.',
+      refs: { approvalId: (await createApproval(db.pool, agentId, {})).id, agentIntent: 'Topping up the gas reserve' },
+    });
+    const start = Date.now();
+    while (h.api.sent.length <= baseline && Date.now() - start < 5000) await new Promise((r) => setTimeout(r, 25));
+    const text = h.api.sent[h.api.sent.length - 1]?.text ?? '';
+    expect(text).toContain('purposeful wants to send'); // verified facts
+    expect(text).toContain('Agent says (unverified):');
+    expect(text).toContain('Topping up the gas reserve');
+    // the unverified line is quarantined onto its own block, never inline with the facts
+    expect(text).toMatch(/\n\n🤖 Agent says \(unverified\): "Topping up the gas reserve"/);
+  });
+
+  it('omits the intent line entirely when no purpose was provided', async () => {
+    const owner = uniqueOwner();
+    const h = buildTelegramHarness();
+    const agentId = await seedAgent(db.pool, { ownerAddr: owner, name: 'terse' });
+    await linkOwner(h, owner, '889');
+    const baseline = h.api.sent.length;
+    await h.t.alerts.emit(owner, {
+      agentId,
+      class: 'decision',
+      kind: 'approval_required',
+      summary: 'terse wants to send.',
+      refs: { approvalId: (await createApproval(db.pool, agentId, {})).id },
+    });
+    const start = Date.now();
+    while (h.api.sent.length <= baseline && Date.now() - start < 5000) await new Promise((r) => setTimeout(r, 25));
+    const text = h.api.sent[h.api.sent.length - 1]?.text ?? '';
+    expect(text).not.toContain('Agent says');
+  });
+});
+
 describe('webhook auth', () => {
   it('wrong or missing secret → 401; correct secret → 200 (no Privy involved)', async () => {
     const h = buildTelegramHarness();
