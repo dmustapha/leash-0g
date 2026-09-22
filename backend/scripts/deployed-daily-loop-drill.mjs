@@ -126,6 +126,7 @@ async function waitReceipt(hash, tries = 5) {
       await sleep(4_000);
     }
   }
+  throw new Error(`waitReceipt: exhausted ${tries} tries for ${hash}`);
 }
 
 async function traces(agentId) {
@@ -322,7 +323,7 @@ async function main() {
   await sleep(150_000);
   const after = await traces(agentB);
   const actsAfter = after.filter((r) => r.kind === 'action').length;
-  const damped = after.filter((r) => r.kind === 'decision' && JSON.stringify(r.detail ?? {}).match(/boundary active|window/i)).length;
+  const damped = after.filter((r) => r.kind === 'decision' && JSON.stringify(r.detail ?? {}).match(/boundary active|standing down|window (exhausted|allowance|resets)/i)).length;
   const alertsFinal = (await alertsOf('limit_hit')).filter((a) => a.agentId === agentB);
   if (actsAfter !== actsAtAlert) throw new Error(`DAMPING FAILED: ${actsAfter - actsAtAlert} act attempt(s) after the boundary`);
   if (alertsFinal.length !== 1) throw new Error(`expected exactly 1 limit_hit alert, found ${alertsFinal.length}`);

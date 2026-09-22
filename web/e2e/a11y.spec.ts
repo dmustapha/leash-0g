@@ -63,10 +63,16 @@ function pairState(): MockState {
   return state;
 }
 
-test('home fleet list has no serious/critical a11y violations', async ({ page }) => {
+test('fleet list (/app) has no serious/critical a11y violations', async ({ page }) => {
   await installMockApi(page, pairState());
-  await page.goto('/');
+  await page.goto('/app');
   await expect(page.getByTestId('fleet-list')).toBeVisible();
+  await expectNoSeriousViolations(page);
+});
+
+test('landing (/) has no serious/critical a11y violations', async ({ page }) => {
+  await page.goto('/');
+  await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
   await expectNoSeriousViolations(page);
 });
 

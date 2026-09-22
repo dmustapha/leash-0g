@@ -111,12 +111,18 @@ export class AlertService {
         stormFolded = true;
       } else {
         const { alert: inserted } = await upsertAlertInTx(client, { ...input, ownerAddr: owner });
+        // The 0G-logged owner stream carries VERIFIED facts only (00 §6b): strip
+        // the model-authored `agentIntent` (untrusted; belongs only on the
+        // ephemeral card, labeled unverified) so a hijacked agent cannot write
+        // arbitrary text into the owner's permanent tamper-evident chain.
+        const loggedRefs = { ...inserted.refs };
+        delete loggedRefs.agentIntent;
         await appendOwnerRecordInTx(client, owner, 'alert', {
           alertId: inserted.id,
           class: inserted.class,
           kind: inserted.kind,
           summary: inserted.summary,
-          refs: inserted.refs as Json,
+          refs: loggedRefs as Json,
           count: inserted.count,
           ...(inserted.agentId !== undefined ? { agentId: inserted.agentId } : {}),
           ...(inserted.linkId !== undefined ? { linkId: inserted.linkId } : {}),

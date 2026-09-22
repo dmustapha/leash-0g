@@ -45,6 +45,7 @@ export function LandingRoot({ children }: { children: React.ReactNode }) {
     }
 
     // ---- count-up on numbers carrying data-count ----
+    const countRafs: number[] = [];
     if (!instant) {
       root.querySelectorAll<HTMLElement>('[data-count]').forEach((el) => {
         const rawTarget = el.dataset.count ?? '0';
@@ -57,10 +58,10 @@ export function LandingRoot({ children }: { children: React.ReactNode }) {
           const t = Math.min(1, (now - start) / dur);
           const eased = 1 - Math.pow(1 - t, 3);
           el.textContent = (target * eased).toFixed(decimals);
-          if (t < 1) requestAnimationFrame(tick);
+          if (t < 1) countRafs.push(requestAnimationFrame(tick));
           else el.textContent = target.toFixed(decimals);
         };
-        requestAnimationFrame(tick);
+        countRafs.push(requestAnimationFrame(tick));
       });
     }
 
@@ -127,6 +128,7 @@ export function LandingRoot({ children }: { children: React.ReactNode }) {
       ctaWatch?.removeEventListener('click', onWatch);
       io?.disconnect();
       if (raf) cancelAnimationFrame(raf);
+      countRafs.forEach(cancelAnimationFrame);
       if (drawTimer) clearTimeout(drawTimer);
     };
   }, []);
