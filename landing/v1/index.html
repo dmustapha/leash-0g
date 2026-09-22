@@ -1,0 +1,216 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LEASH — let your AI agent spend real money. Keep the leash.</title>
+    <meta name="description" content="Bind an agent, watch it reason live, and hold it to hard on-chain limits a hijacked agent cannot exceed. Live on 0G testnet." />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preload" href="/fonts/archivo-latin-700-normal.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/ibm-plex-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="/src/v1.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="nav">
+      <div class="container nav-row">
+        <a class="nav-brand" href="/v1/" aria-label="LEASH home">
+          <svg class="looplink looplink-nav" width="60" height="24" viewBox="0 0 120 48" aria-hidden="true" focusable="false">
+            <circle cx="17" cy="24" r="11" fill="none" />
+            <path d="M28 24 C 42 24, 46 14, 57 19 S 70 29, 77 24" fill="none" />
+            <rect x="80" y="17" width="20" height="14" rx="7" fill="none" transform="rotate(-14 90 24)" />
+            <rect x="96" y="17" width="20" height="14" rx="7" fill="none" transform="rotate(14 106 24)" />
+          </svg>
+          <span class="nav-word">LEASH</span>
+        </a>
+        <nav aria-label="Main">
+          <a class="nav-link" href="#receipts">Receipts</a>
+          <a class="nav-link nav-link-cta" href="https://leash-0g-web.vercel.app">Open the cockpit</a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main">
+      <!-- HERO: 7/5 split, decision-card instrument -->
+      <section class="hero container" aria-labelledby="hero-title">
+        <div class="hero-copy reveal-group">
+          <p class="kicker" data-reveal>Spend control for AI agents · Live on 0G testnet</p>
+          <h1 id="hero-title" data-reveal>Let your AI agent spend real&nbsp;money. Keep the&nbsp;leash.</h1>
+          <p class="hero-sub" data-reveal>
+            Bind an agent to a leash account and watch it reason live, decision by decision.
+            Step in before it spends. If you never get the chance, the contract steps in for you.
+          </p>
+          <div class="hero-ctas" data-reveal>
+            <button class="btn btn-primary" id="cta-watch" type="button">Watch a leash hold</button>
+            <a class="btn btn-ghost" href="https://leash-0g-web.vercel.app">Open the cockpit</a>
+          </div>
+          <p class="hero-fine" data-reveal>
+            Reasoning served by 0G Compute. Every decision hash-chained, encrypted to you alone,
+            recorded on 0G Storage.
+          </p>
+        </div>
+
+        <div class="hero-instrument" id="demo">
+          <div class="card" id="decision-card" aria-live="polite">
+            <div class="card-head">
+              <span class="card-agent mono">treasury-bot</span>
+              <span class="card-state mono" id="card-state">awaiting decision</span>
+            </div>
+            <p class="card-request">
+              Requests <strong class="mono">0.05 0G</strong> to
+              <span class="mono">0x9c…f41</span>
+              <span class="card-flag">not on allowlist</span>
+            </p>
+            <p class="card-reason">
+              “Beneficiary balance is low. Topping up now avoids a failed job at 09:40.”
+            </p>
+            <div class="card-verdict" id="card-verdict">
+              <span class="verdict-line" id="verdict-line"></span>
+              <span class="verdict-text" id="verdict-text"></span>
+            </div>
+            <div class="card-actions" role="group" aria-label="Decide on this request">
+              <button class="btn-card btn-approve" id="btn-approve" type="button">Approve</button>
+              <button class="btn-card btn-deny" id="btn-deny" type="button">Deny</button>
+              <button class="btn-card btn-revoke" id="btn-revoke" type="button">Revoke</button>
+            </div>
+            <svg class="looplink looplink-card" width="150" height="60" viewBox="0 0 120 48" aria-hidden="true" focusable="false">
+              <circle class="ll-loop" cx="17" cy="24" r="11" fill="none" />
+              <path class="ll-tether" id="v1-tether" d="M28 24 C 42 24, 46 14, 57 19 S 70 29, 77 24" fill="none" />
+              <rect class="ll-link1" x="80" y="17" width="20" height="14" rx="7" fill="none" transform="rotate(-14 90 24)" />
+              <rect class="ll-link2" x="96" y="17" width="20" height="14" rx="7" fill="none" transform="rotate(14 106 24)" />
+            </svg>
+            <button class="card-reset" id="card-reset" type="button" hidden>Re-arm the instrument</button>
+          </div>
+          <p class="sim-note">Simulated. The real card lives in the cockpit.</p>
+        </div>
+      </section>
+
+      <!-- INSTRUMENT STRIP: full-bleed hairline band, count-up numbers -->
+      <section class="strip" aria-label="Current spending window">
+        <div class="container strip-row">
+          <div class="strip-cell">
+            <span class="strip-label">spent this window</span>
+            <span class="strip-num mono"><span data-countup="0.004" data-decimals="3">0.000</span> 0G</span>
+          </div>
+          <div class="strip-cell">
+            <span class="strip-label">window cap</span>
+            <span class="strip-num mono"><span data-countup="0.006" data-decimals="3">0.000</span> 0G</span>
+          </div>
+          <div class="strip-cell">
+            <span class="strip-label">per-transfer cap</span>
+            <span class="strip-num mono"><span data-countup="0.002" data-decimals="3">0.000</span> 0G</span>
+          </div>
+          <div class="strip-cell">
+            <span class="strip-label">payees allowed</span>
+            <span class="strip-num mono"><span data-countup="1" data-decimals="0">0</span></span>
+          </div>
+        </div>
+        <p class="container strip-note">Numbers from the leash account the receipts below point at.</p>
+      </section>
+
+      <!-- INCIDENTS: offset ledger, not equal cards -->
+      <section class="incidents container" aria-labelledby="incidents-title">
+        <h2 id="incidents-title">Ungoverned agents already move real money.</h2>
+        <div class="incident incident-a">
+          <span class="incident-when mono">Jan 2026</span>
+          <div>
+            <h3>Step Finance</h3>
+            <p>Trading agents with no enforced boundary moved 27 to 30 million dollars they were never meant to touch.</p>
+          </div>
+        </div>
+        <div class="incident incident-b">
+          <span class="incident-when mono">after a guardrail was silently rewritten</span>
+          <div>
+            <h3>Grok / Bankr</h3>
+            <p>A prompt injection walked past the written rules and drained roughly 150 to 200 thousand dollars.</p>
+          </div>
+        </div>
+        <p class="incidents-thesis">Instructions don't survive a clever prompt. Contracts do.</p>
+      </section>
+
+      <!-- LIMITS: hairline definition rows -->
+      <section class="limits container" aria-labelledby="limits-title">
+        <h2 id="limits-title">What the contract holds, even against a hijacked agent</h2>
+        <dl class="limits-table">
+          <div class="limits-row">
+            <dt>Per-transfer cap</dt>
+            <dd>No single spend can exceed the amount you set. The contract refuses, not the agent.</dd>
+          </div>
+          <div class="limits-row">
+            <dt>Spending window</dt>
+            <dd>A rolling budget. When the window is spent, the account is quiet until it resets.</dd>
+          </div>
+          <div class="limits-row">
+            <dt>Allowlist</dt>
+            <dd>Money only moves to addresses you approved. Everything else bounces.</dd>
+          </div>
+          <div class="limits-row">
+            <dt>Expiry</dt>
+            <dd>The leash has an end date. After it, the agent holds nothing.</dd>
+          </div>
+          <div class="limits-row">
+            <dt>Revoke</dt>
+            <dd>One move closes the account to the agent. Mid-thought, mid-transaction, any time.</dd>
+          </div>
+        </dl>
+        <p class="limits-fine">
+          Limits enforced by a contract on 0G Chain. Attested inference where you choose TEE providers.
+        </p>
+      </section>
+
+      <!-- DAILY LOOP -->
+      <section class="loop-section container" aria-labelledby="loop-title">
+        <div class="loop-grid">
+          <h2 id="loop-title">Most days, the leash is boring.</h2>
+          <div class="loop-body">
+            <p>
+              The daily loop is a handful of boundary decisions with inline Approve and Deny,
+              in the app or in Telegram, plus a daily digest of what was spent. Rare interruptions,
+              full recall. Every decision is hash-chained, encrypted to the owner alone, and
+              anchored on 0G.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- RECEIPTS -->
+      <section class="receipts container" id="receipts" aria-labelledby="receipts-title">
+        <h2 id="receipts-title">Receipts</h2>
+        <ul class="receipt-list">
+          <li class="receipt-row">
+            <span class="receipt-name">AgentRegistry</span>
+            <a class="mono receipt-hash" href="https://chainscan-galileo.0g.ai/address/0xA74d573F43CFDA890713Bd348186ab80736642C3">0xA74d573F43CFDA890713Bd348186ab80736642C3</a>
+            <a class="receipt-verify" href="https://repo.sourcify.dev/contracts/full_match/16602/0xA74d573F43CFDA890713Bd348186ab80736642C3/">sourcify-verified</a>
+          </li>
+          <li class="receipt-row">
+            <span class="receipt-name">LeashAccountFactory</span>
+            <a class="mono receipt-hash" href="https://chainscan-galileo.0g.ai/address/0x5100f7a9661F56842342C21aAAc15169A7fD3c52">0x5100f7a9661F56842342C21aAAc15169A7fD3c52</a>
+            <a class="receipt-verify" href="https://repo.sourcify.dev/contracts/full_match/16602/0x5100f7a9661F56842342C21aAAc15169A7fD3c52/">sourcify-verified</a>
+          </li>
+          <li class="receipt-row">
+            <span class="receipt-name">Coordinated agent act</span>
+            <a class="mono receipt-hash" href="https://chainscan-galileo.0g.ai/tx/0xf3e61c52be3442b850752252a9f4a881ffd53d198ee534468caa220bc965a34f">0xf3e6…a34f</a>
+            <span class="receipt-verify">Live on 0G testnet</span>
+          </li>
+        </ul>
+        <p class="receipts-fine">Testnet only. No mainnet funds are at stake yet.</p>
+      </section>
+
+      <!-- CLOSING -->
+      <section class="closing container">
+        <p class="closing-line">Let your AI agent spend real money. Keep the leash.</p>
+        <a class="btn btn-primary" href="https://leash-0g-web.vercel.app">Open the cockpit</a>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="container footer-row">
+        <span>LEASH</span>
+        <span>Reasoning served by 0G Compute · record on 0G Storage · limits enforced by a contract on 0G Chain</span>
+      </div>
+    </footer>
+
+    <script type="module" src="/src/v1.js"></script>
+  </body>
+</html>

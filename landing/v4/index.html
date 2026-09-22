@@ -1,0 +1,155 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LEASH — your agent works. You keep the leash.</title>
+    <meta name="description" content="Let your AI agent spend real money with hard on-chain limits it cannot exceed, a one-move revoke, and a record encrypted to you alone. Live on 0G testnet." />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preload" href="/fonts/syne-latin-800-normal.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/plus-jakarta-sans-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="/src/v4.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="nav">
+      <div class="container nav-row">
+        <a class="brand" href="/v4/">LEASH</a>
+        <a class="pill pill-inverse" href="https://leash-0g-web.vercel.app">Open the cockpit</a>
+      </div>
+    </header>
+
+    <main id="main">
+      <!-- HERO: the living Loop-Link object -->
+      <section class="hero container" aria-labelledby="hero-title">
+        <div class="object-stage" id="demo">
+          <svg class="looplink" id="looplink" width="480" height="192" viewBox="0 0 120 48" aria-hidden="true" focusable="false">
+            <g class="ll-sway" id="ll-sway">
+              <circle class="ll-loop" cx="17" cy="24" r="11" fill="none" />
+              <path class="ll-tether" id="ll-tether" d="M28 24 C 42 24, 46 14, 57 19 S 70 29, 77 24" fill="none" />
+            </g>
+            <rect class="ll-link ll-link1" x="80" y="17" width="20" height="14" rx="7" fill="none" transform="rotate(-14 90 24)" />
+            <rect class="ll-link ll-link2" x="96" y="17" width="20" height="14" rx="7" fill="none" transform="rotate(14 106 24)" />
+          </svg>
+        </div>
+
+        <h1 id="hero-title">Your agent works. You keep the&nbsp;leash.</h1>
+        <p class="hero-sub">
+          Let your AI agent spend real money inside limits a hijacked agent cannot exceed.
+          Watch it reason live. Step in when it matters. Snap the leash when it doesn't.
+        </p>
+
+        <div class="hero-ctas">
+          <button class="pill pill-inverse" id="cta-watch" type="button">Watch a leash hold</button>
+          <button class="pill pill-beat" id="btn-beat" type="button">Try to overspend</button>
+          <a class="pill pill-quiet" href="https://leash-0g-web.vercel.app">Open the cockpit</a>
+        </div>
+
+        <!-- reserved outcome boxes: zero layout shift -->
+        <div class="outcomes">
+          <div class="outcome-card" id="outcome-refused" data-shown="false">
+            <p class="outcome-title">Refused. The contract held.</p>
+            <p class="outcome-body">You didn't have to be awake.</p>
+          </div>
+          <div class="outcome-card" id="outcome-revoked" data-shown="false">
+            <p class="outcome-title">Revoked, clean.</p>
+            <p class="outcome-body">The link stays. The proof remains.</p>
+          </div>
+        </div>
+        <p class="sim-note">Simulated. The real leash lives in the cockpit.</p>
+      </section>
+
+      <!-- HUMANE NUMBERS: oversized, real limits from the demo account -->
+      <section class="numbers container" aria-labelledby="numbers-title">
+        <h2 id="numbers-title" class="visually-hidden">The limits, in plain numbers</h2>
+        <div class="number-row">
+          <div class="number">
+            <span class="number-big mono">0.002</span>
+            <span class="number-cap">0G per transfer, at most. The contract refuses anything bigger.</span>
+          </div>
+          <div class="number number-late">
+            <span class="number-big mono">0.006</span>
+            <span class="number-cap">0G per spending window. Then the account goes quiet.</span>
+          </div>
+          <div class="number">
+            <span class="number-big mono">1</span>
+            <span class="number-cap">move to revoke. Mid-thought, mid-transaction, any time.</span>
+          </div>
+        </div>
+        <p class="numbers-note">These are the live limits on the leash account in the receipts below.</p>
+      </section>
+
+      <!-- WHY: warm prose, no cards -->
+      <section class="why container" aria-labelledby="why-title">
+        <h2 id="why-title">This already went wrong for other people.</h2>
+        <p>
+          In January 2026, ungoverned trading agents at Step Finance moved 27 to 30 million
+          dollars. A prompt injection drained roughly 150 to 200 thousand dollars from Grok
+          and Bankr users after a guardrail was silently rewritten. The lesson is simple.
+        </p>
+        <p class="why-thesis">Instructions don't survive a clever prompt. Contracts do.</p>
+        <p>
+          So LEASH puts the boundary where prompts can't reach it: a per-transfer cap, a
+          spending window, an allowlist, and an expiry, enforced by a contract on 0G Chain.
+          You bind the agent, watch its reasoning live as it's served by 0G Compute, and step
+          in before it spends.
+        </p>
+      </section>
+
+      <!-- THE ONE SOFT-SHADOW CARD: the daily loop -->
+      <section class="daily container" aria-labelledby="daily-title">
+        <div class="daily-card">
+          <h2 id="daily-title">Most days it's one small question.</h2>
+          <p>
+            A rare boundary decision arrives with Approve and Deny inline, in the app or in
+            Telegram. A daily digest tells you what was spent. Every decision is hash-chained,
+            encrypted to you alone, and anchored on 0G Storage. Attested inference, where you
+            choose the TEE providers.
+          </p>
+          <div class="daily-sample" aria-label="Sample boundary decision">
+            <span class="daily-q">treasury-bot wants <span class="mono">0.05 0G</span> for an address you haven't approved.</span>
+            <span class="daily-a"><span class="chip chip-ok">Approve</span><span class="chip chip-no">Deny</span></span>
+          </div>
+        </div>
+      </section>
+
+      <!-- RECEIPTS -->
+      <section class="receipts container" id="receipts" aria-labelledby="receipts-title">
+        <h2 id="receipts-title">The receipts</h2>
+        <ul class="receipt-list">
+          <li>
+            <span class="receipt-name">AgentRegistry</span>
+            <a class="mono" href="https://chainscan-galileo.0g.ai/address/0xA74d573F43CFDA890713Bd348186ab80736642C3">0xA74d…42C3</a>
+            <a class="verify" href="https://repo.sourcify.dev/contracts/full_match/16602/0xA74d573F43CFDA890713Bd348186ab80736642C3/">sourcify-verified</a>
+          </li>
+          <li>
+            <span class="receipt-name">LeashAccountFactory</span>
+            <a class="mono" href="https://chainscan-galileo.0g.ai/address/0x5100f7a9661F56842342C21aAAc15169A7fD3c52">0x5100…3c52</a>
+            <a class="verify" href="https://repo.sourcify.dev/contracts/full_match/16602/0x5100f7a9661F56842342C21aAAc15169A7fD3c52/">sourcify-verified</a>
+          </li>
+          <li>
+            <span class="receipt-name">A coordinated agent act</span>
+            <a class="mono" href="https://chainscan-galileo.0g.ai/tx/0xf3e61c52be3442b850752252a9f4a881ffd53d198ee534468caa220bc965a34f">0xf3e6…a34f</a>
+            <span class="verify">Live on 0G testnet</span>
+          </li>
+        </ul>
+        <p class="receipts-note">Testnet only. No mainnet funds are at stake yet.</p>
+      </section>
+
+      <!-- CLOSING -->
+      <section class="closing container">
+        <p class="closing-line">Let your AI agent spend real money. Keep the&nbsp;leash.</p>
+        <a class="pill pill-inverse" href="https://leash-0g-web.vercel.app">Open the cockpit</a>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="container footer-line">
+        LEASH · reasoning served by 0G Compute · record on 0G Storage · limits enforced by a contract on 0G Chain
+      </div>
+    </footer>
+
+    <script type="module" src="/src/v4.js"></script>
+  </body>
+</html>

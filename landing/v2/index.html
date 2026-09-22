@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LEASH — let your AI agent spend real money. Keep the leash.</title>
+    <meta name="description" content="An account your agent can spend from and cannot escape. Hard on-chain limits, one-move revoke, a record encrypted to you alone. Live on 0G testnet." />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="preload" href="/fonts/dm-serif-display-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href="/fonts/source-sans-3-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin />
+    <link rel="stylesheet" href="/src/v2.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="masthead">
+      <div class="container masthead-row">
+        <a class="brand" href="/v2/">LEASH</a>
+        <nav aria-label="Main">
+          <a class="mast-link" href="#prove">Proof</a>
+          <a class="mast-link pill pill-ink" href="https://leash-0g-web.vercel.app">Open the cockpit</a>
+        </nav>
+      </div>
+    </header>
+
+    <main id="main">
+      <!-- HERO: engraving, headline, self-printing statement -->
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="column">
+          <svg class="engraving" width="150" height="60" viewBox="0 0 120 48" aria-hidden="true" focusable="false">
+            <circle cx="17" cy="24" r="11" fill="none" />
+            <path d="M28 24 C 42 24, 46 14, 57 19 S 70 29, 77 24" fill="none" />
+            <rect x="80" y="17" width="20" height="14" rx="7" fill="none" transform="rotate(-14 90 24)" />
+            <rect x="96" y="17" width="20" height="14" rx="7" fill="none" transform="rotate(14 106 24)" />
+          </svg>
+          <h1 id="hero-title">Let your AI agent spend real money. Keep the leash.</h1>
+          <p class="hero-sub">
+            An account your agent can spend from and cannot escape. This morning's statement,
+            as the contract wrote it:
+          </p>
+        </div>
+
+        <div class="column">
+          <div class="statement paper" id="demo">
+            <div class="statement-head">
+              <span>ACCOUNT STATEMENT · treasury-bot</span>
+              <span class="statement-live">Live on 0G testnet</span>
+            </div>
+            <ol class="statement-lines mono" id="statement-lines" aria-live="polite">
+              <li data-line="09:14  top-up 0.002 0G — sent"></li>
+              <li data-line="09:15  request 0.05 0G to unknown address — REFUSED BY CONTRACT" data-tone="refuse"></li>
+              <li data-line="09:15  revoke() — account closed to the agent" data-tone="refuse"></li>
+              <li data-line="09:15  record sealed · hash-chained · encrypted to owner" data-tone="accent"></li>
+            </ol>
+            <div class="statement-foot">
+              <button class="print-again" id="print-again" type="button">Print it again</button>
+              <span class="sim-note">Simulated statement. The format is real.</span>
+            </div>
+          </div>
+          <div class="hero-ctas">
+            <button class="pill pill-accent" id="cta-watch" type="button">Watch a leash hold</button>
+            <a class="pill pill-outline" href="https://leash-0g-web.vercel.app">Open the cockpit</a>
+          </div>
+        </div>
+      </section>
+
+      <!-- READING COLUMN: the argument -->
+      <section class="essay" aria-labelledby="essay-title">
+        <div class="column">
+          <h2 id="essay-title">Money already answers to agents. Agents answer to no one.</h2>
+          <p>
+            In January 2026, trading agents at Step Finance moved 27 to 30 million dollars
+            they were never meant to touch. Nothing in their instructions stopped them,
+            because instructions are text. Around the same time, a prompt injection walked
+            past a guardrail that had been silently rewritten and drained roughly 150 to 200
+            thousand dollars from Grok and Bankr users.
+          </p>
+          <p>
+            LEASH takes the opposite bet. You bind an agent to a leash account and watch it
+            reason live, with its thinking served by 0G Compute. You can step in before it
+            spends. And if you never get the chance, the account itself refuses: a per-transfer
+            cap, a spending window, an allowlist, and an expiry, all enforced by a contract on
+            0G Chain. A fully hijacked agent cannot exceed them. Revoke is one move.
+          </p>
+        </div>
+      </section>
+
+      <!-- FULL-BLEED INSERT 1: the thesis band breaks the column -->
+      <aside class="bleed bleed-thesis" aria-label="Thesis">
+        <p class="column-wide">Instructions don't survive a clever prompt. Contracts do.</p>
+      </aside>
+
+      <!-- READING COLUMN: the daily loop -->
+      <section class="essay" aria-labelledby="loop-title">
+        <div class="column">
+          <h2 id="loop-title">Most mornings, this page is the whole job.</h2>
+          <p>
+            The daily loop is small on purpose. A rare boundary decision arrives with Approve
+            and Deny inline, in the app or in Telegram. A digest tells you what was spent.
+            Everything else runs itself, and every decision lands in a record that is
+            hash-chained, encrypted to you alone, and anchored on 0G Storage. When you want
+            attested inference, you choose the TEE providers.
+          </p>
+        </div>
+      </section>
+
+      <!-- PROVE: underline draws on scroll into this section -->
+      <section class="essay prove" id="prove" aria-labelledby="prove-title">
+        <div class="column">
+          <h2 id="prove-title"><span class="underline-draw" id="prove-underline">Prove it, don't promise it.</span></h2>
+          <p>
+            These are the contracts holding the statement above, verified where anyone can
+            read the source.
+          </p>
+        </div>
+      </section>
+
+      <!-- FULL-BLEED INSERT 2: receipts band breaks the column -->
+      <aside class="bleed bleed-receipts" aria-label="Receipts">
+        <div class="column-wide">
+          <dl class="receipts">
+            <div class="receipt">
+              <dt>AgentRegistry</dt>
+              <dd>
+                <a class="mono" href="https://chainscan-galileo.0g.ai/address/0xA74d573F43CFDA890713Bd348186ab80736642C3">0xA74d573F43CFDA890713Bd348186ab80736642C3</a>
+                <a class="verify" href="https://repo.sourcify.dev/contracts/full_match/16602/0xA74d573F43CFDA890713Bd348186ab80736642C3/">sourcify-verified</a>
+              </dd>
+            </div>
+            <div class="receipt">
+              <dt>LeashAccountFactory</dt>
+              <dd>
+                <a class="mono" href="https://chainscan-galileo.0g.ai/address/0x5100f7a9661F56842342C21aAAc15169A7fD3c52">0x5100f7a9661F56842342C21aAAc15169A7fD3c52</a>
+                <a class="verify" href="https://repo.sourcify.dev/contracts/full_match/16602/0x5100f7a9661F56842342C21aAAc15169A7fD3c52/">sourcify-verified</a>
+              </dd>
+            </div>
+            <div class="receipt">
+              <dt>Coordinated agent act</dt>
+              <dd>
+                <a class="mono" href="https://chainscan-galileo.0g.ai/tx/0xf3e61c52be3442b850752252a9f4a881ffd53d198ee534468caa220bc965a34f">0xf3e61c52…bc965a34f</a>
+                <span class="verify">Live on 0G testnet</span>
+              </dd>
+            </div>
+          </dl>
+          <p class="testnet-note">Testnet only. No mainnet funds are at stake yet.</p>
+        </div>
+      </aside>
+
+      <!-- CLOSING -->
+      <section class="essay closing">
+        <div class="column">
+          <h2>Keep the leash.</h2>
+          <div class="hero-ctas">
+            <button class="pill pill-accent" id="cta-watch-2" type="button">Watch a leash hold</button>
+            <a class="pill pill-outline" href="https://leash-0g-web.vercel.app">Open the cockpit</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <div class="container">
+        <p>LEASH · reasoning served by 0G Compute · record on 0G Storage · limits enforced by a contract on 0G Chain</p>
+      </div>
+    </footer>
+
+    <script type="module" src="/src/v2.js"></script>
+  </body>
+</html>

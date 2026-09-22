@@ -1,0 +1,217 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LEASH — Let your AI agent spend real money. Keep the leash.</title>
+    <meta
+      name="description"
+      content="LEASH watches your agent think, holds hard limits it can't change, and writes a proof of everything it did."
+    />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="alternate icon" href="/favicon.ico" />
+    <link rel="stylesheet" href="/src/c.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="topbar">
+      <a class="brand" href="/c/">
+        <img src="/logo.svg" alt="" width="26" height="26" />
+        <span>LEASH</span>
+      </a>
+      <a class="btn-solid btn-small" href="https://leash-0g-web.vercel.app">Open the cockpit</a>
+    </header>
+
+    <main id="main">
+      <!-- HERO: the receipt wall -->
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="wall" aria-label="On-chain receipts, all real">
+          <article class="ticket tk-1">
+            <p class="tk-head">LEASH · RECEIPT #0001</p>
+            <p class="tk-row"><span>artifact</span>AgentRegistry</p>
+            <p class="tk-row"><span>status</span><em class="ok">sourcify-verified</em></p>
+            <p class="tk-hash">
+              <a href="https://chainscan-galileo.0g.ai/address/0xA74d573F43CFDA890713Bd348186ab80736642C3"
+                >0xA74d573F43CFDA890713Bd348186ab80736642C3</a
+              >
+            </p>
+            <p class="tk-foot">0G TESTNET 16602 · KEEP FOR YOUR RECORDS</p>
+          </article>
+          <article class="ticket tk-2">
+            <p class="tk-head">LEASH · RECEIPT #0002</p>
+            <p class="tk-row"><span>artifact</span>LeashAccountFactory</p>
+            <p class="tk-row"><span>status</span><em class="ok">sourcify-verified</em></p>
+            <p class="tk-hash">
+              <a href="https://chainscan-galileo.0g.ai/address/0x5100f7a9661F56842342C21aAAc15169A7fD3c52"
+                >0x5100f7a9661F56842342C21aAAc15169A7fD3c52</a
+              >
+            </p>
+            <p class="tk-foot">0G TESTNET 16602 · KEEP FOR YOUR RECORDS</p>
+          </article>
+          <article class="ticket tk-3">
+            <p class="tk-head">LEASH · RECEIPT #0003</p>
+            <p class="tk-row"><span>event</span>agent-to-agent act</p>
+            <p class="tk-row"><span>status</span><em class="ok">sealed on chain</em></p>
+            <p class="tk-hash">
+              <a href="https://chainscan-galileo.0g.ai/tx/0xf3e61c52be3442b850752252a9f4a881ffd53d198ee534468caa220bc965a34f"
+                >0xf3e61c52be3442b850752252a9f4a881ffd53d198ee534468caa220bc965a34f</a
+              >
+            </p>
+            <p class="tk-foot">0G TESTNET 16602 · KEEP FOR YOUR RECORDS</p>
+          </article>
+        </div>
+
+        <div class="hero-overlay">
+          <p class="overline">Live on 0G testnet · receipts above are real, tap any hash</p>
+          <h1 id="hero-title">Let your AI agent spend real money. <em>Keep the leash.</em></h1>
+          <p class="hero-sub">
+            LEASH watches your agent think, holds hard limits it can't change, and writes a proof of
+            everything it did.
+          </p>
+          <div class="hero-ctas">
+            <a class="btn-solid" href="https://leash-0g-web.vercel.app">Open the cockpit</a>
+            <a class="btn-line" href="mailto:damilolamustaphaa@gmail.com?subject=LEASH%20access"
+              >Request access to the repo</a
+            >
+          </div>
+        </div>
+      </section>
+
+      <!-- LEDGER: claim ↔ receipt -->
+      <section class="ledger" aria-labelledby="ledger-title">
+        <h2 id="ledger-title" class="ledger-head">The ledger. Every claim, its receipt.</h2>
+
+        <!-- entry 1: the problem -->
+        <div class="entry">
+          <div class="claim">
+            <h3>Agents already moved money nobody signed off on.</h3>
+            <p>
+              In January 2026, Step Finance trading agents moved $27–30M with no human gate. Around
+              the same time, ~$150–200k was drained from Grok/Bankr through prompt injection; the
+              guardrail that was supposed to stop it had been silently rewritten.
+            </p>
+            <p class="claim-pull">Instructions don't survive a clever prompt. Contracts do.</p>
+          </div>
+          <article class="ticket ticket-inline ticket-bad">
+            <p class="tk-head">INCIDENT LOG · JAN 2026</p>
+            <p class="tk-row"><span>step finance</span><em class="bad">$27–30M · no human gate</em></p>
+            <p class="tk-row"><span>grok/bankr</span><em class="bad">~$150–200k · prompt injection</em></p>
+            <p class="tk-row"><span>guardrail</span><em class="bad">silently rewritten</em></p>
+            <p class="tk-foot">NOT OUR RECEIPTS. THE REASON THIS EXISTS.</p>
+          </article>
+        </div>
+
+        <!-- entry 2: how it works -->
+        <div class="entry">
+          <div class="claim">
+            <h3>Four moves, in order.</h3>
+            <ol class="claim-steps">
+              <li><strong>Bind.</strong> Point your agent's wallet at a LEASH account; set caps, allowlist, expiry.</li>
+              <li><strong>Watch.</strong> See it reason live; step in before it acts.</li>
+              <li><strong>Contain.</strong> The contract refuses anything outside the leash, no matter what the agent was tricked into.</li>
+              <li><strong>Prove.</strong> Every decision hash-chained, encrypted to you alone, anchored on 0G.</li>
+            </ol>
+          </div>
+          <article class="ticket ticket-inline">
+            <p class="tk-head">LEASH CONFIG · treasury-bot</p>
+            <p class="tk-row"><span>per-transfer cap</span>0.001 0G</p>
+            <p class="tk-row"><span>spending window</span>0.01 0G / day</p>
+            <p class="tk-row"><span>allowlist</span>2 addresses</p>
+            <p class="tk-row"><span>expiry</span>30 days</p>
+            <p class="tk-row"><span>editable by agent</span><em class="bad">never</em></p>
+            <p class="tk-foot">ENFORCED BY A CONTRACT ON 0G CHAIN</p>
+          </article>
+        </div>
+
+        <!-- entry 3: daily loop -->
+        <div class="entry">
+          <div class="claim">
+            <h3>Autonomous by default. You get the rare decision, not a chore queue.</h3>
+            <p>
+              When the agent hits a boundary, a card like the one on the right shows up, in the app
+              and in Telegram, the same card on your phone. Ignore it and it denies by default.
+              Otherwise your whole day is one digest line.
+            </p>
+          </div>
+          <div class="claim-receipts">
+            <article class="ticket ticket-inline">
+              <p class="tk-head">BOUNDARY ALERT · 14:02</p>
+              <p class="tk-body">
+                treasury-bot wants to send 0.002 0G to 0x9c…9c9c <em class="ok">allowlisted ✓</em>,
+                over its per-transfer cap of 0.001 0G.
+              </p>
+              <p class="tk-row"><span>⏱ default</span>denies in 10 min</p>
+              <p class="tk-btns"><span class="tb tb-ok">Approve</span><span class="tb tb-no">Deny</span></p>
+            </article>
+            <article class="ticket ticket-inline">
+              <p class="tk-head">DAILY DIGEST</p>
+              <p class="tk-body">Since you last looked: 3 transfers went out, 0.006 0G total.</p>
+              <p class="tk-foot">NOTHING ELSE NEEDED YOU TODAY</p>
+            </article>
+          </div>
+        </div>
+
+        <!-- entry 4: revoke -->
+        <div class="entry">
+          <div class="claim">
+            <h3>One move ends everything.</h3>
+            <p>
+              Revoke is a single transaction. After it, the contract refuses every act, even ones
+              already queued. We ran it live, and it fail-closed.
+            </p>
+          </div>
+          <article class="ticket ticket-inline ticket-bad">
+            <p class="tk-head">REVOKE · EXECUTED LIVE</p>
+            <p class="tk-row"><span>moves required</span>1</p>
+            <p class="tk-row"><span>acts after revoke</span><em class="bad">all refused</em></p>
+            <p class="tk-row"><span>mode</span><em class="ok">fail-closed</em></p>
+            <p class="tk-foot">TESTED ON 0G TESTNET, FOR REAL</p>
+          </article>
+        </div>
+
+        <!-- entry 5: the record -->
+        <div class="entry">
+          <div class="claim">
+            <h3>Every decision, on the record. Yours alone to read.</h3>
+            <p>
+              A tamper-evident record of what your agent did and why: hash-chained, encrypted to
+              you alone, anchored on 0G Storage. Attested inference where you choose TEE providers.
+            </p>
+            <details class="fine">
+              <summary>Where each piece of 0G sits</summary>
+              <p>
+                Every reasoning call is served by 0G Compute. The tamper-evident record lives on 0G
+                Storage. The limits are enforced by a contract on 0G Chain.
+              </p>
+            </details>
+          </div>
+          <article class="ticket ticket-inline">
+            <p class="tk-head">RECORD ENTRY · #4417</p>
+            <p class="tk-row"><span>decision</span>skip trade, spread too thin</p>
+            <p class="tk-row"><span>prev hash</span>0x81f2…c04a</p>
+            <p class="tk-row"><span>this hash</span>0x3d9e…77b1</p>
+            <p class="tk-row"><span>readable by</span><em class="ok">owner only</em></p>
+            <p class="tk-foot">ANCHORED ON 0G STORAGE</p>
+          </article>
+        </div>
+      </section>
+
+      <!-- CTA -->
+      <section class="cta" aria-labelledby="cta-title">
+        <h2 id="cta-title">Your agent's next receipt could be this boring.</h2>
+        <p class="cta-sub">That is the point.</p>
+        <div class="hero-ctas">
+          <a class="btn-solid" href="https://leash-0g-web.vercel.app">Open the cockpit</a>
+          <a class="btn-line" href="mailto:damilolamustaphaa@gmail.com?subject=LEASH%20access"
+            >Request access to the repo</a
+          >
+        </div>
+      </section>
+    </main>
+
+    <footer class="foot">
+      <p>Built on 0G. Reasoning by 0G Compute, record on 0G Storage, enforcement on 0G Chain.</p>
+    </footer>
+  </body>
+</html>

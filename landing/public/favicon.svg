@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="LEASH clasp">
+  <title>LEASH mark — Tether clasp</title>
+  <rect width="32" height="32" rx="7" fill="#0a0a0b"/>
+  <g fill="none" stroke="#c6f24d" stroke-width="3" stroke-linecap="round">
+    <!-- clasp loop -->
+    <circle cx="12" cy="16" r="7"/>
+    <!-- snap gate -->
+    <path d="M17.5 11 l4 -3" stroke="#d6ff6a"/>
+    <!-- tether stub threading out to the right -->
+    <path d="M19 16 h9"/>
+  </g>
+</svg>

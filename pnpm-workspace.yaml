@@ -1,6 +1,7 @@
 packages:
   - backend
   - web
+  - landing
 allowBuilds:
   '@reown/appkit': false
   argon2: true

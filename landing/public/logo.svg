@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 80" role="img" aria-label="LEASH">
+  <title>LEASH — Tether</title>
+  <!-- Wordmark: geometric slab caps in ink -->
+  <g fill="#f4f4ef" font-family="'Clash Display','Helvetica Neue',Arial,sans-serif" font-weight="700">
+    <text x="44" y="52" font-size="46" letter-spacing="1">LEASH</text>
+  </g>
+  <!-- The leash: a single fine lime line. Clasp/loop before L, threads the baseline, hook after H -->
+  <g fill="none" stroke="#c6f24d" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+    <!-- clasp ring (the loop that holds) -->
+    <circle cx="20" cy="60" r="9"/>
+    <!-- clasp gate opening (the snap) -->
+    <path d="M27 55 l6 -4" stroke="#d6ff6a"/>
+    <!-- tether line threading along baseline of the whole word -->
+    <path d="M29 60 C 60 66, 120 66, 210 62 C 240 60, 250 58, 258 56"/>
+    <!-- hook after the H -->
+    <path d="M258 56 c 8 -2 12 4 8 10 c -3 4 -9 3 -10 -2"/>
+  </g>
+</svg>
