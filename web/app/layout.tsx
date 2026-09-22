@@ -21,6 +21,12 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="en">
+      <head>
+        {/* Preload the landing's two primary used faces (Clash Display 700 headline,
+            Manrope 400 body). font-display: swap is set per @font-face in landing.css. */}
+        <link rel="preload" href="/fonts/clash-display-700.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
+        <link rel="preload" href="/fonts/manrope-latin-400-normal.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
+      </head>
       <body>
         <Providers>
           <SiteNav />

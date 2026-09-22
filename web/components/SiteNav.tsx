@@ -11,7 +11,7 @@ import { UnreadBadge } from '@/components/inbox/UnreadBadge';
 
 export function Wordmark({ height = 26 }: { height?: number }) {
   return (
-    <Link href="/" aria-label="LEASH home" style={{ display: 'inline-flex', alignItems: 'center' }}>
+    <Link href="/app" aria-label="LEASH console home" style={{ display: 'inline-flex', alignItems: 'center' }}>
       <svg height={height} viewBox="0 0 300 80" role="img" aria-label="LEASH" style={{ display: 'block', width: 'auto' }}>
         <g fill="var(--color-ink, #f4f4ef)" fontFamily="var(--font-display), 'Clash Display', sans-serif" fontWeight={700}>
           <text x="44" y="52" fontSize="46" letterSpacing="1">LEASH</text>
@@ -32,7 +32,11 @@ export default function SiteNav() {
   const wallet = useOwnerWallet();
   const { agentId } = useAgentId();
 
+  // The marketing landing (route `/`) renders its own minimal header — hide the app nav.
+  if (path === '/') return null;
+
   const links: { href: string; label: string; badge?: boolean }[] = [
+    { href: '/app', label: 'Agents' },
     { href: '/create', label: 'Create agent' },
     { href: '/links', label: 'Links' },
     { href: '/inbox', label: 'Inbox', badge: true },
