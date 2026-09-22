@@ -13,6 +13,11 @@ export interface InlineKeyboardButton {
 
 export interface SendMessageInput {
   chat_id: string;
+  // PLAIN TEXT ONLY — deliberately no `parse_mode`. Cards carry UNTRUSTED
+  // model-authored text (refs.agentIntent, sanitized to strip control chars but
+  // NOT markup like * _ ` <). Adding parse_mode: 'HTML'/'MarkdownV2' here would
+  // turn that intent line into a markup/entity-injection surface on the phone —
+  // do not, without HTML-escaping every untrusted field first.
   text: string;
   reply_markup?: { inline_keyboard: InlineKeyboardButton[][] } | undefined;
 }

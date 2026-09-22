@@ -29,8 +29,8 @@ test('fleet list → create second agent (executor) → link → pair timeline �
   state.approvalPending = false;
   await installMockApi(page, state);
 
-  // — Fleet list shows the Phase-1 agent fetched from the backend (no localStorage redirect)
-  await page.goto('/');
+  // — Fleet list (now at /app; / is the landing) shows the Phase-1 agent fetched from the backend
+  await page.goto('/app');
   await expect(page.getByTestId('fleet-list')).toBeVisible();
   await expect(page.getByTestId('fleet-row-agent-1')).toContainText('Treasury helper');
 
