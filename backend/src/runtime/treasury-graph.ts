@@ -12,7 +12,7 @@ import { CoordinationError, type DelegationCoordinator } from '../coordination/c
 import type { AlertService } from '../alerts/service.js';
 import { BoundaryRegistry, policyFingerprint, DAMPABLE_ERRORS, type DampableError } from './boundary.js';
 import { decodeLeashError } from '../chain/errors.js';
-import { formatG, shortAddr, inMinutes } from '../util/format.js';
+import { formatG, shortAddr, inMinutes, sanitizeAgentIntent } from '../util/format.js';
 import type { DecodedLeashError } from '../types.js';
 import type { RuntimeChain } from './session-chain.js';
 import {
@@ -366,6 +366,12 @@ export function buildTreasuryGraph(
         deps.approvalTimeoutMs !== undefined
           ? ` ⏱ Auto-denies ${inMinutes(deps.approvalTimeoutMs)} if you don't answer.`
           : ' ⏱ Auto-denies if you don\'t answer in time.';
+      // The agent's own stated purpose (00 §6b) — UNTRUSTED, so it is sanitized
+      // (control chars stripped, one line, capped) and carried in refs, NOT the
+      // verified summary. Each surface renders it labeled + quoted + quarantined
+      // (Telegram appends a line; the app shows a distinct block) so the owner
+      // sees WHY without the card becoming a persuasion/injection surface.
+      const intent = sanitizeAgentIntent(verdict.decision.reason);
       await deps.alerts.emit(ctx.agentRow.ownerAddr, {
         agentId: ctx.agentId,
         class: 'decision',
@@ -379,6 +385,7 @@ export function buildTreasuryGraph(
           approvalId: approval.id,
           amountWei: verdict.decision.amountWei,
           to,
+          ...(intent ? { agentIntent: intent } : {}),
           ...(deps.approvalTimeoutMs !== undefined
             ? { autoDeniesAtUnix: Math.floor((Date.now() + deps.approvalTimeoutMs) / 1000) }
             : {}),

@@ -288,6 +288,7 @@ export class DigestService {
           `${formatG(digest.totals.spendWei)} total` +
           (decisions > 0 ? `, and ${plural(decisions, 'decision')} came to you.` : '.');
 
+    const nameOf = new Map(digest.agents.map((a) => [a.agentId, a.name]));
     const lines: string[] = [lead, ''];
     for (const a of digest.agents) {
       const bits: string[] = [];
@@ -303,6 +304,7 @@ export class DigestService {
         if (a.approvals.expired > 0) parts.push(`${a.approvals.expired} expired unanswered`);
         bits.push(parts.join(', '));
       }
+      if (a.modifies > 0) bits.push(`${plural(a.modifies, 'limit change')} you made`);
       const done = a.delegationsTerminal['completed'] ?? 0;
       const rough = ['failed', 'declined', 'cancelled', 'expired']
         .map((k) => a.delegationsTerminal[k] ?? 0)
@@ -310,6 +312,20 @@ export class DigestService {
       if (done > 0) bits.push(`${plural(done, 'handoff')} completed`);
       if (rough > 0) bits.push(`${plural(rough, 'handoff')} didn't go through`);
       if (bits.length > 0) lines.push(`🐕 ${a.name} — ${bits.join(' · ')}`);
+    }
+
+    // Cross-agent handoffs, named and directional (row-sourced links) — a
+    // fleet's coordination is invisible without WHO handed off to WHOM.
+    if (digest.links.length > 0) {
+      lines.push('', 'Handoffs between your agents:');
+      for (const l of digest.links) {
+        const from = nameOf.get(l.fromAgentId) ?? 'an agent';
+        const to = nameOf.get(l.toAgentId) ?? 'an agent';
+        const parts = Object.entries(l.byStatus)
+          .map(([status, n]) => `${n} ${status === 'completed' ? 'completed' : status}`)
+          .join(', ');
+        lines.push(`↪ ${from} → ${to}: ${parts}`);
+      }
     }
 
     const attention: string[] = [];

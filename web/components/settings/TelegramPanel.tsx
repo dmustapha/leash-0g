@@ -104,6 +104,17 @@ export function TelegramPanel({
               <p style={{ margin: 0, fontSize: '0.78rem', color: 'var(--color-ink-faint)' }}>
                 One-time link, valid until {new Date(deepLink.expiresAt).toLocaleTimeString()}.
               </p>
+              <Disclosure label="No Start button? (used this bot before)">
+                Telegram only shows the <strong>Start</strong> button the first time you open a
+                bot. If you&apos;ve linked before, open <span className="code">@leashapp_bot</span>{' '}
+                and send this message instead:
+                <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap', marginTop: '0.5rem' }}>
+                  <span className="code" style={{ wordBreak: 'break-all' }}>
+                    /start {new URL(deepLink.url).searchParams.get('start') ?? ''}
+                  </span>
+                  <CopyButton text={`/start ${new URL(deepLink.url).searchParams.get('start') ?? ''}`} />
+                </div>
+              </Disclosure>
               <button
                 type="button"
                 className="btn btn-ghost btn-sm"

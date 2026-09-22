@@ -62,6 +62,15 @@ const LEASH_ACCOUNT_ABI = [
     }],
     outputs: [],
   },
+  {
+    name: 'policy', type: 'function', stateMutability: 'view', inputs: [],
+    outputs: [
+      { name: 'perTransferCap', type: 'uint128' },
+      { name: 'windowCap', type: 'uint128' },
+      { name: 'windowSeconds', type: 'uint32' },
+      { name: 'expiresAt', type: 'uint64' },
+    ],
+  },
 ];
 
 // ---------- Privy headless SIWE (same flow the FE uses) ----------
@@ -86,15 +95,38 @@ async function privyLogin() {
 }
 
 let token;
-async function api(path, opts = {}) {
+async function api(path, opts = {}, _retried = false) {
   const res = await fetch(`${API}${path}`, {
     ...opts,
     headers: { 'content-type': 'application/json', authorization: `Bearer ${token}`, ...(opts.headers ?? {}) },
   });
+  // Privy SIWE tokens are short-lived (~1 h); a long drill (link loops + patient
+  // approval windows) outlives them. A 401 means "token expired", not "denied" —
+  // re-login ONCE and retry so the poll doesn't silently spin forever (drill-7/8
+  // 401 root cause).
+  if (res.status === 401 && !_retried) {
+    token = await privyLogin();
+    return api(path, opts, true);
+  }
   const body = await res.json().catch(() => ({}));
   return { status: res.status, body };
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// 0G RPC lags on immediate receipt lookups (a fresh tx isn't indexed the
+// instant it's mined). waitForTransactionReceipt can throw
+// TransactionReceiptNotFoundError before the node catches up — retry with a
+// generous timeout instead of failing the whole drill on a transient miss.
+async function waitReceipt(hash, tries = 5) {
+  for (let i = 0; i < tries; i++) {
+    try {
+      return await pub.waitForTransactionReceipt({ hash, timeout: 120_000, pollingInterval: 2_000 });
+    } catch (e) {
+      if (i === tries - 1) throw e;
+      await sleep(4_000);
+    }
+  }
+}
 
 async function traces(agentId) {
   const tr = await api(`/api/agents/${agentId}/traces?limit=200`);
@@ -147,6 +179,12 @@ async function main() {
   token = await privyLogin();
   console.log('privy SIWE login OK');
 
+  // PART_B_ONLY: skip the phone-interactive sections (link, approve/deny,
+  // digest) and run only the fully-automated limit_hit + damping proof. Used
+  // when the operator-facing halves are ALREADY proven on-chain and only the
+  // headless Part B needs a deployed run.
+  let agentA;
+  if (!process.env.PART_B_ONLY) {
   // ---------- 1. Telegram link (interactive) ----------
   // Tokens are single-use with a 5-min TTL (security posture unchanged) —
   // the drill simply re-issues a FRESH link every 4 minutes until the
@@ -168,11 +206,11 @@ async function main() {
   // ---------- 2. Part A agent: require_approval boundary → inline APPROVE ----------
   const createA = await api('/api/agents', { method: 'POST', body: JSON.stringify(createBody('phase3-telegram-drill', { requireApproval: true })) });
   if (createA.status !== 201) throw new Error(`create A failed ${createA.status}: ${JSON.stringify(createA.body)}`);
-  const agentA = createA.body.agentId;
+  agentA = createA.body.agentId;
   evidence.telegram = { agentId: agentA, accountAddr: createA.body.accountAddr };
   // fund the account so the approved act is a REAL transfer
   const fundTx = await opsWallet.sendTransaction({ to: createA.body.accountAddr, value: parseEther('0.01') });
-  await pub.waitForTransactionReceipt({ hash: fundTx });
+  await waitReceipt(fundTx);
   await api(`/api/agents/${agentA}/start`, { method: 'POST', body: '{}' });
   console.log('agent A started — the boundary alert should push to your phone within ~1 min.');
   console.log('\n=== ACTION REQUIRED (phone) ===\nTap ✅ APPROVE on the LEASH card when it arrives.\n===============================\n');
@@ -228,6 +266,7 @@ async function main() {
   }).catch(() => null);
   evidence.scheduledPush = scheduled ? { seq: scheduled.seq } : 'skipped-empty-or-timeout (recorded honestly)';
   console.log('scheduled push:', evidence.scheduledPush);
+  } // end !PART_B_ONLY
 
   // ---------- 5. Part B: limit_hit + damping (instant-tighten) ----------
   const createB = await api('/api/agents', { method: 'POST', body: JSON.stringify(createBody('phase3-limit-hit-drill')) });
@@ -236,10 +275,10 @@ async function main() {
   const accountB = createB.body.accountAddr;
   evidence.limitHit = { agentId: agentB, accountAddr: accountB };
   const fundB = await opsWallet.sendTransaction({ to: accountB, value: parseEther('0.01') });
-  await pub.waitForTransactionReceipt({ hash: fundB });
+  await waitReceipt(fundB);
   // gas for the owner's tighten tx
   const gasTx = await opsWallet.sendTransaction({ to: owner.address, value: parseEther('0.005') });
-  await pub.waitForTransactionReceipt({ hash: gasTx });
+  await waitReceipt(gasTx);
 
   await api(`/api/agents/${agentB}/start`, { method: 'POST', body: '{}' });
   const firstAct = await waitUntil('agent B first in-policy act', 300_000, async () => {
@@ -248,19 +287,27 @@ async function main() {
   });
   console.log('agent B acted in-policy:', firstAct.detail.txHash);
 
-  // Owner INSTANT-TIGHTENS windowCap below the next send (tightening needs no timelock).
+  // Owner INSTANT-TIGHTENS windowCap below the next send (tightening needs no
+  // timelock). Read the CURRENT on-chain policy and change ONLY windowCap — the
+  // contract enforces monotonic tightening, so reusing a freshly-computed
+  // expiresAt would EXTEND expiry and revert as NotTightening (0x0bbfcdcc).
+  const [curPerXfer, , curWindowSecs, curExpiresAt] = await pub.readContract({
+    address: accountB,
+    abi: LEASH_ACCOUNT_ABI,
+    functionName: 'policy',
+  });
   const tightenTx = await ownerWallet.writeContract({
     address: accountB,
     abi: LEASH_ACCOUNT_ABI,
     functionName: 'tightenPolicy',
     args: [{
-      perTransferCap: parseEther('0.002'),
+      perTransferCap: curPerXfer, // unchanged
       windowCap: parseEther('0.0001'), // below any next send AND below already-spent
-      windowSeconds: 3600,
-      expiresAt: BigInt(Math.floor(Date.now() / 1000) + 7200),
+      windowSeconds: curWindowSecs, // unchanged
+      expiresAt: curExpiresAt, // unchanged — never extend, or NotTightening
     }],
   });
-  await pub.waitForTransactionReceipt({ hash: tightenTx });
+  await waitReceipt(tightenTx);
   evidence.limitHit.tightenTx = tightenTx;
   console.log('owner tightened windowCap on-chain:', tightenTx);
 
@@ -287,7 +334,7 @@ async function main() {
   console.log(`limit_hit ✓ ONE alert (${alertsFinal[0].refs?.errorName}), 0 futile acts, ${damped} damped stand-down(s)`);
 
   // ---------- 6. teardown ----------
-  for (const id of [agentA, agentB]) {
+  for (const id of [agentA, agentB].filter(Boolean)) {
     const rev = await api(`/api/agents/${id}/revoke`, { method: 'POST', body: '{}' });
     if (rev.status >= 300) console.error(`teardown revoke ${id} failed:`, rev.status, rev.body);
   }

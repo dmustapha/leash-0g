@@ -110,6 +110,25 @@ export function AlertCard({
 
       <p style={{ fontSize: '0.92rem', margin: 0 }}>{alert.summary}</p>
 
+      {typeof alert.refs.agentIntent === 'string' && alert.refs.agentIntent ? (
+        <div
+          data-testid="agent-intent"
+          style={{
+            borderLeft: '2px solid var(--color-line)',
+            paddingLeft: '0.7rem',
+            display: 'grid',
+            gap: '0.15rem',
+          }}
+        >
+          <span style={{ fontSize: '0.72rem', letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--color-ink-faint)' }}>
+            Agent says · unverified
+          </span>
+          <span style={{ fontSize: '0.86rem', color: 'var(--color-ink-dim)', fontStyle: 'italic' }}>
+            “{alert.refs.agentIntent}”
+          </span>
+        </div>
+      ) : null}
+
       {open && alert.kind === 'approval_required' && autoDeniesAt !== undefined ? (
         <p style={{ fontSize: '0.84rem', margin: 0, color: 'var(--color-ink-dim)' }} data-testid="autodeny-countdown">
           {countdown(autoDeniesAt) === 'expired'

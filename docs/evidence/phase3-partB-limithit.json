@@ -1,0 +1,13 @@
+{
+  "api": "https://leash-0g-backend.onrender.com",
+  "limitHit": {
+    "agentId": "3e35d3bd-d0f7-4667-8bbd-b15933fd5314",
+    "accountAddr": "0x5b83A37fde99cef0C8EDd2B50B1626f2d106Ae7b",
+    "tightenTx": "0x8deb7c8786c262e6a846d330a25849f9d11080e3c559db4ec718fc6a4af4c675",
+    "alertId": "0a2b3483-0e44-410a-8c83-61e935d5e099",
+    "boundaryErrorName": "OverWindowCap",
+    "actsBeforeBoundary": 1,
+    "futileActsAfterBoundary": 0,
+    "dampedStandDowns": 4
+  }
+}

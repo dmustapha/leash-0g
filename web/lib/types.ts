@@ -247,6 +247,8 @@ export type Alert = {
     autoDeniesAtUnix?: number;
     amountWei?: string;
     to?: string;
+    /** Agent's own stated purpose — UNTRUSTED (server-sanitized); render labeled + quoted. */
+    agentIntent?: string;
   };
   /** Coalesced kinds increment this. */
   count: number;
