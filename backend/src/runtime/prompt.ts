@@ -124,18 +124,27 @@ const EXECUTOR_PROMPT = [
   ...DECISION_CONTRACT,
 ].join('\n');
 
-const SYSTEM_PROMPTS: Record<AgentRole, string> = {
+// Only the transfer/allowance roles use this decision contract. Phase-4 job
+// roles (requester/provider/evaluator) have their OWN reason contracts in
+// jobs/prompt.ts (a deliverable / a verdict — not a send/stand_down decision).
+type TransferRole = 'treasury' | 'sentinel' | 'executor';
+const SYSTEM_PROMPTS: Record<TransferRole, string> = {
   treasury: TREASURY_PROMPT,
   sentinel: SENTINEL_PROMPT,
   executor: EXECUTOR_PROMPT,
 };
+
+function transferPromptFor(role: AgentRole): string {
+  if (role === 'treasury' || role === 'sentinel' || role === 'executor') return SYSTEM_PROMPTS[role];
+  throw new Error(`buildReasonRequest called for non-transfer role "${role}" — job roles use jobs/prompt.ts`);
+}
 
 /** Build the OpenAI-compatible chat body sent through the LEASH gateway. */
 export function buildReasonRequest(model: string, ctx: ReasonContext): Json {
   return {
     model,
     messages: [
-      { role: 'system', content: SYSTEM_PROMPTS[goalRole(ctx.goal)] },
+      { role: 'system', content: transferPromptFor(goalRole(ctx.goal)) },
       { role: 'user', content: `Observation:\n${JSON.stringify(buildObservation(ctx))}` },
     ],
     temperature: 0,
@@ -153,18 +162,14 @@ export function buildReasonRequest(model: string, ctx: ReasonContext): Json {
 // the user message (interfaces like PolicySnapshot lack Json's index signature).
 function buildObservation(ctx: ReasonContext) {
   const goal = ctx.goal;
+  // Only treasury/sentinel carry beneficiary/target/topUp; executor's request
+  // arrives via the inbound delegation. (Job roles never reach this builder.)
+  const goalCtx =
+    goal.type === undefined || goal.type === 'treasury' || goal.type === 'sentinel'
+      ? { goal: { beneficiary: goal.beneficiary, targetBalanceWei: goal.targetBalanceWei, topUpWei: goal.topUpWei } }
+      : {};
   return {
-    // Executor goals carry no beneficiary/amounts (spec §3b) — the request
-    // arrives in the inbound delegation instead.
-    ...(goal.type !== 'executor'
-      ? {
-          goal: {
-            beneficiary: goal.beneficiary,
-            targetBalanceWei: goal.targetBalanceWei,
-            topUpWei: goal.topUpWei,
-          },
-        }
-      : {}),
+    ...goalCtx,
     beneficiaryBalanceWei: ctx.beneficiaryBalanceWei,
     accountBalanceWei: ctx.accountBalanceWei,
     policy: ctx.policy,

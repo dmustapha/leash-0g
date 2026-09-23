@@ -26,6 +26,8 @@ import type {
   OwnerSettingsView,
   RevokeBatchResult,
   TraceRecord,
+  JobView,
+  OwnerJobSpec,
 } from './types';
 
 export type TokenGetter = () => Promise<string | null>;
@@ -68,7 +70,7 @@ export class ApiError extends Error {
 
 async function request<T>(
   getToken: TokenGetter,
-  method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+  method: 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE',
   path: string,
   body?: unknown,
 ): Promise<T> {
@@ -202,6 +204,14 @@ export function makeApi(getToken: TokenGetter) {
       request<{ url: string; expiresAt: string }>(getToken, 'POST', '/api/owner/telegram/link'),
     telegramUnlink: () => request<{ ok: true }>(getToken, 'DELETE', '/api/owner/telegram'),
     telegramPing: () => request<{ ok: true }>(getToken, 'POST', '/api/owner/telegram/ping'),
+
+    // — Phase 4 (spec §7): ACP jobs (request → deliver → verify → settle) —
+    listJobs: () => request<{ jobs: JobView[] }>(getToken, 'GET', '/api/jobs'),
+    getJob: (id: string) => request<JobView>(getToken, 'GET', `/api/jobs/${id}`),
+    putJobSpec: (ref: string, body: OwnerJobSpec) =>
+      request<{ ok: true; sourceRef: string }>(getToken, 'PUT', `/api/job-specs/${encodeURIComponent(ref)}`, body),
+    getJobSpec: (ref: string) =>
+      request<OwnerJobSpec>(getToken, 'GET', `/api/job-specs/${encodeURIComponent(ref)}`),
   };
 }
 

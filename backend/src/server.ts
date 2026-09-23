@@ -27,6 +27,13 @@ export interface ChainOps {
     policy: { perTransferCap: bigint; windowCap: bigint; windowSeconds: number; expiresAt: number };
     allowlist: string[];
     timelockDelay: number;
+    /**
+     * Phase-4 optional settlement-token config (F1/F3). Omitted / zero address
+     * ⇒ a native-only account (every legacy shape + provider/evaluator). When
+     * set, the account is token-capable with these immutable per-token caps.
+     */
+    settlementToken?: string;
+    tokenPolicy?: { perTransferCapToken: bigint; windowCapToken: bigint };
   }): Promise<{ accountAddr: string; chainAgentId: bigint; createTx: string; registerTx: string; guardianAddr: string }>;
   /**
    * `accountGuardianAddr` = the guardian recorded for this account at create

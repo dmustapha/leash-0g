@@ -20,6 +20,18 @@ export interface RuntimeChain {
     to: string;
     valueWei: bigint;
   }): Promise<{ txHash: string }>;
+  /**
+   * Phase-4 governed ERC-20 settlement (F9): the contract builds the transfer
+   * calldata — the agent supplies only (token, to, amount). A reverted settle
+   * must never be recorded as a completed settlement.
+   */
+  executeTokenTransfer(input: {
+    sessionPrivateKey: string;
+    accountAddr: string;
+    token: string;
+    to: string;
+    amountWei: bigint;
+  }): Promise<{ txHash: string }>;
 }
 
 export class SessionChain implements RuntimeChain {
@@ -60,6 +72,34 @@ export class SessionChain implements RuntimeChain {
       abi: leashAccountAbi,
       functionName: 'execute',
       args: [input.to as Hex, input.valueWei, '0x'],
+    });
+    const receipt = await waitReceipt(this.publicClient, txHash);
+    assertReceiptSuccess(receipt.status, txHash);
+    return { txHash };
+  }
+
+  async executeTokenTransfer(input: {
+    sessionPrivateKey: string;
+    accountAddr: string;
+    token: string;
+    to: string;
+    amountWei: bigint;
+  }): Promise<{ txHash: string }> {
+    const account = privateKeyToAccount(input.sessionPrivateKey as Hex);
+    const wallet = createWalletClient({
+      chain: zeroGChain(this.opts.rpcUrl, this.opts.chainId),
+      transport: http(this.opts.rpcUrl),
+      account,
+    });
+    // Phase 4: the contract builds IERC20.transfer(to, amount); the agent
+    // supplies only (token, to, amount) — no raw calldata (D-JOB-6).
+    const txHash = await wallet.writeContract({
+      chain: wallet.chain,
+      account,
+      address: input.accountAddr as Hex,
+      abi: leashAccountAbi,
+      functionName: 'executeTokenTransfer',
+      args: [input.token as Hex, input.to as Hex, input.amountWei],
     });
     const receipt = await waitReceipt(this.publicClient, txHash);
     assertReceiptSuccess(receipt.status, txHash);

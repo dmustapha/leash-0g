@@ -1,7 +1,8 @@
 // File: web/lib/leash-errors.ts
-// P3C-6(ii): plain-language copy for ALL 17 LeashAccount custom errors, mirroring
+// P3C-6(ii): plain-language copy for ALL LeashAccount custom errors, mirroring
 // backend/src/chain/errors.ts plainLeashError (the no-args variants) EXACTLY. The cockpit and
 // inbox render this copy — never a raw selector; the raw errorName lives behind a Disclosure.
+// Phase-4 adds the 5 governed-ERC-20 settlement errors (v3 executeTokenTransfer).
 
 export const LEASH_ERROR_COPY = {
   NotOwner: 'Only the owner wallet can do this.',
@@ -23,6 +24,16 @@ export const LEASH_ERROR_COPY = {
   NotLoosening: 'This path is only for changes that loosen policy — tightening applies instantly.',
   NotTightening: 'This path is only for changes that tighten policy.',
   InvalidPolicy: 'That policy configuration is not valid.',
+  // Phase-4 governed ERC-20 settlement (v3 executeTokenTransfer) — the no-args
+  // copy; the amount/cap variants are composed backend-side into the trace.
+  NoSettlementToken:
+    'This account is native-only — it has no settlement token configured, so token transfers are not allowed.',
+  TokenNotAllowlisted: 'That token is not this account’s settlement token — the account refuses to move it.',
+  OverPerTransferCapToken:
+    'That single token transfer is over the per-transfer cap — the account refuses it no matter who asks.',
+  OverWindowCapToken:
+    'That would go over the token spending-window cap — the window has to reset (or the owner raise it) first.',
+  TokenTransferFailed: 'The token transfer itself failed (the token rejected it or returned false).',
 } as const satisfies Record<string, string>;
 
 export type LeashErrorName = keyof typeof LEASH_ERROR_COPY;

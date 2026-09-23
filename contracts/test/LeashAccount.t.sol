@@ -51,10 +51,14 @@ contract LeashAccountTest is Test {
         });
     }
 
+    function _tokenNone() internal pure returns (LeashAccount.TokenPolicy memory) {
+        return LeashAccount.TokenPolicy({perTransferCapToken: 0, windowCapToken: 0});
+    }
+
     function _deploy() internal returns (LeashAccount) {
         address[] memory list = new address[](1);
         list[0] = dest;
-        return new LeashAccount(owner, guardian, session, _policy(), list, DELAY);
+        return new LeashAccount(owner, guardian, session, _policy(), list, DELAY, address(0), _tokenNone());
     }
 
     function setUp() public {
@@ -83,9 +87,9 @@ contract LeashAccountTest is Test {
     function test_constructor_rejectsZeroOwnerOrSessionKey() public {
         address[] memory list = new address[](0);
         vm.expectRevert(LeashAccount.ZeroAddress.selector);
-        new LeashAccount(address(0), guardian, session, _policy(), list, DELAY);
+        new LeashAccount(address(0), guardian, session, _policy(), list, DELAY, address(0), _tokenNone());
         vm.expectRevert(LeashAccount.ZeroAddress.selector);
-        new LeashAccount(owner, guardian, address(0), _policy(), list, DELAY);
+        new LeashAccount(owner, guardian, address(0), _policy(), list, DELAY, address(0), _tokenNone());
     }
 
     function test_receive_acceptsDeposits() public {
@@ -183,7 +187,9 @@ contract LeashAccountTest is Test {
                 perTransferCap: 0, windowCap: 0, windowSeconds: 1 hours, expiresAt: uint64(block.timestamp + 30 days)
             }),
             emptyList,
-            DELAY
+            DELAY,
+            address(0),
+            _tokenNone()
         );
         vm.deal(address(incapable), 1 ether);
         vm.startPrank(session);

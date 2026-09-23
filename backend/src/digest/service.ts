@@ -31,6 +31,12 @@ export interface AgentDigest {
   name: string;
   status: string;
   spendWei: string;
+  /**
+   * §8 calibration: job-fee settlements are governed ERC-20 transfers, kept
+   * SEPARATE from native `spendWei` (18dp 0G) — a 6dp token fee must never be
+   * summed into the native total. count + summed amount per token address.
+   */
+  jobFees: { count: number; byToken: Record<string, string> };
   balanceWei: string;
   /** null until a snapshot exists (first digest has no baseline — honest). */
   balanceChangeWei: string | null;
@@ -53,7 +59,7 @@ export interface Digest {
   since: string | null;
   agents: AgentDigest[];
   links: LinkDigest[];
-  totals: { spendWei: string; actions: number; decisions: number };
+  totals: { spendWei: string; actions: number; decisions: number; jobFees: { count: number; byToken: Record<string, string> } };
   empty: boolean;
 }
 
@@ -96,6 +102,8 @@ export class DigestService {
     let totalSpend = 0n;
     let totalActions = 0;
     let totalDecisions = 0;
+    const totalJobFeeByToken = new Map<string, bigint>();
+    let totalJobFeeCount = 0;
 
     for (const a of agents.rows) {
       const prior = cursor?.agents[a.id];
@@ -105,6 +113,8 @@ export class DigestService {
         [a.id, afterSeq],
       );
       let spend = 0n;
+      const jobFeeByToken = new Map<string, bigint>();
+      let jobFeeCount = 0;
       let actions = 0;
       let blocks = 0;
       let modifies = 0;
@@ -117,6 +127,22 @@ export class DigestService {
         const detail = (rec['detail'] ?? {}) as Record<string, Json | undefined>;
         switch (r.kind) {
           case 'action': {
+            // §8: a job-fee settlement is a governed ERC-20 transfer carrying
+            // category:'jobFee' + feeAmountWei (6dp token, per feeToken). It is
+            // NOT a native treasury transfer — keep it out of the native action
+            // count AND the native spendWei total; report it on its own line.
+            if (detail['category'] === 'jobFee') {
+              const token = detail['feeToken'];
+              const amt = detail['feeAmountWei'];
+              if (typeof token === 'string' && typeof amt === 'string' && /^\d+$/.test(amt)) {
+                // Normalize the address so a checksummed feeToken never splits
+                // into a second Map key and desyncs the per-token total.
+                const key = token.toLowerCase();
+                jobFeeByToken.set(key, (jobFeeByToken.get(key) ?? 0n) + BigInt(amt));
+                jobFeeCount += 1;
+              }
+              break;
+            }
             actions += 1;
             const v = detail['valueWei'];
             if (typeof v === 'string' && /^\d+$/.test(v)) spend += BigInt(v);
@@ -156,6 +182,7 @@ export class DigestService {
         name: a.name,
         status: a.status,
         spendWei: spend.toString(),
+        jobFees: { count: jobFeeCount, byToken: Object.fromEntries([...jobFeeByToken].map(([t, v]) => [t, v.toString()])) },
         balanceWei: balance.toString(),
         balanceChangeWei: priorBalance !== undefined ? (balance - BigInt(priorBalance)).toString() : null,
         actions,
@@ -168,6 +195,8 @@ export class DigestService {
       totalSpend += spend;
       totalActions += actions;
       totalDecisions += approvals.approved + approvals.denied + approvals.expired;
+      totalJobFeeCount += jobFeeCount;
+      for (const [t, v] of jobFeeByToken) totalJobFeeByToken.set(t, (totalJobFeeByToken.get(t) ?? 0n) + v);
     }
 
     // Per-link figures from delegation rows decided since the mark (spec §3b:
@@ -203,7 +232,12 @@ export class DigestService {
       totalDecisions > 0 ||
       links.length > 0 ||
       perAgent.some(
-        (a) => a.blocks > 0 || a.modifies > 0 || Object.keys(a.delegationsTerminal).length > 0 || a.spendWei !== '0',
+        (a) =>
+          a.blocks > 0 ||
+          a.modifies > 0 ||
+          Object.keys(a.delegationsTerminal).length > 0 ||
+          a.spendWei !== '0' ||
+          a.jobFees.count > 0,
       );
     return {
       digest: {
@@ -211,7 +245,15 @@ export class DigestService {
         since: cursor?.ts ?? null,
         agents: perAgent,
         links,
-        totals: { spendWei: totalSpend.toString(), actions: totalActions, decisions: totalDecisions },
+        totals: {
+          spendWei: totalSpend.toString(),
+          actions: totalActions,
+          decisions: totalDecisions,
+          jobFees: {
+            count: totalJobFeeCount,
+            byToken: Object.fromEntries([...totalJobFeeByToken].map(([t, v]) => [t, v.toString()])),
+          },
+        },
         empty: !hasActivity,
       },
       nextCursor: {
@@ -281,18 +323,28 @@ export class DigestService {
     if (digest.empty) return 'Nothing new since you last looked — your agents are quiet.';
 
     const decisions = digest.totals.decisions;
-    const lead =
-      digest.totals.actions === 0
-        ? 'Since you last looked: no money moved, but there was some activity.'
-        : `Since you last looked: ${plural(digest.totals.actions, 'transfer')} went out, ` +
-          `${formatG(digest.totals.spendWei)} total` +
-          (decisions > 0 ? `, and ${plural(decisions, 'decision')} came to you.` : '.');
+    const jobFeeCount = digest.totals.jobFees.count;
+    // §8: compose the lead from independent clauses so no movement is dropped.
+    // Job-fee settlements are named distinctly from native transfers (a token
+    // fee must never read as a 0G outflow), and the "decisions came to you"
+    // clause is emitted regardless of whether native transfers happened — the
+    // flagship job path is actions=0, decisions≥1, jobFees≥1.
+    const clauses: string[] = [];
+    if (digest.totals.actions > 0) {
+      clauses.push(`${plural(digest.totals.actions, 'transfer')} went out, ${formatG(digest.totals.spendWei)} total`);
+    }
+    if (jobFeeCount > 0) clauses.push(`${plural(jobFeeCount, 'job fee')} settled`);
+    if (decisions > 0) clauses.push(`${plural(decisions, 'decision')} came to you`);
+    const lead = clauses.length
+      ? `Since you last looked: ${clauses.join(', ')}.`
+      : 'Since you last looked: no money moved, but there was some activity.';
 
     const nameOf = new Map(digest.agents.map((a) => [a.agentId, a.name]));
     const lines: string[] = [lead, ''];
     for (const a of digest.agents) {
       const bits: string[] = [];
       if (a.actions > 0) bits.push(`sent ${formatG(a.spendWei)} in ${plural(a.actions, 'transfer')}`);
+      if (a.jobFees.count > 0) bits.push(`settled ${plural(a.jobFees.count, 'job fee')}`);
       if (a.balanceChangeWei !== null && a.balanceChangeWei !== '0') {
         bits.push(`balance ${formatG(a.balanceWei)} (${formatG(a.balanceChangeWei, true)})`);
       }

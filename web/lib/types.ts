@@ -36,7 +36,28 @@ export type SentinelGoal = {
 /** Executor (spec §3b): acts on inbound delegations within ITS OWN caps. */
 export type ExecutorGoal = { type: 'executor'; model?: string };
 
-export type AgentGoal = GoalInput | SentinelGoal | ExecutorGoal;
+/** Phase-4 ACP roles (spec §3b). Only the requester spends (governed ERC-20). */
+export type RequesterGoal = {
+  type: 'requester';
+  jobSpecSource: string;
+  providerAgentId: string;
+  evaluatorAgentId: string;
+  feeToken: Address;
+  feeRecipient: Address;
+  feeCapPerJobWei: string; // token base units
+  model?: string;
+};
+export type ProviderGoal = { type: 'provider'; serviceSpec: string; model?: string };
+export type EvaluatorGoal = { type: 'evaluator'; rubricRef: string; model?: string };
+
+export type AgentGoal = GoalInput | SentinelGoal | ExecutorGoal | RequesterGoal | ProviderGoal | EvaluatorGoal;
+
+/** Phase-4 settlement-token config (requester only, F1): immutable token + per-token caps. */
+export type TokenConfigInput = {
+  settlementToken: Address;
+  perTransferCapTokenWei: string;
+  windowCapTokenWei: string;
+};
 
 export type CreateAgentRequest = {
   name: string;
@@ -46,6 +67,8 @@ export type CreateAgentRequest = {
   auditPubKey: string; // hex, no 0x prefix per contract
   /** Opaque AES-GCM blob of the audit privkey; server stores it blind. */
   encryptedAuditKey: string;
+  /** Phase-4: required for a requester goal, forbidden otherwise (backend enforces). */
+  tokenConfig?: TokenConfigInput;
 };
 
 export type CreateAgentResponse = {
@@ -68,10 +91,14 @@ export type GatewayRule = {
 };
 
 /** Fleet row from GET /api/agents (spec §4 AgentSummary). */
+export type AgentRole = 'treasury' | 'sentinel' | 'executor' | 'requester' | 'provider' | 'evaluator';
+
 export type AgentSummary = {
   agentId: string;
   name: string;
   status: 'active' | 'revoked';
+  /** Phase-4: runtime role (derived server-side) — lets the create flow pick job agents. */
+  role?: AgentRole;
   accountAddr: Address;
   sessionKeyAddr: Address;
   accountBalanceWei: string;
@@ -331,3 +358,86 @@ export type OwnerRecord = {
 };
 
 export type OwnerAuditBatch = AuditBatch & { ownerAddr: string; createdAt: string };
+
+// ── Phase 4 (spec §7): ACP jobs — request → deliver → verify → settle ──
+
+/** The owner-seeded job definition (F5) — the authority the requester executes. */
+export type JobSpecFields = {
+  question: string;
+  context?: string;
+  deliverableSchemaRef: string;
+  acceptanceRef: string;
+};
+
+/** A single generic acceptance rule (F2 — the floor is structural, not semantic). */
+export type AcceptanceRule =
+  | { kind: 'required'; path: string }
+  | { kind: 'type'; path: string; type: 'string' | 'number' | 'boolean' | 'object' | 'array' }
+  | { kind: 'numberRange'; path: string; min?: number; max?: number }
+  | { kind: 'stringLength'; path: string; min?: number; max?: number }
+  | { kind: 'enum'; path: string; values: (string | number | boolean)[] }
+  | { kind: 'arrayMinLength'; path: string; min: number };
+
+export type AcceptanceRuleSet = { label?: string; rules: AcceptanceRule[] };
+
+export type OwnerJobSpec = {
+  spec: JobSpecFields;
+  acceptance: AcceptanceRuleSet;
+  feeAmountWei: string;
+};
+
+export type AcceptanceResult = { passed: boolean; failures: string[]; checked: number };
+
+export type JobStatus =
+  | 'originated'
+  | 'delivered'
+  | 'evaluating'
+  | 'verdict'
+  | 'awaiting_approval'
+  | 'settled'
+  | 'rejected'
+  | 'denied'
+  | 'failed';
+
+/** The multi-party signed Proof-of-Agreement (F7) — hashes/roots/sigs only. */
+export type PoaRecord = {
+  jobId: string;
+  jobSpecHash: Hex;
+  requesterSig: string;
+  deliverableRoot: string;
+  providerSig: string;
+  verdict: 'accept' | 'reject';
+  evaluatorSig: string;
+  acceptance: { passed: boolean; checked: number; failureCount: number };
+  settlementTx?: string;
+};
+
+/**
+ * A job's full lifecycle view. `deliverable` + `deliverableSummary` (and the
+ * resolved rationale) are UNTRUSTED agent text (F-quar) — render QUARANTINED,
+ * never mixed into the verified PoA fields.
+ */
+export type JobView = {
+  jobId: string;
+  status: JobStatus;
+  spec: JobSpecFields;
+  jobSpecHash: Hex;
+  requesterAgentId: string;
+  providerAgentId: string;
+  evaluatorAgentId: string;
+  feeToken: Hex;
+  feeAmountWei: string;
+  feeRecipient: Hex;
+  deliverable: Json | null; // UNTRUSTED
+  deliverableRoot: string | null;
+  deliverableSummary: string | null; // UNTRUSTED
+  acceptance: AcceptanceResult | null;
+  verdict: 'accept' | 'reject' | null;
+  rationaleRef: string | null;
+  approvalId: string | null;
+  settlementTx: string | null;
+  poa: PoaRecord | null;
+  blockedBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+};

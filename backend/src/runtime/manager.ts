@@ -11,12 +11,15 @@ import { decryptSecret } from '../crypto/keycrypt.js';
 import { appendTrace } from '../trace/trace-store.js';
 import { traceEvent } from '../sse/events.js';
 import type { AgentRow } from '../types.js';
+import { goalRole } from '../types.js';
 import type { DelegationCoordinator } from '../coordination/coordinator.js';
 import type { AlertService } from '../alerts/service.js';
 import { BoundaryRegistry } from './boundary.js';
 import { listActivatablePendingFor } from '../coordination/store.js';
 import type { RuntimeChain } from './session-chain.js';
 import { buildTreasuryGraph, type TreasuryGraph } from './treasury-graph.js';
+import { buildJobGraph, type JobGraph } from '../jobs/graph.js';
+import type { StorageUploader } from '../audit/batcher.js';
 import type { InboundDelegationInput } from './prompt.js';
 
 export interface RuntimeSettings {
@@ -26,6 +29,9 @@ export interface RuntimeSettings {
   gatewayUrl: string;
   intervalMs: number;
   defaultModel: string;
+  /** §0.6/F8 strong models for the ACP reasoning roles (fall back to defaultModel). */
+  jobProviderModel?: string | undefined;
+  jobEvaluatorModel?: string | undefined;
   fetchFn?: typeof fetch;
 }
 
@@ -37,6 +43,12 @@ export interface RuntimeManagerDeps {
   checkpointer: BaseCheckpointSaver;
   /** Phase-3 alert engine (optional in coordination-free test setups). */
   alerts?: AlertService | undefined;
+  /**
+   * Phase-4: 0G Storage Log Layer uploader — the provider/evaluator job graphs
+   * write the deliverable + rationale here (ECIES owner-only). Absent only in
+   * treasury-only test setups (the job graph is never built then).
+   */
+  uploader?: StorageUploader | undefined;
   settings: RuntimeSettings;
 }
 
@@ -47,7 +59,10 @@ interface Loop {
   /** True while a cycle is executing — nudge() must not double-schedule then. */
   busy: boolean;
   pendingApprovalId: string | null;
-  graph: TreasuryGraph;
+  /** Either the treasury/transfer graph or the Phase-4 ACP job graph — both
+   * share the manager contract: invoke({inboundDelegation}), a pending
+   * interrupt on getState().tasks[].interrupts, resume via Command. */
+  graph: TreasuryGraph | JobGraph;
   agent: AgentRow;
 }
 
@@ -81,35 +96,65 @@ export class LeashRuntimeManager implements RuntimeManager {
     this.coordinator = coordinator;
   }
 
+  /** A job role cannot run without the 0G Storage uploader (deliverable/PoA sink). */
+  private requireUploader(): StorageUploader {
+    if (!this.deps.uploader) throw new Error('job role requires a StorageUploader (uploader dep missing)');
+    return this.deps.uploader;
+  }
+
   async start(agentId: string): Promise<void> {
     if (this.loops.has(agentId)) return;
     const agent = await getAgentById(this.deps.pool, agentId);
     if (!agent || agent.status !== 'active') throw new Error('agent not startable');
     if (!agent.gatewayTokenEnc) throw new Error('agent has no runtime gateway token');
     const { keyEncryptionSecret } = this.deps.settings;
-    const graph = buildTreasuryGraph(
-      {
-        pool: this.deps.pool,
-        hub: this.deps.hub,
-        chain: this.deps.chain,
-        gatewayUrl: this.deps.settings.gatewayUrl,
-        defaultModel: this.deps.settings.defaultModel,
-        getCoordinator: () => this.coordinator,
-        alerts: this.deps.alerts,
-        boundaries: this.boundaries,
-        approvalTimeoutMs: this.deps.settings.approvalTimeoutMs,
-        ...(this.deps.settings.fetchFn ? { fetchFn: this.deps.settings.fetchFn } : {}),
-      },
-      {
-        agentId: agent.id,
-        accountAddr: agent.accountAddr,
-        goal: agent.goal,
-        agentRow: agent,
-        sessionPrivateKey: decryptSecret(agent.sessionKeyEnc, keyEncryptionSecret),
-        gatewayToken: decryptSecret(agent.gatewayTokenEnc, keyEncryptionSecret),
-      },
-      this.deps.checkpointer,
-    );
+    const ctx = {
+      agentId: agent.id,
+      accountAddr: agent.accountAddr,
+      goal: agent.goal,
+      agentRow: agent,
+      sessionPrivateKey: decryptSecret(agent.sessionKeyEnc, keyEncryptionSecret),
+      gatewayToken: decryptSecret(agent.gatewayTokenEnc, keyEncryptionSecret),
+    };
+    // Phase-4 dispatch (spec §3b): the ACP job roles run in their OWN graph
+    // (jobs/graph.ts); every legacy role stays on the treasury/transfer graph.
+    const role = goalRole(agent.goal);
+    const isJobRole = role === 'requester' || role === 'provider' || role === 'evaluator';
+    const graph: TreasuryGraph | JobGraph = isJobRole
+      ? buildJobGraph(
+          {
+            pool: this.deps.pool,
+            hub: this.deps.hub,
+            chain: this.deps.chain,
+            uploader: this.requireUploader(),
+            gatewayUrl: this.deps.settings.gatewayUrl,
+            defaultModel: this.deps.settings.defaultModel,
+            providerModel: this.deps.settings.jobProviderModel ?? this.deps.settings.defaultModel,
+            evaluatorModel: this.deps.settings.jobEvaluatorModel ?? this.deps.settings.defaultModel,
+            getCoordinator: () => this.coordinator,
+            alerts: this.deps.alerts,
+            approvalTimeoutMs: this.deps.settings.approvalTimeoutMs,
+            ...(this.deps.settings.fetchFn ? { fetchFn: this.deps.settings.fetchFn } : {}),
+          },
+          ctx,
+          this.deps.checkpointer,
+        )
+      : buildTreasuryGraph(
+          {
+            pool: this.deps.pool,
+            hub: this.deps.hub,
+            chain: this.deps.chain,
+            gatewayUrl: this.deps.settings.gatewayUrl,
+            defaultModel: this.deps.settings.defaultModel,
+            getCoordinator: () => this.coordinator,
+            alerts: this.deps.alerts,
+            boundaries: this.boundaries,
+            approvalTimeoutMs: this.deps.settings.approvalTimeoutMs,
+            ...(this.deps.settings.fetchFn ? { fetchFn: this.deps.settings.fetchFn } : {}),
+          },
+          ctx,
+          this.deps.checkpointer,
+        );
     const loop: Loop = { stopped: false, timer: null, current: Promise.resolve(), busy: false, pendingApprovalId: null, graph, agent };
     this.loops.set(agentId, loop);
     this.schedule(loop, 0);

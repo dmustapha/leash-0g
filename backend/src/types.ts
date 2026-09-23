@@ -60,6 +60,16 @@ export interface PolicyView {
   /** P3C-6(i): raw window state from the contract's public getters. */
   spentInWindow: bigint;
   windowStart: number;
+  /**
+   * Phase-4 token settlement observability (F9): present ONLY for v3
+   * token-capable accounts (settlementToken != 0). Absent on v2/native-only
+   * accounts — the runtime + FE branch on `settlementToken` before reading.
+   */
+  settlementToken?: string;
+  tokenPerTransferCap?: bigint;
+  tokenWindowCap?: bigint;
+  spentInWindowToken?: bigint;
+  windowStartToken?: number;
 }
 
 export interface AuditBatch {
@@ -146,13 +156,104 @@ export interface ExecutorGoal {
   model?: string | undefined;
 }
 
-export type AgentGoal = TreasuryGoal | SentinelGoal | ExecutorGoal;
+/**
+ * Phase-4 Olas-Mech/ACP roles (spec §3b) — the FIRST real instantiation of the
+ * goal-union beyond the treasury specimen. All three are runtime-only: the
+ * contracts/APIs/coordination tables never see these discriminators (generality
+ * guard). Only the REQUESTER spends (governed ERC-20 settlement); provider and
+ * evaluator are spend-incapable.
+ */
 
-export type AgentRole = 'treasury' | 'sentinel' | 'executor';
+/**
+ * Requester (ACP hub): posts an OWNER-SEEDED job (`job.request`) to its provider
+ * and, on a verified delivery, settles the governed ERC-20 fee. The fee amount
+ * comes from the owner-defined `jobSpec` in server state — NEVER from model or
+ * envelope text (F4). `feeCapPerJob` bounds it again, defence-in-depth with the
+ * on-chain per-token caps.
+ */
+export interface RequesterGoal {
+  type: 'requester';
+  /** Opaque handle to the owner-seeded job spec in server state (F5). */
+  jobSpecSource: string;
+  /** The provider agent this requester delegates to (server link state, F6). */
+  providerAgentId: string;
+  /** The evaluator agent that judges deliveries (server link state, F6). */
+  evaluatorAgentId: string;
+  /** Immutable settlement token this requester's account is configured for. */
+  feeToken: string;
+  /** Recipient of the fee (must be on the account allowlist). */
+  feeRecipient: string;
+  /** Owner-defined per-job fee ceiling (token base units), ≤ on-chain per-transfer cap. */
+  feeCapPerJobWei: string;
+  model?: string | undefined;
+}
+
+/**
+ * Provider (ACP worker): INBOUND-DRIVEN only (like executor) — receives
+ * `job.request`, reasons on 0G Compute, writes a signed deliverable to 0G
+ * Storage, returns `job.deliver`. Spend-incapable (never moves funds).
+ */
+export interface ProviderGoal {
+  type: 'provider';
+  /** Describes the service the provider offers (owner-defined). */
+  serviceSpec: string;
+  model?: string | undefined;
+}
+
+/**
+ * Evaluator (ACP arbiter, ②-B): INBOUND-DRIVEN, spend-incapable (zero caps,
+ * empty allowlist, deployed like the sentinel). Receives `job.evaluate`, reads
+ * the deliverable + job spec, emits a SKEPTIC verdict (anti-sycophancy, 02 §3).
+ * Its model MUST differ from the provider's (F8) so verification does not
+ * inherit the provider's blind spots.
+ */
+export interface EvaluatorGoal {
+  type: 'evaluator';
+  /** Opaque handle to the owner-defined rubric in server state. */
+  rubricRef: string;
+  model?: string | undefined;
+}
+
+export type AgentGoal =
+  | TreasuryGoal
+  | SentinelGoal
+  | ExecutorGoal
+  | RequesterGoal
+  | ProviderGoal
+  | EvaluatorGoal;
+
+export type AgentRole = 'treasury' | 'sentinel' | 'executor' | 'requester' | 'provider' | 'evaluator';
 
 /** Missing discriminator ⇒ treasury (Phase-1 rows predate the union). */
 export function goalRole(goal: AgentGoal): AgentRole {
   return goal.type ?? 'treasury';
+}
+
+/**
+ * Roles whose accounts are spend-incapable — never routed to act/settle. NOTE
+ * executor is NOT here: it spends on inbound delegations against its own policy.
+ * Sentinel delegates instead of spending; provider/evaluator never move funds.
+ */
+export function isSpendIncapableRole(role: AgentRole): boolean {
+  return role === 'sentinel' || role === 'provider' || role === 'evaluator';
+}
+
+/**
+ * The allowlist address(es) a goal cares about, for the cockpit policy view.
+ * Treasury/sentinel = beneficiary; requester = fee recipient; executor/
+ * provider/evaluator carry none. Returns [] when there is no candidate.
+ */
+export function goalAllowlistCandidates(goal: AgentGoal): string[] {
+  switch (goal.type) {
+    case 'requester':
+      return [goal.feeRecipient];
+    case 'executor':
+    case 'provider':
+    case 'evaluator':
+      return [];
+    default:
+      return [goal.beneficiary]; // treasury (undefined type) + sentinel
+  }
 }
 
 /**
@@ -265,8 +366,9 @@ export type OwnerStreamEvent =
   | { type: 'alert'; alert: Alert }
   | { type: 'digest_ready'; digestId: string };
 
-/** Owner-stream hash-chained record kinds (spec §3d). */
-export type OwnerRecordKind = 'alert' | 'alert_resolved' | 'digest';
+/** Owner-stream hash-chained record kinds (spec §3d). 'poa' = the Phase-4
+ * multi-party signed Proof-of-Agreement (F7 — hashes/roots/sigs only). */
+export type OwnerRecordKind = 'alert' | 'alert_resolved' | 'digest' | 'poa';
 
 export interface OwnerRecord {
   ownerAddr: string;

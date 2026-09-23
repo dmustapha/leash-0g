@@ -38,6 +38,7 @@ export default function SiteNav() {
   const links: { href: string; label: string; badge?: boolean }[] = [
     { href: '/app', label: 'Agents' },
     { href: '/create', label: 'Create agent' },
+    { href: '/jobs', label: 'Jobs' },
     { href: '/links', label: 'Links' },
     { href: '/inbox', label: 'Inbox', badge: true },
     { href: '/digest', label: 'Digest' },

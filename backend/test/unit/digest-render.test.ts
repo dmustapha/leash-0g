@@ -16,7 +16,7 @@ function digest(over: Partial<Digest>): Digest {
     since: new Date(Date.now() - 86_400_000).toISOString(),
     agents: [],
     links: [],
-    totals: { spendWei: '0', actions: 0, decisions: 0 },
+    totals: { spendWei: '0', actions: 0, decisions: 0, jobFees: { count: 0, byToken: {} } },
     empty: false,
     ...over,
   };
@@ -27,6 +27,7 @@ const agent = (over: Partial<Digest['agents'][number]>): Digest['agents'][number
   name: 'Agent',
   status: 'active',
   spendWei: '0',
+  jobFees: { count: 0, byToken: {} },
   balanceWei: '0',
   balanceChangeWei: null,
   actions: 0,
@@ -63,11 +64,45 @@ describe('DigestService.renderText', () => {
     expect(out).toContain('Treasury → Payroll: 1 completed, 1 failed');
   });
 
+  it('§8: labels job-fee settlements distinctly from native transfers', () => {
+    const out = svc.renderText(
+      digest({
+        agents: [agent({ agentId: 'r1', name: 'Requester', jobFees: { count: 2, byToken: { '0xbeea': '3000000' } } })],
+        totals: { spendWei: '0', actions: 0, decisions: 0, jobFees: { count: 2, byToken: { '0xbeea': '3000000' } } },
+      }),
+    );
+    // job fees are named as job fees, never rolled into a native "0G total"
+    expect(out).toContain('2 job fees settled');
+    expect(out).toContain('settled 2 job fees');
+    expect(out).not.toMatch(/0G total/);
+  });
+
+  it('§8: the real settlement shape (fee + owner decision, no native transfer) keeps BOTH clauses', () => {
+    // actions=0, decisions>=1, jobFees>=1 — the exact digest the deployed job
+    // drill produces. The lead must name the job fee AND the owner decision.
+    const out = svc.renderText(
+      digest({
+        agents: [
+          agent({
+            agentId: 'r1',
+            name: 'Requester',
+            approvals: { approved: 1, denied: 0, expired: 0 },
+            jobFees: { count: 1, byToken: { '0xbeea': '2000000' } },
+          }),
+        ],
+        totals: { spendWei: '0', actions: 0, decisions: 1, jobFees: { count: 1, byToken: { '0xbeea': '2000000' } } },
+      }),
+    );
+    expect(out).toContain('1 job fee settled');
+    expect(out).toContain('1 decision came to you');
+    expect(out).not.toMatch(/0G total/);
+  });
+
   it('flags blocked requests and unanswered approvals for attention', () => {
     const out = svc.renderText(
       digest({
         agents: [agent({ name: 'Treasury', blocks: 3, approvals: { approved: 0, denied: 0, expired: 1 } })],
-        totals: { spendWei: '0', actions: 0, decisions: 1 },
+        totals: { spendWei: '0', actions: 0, decisions: 1, jobFees: { count: 0, byToken: {} } },
       }),
     );
     expect(out).toMatch(/Worth a look:/);

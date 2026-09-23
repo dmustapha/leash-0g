@@ -21,6 +21,16 @@ external 0G roughness, surfaced per 02-BUILD-METHODOLOGY §8. Source verificatio
 - `revoke()` (guardian) → `0x3d5539482ae573ab11e64977635ee3a568d8e5815308ccb37430e5fd5d402b96`
 - Post-revoke `execute` attempt: **reverts `AccountRevoked` (0x74b17b2b)** live — fail-closed proven on-chain.
 
+## v3 redeploy — token-capable factory + TestUSD (2026-09-23, Phase-4)
+Factory v3 adds settlementToken + TokenPolicy (native-only = `address(0)`; legacy v2 unaffected).
+AgentRegistry is UNCHANGED (stores no policy — the v2 registry above stays canonical).
+Deployer: ops key `0xc211C942946011859ca634F22400d80570ED12A5`. Chain 16602. Sourcify `exact_match` (creation + runtime) on both.
+
+- `LeashAccountFactory` (v3) — `0xcD7818673238E2703585CF96658FeBf1a10f8105`
+  - deploy tx `0x416f41298db07b742dde4892c0178bfa52095d4fa5a9388c1d642c7abf4d347a` (block 56334196, status 0x1)
+- `MockERC20` (TestUSD, 6dp, open faucet, test-labelled) — `0xbeeA96c7614ebc46760B442068E359e51e7c4e52`
+  - deploy tx `0x3d5dc19c2e57eafe86d0363eab362fede510565838186cb0ab10de3d0e1de5d5` (block 56334210, status 0x1)
+
 ## Superseded (v1, same day — pre gate fixes; kept for audit continuity)
 - `AgentRegistry` `0x6C8c6df5E8FdE59330Ea309676fa280302865Ed6` · `LeashAccountFactory` `0x43456298A210b8571b1917593CBb9EbbA9C4BE5D`
 - v1 proof: create `0x95f707762f089dc7878ed9aa79e9ebfc023a042233b3b6b3d4727d574a0b1bd9` · account `0x24bB3B7CE50A0B6133F60D6CA3cd45269DE9c6Af` · execute `0x2126e0f49e336a774599549a0114f5da3b7b7585200580f03907db62ef17d2fa` · revoke `0x3f933efea8ed257bd99585b883880f5a5ae363f1eb292b4804300ff1825b44f3` · post-revoke revert `AccountRevoked`.

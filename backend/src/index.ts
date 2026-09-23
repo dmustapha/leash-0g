@@ -77,7 +77,11 @@ async function main(): Promise<void> {
     await migratePool.end();
   }
 
-  const hub = new SseHub();
+  const hub = new SseHub({
+    maxGlobal: cfg.SSE_MAX_GLOBAL,
+    maxPerOwner: cfg.SSE_MAX_PER_OWNER,
+    idleTimeoutMs: cfg.SSE_IDLE_TIMEOUT_MS,
+  });
   // S8: owner aggregate fan-out — agent→owner resolved from the DB, cached.
   hub.setOwnerLookup(async (agentId) => (await getAgentById(pool, agentId))?.ownerAddr ?? null);
   const broker = new ApprovalBroker();
@@ -102,11 +106,20 @@ async function main(): Promise<void> {
     registryAddr: cfg.AGENT_REGISTRY_ADDR,
   });
 
+  // 0G Storage Log Layer wrapper — the audit batcher's sink AND the Phase-4
+  // job graph's deliverable/PoA sink (built here so the runtime can thread it).
+  const uploader = new ZeroGStorage({
+    indexerUrl: cfg.ZERO_G_STORAGE_INDEXER,
+    rpcUrl: cfg.ZERO_G_RPC,
+    opsPrivateKey: cfg.OPS_PRIVATE_KEY,
+  });
+
   const runtime = new LeashRuntimeManager({
     pool,
     hub,
     broker,
     alerts,
+    uploader,
     chain: new SessionChain({ rpcUrl: cfg.ZERO_G_RPC, chainId: cfg.ZERO_G_CHAIN_ID }),
     checkpointer,
     settings: {
@@ -115,6 +128,8 @@ async function main(): Promise<void> {
       gatewayUrl: `http://127.0.0.1:${cfg.GATEWAY_PORT}`, // the runtime is the gateway's only client
       intervalMs: cfg.RUNTIME_INTERVAL_MS,
       defaultModel: cfg.RUNTIME_DEFAULT_MODEL,
+      jobProviderModel: cfg.JOB_PROVIDER_MODEL,
+      jobEvaluatorModel: cfg.JOB_EVALUATOR_MODEL,
     },
   });
 
@@ -205,11 +220,6 @@ async function main(): Promise<void> {
   const ownerApp = createOwnerApp(appDeps);
   const gatewayApp = createGatewayApp(appDeps);
 
-  const uploader = new ZeroGStorage({
-    indexerUrl: cfg.ZERO_G_STORAGE_INDEXER,
-    rpcUrl: cfg.ZERO_G_RPC,
-    opsPrivateKey: cfg.OPS_PRIVATE_KEY,
-  });
   const batcher = new AuditBatcher({ pool, uploader });
   batcher.start();
   // §3d: the owner-stream batcher — same machinery, second source. Defers

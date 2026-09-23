@@ -31,7 +31,7 @@ contract LeashAccountFactoryTest is Test {
         list[0] = dest;
 
         vm.prank(ops);
-        address accountAddr = factory.createAccount(user, ops, session, _policy(), list, 15 minutes);
+        address accountAddr = factory.createAccount(user, ops, session, _policy(), list, 15 minutes, address(0), LeashAccount.TokenPolicy(0, 0));
 
         LeashAccount acct = LeashAccount(payable(accountAddr));
         assertEq(acct.owner(), user); // the USER owns it, not the deployer
@@ -58,6 +58,6 @@ contract LeashAccountFactoryTest is Test {
         vm.expectEmit(false, true, false, false);
         emit LeashAccountFactory.AccountCreated(address(0), user, session, ops);
         vm.prank(ops);
-        factory.createAccount(user, ops, session, _policy(), list, 15 minutes);
+        factory.createAccount(user, ops, session, _policy(), list, 15 minutes, address(0), LeashAccount.TokenPolicy(0, 0));
     }
 }
