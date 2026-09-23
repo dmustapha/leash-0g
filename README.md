@@ -90,9 +90,11 @@ The most recent work is the part that turns a governed wallet into something clo
 
 ## Status
 
-This is a work in progress, and it is meant to be one. Everything described above is live and proven on 0G testnet, not aspirational. The work in front of us now is mostly hardening the multi-agent side, giving the audit and analytics surfaces more depth, and continuing to make the owner experience feel less like operating machinery.
+What's described above is live and proven on 0G testnet, but it's the foundation, not the finished product, and there's still more to build.
 
-Testnet only, no mainnet funds.
+A few of the larger pieces still in front of us: making the governance layer chain-agnostic rather than 0G-specific, so an agent can be leashed wherever it operates; letting owners bind agents that already exist instead of only ones created through LEASH; agents that can take on any kind of work rather than a fixed job type; a full agent-to-agent economy on top of that; and x402 integration for the payment rails. Deepening the audit and analytics surfaces and pushing the autonomy model further, without loosening the hard guarantees, run alongside all of it. None of that is small, and the scope will keep growing as the agent economy does.
+
+Testnet only.
 
 ## License
 
