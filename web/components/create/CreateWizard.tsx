@@ -8,7 +8,7 @@ import { useMemo, useState } from 'react';
 import { isAddress, type Address } from 'viem';
 import { ApiError } from '@/lib/api';
 import { isValidOgAmount, ogToWei, weiToOg } from '@/lib/format';
-import type { AgentGoal, CreateAgentResponse, Hex, PolicyInput } from '@/lib/types';
+import type { AgentGoal, CreateAgentResponse, Hex, PolicyInput, TokenConfigInput } from '@/lib/types';
 import { Disclosure } from '@/components/ui/Disclosure';
 import { Field } from '@/components/ui/Field';
 import { CopyButton } from '@/components/ui/CopyButton';
@@ -26,10 +26,15 @@ export type WizardInput = {
   policy: PolicyInput;
   allowlist: Address[];
   goal: AgentGoal;
+  /** Phase-4: present only for a requester (the sole token-capable role, F1). */
+  tokenConfig?: TokenConfigInput;
 };
 
-/** Role variant chooser (spec §3c): ONE plain-language choice on the goal step. */
-export type AgentRole = 'treasury' | 'sentinel' | 'executor';
+/** Role variant chooser (spec §3c/§3b): ONE plain-language choice on the goal step. */
+export type AgentRole = 'treasury' | 'sentinel' | 'executor' | 'requester' | 'provider' | 'evaluator';
+
+/** A pickable existing agent (for the requester's provider/evaluator links). */
+export type JobAgentOption = { id: string; name: string };
 
 export type WizardResult = {
   response: CreateAgentResponse;
@@ -45,6 +50,8 @@ export type CreateWizardProps = {
     send: (to: Address, valueWei: bigint) => Promise<Hex>;
     getBalance?: (account: Address) => Promise<bigint>;
   };
+  /** Phase-4: the owner's existing provider/evaluator agents, for a requester's links. */
+  jobAgents?: { providers: JobAgentOption[]; evaluators: JobAgentOption[] };
 };
 
 type Step =
@@ -54,6 +61,10 @@ type Step =
   | 'budget'
   | 'allowlist'
   | 'sentinel-policy'
+  | 'provider-service'
+  | 'evaluator-rubric'
+  | 'requester-config'
+  | 'token-config'
   | 'expiry'
   | 'review'
   | 'passphrase'
@@ -67,6 +78,12 @@ const STEP_ORDERS: Record<AgentRole, Step[]> = {
   treasury: ['name', 'goal', 'transfer-cap', 'budget', 'allowlist', 'expiry', 'review'],
   sentinel: ['name', 'goal', 'sentinel-policy', 'expiry', 'review'],
   executor: ['name', 'goal', 'transfer-cap', 'budget', 'allowlist', 'expiry', 'review'],
+  // Phase-4 ACP roles (spec §3b). Provider/evaluator are spend-incapable (no
+  // policy steps, like the sentinel); the requester is the sole governed
+  // spender, so it gets the settlement-token config step.
+  provider: ['name', 'goal', 'provider-service', 'expiry', 'review'],
+  evaluator: ['name', 'goal', 'evaluator-rubric', 'expiry', 'review'],
+  requester: ['name', 'goal', 'requester-config', 'token-config', 'expiry', 'review'],
 };
 
 const ROLE_OPTIONS: Array<{ value: AgentRole; label: string; explain: string }> = [
@@ -85,7 +102,31 @@ const ROLE_OPTIONS: Array<{ value: AgentRole; label: string; explain: string }> 
     label: 'Act on requests from another agent',
     explain: 'It waits for requests over a link you create, checks them against its own limits, then pays.',
   },
+  {
+    value: 'requester',
+    label: 'Order a job and pay for good work',
+    explain: 'It posts a job you defined, waits for a verified deliverable, then pays a capped on-chain fee — with your approval.',
+  },
+  {
+    value: 'provider',
+    label: 'Do a job for others',
+    explain: 'It takes a job request, reasons on 0G, and delivers a verifiable work-product. It never moves money.',
+  },
+  {
+    value: 'evaluator',
+    label: 'Judge others’ work (skeptic)',
+    explain: 'It reads a deliverable and the job spec and returns an honest accept/reject. It never moves money.',
+  },
 ];
+
+/** Roles that watch a beneficiary balance and set a top-up goal (treasury/sentinel). */
+function isTopUpRole(role: AgentRole): boolean {
+  return role === 'treasury' || role === 'sentinel';
+}
+/** Phase-4 ACP job roles. */
+function isJobRole(role: AgentRole): boolean {
+  return role === 'requester' || role === 'provider' || role === 'evaluator';
+}
 
 /** Friendly copy for the backend's create guardrails (spec §4 error shapes). */
 function createErrorMessage(e: unknown): string {
@@ -108,7 +149,7 @@ function createErrorMessage(e: unknown): string {
 
 const DAY = 86_400;
 
-export function CreateWizard({ onCreate, walletReady, fund }: CreateWizardProps) {
+export function CreateWizard({ onCreate, walletReady, fund, jobAgents }: CreateWizardProps) {
   const [step, setStep] = useState<Step>('name');
   const [role, setRole] = useState<AgentRole>('treasury');
   const [name, setName] = useState('');
@@ -123,10 +164,73 @@ export function CreateWizard({ onCreate, walletReady, fund }: CreateWizardProps)
   const [passphrase, setPassphrase] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<WizardResult | null>(null);
+  // Phase-4 job-role fields.
+  const [serviceSpec, setServiceSpec] = useState('');
+  const [rubricRef, setRubricRef] = useState('');
+  const [jobSpecSource, setJobSpecSource] = useState('');
+  const [providerAgentId, setProviderAgentId] = useState('');
+  const [evaluatorAgentId, setEvaluatorAgentId] = useState('');
+  const [feeToken, setFeeToken] = useState('');
+  const [feeRecipient, setFeeRecipient] = useState('');
+  const [feeCapPerJob, setFeeCapPerJob] = useState('');
+  const [tokenPerTransfer, setTokenPerTransfer] = useState('');
+  const [tokenWindow, setTokenWindow] = useState('');
 
   const input = useMemo<WizardInput | null>(() => {
     if (!name.trim() || !/^\d+$/.test(expiryDays) || Number(expiryDays) < 1) return null;
     const expiresAt = Math.floor(Date.now() / 1000) + Number(expiryDays) * DAY;
+
+    const zeroCaps: PolicyInput = { perTransferCapWei: '0', windowCapWei: '0', windowSeconds: 24 * 3600, expiresAt };
+
+    // Phase-4 spend-incapable job roles (provider/evaluator): zero caps, empty
+    // allowlist — deployed exactly like the sentinel; they never move funds.
+    if (role === 'provider') {
+      if (!serviceSpec.trim()) return null;
+      return { name: name.trim(), policy: zeroCaps, allowlist: [], goal: { type: 'provider', serviceSpec: serviceSpec.trim() } };
+    }
+    if (role === 'evaluator') {
+      if (!rubricRef.trim()) return null;
+      return { name: name.trim(), policy: zeroCaps, allowlist: [], goal: { type: 'evaluator', rubricRef: rubricRef.trim() } };
+    }
+
+    // Phase-4 requester (F1): the sole governed spender. It never moves NATIVE
+    // funds (zero native caps) but settles a governed ERC-20 fee — the token
+    // config carries the per-token caps; the fee recipient is the allowlisted
+    // target. Mirrors the backend enforcement boundary.
+    if (role === 'requester') {
+      if (
+        !jobSpecSource.trim() ||
+        !isAddress(feeToken) ||
+        !isAddress(feeRecipient) ||
+        !providerAgentId ||
+        !evaluatorAgentId ||
+        !/^\d+$/.test(feeCapPerJob) ||
+        !/^\d+$/.test(tokenPerTransfer) ||
+        !/^\d+$/.test(tokenWindow) ||
+        BigInt(feeCapPerJob) > BigInt(tokenPerTransfer) // defence in depth (F4)
+      ) {
+        return null;
+      }
+      return {
+        name: name.trim(),
+        policy: zeroCaps,
+        allowlist: [feeRecipient],
+        goal: {
+          type: 'requester',
+          jobSpecSource: jobSpecSource.trim(),
+          providerAgentId,
+          evaluatorAgentId,
+          feeToken,
+          feeRecipient,
+          feeCapPerJobWei: feeCapPerJob,
+        },
+        tokenConfig: {
+          settlementToken: feeToken, // F1: settlementToken == feeToken
+          perTransferCapTokenWei: tokenPerTransfer,
+          windowCapTokenWei: tokenWindow,
+        },
+      };
+    }
 
     if (role === 'sentinel') {
       // Spend-incapable preset (spec §3c): zero caps, empty allowlist. The goal amounts
@@ -182,7 +286,11 @@ export function CreateWizard({ onCreate, walletReady, fund }: CreateWizardProps)
         topUpWei: ogToWei(topUp),
       },
     };
-  }, [role, name, beneficiary, targetBalance, topUp, perTransfer, windowAmount, windowHours, payee, expiryDays]);
+  }, [
+    role, name, beneficiary, targetBalance, topUp, perTransfer, windowAmount, windowHours, payee, expiryDays,
+    serviceSpec, rubricRef, jobSpecSource, providerAgentId, evaluatorAgentId, feeToken, feeRecipient, feeCapPerJob,
+    tokenPerTransfer, tokenWindow,
+  ]);
 
   // Reviewed constraint (TREASURY only): a single top-up is one payment, so it can never
   // exceed the per-payment cap the chain enforces. The sentinel never pays (its request
@@ -285,6 +393,7 @@ export function CreateWizard({ onCreate, walletReady, fund }: CreateWizardProps)
         stepForm(
           stepOrder[stepOrder.indexOf('goal') + 1] ?? 'review',
           role === 'executor' ||
+            isJobRole(role) ||
             (isAddress(beneficiary) && isValidOgAmount(targetBalance) && isValidOgAmount(topUp)),
           'Enter a valid wallet address and amounts greater than zero, like 0.1.',
           <>
@@ -314,7 +423,7 @@ export function CreateWizard({ onCreate, walletReady, fund }: CreateWizardProps)
               ))}
             </fieldset>
 
-            {role !== 'executor' ? (
+            {isTopUpRole(role) ? (
               <>
                 <Field
                   id="goal-beneficiary"
@@ -346,11 +455,19 @@ export function CreateWizard({ onCreate, walletReady, fund }: CreateWizardProps)
                   suffix="0G"
                 />
               </>
-            ) : (
+            ) : role === 'executor' ? (
               <p data-testid="executor-goal-note" style={{ color: 'var(--color-ink-dim)', fontSize: '0.88rem' }}>
                 Nothing else to set here. This agent waits for requests from an agent you link to
                 it, checks each one against its own limits (you set those next), and then pays —
                 or asks you first.
+              </p>
+            ) : (
+              <p data-testid="job-goal-note" style={{ color: 'var(--color-ink-dim)', fontSize: '0.88rem' }}>
+                {role === 'provider'
+                  ? 'This agent does jobs. Next you describe the service it offers — then link a requester to it.'
+                  : role === 'evaluator'
+                    ? 'This agent judges work as an honest skeptic. Next you name the rubric it applies.'
+                    : 'This agent orders jobs and pays for good work. Next you point it at a job you defined, its provider and evaluator, and the capped fee.'}
               </p>
             )}
             <Disclosure label="How does the agent use this?">
@@ -358,7 +475,11 @@ export function CreateWizard({ onCreate, walletReady, fund }: CreateWizardProps)
                 ? 'Requests from other agents carry no authority of their own. This agent re-reasons about every request and its own on-chain caps and allowlist bound anything it pays, no matter what it is asked.'
                 : role === 'sentinel'
                   ? 'This goal is the standing instruction: watch the balance and request a top-up when it dips below target. The agent itself can never move money — the linked agent that acts checks every request against its own limits.'
-                  : 'This goal is the agent’s standing instruction: watch the beneficiary’s balance and top it up toward the target, never sending more than the per-top-up amount at once. The on-chain caps you set next still bound every single payment, no matter what the agent decides.'}
+                  : role === 'provider' || role === 'evaluator'
+                    ? 'This agent is spend-incapable by construction — it holds a scoped session key with zero spending caps and an empty allowlist, so it can never move money no matter what it is asked. It is governed by the cockpit and the verifiable audit trail, not spend limits.'
+                    : role === 'requester'
+                      ? 'This is the only agent that spends. It settles a governed ERC-20 fee — the amount comes from the job you defined (never the agents), bounded again by the on-chain per-token caps, and released only with your approval after an independent evaluator accepts the work.'
+                      : 'This goal is the agent’s standing instruction: watch the beneficiary’s balance and top it up toward the target, never sending more than the per-top-up amount at once. The on-chain caps you set next still bound every single payment, no matter what the agent decides.'}
             </Disclosure>
           </>,
           // The beneficiary is almost always the payee — seed the allowlist step so the
@@ -385,6 +506,165 @@ export function CreateWizard({ onCreate, walletReady, fund }: CreateWizardProps)
               Its LeashAccount is deployed with a per-payment cap of 0, a budget cap of 0, and an
               empty allowlist — every execute() reverts. Because it can never spend, there is no
               account to fund and no gas top-up to make.
+            </Disclosure>
+          </>,
+        )}
+
+      {step === 'provider-service' &&
+        stepForm(
+          'expiry',
+          !!serviceSpec.trim(),
+          'Describe the service this provider offers.',
+          <>
+            <h1 style={{ fontSize: 'var(--text-h1)' }}>What service does it offer?</h1>
+            <Field
+              id="provider-service"
+              label="Service"
+              hint="A short description a requester will see, e.g. “calibrated probability estimates for market questions”."
+              value={serviceSpec}
+              onChange={(e) => setServiceSpec(e.target.value)}
+              placeholder="calibrated probability estimates…"
+              autoFocus
+            />
+            <p data-testid="provider-spend-note" style={{ color: 'var(--color-ink-dim)', fontSize: '0.86rem' }}>
+              This agent is spend-incapable — zero caps, empty allowlist. It only produces work.
+            </p>
+          </>,
+        )}
+
+      {step === 'evaluator-rubric' &&
+        stepForm(
+          'expiry',
+          !!rubricRef.trim(),
+          'Name the rubric this evaluator applies.',
+          <>
+            <h1 style={{ fontSize: 'var(--text-h1)' }}>How should it judge?</h1>
+            <Field
+              id="evaluator-rubric"
+              label="Rubric"
+              hint="A short name/description of the standard it holds work to, e.g. “strict calibration + grounded claims”."
+              value={rubricRef}
+              onChange={(e) => setRubricRef(e.target.value)}
+              placeholder="strict calibration + grounded claims"
+              autoFocus
+            />
+            <p data-testid="evaluator-spend-note" style={{ color: 'var(--color-ink-dim)', fontSize: '0.86rem' }}>
+              Spend-incapable by construction. It is a skeptic — it defaults to reject and must justify any accept.
+            </p>
+          </>,
+        )}
+
+      {step === 'requester-config' &&
+        stepForm(
+          'token-config',
+          !!jobSpecSource.trim() && !!providerAgentId && !!evaluatorAgentId && isAddress(feeRecipient) && /^\d+$/.test(feeCapPerJob),
+          'Point at a saved job, pick its provider and evaluator, set the fee recipient and cap.',
+          <>
+            <h1 style={{ fontSize: 'var(--text-h1)' }}>Order a job</h1>
+            <Field
+              id="requester-jobspec"
+              label="Job handle"
+              hint="The handle of a job you defined (Jobs → Define a job)."
+              value={jobSpecSource}
+              onChange={(e) => setJobSpecSource(e.target.value)}
+              placeholder="eth-4000"
+              autoFocus
+            />
+            <label className="label" style={{ color: 'var(--color-ink)' }}>
+              Provider agent
+              <select
+                className="field"
+                data-testid="requester-provider"
+                value={providerAgentId}
+                onChange={(e) => setProviderAgentId(e.target.value)}
+              >
+                <option value="">— pick a provider —</option>
+                {(jobAgents?.providers ?? []).map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="label" style={{ color: 'var(--color-ink)' }}>
+              Evaluator agent
+              <select
+                className="field"
+                data-testid="requester-evaluator"
+                value={evaluatorAgentId}
+                onChange={(e) => setEvaluatorAgentId(e.target.value)}
+              >
+                <option value="">— pick an evaluator —</option>
+                {(jobAgents?.evaluators ?? []).map((a) => (
+                  <option key={a.id} value={a.id}>
+                    {a.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <Field
+              id="requester-fee-recipient"
+              label="Pay the fee to"
+              hint="The allowlisted recipient of the job fee (e.g. the provider’s payout wallet)."
+              value={feeRecipient}
+              onChange={(e) => setFeeRecipient(e.target.value)}
+              placeholder="0x…"
+            />
+            <Field
+              id="requester-fee-cap"
+              label="Fee cap per job (token base units)"
+              hint="A hard ceiling per job, on top of the seeded fee. 6-dp for TestUSD: 5000000 = 5.00."
+              value={feeCapPerJob}
+              onChange={(e) => setFeeCapPerJob(e.target.value)}
+              inputMode="numeric"
+            />
+            <Disclosure label="Where does the fee amount come from?">
+              From the job you defined, in server state — never from the agents. This cap and the
+              on-chain per-token caps bound it again: a hijacked requester cannot overpay.
+            </Disclosure>
+          </>,
+        )}
+
+      {step === 'token-config' &&
+        stepForm(
+          'expiry',
+          isAddress(feeToken) && /^\d+$/.test(tokenPerTransfer) && /^\d+$/.test(tokenWindow) && (feeCapPerJob === '' || BigInt(feeCapPerJob || '0') <= BigInt(tokenPerTransfer || '0')),
+          'Enter the settlement token and per-token caps; the per-job fee cap must not exceed the per-transfer cap.',
+          <>
+            <h1 style={{ fontSize: 'var(--text-h1)' }}>Settlement limits</h1>
+            <p style={{ color: 'var(--color-ink-dim)', fontSize: '0.88rem' }}>
+              The one token this account can ever move, and the hard caps the contract enforces on it.
+              The token is fixed at creation — a different token is a different account.
+            </p>
+            <Field
+              id="token-address"
+              label="Settlement token (ERC-20)"
+              hint="Testnet only — a TestUSD-style token on 16602. Not real USDC."
+              value={feeToken}
+              onChange={(e) => setFeeToken(e.target.value)}
+              placeholder="0x…"
+              autoFocus
+            />
+            <Field
+              id="token-per-transfer"
+              label="Max per settlement (token base units)"
+              hint="One hijacked payment can never exceed this. 6-dp: 10000000 = 10.00."
+              value={tokenPerTransfer}
+              onChange={(e) => setTokenPerTransfer(e.target.value)}
+              inputMode="numeric"
+            />
+            <Field
+              id="token-window"
+              label="Max per window (token base units)"
+              hint="Total the account can settle within its rolling window."
+              value={tokenWindow}
+              onChange={(e) => setTokenWindow(e.target.value)}
+              inputMode="numeric"
+            />
+            <Disclosure label="What the contract enforces">
+              Every settle is a contract-encoded transfer(to, amount) the account itself builds — the
+              agent never supplies raw calldata. It reverts over the per-transfer cap, over the window
+              cap, off the token, off the recipient allowlist, when expired, or after revoke.
             </Disclosure>
           </>,
         )}
@@ -501,25 +781,48 @@ export function CreateWizard({ onCreate, walletReady, fund }: CreateWizardProps)
                   ? 'manages an allowance itself'
                   : role === 'sentinel'
                     ? 'watches and requests top-ups (never pays)'
-                    : 'acts on requests from a linked agent',
+                    : role === 'executor'
+                      ? 'acts on requests from a linked agent'
+                      : role === 'provider'
+                        ? 'does jobs (spend-incapable)'
+                        : role === 'evaluator'
+                          ? 'judges work — skeptic (spend-incapable)'
+                          : 'orders jobs and pays for good work',
               ],
-              ...(role !== 'executor'
+              // treasury/sentinel top-up rows
+              ...(isTopUpRole(role)
                 ? [
                     [role === 'sentinel' ? 'Watches' : 'Keeps topped up', beneficiary],
                     ['Keep them at', `${targetBalance} 0G`],
                     [role === 'sentinel' ? 'Asks for, per top-up' : 'Per top-up', `${topUp} 0G max`],
                   ]
                 : []),
+              // Phase-4 job-role rows
+              ...(role === 'provider' ? [['Service', serviceSpec]] : []),
+              ...(role === 'evaluator' ? [['Rubric', rubricRef]] : []),
+              ...(role === 'requester'
+                ? [
+                    ['Job handle', jobSpecSource],
+                    ['Settlement token', feeToken],
+                    ['Pays fee to', feeRecipient],
+                    ['Fee cap per job', `${feeCapPerJob} base units`],
+                    ['Max per settlement', `${tokenPerTransfer} base units`],
+                    ['Max per window', `${tokenWindow} base units`],
+                  ]
+                : []),
+              // native-spend policy rows (treasury/executor only)
               ...(role === 'sentinel'
                 ? [
                     ['Per payment', 'nothing — it can never pay'],
                     ['Can pay', 'nobody (empty allowlist)'],
                   ]
-                : [
-                    ['Per payment', `${weiToOg(input?.policy.perTransferCapWei ?? '0')} 0G max`],
-                    ['Budget', `${weiToOg(input?.policy.windowCapWei ?? '0')} 0G every ${windowHours} hours`],
-                    ['Can pay', payee],
-                  ]),
+                : isJobRole(role)
+                  ? [['Moves native funds', role === 'requester' ? 'no — settles ERC-20 only' : 'no — spend-incapable']]
+                  : [
+                      ['Per payment', `${weiToOg(input?.policy.perTransferCapWei ?? '0')} 0G max`],
+                      ['Budget', `${weiToOg(input?.policy.windowCapWei ?? '0')} 0G every ${windowHours} hours`],
+                      ['Can pay', payee],
+                    ]),
               ['Expires', `in ${expiryDays} days`],
             ].map(([k, v]) => (
               <div key={k} style={{ display: 'flex', gap: '0.8rem', justifyContent: 'space-between', borderBottom: '1px solid var(--color-line-soft)', paddingBottom: '0.45rem' }}>

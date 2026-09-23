@@ -41,6 +41,15 @@ const envSchema = z.object({
   // reasoning_content when content is starved. goal.model overrides per agent;
   // revisit at Phase 4 (real-job slice).
   RUNTIME_DEFAULT_MODEL: z.string().min(1).default('0gm-1.0-35b-a3b'),
+  // Phase-4 §0.6 + F8: the ACP provider/evaluator work cycles use STRONGER
+  // 0G-catalog models than the platform default (0gm-1.0 flaked on structured
+  // output in Phase 3), and the evaluator's model MUST DIFFER from the
+  // provider's so verification does not inherit the provider's blind spots
+  // (perspective diversity). Confirmed available via the 0G router GET /models.
+  // goal.model still overrides per agent; the requester never reasons so it
+  // needs no strong model.
+  JOB_PROVIDER_MODEL: z.string().min(1).default('deepseek-v3'),
+  JOB_EVALUATOR_MODEL: z.string().min(1).default('glm-5'),
   // C-1 limits (07 S6, config-driven testnet defaults; revisit at first
   // external users / mainnet). Quota counts ALL created rows incl. revoked —
   // ops create-gas is the drained resource; revoking must not refill quota.
@@ -55,6 +64,15 @@ const envSchema = z.object({
   BALANCE_CACHE_TTL_MS: z.coerce.number().int().positive().default(15_000),
   // Phase-3 daily loop (07 S11, config-driven testnet values).
   ALERT_RATE_PER_OWNER_PER_HOUR: z.coerce.number().int().positive().default(60),
+  // P4C-1 (07, recurring MEDIUM since Phase 1 — before real funds): the single
+  // Render instance's SSE fan-out is unbounded, so one authed owner opening
+  // many streams can exhaust file descriptors / heap. Cap connections globally
+  // AND per owner, and reap idle/zombie sockets via a heartbeat write (a dead
+  // peer's socket fails the write and is closed). Config-driven testnet
+  // defaults; revisit at first external users / mainnet (same as S6/S11).
+  SSE_MAX_GLOBAL: z.coerce.number().int().positive().default(400),
+  SSE_MAX_PER_OWNER: z.coerce.number().int().positive().default(20),
+  SSE_IDLE_TIMEOUT_MS: z.coerce.number().int().positive().default(300_000),
   DIGEST_DEFAULT_HOUR_UTC: z.coerce.number().int().min(0).max(23).default(8),
   // Telegram (S9) — the whole feature is OFF unless the token is set (local
   // dev / CI run without a bot; the deployed stack sets all four).

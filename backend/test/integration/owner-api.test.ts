@@ -145,6 +145,104 @@ describe('POST /api/agents', () => {
   });
 });
 
+// Phase-4 ACP role create-validation (spec §4). The API is the enforcement
+// boundary — a direct caller must not mint a mis-configured role.
+describe('POST /api/agents — Phase-4 ACP roles', () => {
+  const TOKEN = '0x' + 'a5'.repeat(20);
+  const RECIPIENT = '0x' + '9c'.repeat(20);
+  const provId = '22222222-2222-4222-8222-222222222222';
+  const evalId = '33333333-3333-4333-8333-333333333333';
+
+  function requesterBody(over: Record<string, unknown> = {}): Record<string, unknown> {
+    return {
+      ...CREATE_BODY,
+      name: 'requester',
+      allowlist: [RECIPIENT],
+      goal: {
+        type: 'requester',
+        jobSpecSource: 'job-1',
+        providerAgentId: provId,
+        evaluatorAgentId: evalId,
+        feeToken: TOKEN,
+        feeRecipient: RECIPIENT,
+        feeCapPerJobWei: '100000000',
+      },
+      tokenConfig: { settlementToken: TOKEN, perTransferCapTokenWei: '100000000', windowCapTokenWei: '250000000' },
+      ...over,
+    };
+  }
+
+  async function post(body: Record<string, unknown>) {
+    return request(t.app).post('/api/agents').set('authorization', ownerAuth('0x' + 'c1'.repeat(20))).send(body);
+  }
+
+  it('creates a valid requester (token-capable)', async () => {
+    const res = await post(requesterBody());
+    expect(res.status).toBe(201);
+  });
+
+  it('rejects a requester with no tokenConfig', async () => {
+    const b = requesterBody();
+    delete b['tokenConfig'];
+    expect((await post(b)).status).toBe(400);
+  });
+
+  it('rejects feeToken != settlementToken', async () => {
+    const res = await post(requesterBody({ goal: { ...(requesterBody().goal as object), feeToken: '0x' + 'b6'.repeat(20) } }));
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects feeCapPerJob above the per-token per-transfer cap', async () => {
+    const res = await post(requesterBody({ goal: { ...(requesterBody().goal as object), feeCapPerJobWei: '999000000' } }));
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects feeRecipient not in the allowlist', async () => {
+    const res = await post(requesterBody({ allowlist: ['0x' + 'de'.repeat(20)] }));
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects tokenConfig on a non-requester goal', async () => {
+    const res = await post({ ...requesterBody(), goal: { type: 'provider', serviceSpec: 'x' } });
+    expect(res.status).toBe(400);
+  });
+
+  it('creates a spend-incapable provider (zero caps, empty allowlist)', async () => {
+    const res = await post({
+      ...CREATE_BODY,
+      name: 'provider',
+      allowlist: [],
+      policy: { ...CREATE_BODY.policy, perTransferCapWei: '0', windowCapWei: '0' },
+      goal: { type: 'provider', serviceSpec: 'probability forecasting' },
+      tokenConfig: undefined,
+    });
+    expect(res.status).toBe(201);
+  });
+
+  it('rejects a provider with non-zero native caps', async () => {
+    const res = await post({
+      ...CREATE_BODY,
+      name: 'provider',
+      allowlist: [],
+      goal: { type: 'provider', serviceSpec: 'x' },
+      tokenConfig: undefined,
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('creates a spend-incapable evaluator', async () => {
+    const res = await post({
+      ...CREATE_BODY,
+      name: 'evaluator',
+      allowlist: [],
+      policy: { ...CREATE_BODY.policy, perTransferCapWei: '0', windowCapWei: '0' },
+      goal: { type: 'evaluator', rubricRef: 'rubric-1' },
+      tokenConfig: undefined,
+    });
+    expect(res.status).toBe(201);
+  });
+});
+
 describe('agent lifecycle routes', () => {
   it('GET /api/agents/:id returns the FE AgentDetail shape incl. encryptedAuditKey', async () => {
     const a = await createAgent();

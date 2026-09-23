@@ -42,5 +42,9 @@ export function sanitizeAgentIntent(reason: string | undefined, max = 160): stri
     .replace(/\s+/g, ' ')
     .trim();
   if (!flat) return null;
-  return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat;
+  // P4C-5: truncate by CODE POINTS, not UTF-16 units — `String.slice` can cut
+  // an astral char (emoji) mid-surrogate and emit a lone half. Array.from
+  // iterates code points, so the tail is always a whole character.
+  const cps = Array.from(flat);
+  return cps.length > max ? `${cps.slice(0, max - 1).join('').trimEnd()}…` : flat;
 }

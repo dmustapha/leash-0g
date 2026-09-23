@@ -23,6 +23,22 @@ import {
  * (02 §6 honesty), the inbox and Telegram just stop amplifying.
  */
 
+/**
+ * P4C-2 advisory-lock key. `pg_advisory_xact_lock(classid, objid)` takes two
+ * int4s; we fix a namespace class for alert emission and derive a signed-int32
+ * object key from the owner address (FNV-1a → int32). This serializes all alert
+ * emissions per owner without any owner-derived text touching SQL.
+ */
+const ALERT_LOCK_CLASS = 0x4c41; // "LA" — LEASH alerts namespace
+function ownerLockKey(owner: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < owner.length; i++) {
+    h ^= owner.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h | 0; // to signed int32
+}
+
 export interface EmitAlertInput {
   agentId?: string;
   linkId?: string;
@@ -77,10 +93,22 @@ export class AlertService {
     let alert: Alert;
     let stormFolded = false;
     try {
-      await client.query('BEGIN');
-      // Rate guard (S11): counted INSIDE the tx, after the owner advisory
-      // lock taken by the record append below would serialize us anyway —
-      // but the guard runs first so a storm never appends per-emission rows.
+      // P4C-2: hoist the per-owner advisory lock to the TOP of the tx so the
+      // count→(insert|fold) sequence is strictly serialized per owner. The
+      // storm-fold branch may append NO owner record (deduped, non-50th), so
+      // relying on the chained-append lock alone left a check-then-act race
+      // that could admit a few extra alerts past the rate guard (no chain/
+      // consent/fund impact, but a soft-cap breach). One lock, whole tx.
+      //
+      // The lock is folded INTO the BEGIN round-trip (one query, not two) using
+      // the two-int4 advisory form with a JS-computed key — so it adds ZERO
+      // extra round-trips per emit. Both operands are integers we compute here,
+      // so nothing owner-derived is interpolated into SQL. The (classid,objid)
+      // space is DISTINCT from the single-int8 `hashtextextended` locks the
+      // chained-append helper uses, so the two never collide.
+      await client.query(`BEGIN; SELECT pg_advisory_xact_lock(${ALERT_LOCK_CLASS}, ${ownerLockKey(owner)})`);
+      // Rate guard (S11): counted INSIDE the tx — now under the owner lock, so
+      // the count reflects every committed emission with no interleaving.
       const recent = await countRecentEmissions(client, owner);
       if (recent >= this.deps.settings.alertRatePerOwnerPerHour && input.kind !== 'alert_storm') {
         // Fold into ONE open storm row. The owner stream records the TRIP

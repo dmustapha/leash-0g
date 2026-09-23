@@ -12,16 +12,29 @@ import type { TelegramBot } from './bot.js';
  */
 export function telegramWebhookRouter(bot: TelegramBot, webhookSecret: string): Router {
   const router = Router();
-  router.use('/api/telegram/webhook', json({ limit: 64 * 1024 }));
-  router.post('/api/telegram/webhook', (req: Request, res: Response) => {
+  // P4C-5: authenticate on the SECRET HEADER *before* the JSON body is parsed.
+  // Previously `json()` ran first, so an unauthenticated caller could force a
+  // 64KB JSON parse on every request. The secret-check middleware short-circuits
+  // 401 before any body work; only authenticated updates reach the parser.
+  router.use('/api/telegram/webhook', (req: Request, res: Response, next) => {
     const given = req.headers['x-telegram-bot-api-secret-token'];
     if (typeof given !== 'string' || !constantTimeEqual(given, webhookSecret)) {
       res.status(401).json({ error: { message: 'unauthorized' } });
       return;
     }
+    next();
+  });
+  router.use('/api/telegram/webhook', json({ limit: 64 * 1024 }));
+  router.post('/api/telegram/webhook', (req: Request, res: Response) => {
     // Fire-and-forget: Telegram wants a fast 200; our handling is async and
     // failure-logged (a lost update is re-delivered by Telegram anyway).
-    void bot.handleUpdate(req.body).catch((err: unknown) => console.error('telegram update failed', err));
+    // P4C-5: log ONLY the error message, never the update body — a hijacked
+    // agent's text must not be echoed into logs via a stringified error/update.
+    void bot
+      .handleUpdate(req.body)
+      .catch((err: unknown) =>
+        console.error('telegram update failed:', err instanceof Error ? err.message : 'unknown error'),
+      );
     res.json({ ok: true });
   });
   return router;

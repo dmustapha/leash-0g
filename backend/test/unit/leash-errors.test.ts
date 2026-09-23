@@ -32,11 +32,17 @@ const FIXTURES: Array<{ name: string; args: unknown[] }> = [
   { name: 'NotLoosening', args: [] },
   { name: 'NotTightening', args: [] },
   { name: 'InvalidPolicy', args: [] },
+  // Phase-4 v3 token-path errors (spec §3b).
+  { name: 'NoSettlementToken', args: [] },
+  { name: 'TokenNotAllowlisted', args: ['0x8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c8c'] },
+  { name: 'OverPerTransferCapToken', args: [101_000_000n, 100_000_000n] },
+  { name: 'OverWindowCapToken', args: [300_000_000n, 250_000_000n] },
+  { name: 'TokenTransferFailed', args: [] },
 ];
 
-describe('P3C-6(ii) — decodeLeashError over all 17 errors', () => {
-  it('the fixture list covers exactly the contract error set (pin: 17)', () => {
-    expect(LEASH_ERROR_NAMES).toHaveLength(17);
+describe('P3C-6(ii) — decodeLeashError over all 22 errors', () => {
+  it('the fixture list covers exactly the contract error set (pin: 22 = 17 native + 5 token)', () => {
+    expect(LEASH_ERROR_NAMES).toHaveLength(22);
     expect([...FIXTURES.map((f) => f.name)].sort()).toEqual([...LEASH_ERROR_NAMES].sort());
   });
 

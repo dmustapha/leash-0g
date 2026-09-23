@@ -133,8 +133,14 @@ type CycleMode =
   | { mode: 'inbound_reject'; reason: 'unsupported kind' | 'malformed payload' };
 
 function classifyCycle(goal: AgentGoal, inbound: InboundDelegationInput | null | undefined): CycleMode {
+  // Phase-4 job roles (requester/provider/evaluator) run in their OWN runtime
+  // (jobs/*), never through this treasury/transfer graph — guard defensively.
+  const role = goal.type ?? 'treasury';
+  const isLegacyAutonomous = role === 'treasury' || role === 'sentinel';
   if (!inbound) {
-    return goal.type === 'executor' ? { mode: 'executor_idle' } : { mode: 'autonomous', goal };
+    if (role === 'executor') return { mode: 'executor_idle' };
+    if (isLegacyAutonomous) return { mode: 'autonomous', goal: goal as TreasuryGoal | SentinelGoal };
+    return { mode: 'inbound_reject', reason: 'unsupported kind' };
   }
   // Only the specimen executor interprets 'transfer.request' (spec §3b) —
   // every other (role, kind) combination is generically unsupported.
@@ -660,10 +666,10 @@ function evaluateDecision(
   if (!policy.allowlist.includes(state.effectiveBeneficiary.toLowerCase())) {
     return stand('beneficiary is not allowlisted');
   }
-  if (mode.mode === 'autonomous' && ctx.goal.type !== 'executor') {
-    // Treasury target check — an inbound transfer.request has no goal target;
-    // the executor honours the request bounded by its policy instead.
-    if (BigInt(state.beneficiaryBalanceWei) >= BigInt(ctx.goal.targetBalanceWei)) {
+  if (mode.mode === 'autonomous') {
+    // Treasury/sentinel target check — an inbound transfer.request has no goal
+    // target; the executor honours the request bounded by its policy instead.
+    if (BigInt(state.beneficiaryBalanceWei) >= BigInt(mode.goal.targetBalanceWei)) {
       return stand('target balance already met');
     }
   }

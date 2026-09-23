@@ -118,6 +118,11 @@ export class LeashChainOps implements ChainOps {
           },
           input.allowlist as Hex[],
           BigInt(input.timelockDelay),
+          (input.settlementToken ?? '0x0000000000000000000000000000000000000000') as Hex,
+          {
+            perTransferCapToken: input.tokenPolicy?.perTransferCapToken ?? 0n,
+            windowCapToken: input.tokenPolicy?.windowCapToken ?? 0n,
+          },
         ],
       });
       const createReceipt = await waitReceipt(this.publicClient, createHash);
@@ -237,7 +242,7 @@ export async function readPolicyView(
     });
     if (allowed) allowlist.push(candidate.toLowerCase());
   }
-  return {
+  const base: PolicyView = {
     perTransferCap: policy[0],
     windowCap: policy[1],
     windowSeconds: policy[2],
@@ -246,5 +251,33 @@ export async function readPolicyView(
     revoked,
     spentInWindow,
     windowStart: Number(windowStart),
+  };
+  // F9 mixed support: only v3 token-capable accounts expose these getters. A
+  // v2 account has no `settlementToken` code — the read reverts, which we treat
+  // as "native-only" (no token fields). We probe settlementToken first; a zero
+  // (or a revert) means native-only.
+  let settlementToken: string;
+  try {
+    settlementToken = (await client.readContract({
+      address,
+      abi: leashAccountAbi,
+      functionName: 'settlementToken',
+    })) as string;
+  } catch {
+    return base; // legacy v2 account — no token surface
+  }
+  if (!settlementToken || /^0x0+$/i.test(settlementToken)) return base; // native-only v3
+  const [tp, spentToken, windowStartToken] = await Promise.all([
+    client.readContract({ address, abi: leashAccountAbi, functionName: 'tokenPolicy' }),
+    client.readContract({ address, abi: leashAccountAbi, functionName: 'spentInWindowToken' }),
+    client.readContract({ address, abi: leashAccountAbi, functionName: 'windowStartToken' }),
+  ]);
+  return {
+    ...base,
+    settlementToken: settlementToken.toLowerCase(),
+    tokenPerTransferCap: tp[0],
+    tokenWindowCap: tp[1],
+    spentInWindowToken: spentToken,
+    windowStartToken: Number(windowStartToken),
   };
 }

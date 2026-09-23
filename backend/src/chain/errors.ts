@@ -52,6 +52,16 @@ export function plainLeashError(errorName: string, args: Json): string {
       return 'This path is only for changes that tighten policy.';
     case 'InvalidPolicy':
       return 'That policy configuration is not valid.';
+    case 'NoSettlementToken':
+      return 'This account is native-only — it has no settlement token configured, so token transfers are not allowed.';
+    case 'TokenNotAllowlisted':
+      return `That token is not this account’s settlement token${typeof a[0] === 'string' ? ` (${String(a[0])})` : ''} — the account refuses to move it.`;
+    case 'OverPerTransferCapToken':
+      return `That single token transfer is over the per-transfer cap${caps(a)} — the account refuses it no matter who asks.`;
+    case 'OverWindowCapToken':
+      return `That would go over the token spending-window cap${caps(a)} — the window has to reset (or the owner raise it) first.`;
+    case 'TokenTransferFailed':
+      return 'The token transfer itself failed (the token rejected it or returned false).';
     default:
       return 'The account contract refused this action.';
   }

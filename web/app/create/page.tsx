@@ -3,7 +3,7 @@
 // signature-derived KEK (with determinism guard + passphrase fallback), backend create call.
 'use client';
 
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { Address } from 'viem';
 import { makeApi } from '@/lib/api';
 import { config } from '@/lib/config';
@@ -38,7 +38,28 @@ function download(filename: string, contents: string) {
 export default function CreatePage() {
   const wallet = useOwnerWallet();
   const { setAgentId } = useAgentId();
-  const api = makeApi(wallet.getToken);
+  const api = useMemo(() => makeApi(wallet.getToken), [wallet.getToken]);
+
+  // Phase-4: the owner's existing provider/evaluator agents, for a requester's
+  // provider/evaluator links (a requester can only point at agents that exist).
+  const [jobAgents, setJobAgents] = useState<{ providers: { id: string; name: string }[]; evaluators: { id: string; name: string }[] }>({
+    providers: [],
+    evaluators: [],
+  });
+  useEffect(() => {
+    void (async () => {
+      try {
+        const { agents } = await api.listAgents();
+        const active = agents.filter((a) => a.status === 'active');
+        setJobAgents({
+          providers: active.filter((a) => a.role === 'provider').map((a) => ({ id: a.agentId, name: a.name })),
+          evaluators: active.filter((a) => a.role === 'evaluator').map((a) => ({ id: a.agentId, name: a.name })),
+        });
+      } catch {
+        /* the requester picker just shows empty — non-fatal */
+      }
+    })();
+  }, [api]);
 
   const onCreate = useCallback(
     async (input: WizardInput, passphrase?: string): Promise<WizardResult> => {
@@ -66,6 +87,9 @@ export default function CreatePage() {
         goal: input.goal,
         auditPubKey: keypair.pubKeyHex,
         encryptedAuditKey: serializeBlob(blob),
+        // Phase-4: settlement-token config for a requester (F1) — the backend
+        // rejects it for any other role.
+        ...(input.tokenConfig ? { tokenConfig: input.tokenConfig } : {}),
       });
       setAgentId(response.agentId);
 
@@ -102,7 +126,7 @@ export default function CreatePage() {
 
   return (
     <div className="wrap-narrow" style={{ paddingBlock: 'clamp(2rem, 5vw, 4rem)', maxWidth: '640px' }}>
-      <CreateWizard onCreate={onCreate} walletReady={wallet.authenticated} fund={fund} />
+      <CreateWizard onCreate={onCreate} walletReady={wallet.authenticated} fund={fund} jobAgents={jobAgents} />
     </div>
   );
 }

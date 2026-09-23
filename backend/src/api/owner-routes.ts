@@ -21,6 +21,10 @@ import { reserveCreate, releaseReservation } from '../store/reservations.js';
 import type { AlertService } from '../alerts/service.js';
 import { listAlerts, getAlert as getAlertRow, markAlertRead, markAllInfoRead, countUnread } from '../alerts/store.js';
 import { listOwnerRecords, verifyOwnerChainIncremental } from '../store/owner-records.js';
+import { listJobsForOwner, getJob } from '../store/jobs.js';
+import { upsertJobSpec, getJobSpec } from '../store/job-specs.js';
+import { jobSpecSchema } from '../jobs/envelopes.js';
+import { acceptanceRuleSetSchema } from '../jobs/acceptance.js';
 import {
   getOwnerSettings,
   patchOwnerSettings,
@@ -42,6 +46,7 @@ import type { DelegationCoordinator } from '../coordination/coordinator.js';
 import type { TelegramBot } from '../telegram/bot.js';
 import type { DigestService } from '../digest/service.js';
 import type { AgentRow, AuditBatch, Link } from '../types.js';
+import { goalAllowlistCandidates, goalRole } from '../types.js';
 import type { Json } from '../crypto/canonical.js';
 import type { ChainOps, RuntimeManager, Settings } from '../server.js';
 
@@ -112,7 +117,50 @@ const executorGoalSchema = z.object({
   model: z.string().min(1).optional(),
 });
 
-const goalSchema = z.union([sentinelGoalSchema, executorGoalSchema, treasuryGoalSchema]);
+// Phase-4 ACP roles (spec §3b). Requester is the sole governed spender; provider
+// and evaluator are spend-incapable. jobSpecSource/rubricRef are opaque server
+// handles; the fee amount is NEVER trusted from these — it comes from the
+// owner-defined job spec in server state (F4).
+const requesterGoalSchema = z.object({
+  type: z.literal('requester'),
+  jobSpecSource: z.string().min(1).max(200),
+  providerAgentId: z.string().uuid(),
+  evaluatorAgentId: z.string().uuid(),
+  feeToken: addressSchema,
+  feeRecipient: addressSchema,
+  feeCapPerJobWei: weiSchema,
+  model: z.string().min(1).optional(),
+});
+
+const providerGoalSchema = z.object({
+  type: z.literal('provider'),
+  serviceSpec: z.string().min(1).max(2000),
+  model: z.string().min(1).optional(),
+});
+
+const evaluatorGoalSchema = z.object({
+  type: z.literal('evaluator'),
+  rubricRef: z.string().min(1).max(200),
+  model: z.string().min(1).optional(),
+});
+
+const goalSchema = z.union([
+  sentinelGoalSchema,
+  executorGoalSchema,
+  requesterGoalSchema,
+  providerGoalSchema,
+  evaluatorGoalSchema,
+  treasuryGoalSchema,
+]);
+
+// Optional per-account settlement-token config (spec §4). Present ONLY for a
+// requester (the sole token-capable role, F1); its token is immutable at create
+// (F3). Absent ⇒ native-only account (every other role + legacy shapes).
+const tokenConfigSchema = z.object({
+  settlementToken: addressSchema,
+  perTransferCapTokenWei: weiSchema,
+  windowCapTokenWei: weiSchema,
+});
 
 const createAgentSchema = z.object({
   name: z.string().min(1).max(120),
@@ -131,6 +179,8 @@ const createAgentSchema = z.object({
   gatewayRules: z.array(gatewayRuleSchema).optional(),
   /** Opaque KEK-wrapped audit privkey blob, encrypted in the owner's browser. */
   encryptedAuditKey: z.string().min(1).max(20_000).optional(),
+  /** Phase-4: settlement-token config — required for requester, forbidden otherwise. */
+  tokenConfig: tokenConfigSchema.optional(),
 }).superRefine((v, issues) => {
   const role = v.goal.type ?? 'treasury';
   if (role === 'treasury' && v.allowlist.length < 1) {
@@ -139,6 +189,35 @@ const createAgentSchema = z.object({
       message: 'allowlist must not be empty for a treasury agent',
       path: ['allowlist'],
     });
+  }
+  // Phase-4 requester: token-capable, the sole governed spender (F1).
+  if (v.goal.type === 'requester') {
+    if (!v.tokenConfig) {
+      issues.addIssue({ code: z.ZodIssueCode.custom, message: 'requester requires tokenConfig', path: ['tokenConfig'] });
+    } else {
+      // feeToken must match the account's settlement token (single token, F3).
+      if (v.tokenConfig.settlementToken.toLowerCase() !== v.goal.feeToken.toLowerCase()) {
+        issues.addIssue({ code: z.ZodIssueCode.custom, message: 'goal.feeToken must equal tokenConfig.settlementToken', path: ['goal', 'feeToken'] });
+      }
+      // feeCapPerJob ≤ on-chain per-token per-transfer cap (defence in depth, F4).
+      if (BigInt(v.goal.feeCapPerJobWei) > BigInt(v.tokenConfig.perTransferCapTokenWei)) {
+        issues.addIssue({ code: z.ZodIssueCode.custom, message: 'goal.feeCapPerJobWei must not exceed tokenConfig.perTransferCapTokenWei', path: ['goal', 'feeCapPerJobWei'] });
+      }
+      // The fee recipient must be on the account allowlist (the contract enforces it too).
+      if (!v.allowlist.map((a) => a.toLowerCase()).includes(v.goal.feeRecipient.toLowerCase())) {
+        issues.addIssue({ code: z.ZodIssueCode.custom, message: 'goal.feeRecipient must be in the allowlist', path: ['goal', 'feeRecipient'] });
+      }
+    }
+  } else if (v.tokenConfig) {
+    // Only a requester may configure a settlement token (F1) — provider/
+    // evaluator/treasury/sentinel/executor are native-only.
+    issues.addIssue({ code: z.ZodIssueCode.custom, message: 'tokenConfig is only valid for a requester goal', path: ['tokenConfig'] });
+  }
+  // Provider/evaluator are spend-incapable (like sentinel): zero native caps.
+  // Evaluator may have an empty allowlist (like sentinel); provider too.
+  if ((role === 'provider' || role === 'evaluator') &&
+    (BigInt(v.policy.perTransferCapWei) !== 0n || BigInt(v.policy.windowCapWei) !== 0n)) {
+    issues.addIssue({ code: z.ZodIssueCode.custom, message: `${role} must be spend-incapable (zero native caps)`, path: ['policy'] });
   }
   // FE validates this too, but the API is the enforcement boundary: a top-up
   // chunk above the per-transfer cap would push every cycle into approval.
@@ -277,6 +356,17 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       },
       allowlist: input.allowlist,
       timelockDelay: deps.settings.defaultTimelockDelay,
+      // Phase-4: token-capable ONLY for a requester (validated above); the
+      // settlement token is immutable at create (F3).
+      ...(input.tokenConfig
+        ? {
+            settlementToken: input.tokenConfig.settlementToken,
+            tokenPolicy: {
+              perTransferCapToken: BigInt(input.tokenConfig.perTransferCapTokenWei),
+              windowCapToken: BigInt(input.tokenConfig.windowCapTokenWei),
+            },
+          }
+        : {}),
     });
 
     const token = generateGatewayToken();
@@ -354,6 +444,10 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
         agentId: a.id,
         name: a.name,
         status: a.status,
+        // Phase-4: the runtime role, so the create flow can offer provider/
+        // evaluator agents to a new requester (generality guard: derived here,
+        // never a coordination-table column).
+        role: goalRole(a.goal),
         accountAddr: a.accountAddr,
         sessionKeyAddr: a.sessionKeyAddr,
         accountBalanceWei: (await cachedBalance(a.accountAddr)).toString(),
@@ -397,12 +491,10 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     const agent = await requireOwnedAgent(req, res);
     if (!agent) return;
     const [policy, accountBalance] = await Promise.all([
-      // Executor goals carry no beneficiary (spec §3b) — no allowlist
-      // candidate to resolve; the view still returns caps/expiry/revoked.
-      deps.chain.getPolicyView(
-        agent.accountAddr,
-        agent.goal.type !== 'executor' ? [agent.goal.beneficiary] : [],
-      ),
+      // Role-aware allowlist candidate (spec §3b): treasury/sentinel =
+      // beneficiary, requester = fee recipient, executor/provider/evaluator =
+      // none. The view still returns caps/expiry/revoked regardless.
+      deps.chain.getPolicyView(agent.accountAddr, goalAllowlistCandidates(agent.goal)),
       deps.chain.getBalance(agent.accountAddr),
     ]);
     // Shape = FE AgentDetail (web/lib/types.ts): running|paused|revoked, wei-string
@@ -437,7 +529,9 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
   router.get('/api/agents/:id/stream', asyncRoute(async (req: OwnerRequest, res) => {
     const agent = await requireOwnedAgent(req, res);
     if (!agent) return;
-    deps.hub.attach(agent.id, res);
+    // P4C-1: pass ownerAddr so this per-agent stream counts toward the owner's
+    // connection cap (rejection sends a 429 before the SSE head).
+    deps.hub.attach(agent.id, res, agent.ownerAddr);
   }));
 
   router.get('/api/agents/:id/traces', asyncRoute(async (req: OwnerRequest, res) => {
@@ -1066,7 +1160,103 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     }
   }));
 
+  // ---- Phase-4 ACP jobs (spec §5/§7): owner-seeded job spec registry +
+  // the job projection read model. Authority stays server-side (F4/F5): the
+  // fee amount comes from the seeded spec, never from model/envelope text. ----
+
+  const jobSpecBodySchema = z
+    .object({
+      sourceRef: z.string().min(1).max(200),
+      spec: jobSpecSchema,
+      acceptance: acceptanceRuleSetSchema,
+      feeAmountWei: weiSchema,
+    })
+    .strict();
+
+  // Seed / update the owner-defined job a requester will run (F5). The
+  // requester's goal.jobSpecSource points at `sourceRef`.
+  router.put('/api/job-specs/:ref', asyncRoute(async (req: OwnerRequest, res) => {
+    const ownerAddr = req.ownerAddr as string;
+    const ref = req.params['ref'] ?? '';
+    const parsed = jobSpecBodySchema.safeParse({ ...req.body, sourceRef: ref });
+    if (!parsed.success) {
+      res.status(400).json({ error: { message: 'invalid job spec', issues: parsed.error.issues } });
+      return;
+    }
+    // Defence in depth (F4): the acceptanceRef in the spec should name the
+    // acceptance set the requester resolves — we store them together so the
+    // runtime never has to trust envelope text for either.
+    await upsertJobSpec(deps.pool, ownerAddr, ref, {
+      spec: parsed.data.spec,
+      acceptance: parsed.data.acceptance,
+      feeAmountWei: parsed.data.feeAmountWei,
+    });
+    res.json({ ok: true, sourceRef: ref });
+  }));
+
+  router.get('/api/job-specs/:ref', asyncRoute(async (req: OwnerRequest, res) => {
+    const seeded = await getJobSpec(deps.pool, req.ownerAddr as string, req.params['ref'] ?? '');
+    if (!seeded) {
+      res.status(404).json({ error: { message: 'not found' } });
+      return;
+    }
+    res.json(seeded);
+  }));
+
+  // The job lifecycle list for the cockpit (spec §7): request → deliver →
+  // verify → settle, one row per ACP job.
+  router.get('/api/jobs', asyncRoute(async (req: OwnerRequest, res) => {
+    const limitRaw = req.query['limit'];
+    const limit = Math.min(Number.parseInt(typeof limitRaw === 'string' ? limitRaw : '50', 10) || 50, 200);
+    const jobs = await listJobsForOwner(deps.pool, req.ownerAddr as string, limit);
+    res.json({ jobs: jobs.map(jobView) });
+  }));
+
+  // One job's full lifecycle. The deliverable + evaluator rationale are
+  // UNTRUSTED (F-quar): the FE renders them QUARANTINED. Only hashes/roots/sigs
+  // are the verified PoA fields.
+  router.get('/api/jobs/:id', asyncRoute(async (req: OwnerRequest, res) => {
+    const job = await getJob(deps.pool, req.params['id'] ?? '');
+    if (!job || job.ownerAddr !== req.ownerAddr) {
+      res.status(404).json({ error: { message: 'not found' } });
+      return;
+    }
+    res.json(jobView(job));
+  }));
+
   return router;
+}
+
+/**
+ * Shape a job projection row for the cockpit. The deliverable + rationale are
+ * carried through UNTRUSTED (F-quar) — the FE quarantines their display; the
+ * verified PoA holds only hashes/roots/sigs.
+ */
+function jobView(job: import('../store/jobs.js').JobRow): Json {
+  return {
+    jobId: job.jobId,
+    status: job.status,
+    spec: job.spec as unknown as Json,
+    jobSpecHash: job.jobSpecHash,
+    requesterAgentId: job.requesterAgentId,
+    providerAgentId: job.providerAgentId,
+    evaluatorAgentId: job.evaluatorAgentId,
+    feeToken: job.feeToken,
+    feeAmountWei: job.feeAmountWei,
+    feeRecipient: job.feeRecipient,
+    deliverable: job.deliverable ?? null, // UNTRUSTED — FE quarantines
+    deliverableRoot: job.deliverableRoot,
+    deliverableSummary: job.deliverableSummary, // UNTRUSTED — FE quarantines
+    acceptance: (job.acceptance as unknown as Json) ?? null,
+    verdict: job.verdict,
+    rationaleRef: job.rationaleRef,
+    approvalId: job.approvalId,
+    settlementTx: job.settlementTx,
+    poa: (job.poa as unknown as Json) ?? null,
+    blockedBy: job.blockedBy,
+    createdAt: job.createdAt,
+    updatedAt: job.updatedAt,
+  };
 }
 
 function publicAgent(agent: AgentRow): Record<string, unknown> {

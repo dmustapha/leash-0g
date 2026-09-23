@@ -70,7 +70,9 @@ contract LeashAccountInvariantTest is Test {
                 expiresAt: uint64(block.timestamp + 3650 days)
             }),
             list,
-            15 minutes
+            15 minutes,
+            address(0),
+            LeashAccount.TokenPolicy({perTransferCapToken: 0, windowCapToken: 0})
         );
         vm.deal(address(acct), 10_000 ether);
         handler = new LeashHandler(acct, owner, guardian, session, dest);

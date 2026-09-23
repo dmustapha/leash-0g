@@ -22,12 +22,18 @@ const EXPECTED_NAMES = [
   'NotLoosening',
   'NotTightening',
   'InvalidPolicy',
+  // Phase-4 governed ERC-20 settlement (v3 executeTokenTransfer).
+  'NoSettlementToken',
+  'TokenNotAllowlisted',
+  'OverPerTransferCapToken',
+  'OverWindowCapToken',
+  'TokenTransferFailed',
 ];
 
 describe('leash-errors copy map', () => {
-  it('has exactly 17 entries — every LeashAccount custom error, nothing else', () => {
+  it('has exactly 22 entries — every LeashAccount custom error, nothing else', () => {
     expect(Object.keys(LEASH_ERROR_COPY).sort()).toEqual([...EXPECTED_NAMES].sort());
-    expect(Object.keys(LEASH_ERROR_COPY)).toHaveLength(17);
+    expect(Object.keys(LEASH_ERROR_COPY)).toHaveLength(22);
   });
 
   it('never outputs a raw selector or hex — plain language only', () => {

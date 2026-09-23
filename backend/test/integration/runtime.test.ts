@@ -56,6 +56,17 @@ class FakeRuntimeChain implements RuntimeChain {
     this.executed.push({ to: input.to, valueWei: input.valueWei, sessionPrivateKey: input.sessionPrivateKey });
     return { txHash: '0x' + 'ee'.repeat(32) };
   }
+
+  async executeTokenTransfer(input: {
+    sessionPrivateKey: string;
+    accountAddr: string;
+    token: string;
+    to: string;
+    amountWei: bigint;
+  }): Promise<{ txHash: string }> {
+    void input;
+    return { txHash: '0x' + 'dd'.repeat(32) };
+  }
 }
 
 let db: TestDb;

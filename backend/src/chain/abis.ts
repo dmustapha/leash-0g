@@ -4,7 +4,8 @@ import { parseAbi } from 'viem';
 
 export const factoryAbi = parseAbi([
   'struct Policy { uint128 perTransferCap; uint128 windowCap; uint32 windowSeconds; uint64 expiresAt; }',
-  'function createAccount(address owner, address guardian, address sessionKey, Policy initialPolicy, address[] initialAllowlist, uint64 timelockDelay) returns (address account)',
+  'struct TokenPolicy { uint128 perTransferCapToken; uint128 windowCapToken; }',
+  'function createAccount(address owner, address guardian, address sessionKey, Policy initialPolicy, address[] initialAllowlist, uint64 timelockDelay, address settlementToken, TokenPolicy initialTokenPolicy) returns (address account)',
   'event AccountCreated(address indexed account, address indexed owner, address sessionKey, address guardian)',
 ]);
 
@@ -17,6 +18,8 @@ export const registryAbi = parseAbi([
 
 export const leashAccountAbi = parseAbi([
   'function execute(address to, uint256 value, bytes data)',
+  // Phase-4 v3: the contract-encoded ERC-20 settlement path (agent supplies no calldata).
+  'function executeTokenTransfer(address token, address to, uint256 amount)',
   'function revoke()',
   'function revoked() view returns (bool)',
   'function sessionKey() view returns (address)',
@@ -25,7 +28,14 @@ export const leashAccountAbi = parseAbi([
   'function allowlist(address) view returns (bool)',
   'function spentInWindow() view returns (uint128)',
   'function windowStart() view returns (uint64)',
+  // Phase-4 v3 token settlement getters (v2 accounts have no code for these →
+  // the runtime branches on settlementToken() != 0 before reading, F9).
+  'function settlementToken() view returns (address)',
+  'function tokenPolicy() view returns (uint128 perTransferCapToken, uint128 windowCapToken)',
+  'function spentInWindowToken() view returns (uint128)',
+  'function windowStartToken() view returns (uint64)',
   'event Executed(address indexed to, uint256 value, uint128 spentInWindow)',
+  'event TokenExecuted(address indexed token, address indexed to, uint256 amount, uint128 spentInWindowToken)',
   'event Revoked(address indexed by)',
   // P3C-6(ii): ALL 17 LeashAccount custom errors — with these in the ABI viem
   // decodes reverts by name, and decodeLeashError (chain/errors.ts) maps them
@@ -48,4 +58,10 @@ export const leashAccountAbi = parseAbi([
   'error NotLoosening()',
   'error NotTightening()',
   'error InvalidPolicy()',
+  // Phase-4 v3 token-path errors (extend the decode ABI, spec §3b).
+  'error NoSettlementToken()',
+  'error TokenNotAllowlisted(address token)',
+  'error OverPerTransferCapToken(uint256 amount, uint128 cap)',
+  'error OverWindowCapToken(uint256 attempted, uint128 cap)',
+  'error TokenTransferFailed()',
 ]);
