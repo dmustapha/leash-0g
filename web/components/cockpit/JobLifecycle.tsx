@@ -79,13 +79,19 @@ function Stage({
 export function JobLifecycle({
   job,
   onDecide,
-  tokenSymbol = 'TestUSD',
+  tokenSymbol,
 }: {
   job: JobView;
   /** Verdict-bound settlement approve/deny (rides the shared approvals rail). */
   onDecide?: (approvalId: string, decision: ApprovalDecision) => void;
+  /** Fallback only — the job's own detected symbol/decimals win when present. */
   tokenSymbol?: string;
 }) {
+  // Detect the true settlement asset from the job (read on-chain at originate);
+  // fall back to the prop / generic only when metadata is absent.
+  const sym = job.feeTokenSymbol ?? tokenSymbol ?? 'tokens';
+  const dec = job.feeTokenDecimals ?? 6;
+  const fee = (base: string) => formatToken(base, dec);
   const status = STATUS_COPY[job.status];
   const delivered = job.deliverableRoot !== null;
   const verdictIn = job.verdict !== null;
@@ -111,7 +117,7 @@ export function JobLifecycle({
         {/* 1 — request */}
         <Stage n={1} title="Requested" done active={false}>
           <p style={{ margin: 0, fontSize: '0.86rem', color: 'var(--color-ink-dim)' }}>
-            Fee if accepted: <strong>{formatToken(job.feeAmountWei)} {tokenSymbol}</strong> to {shortAddr(job.feeRecipient)}.
+            Fee if accepted: <strong>{fee(job.feeAmountWei)} {sym}</strong> to {shortAddr(job.feeRecipient)}.
             The amount comes from your seeded job spec — never from the agents.
           </p>
         </Stage>
@@ -174,7 +180,7 @@ export function JobLifecycle({
           {job.status === 'awaiting_approval' && job.approvalId ? (
             <div style={{ display: 'grid', gap: '0.5rem' }} data-testid="settlement-approval">
               <p style={{ margin: 0, fontSize: '0.86rem', color: 'var(--color-ink-dim)' }}>
-                Release <strong>{formatToken(job.feeAmountWei)} {tokenSymbol}</strong> to {shortAddr(job.feeRecipient)}?
+                Release <strong>{fee(job.feeAmountWei)} {sym}</strong> to {shortAddr(job.feeRecipient)}?
                 The deliverable passed the floor and the evaluator accepted it — the final call is yours.
               </p>
               {onDecide ? (
@@ -198,7 +204,7 @@ export function JobLifecycle({
             </div>
           ) : settled && job.settlementTx ? (
             <p style={{ margin: 0, fontSize: '0.86rem', color: 'var(--color-ink-dim)' }} data-testid="settlement-tx">
-              Paid <strong>{formatToken(job.feeAmountWei)} {tokenSymbol}</strong> — tx{' '}
+              Paid <strong>{fee(job.feeAmountWei)} {sym}</strong> — tx{' '}
               <code className="code">{shortAddr(job.settlementTx)}</code>
             </p>
           ) : blockedVerdict || job.status === 'rejected' || job.status === 'denied' ? (

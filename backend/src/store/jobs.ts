@@ -37,6 +37,8 @@ export interface JobRow {
   feeToken: string;
   feeAmountWei: string;
   feeRecipient: string;
+  feeTokenSymbol: string | null;
+  feeTokenDecimals: number | null;
   deliverable: Json | null;
   deliverableRoot: string | null;
   deliverableSummary: string | null;
@@ -66,6 +68,8 @@ interface JobDbRow {
   fee_token: string;
   fee_amount_wei: string;
   fee_recipient: string;
+  fee_token_symbol: string | null;
+  fee_token_decimals: number | null;
   deliverable: Json | null;
   deliverable_root: string | null;
   deliverable_summary: string | null;
@@ -96,6 +100,8 @@ function toRow(r: JobDbRow): JobRow {
     feeToken: r.fee_token,
     feeAmountWei: r.fee_amount_wei,
     feeRecipient: r.fee_recipient,
+    feeTokenSymbol: r.fee_token_symbol,
+    feeTokenDecimals: r.fee_token_decimals,
     deliverable: r.deliverable,
     deliverableRoot: r.deliverable_root,
     deliverableSummary: r.deliverable_summary,
@@ -115,7 +121,8 @@ function toRow(r: JobDbRow): JobRow {
 
 const COLS =
   `job_id, owner_addr, requester_agent_id, provider_agent_id, evaluator_agent_id, status, spec,
-   job_spec_hash, requester_sig, fee_token, fee_amount_wei, fee_recipient, deliverable,
+   job_spec_hash, requester_sig, fee_token, fee_amount_wei, fee_recipient, fee_token_symbol,
+   fee_token_decimals, deliverable,
    deliverable_root, deliverable_summary, provider_sig, acceptance, verdict, rationale_ref,
    evaluator_sig, approval_id, settlement_tx, poa, blocked_by, created_at, updated_at`;
 
@@ -131,14 +138,17 @@ export interface CreateJobInput {
   feeToken: string;
   feeAmountWei: string;
   feeRecipient: string;
+  feeTokenSymbol?: string | null;
+  feeTokenDecimals?: number | null;
 }
 
 /** Originate a job (requester side). Status starts at 'originated'. */
 export async function createJob(pool: Pool, input: CreateJobInput): Promise<JobRow> {
   const res = await pool.query<JobDbRow>(
     `INSERT INTO jobs (job_id, owner_addr, requester_agent_id, provider_agent_id, evaluator_agent_id,
-                       status, spec, job_spec_hash, requester_sig, fee_token, fee_amount_wei, fee_recipient)
-     VALUES ($1,$2,$3,$4,$5,'originated',$6,$7,$8,$9,$10,$11)
+                       status, spec, job_spec_hash, requester_sig, fee_token, fee_amount_wei, fee_recipient,
+                       fee_token_symbol, fee_token_decimals)
+     VALUES ($1,$2,$3,$4,$5,'originated',$6,$7,$8,$9,$10,$11,$12,$13)
      RETURNING ${COLS}`,
     [
       input.jobId,
@@ -152,6 +162,8 @@ export async function createJob(pool: Pool, input: CreateJobInput): Promise<JobR
       input.feeToken.toLowerCase(),
       input.feeAmountWei,
       input.feeRecipient.toLowerCase(),
+      input.feeTokenSymbol ?? null,
+      input.feeTokenDecimals ?? null,
     ],
   );
   const row = res.rows[0];

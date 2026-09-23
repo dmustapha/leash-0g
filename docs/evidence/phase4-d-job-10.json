@@ -1,0 +1,53 @@
+{
+  "drill": "D-JOB-10",
+  "api": "https://leash-0g-backend.onrender.com",
+  "settlementToken": "0xbeea96c7614ebc46760b442068e359e51e7c4e52",
+  "generatedAt": "2026-09-23T09:08:44.773Z",
+  "telegramLinked": true,
+  "jobSpecRef": "eth-4000-deployed",
+  "agents": {
+    "requester": {
+      "agentId": "68b310a0-a9b1-475e-867c-911959e8a9a5",
+      "accountAddr": "0x889C6aeE9b744c90F2c5aBE426618Dca3C0a6FA6"
+    },
+    "provider": {
+      "agentId": "dd51773e-3532-4eb4-8948-44f55ee2b62e",
+      "accountAddr": "0xE66395D40f2387b7EFE23965B74853FE94a57A28"
+    },
+    "evaluator": {
+      "agentId": "b96e53ee-4a61-4cc1-908e-afeb4cbe6b86",
+      "accountAddr": "0x7b15Fb5Ad57240001b067924762cB3a04a392231"
+    }
+  },
+  "funding": {
+    "mintTx": "0xc171b40e7c841517d5dda9a7b49a003b91ed1268bbd63784c50095c16e9be16c",
+    "testUsdBalance": "50000000",
+    "gasTx": "0x0756a038f003043c9c65b9b117367e9fd6ed99f6339dd5d064563059c34aae16"
+  },
+  "awaitingJobId": "b4d6e703-b207-4424-9968-1350f3c1b870",
+  "settlement": {
+    "jobId": "b4d6e703-b207-4424-9968-1350f3c1b870",
+    "status": "settled",
+    "settlementTx": "0x23d7deb710740d167c9b9699278c63bcd73b1e49e9beabd522a8460df3b13c97",
+    "feeToken": "0xbeea96c7614ebc46760b442068e359e51e7c4e52",
+    "feeAmountWei": "2000000",
+    "feeRecipient": "0xAf201Fc69f9E36D05955243E53203497d8A681D9",
+    "poa": {
+      "jobId": "b4d6e703-b207-4424-9968-1350f3c1b870",
+      "verdict": "accept",
+      "acceptance": {
+        "passed": true,
+        "checked": 4,
+        "failureCount": 0
+      },
+      "jobSpecHash": "0x06eb4cb4ace5ceabd1958be18d95c0f108000a02a5e9f1cccf23736fa1f5c1d1",
+      "providerSig": "0xba27fe150c8d15ac188eb925f81179cbe7a718662de4f2352997ab516a9256f2671611955f8deb33b5048feb4c2cfe074a4b0d2138e3f6d8318ed2f4cdf5e4301c",
+      "evaluatorSig": "0x8b24e43020d97e83e95cedbee316336ed2343e7d5dddc66b9689356634680f6516a68105aad7a4164c43392bc166a3adc92507379f6913a95c4c143d9cd90dae1b",
+      "requesterSig": "0x9bfd7fe563201f1030c838fca84a07850152673aef42cb929463b627eaf125bf523db09f588c7a566fd1709fe286a71f94ceb9404199de6d37f7b4a0a9ab65991b",
+      "settlementTx": "0x23d7deb710740d167c9b9699278c63bcd73b1e49e9beabd522a8460df3b13c97",
+      "deliverableRoot": "0x14dbc969c3dc445685513127a9c36c879e8dc55316ce9b5032f7ddbf56d383b8"
+    },
+    "recipientTestUsdBalance": "2000000"
+  },
+  "poaOnOwnerStream": true
+}

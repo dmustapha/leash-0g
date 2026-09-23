@@ -14,6 +14,23 @@ export function formatG(wei: string, signed = false): string {
   return `${neg ? '-' : signed ? '+' : ''}${num} 0G`;
 }
 
+/**
+ * Format a token/native amount from base units using its OWN decimals + symbol
+ * — so the surface shows the true asset ("2 USDC", "0.5 0G") instead of forcing
+ * everything through the 18-decimal 0G formatter. `decimals`/`symbol` null ⇒
+ * unknown token: show raw base units labelled generically (honest, never wrong).
+ */
+export function formatAsset(baseUnits: string, decimals: number | null, symbol: string | null): string {
+  if (decimals === null || symbol === null) return `${baseUnits} units`;
+  const neg = baseUnits.startsWith('-');
+  const abs = neg ? baseUnits.slice(1) : baseUnits;
+  const padded = abs.padStart(decimals + 1, '0');
+  const whole = padded.slice(0, padded.length - decimals).replace(/^0+(?=\d)/, '') || '0';
+  const frac = decimals > 0 ? padded.slice(padded.length - decimals).replace(/0+$/, '') : '';
+  const num = frac ? `${whole}.${frac}` : whole;
+  return `${neg ? '-' : ''}${num} ${symbol}`;
+}
+
 /** '0x9c9c…9c9c' — enough to recognize, short enough for a phone card. */
 export function shortAddr(addr: string): string {
   return addr.length > 12 ? `${addr.slice(0, 6)}…${addr.slice(-4)}` : addr;

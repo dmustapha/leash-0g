@@ -91,6 +91,9 @@ class FakeChain implements RuntimeChain {
     });
     return { txHash: '0x' + 'dd'.repeat(32) };
   }
+  async getErc20Meta(): Promise<{ symbol: string; decimals: number }> {
+    return { symbol: 'TUSD', decimals: 6 };
+  }
 }
 
 class FakeUploader implements StorageUploader {
