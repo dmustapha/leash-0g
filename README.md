@@ -78,9 +78,21 @@ Contract addresses, RPC, and other config are in [docs/DEPLOYMENTS.md](docs/DEPL
 - `backend/`: unit and integration suites over the policy engine, gateway, agent runtime, the layered verification gate, and the governed settlement path.
 - `web/`: component and accessibility tests over the create wizard, cockpit, and job lifecycle.
 
+## Build phases
+
+LEASH was built in deliberate phases, each ending in a scope + build review gate. Every phase shipped and was proven on 0G testnet before the next began.
+
+| Phase | Focus | What it achieved |
+|---|---|---|
+| **0 — De-risking spike** | Validate the hard unknowns first | A throwaway spike proving the three risky pieces work on 0G: the hardened Compute gateway, ECIES-encrypted writes to 0G Storage, and in-contract spend enforcement. Learnings kept, code discarded. |
+| **1 — Walking skeleton** | One agent, fully governed, end-to-end | An owner-created treasury agent bound to a self-enforcing `LeashAccount`, reasoning on 0G Compute through the gateway, with a hash-chained trace + ECIES audit trail on 0G Storage and a live cockpit (create, stream, approve, revoke). Fail-closed revoke proven on-chain. |
+| **2 — Second agent + coordination** | More than one agent, working together | Multiple agents under one owner with links, delegations, a state machine, and throttles; a watch-only sentinel and an act-on-request executor; a coordinated governed action across a pair proven live; a guardian-key revoke lane and a least-privilege runtime DB role. |
+| **3 — Daily loop** | The owner's at-a-glance layer | An alert engine + aggregated activity stream, a real Telegram bot (link, minimal-disclosure push, inline approve/deny on the same consent rails), a daily digest, spend-window observability, plain-language decoding of every contract error, and damping so a boundary-blocked agent stops retrying. |
+| **4 — Real use-case (agent commerce)** | Agents that order, verify, and pay for work | The requester / provider / evaluator triangle running a real job end-to-end: owner-seeded job specs, a deterministic acceptance floor, an independent skeptic evaluator, a layered release gate (floor, then verdict, then owner approval), governed ERC-20 settlement via token-capable v3 contracts + TestUSD, multi-party proof-of-agreement on 0G Storage, and asset-aware settlement UX. Proven on-chain (see the settlement tx above). |
+
 ## Status
 
-**Work in progress.** Shipped and proven end-to-end on 0G testnet: the on-chain policy engine, human-in-the-loop approvals, and the full request, deliver, verify, settle agent-commerce loop with governed ERC-20 settlement.
+**Work in progress.** Phases 0 through 4 are shipped and proven end-to-end on 0G testnet.
 
 Next: hardening the multi-agent economy, richer audit and analytics surfaces, and a continued polish pass on the owner experience.
 
