@@ -19,3 +19,7 @@ contracts/broadcast/**/dry-run/
 .turbo/
 playwright-report/
 test-results/
+tasks/
+.claude/
+.deploy-state.json
+.conductor-state.json
