@@ -78,25 +78,21 @@ Contract addresses, RPC, and other config are in [docs/DEPLOYMENTS.md](docs/DEPL
 - `backend/`: unit and integration suites over the policy engine, gateway, agent runtime, the layered verification gate, and the governed settlement path.
 - `web/`: component and accessibility tests over the create wizard, cockpit, and job lifecycle.
 
-## Build phases
+## How it came together
 
-LEASH was built in deliberate phases, each ending in a scope + build review gate. Every phase shipped and was proven on 0G testnet before the next began.
+The build was deliberately incremental, and the order was driven by risk. Before committing to anything, the first job was to find out whether the scary parts even worked on 0G: could an agent actually reason through a hardened gateway to 0G Compute, would an encrypted audit trail really land on 0G Storage, and could a contract genuinely refuse a spend it didn't like. That early pass was throwaway code and never meant to ship, but it settled the questions that would have sunk the project if the answers were no.
 
-| Phase | Focus | What it achieved |
-|---|---|---|
-| **0 — De-risking spike** | Validate the hard unknowns first | A throwaway spike proving the three risky pieces work on 0G: the hardened Compute gateway, ECIES-encrypted writes to 0G Storage, and in-contract spend enforcement. Learnings kept, code discarded. |
-| **1 — Walking skeleton** | One agent, fully governed, end-to-end | An owner-created treasury agent bound to a self-enforcing `LeashAccount`, reasoning on 0G Compute through the gateway, with a hash-chained trace + ECIES audit trail on 0G Storage and a live cockpit (create, stream, approve, revoke). Fail-closed revoke proven on-chain. |
-| **2 — Second agent + coordination** | More than one agent, working together | Multiple agents under one owner with links, delegations, a state machine, and throttles; a watch-only sentinel and an act-on-request executor; a coordinated governed action across a pair proven live; a guardian-key revoke lane and a least-privilege runtime DB role. |
-| **3 — Daily loop** | The owner's at-a-glance layer | An alert engine + aggregated activity stream, a real Telegram bot (link, minimal-disclosure push, inline approve/deny on the same consent rails), a daily digest, spend-window observability, plain-language decoding of every contract error, and damping so a boundary-blocked agent stops retrying. |
-| **4 — Real use-case (agent commerce)** | Agents that order, verify, and pay for work | The requester / provider / evaluator triangle running a real job end-to-end: owner-seeded job specs, a deterministic acceptance floor, an independent skeptic evaluator, a layered release gate (floor, then verdict, then owner approval), governed ERC-20 settlement via token-capable v3 contracts + TestUSD, multi-party proof-of-agreement on 0G Storage, and asset-aware settlement UX. Proven on-chain (see the settlement tx above). |
+Only then did the first real agent go in, and it was intentionally small: something that watches a wallet and tops it up on its own, held to a self-enforcing account contract, with a cockpit to stream what it's doing, step in, or cut it off. Revoke was the piece that had to be right first. If a compromised agent could survive being cut off there was no point building anything on top, so revoke was proven to fail closed on-chain before the rest followed.
+
+A single agent is really just a demo. What makes it interesting is more than one agent working together, so the next stretch added a second agent and the coordination between them, a watcher that can only ask and an executor that acts on request, connected through links and delegations, with a guardian that can pull the plug at any time. Once agents were acting on their own it became obvious that an owner can't be expected to sit and watch a dashboard, so a fair amount of work went into the ambient layer: alerts, a Telegram bot that surfaces only the decisions that actually need a human and takes the approve or deny right there, a daily digest, and enough restraint that an agent which hits a limit stops hammering at it.
+
+The most recent work is the part that turns a governed wallet into something closer to an economy: agents that order work, verify it, and pay for it. A requester posts a job the owner defined, a provider carries it out on 0G, and a separate skeptic evaluator judges the result. The fee only moves on-chain if the work clears three gates in order, a deterministic acceptance floor, then the evaluator, then an explicit approval from the owner, and even then the amount and the recipient come from the owner's own job definition rather than anything the agents produce. That full loop runs end to end today; the settlement transaction linked above is one real pass through it.
 
 ## Status
 
-**Work in progress.** Phases 0 through 4 are shipped and proven end-to-end on 0G testnet.
+This is a work in progress, and it is meant to be one. Everything described above is live and proven on 0G testnet, not aspirational. The work in front of us now is mostly hardening the multi-agent side, giving the audit and analytics surfaces more depth, and continuing to make the owner experience feel less like operating machinery.
 
-Next: hardening the multi-agent economy, richer audit and analytics surfaces, and a continued polish pass on the owner experience.
-
-Testnet only. No mainnet funds.
+Testnet only, no mainnet funds.
 
 ## License
 
