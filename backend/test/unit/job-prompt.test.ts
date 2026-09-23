@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { buildProviderRequest, parseDeliverable, buildEvaluatorRequest, parseVerdict } from '../../src/jobs/prompt.js';
+import { renderAcceptanceContract } from '../../src/jobs/acceptance.js';
 import type { JobSpec } from '../../src/jobs/envelopes.js';
 
 const spec: JobSpec = { question: 'Will X happen by Q3?', context: 'base rate ~30%', deliverableSchemaRef: 'prob-v1', acceptanceRef: 'a' };
@@ -13,6 +14,36 @@ describe('provider prompt', () => {
     expect(sys).toContain('probability forecasting');
     expect(user).toContain('Will X happen by Q3?');
     expect(user).toContain('base rate ~30%');
+  });
+
+  it('D-JOB-10: injects the acceptance field contract so the model emits the required top-level fields', () => {
+    // The exact rule set that made the live provider fail (nested {analysis}
+    // instead of top-level probability/rationale).
+    const contract = renderAcceptanceContract({
+      label: 'market-analysis-floor',
+      rules: [
+        { kind: 'required', path: 'probability' },
+        { kind: 'numberRange', path: 'probability', min: 0, max: 1 },
+        { kind: 'required', path: 'rationale' },
+        { kind: 'stringLength', path: 'rationale', min: 1 },
+      ],
+    });
+    // the rendered contract names the fields, types, and range
+    expect(contract).toContain('"probability"');
+    expect(contract).toContain('"rationale"');
+    expect(contract).toContain('>= 0');
+    expect(contract).toContain('<= 1');
+    expect(contract).toContain('do not nest them under a wrapper object');
+
+    const req = buildProviderRequest('m', spec, 'probability forecasting', contract) as {
+      messages: { role: string; content: string }[];
+    };
+    const user = req.messages[1]!.content;
+    expect(user).toContain('"probability"');
+    expect(user).toContain('"rationale"');
+    // and without a contract, the prompt still works (backward compatible)
+    const bare = buildProviderRequest('m', spec, 'svc') as { messages: { content: string }[] };
+    expect(bare.messages[1]!.content).not.toContain('"probability"');
   });
 
   it('parses a deliverable JSON object', () => {
