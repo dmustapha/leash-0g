@@ -186,6 +186,8 @@ export type StreamEvent =
       summary: string;
       to?: Address;
       valueWei?: string;
+      /** Pre-formatted true settlement asset (e.g. "2 USDC"). Absent ⇒ native 0G. */
+      assetLabel?: string;
       ts?: string;
     }
   | { type: 'status'; status: AgentStatus; ts?: string }
@@ -428,6 +430,9 @@ export type JobView = {
   feeToken: Hex;
   feeAmountWei: string;
   feeRecipient: Hex;
+  /** Detected settlement-asset metadata (read on-chain at originate). */
+  feeTokenSymbol: string | null;
+  feeTokenDecimals: number | null;
   deliverable: Json | null; // UNTRUSTED
   deliverableRoot: string | null;
   deliverableSummary: string | null; // UNTRUSTED

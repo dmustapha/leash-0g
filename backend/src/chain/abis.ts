@@ -9,6 +9,12 @@ export const factoryAbi = parseAbi([
   'event AccountCreated(address indexed account, address indexed owner, address sessionKey, address guardian)',
 ]);
 
+/** Minimal ERC-20 metadata reads — to detect + label the settlement asset. */
+export const erc20MetaAbi = parseAbi([
+  'function decimals() view returns (uint8)',
+  'function symbol() view returns (string)',
+]);
+
 export const registryAbi = parseAbi([
   'function register(address account, address sessionKey, bytes auditPubKey, string name) returns (uint256 agentId)',
   'function setStatus(uint256 agentId, uint8 s)',

@@ -19,6 +19,8 @@ const BASE: JobView = {
   feeToken: `0x${'77'.repeat(20)}`,
   feeAmountWei: '5000000', // 5.0 TestUSD (6dp)
   feeRecipient: `0x${'9c'.repeat(20)}`,
+  feeTokenSymbol: 'TestUSD',
+  feeTokenDecimals: 6,
   deliverable: { probability: 0.62, rationale: 'grounded' },
   deliverableRoot: `0x${'ab'.repeat(32)}`,
   deliverableSummary: 'calibrated 0.62 with cited signals',

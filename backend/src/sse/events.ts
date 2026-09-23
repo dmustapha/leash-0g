@@ -17,13 +17,21 @@ export function reasoningEvent(text: string): Json {
   return { type: 'reasoning', text, ts: new Date().toISOString() };
 }
 
-export function approvalEvent(input: { approvalId: string; summary: string; to?: string; valueWei?: string }): Json {
+export function approvalEvent(input: {
+  approvalId: string;
+  summary: string;
+  to?: string;
+  valueWei?: string;
+  /** Pre-formatted true asset (e.g. "2 USDC"). Absent ⇒ native 0G approval. */
+  assetLabel?: string;
+}): Json {
   return {
     type: 'approval',
     approvalId: input.approvalId,
     summary: input.summary,
     ...(input.to !== undefined ? { to: input.to } : {}),
     ...(input.valueWei !== undefined ? { valueWei: input.valueWei } : {}),
+    ...(input.assetLabel !== undefined ? { assetLabel: input.assetLabel } : {}),
     ts: new Date().toISOString(),
   };
 }

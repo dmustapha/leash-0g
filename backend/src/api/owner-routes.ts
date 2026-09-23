@@ -1244,6 +1244,8 @@ function jobView(job: import('../store/jobs.js').JobRow): Json {
     feeToken: job.feeToken,
     feeAmountWei: job.feeAmountWei,
     feeRecipient: job.feeRecipient,
+    feeTokenSymbol: job.feeTokenSymbol,
+    feeTokenDecimals: job.feeTokenDecimals,
     deliverable: job.deliverable ?? null, // UNTRUSTED — FE quarantines
     deliverableRoot: job.deliverableRoot,
     deliverableSummary: job.deliverableSummary, // UNTRUSTED — FE quarantines

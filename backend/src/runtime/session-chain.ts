@@ -1,6 +1,6 @@
 import { createPublicClient, createWalletClient, http, type Hex, type PublicClient } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { leashAccountAbi } from '../chain/abis.js';
+import { leashAccountAbi, erc20MetaAbi } from '../chain/abis.js';
 import { readPolicyView, zeroGChain } from '../chain/ops.js';
 import type { PolicyView } from '../types.js';
 import { waitReceipt } from '../chain/wait-receipt.js';
@@ -32,6 +32,12 @@ export interface RuntimeChain {
     to: string;
     amountWei: bigint;
   }): Promise<{ txHash: string }>;
+  /**
+   * Read an ERC-20's symbol + decimals so the settlement surfaces can DETECT
+   * and label the actual asset (native 0G vs USDC vs TestUSD …) instead of
+   * assuming 0G. Read once per job at originate and stored on the job row.
+   */
+  getErc20Meta(token: string): Promise<{ symbol: string; decimals: number }>;
 }
 
 export class SessionChain implements RuntimeChain {
@@ -50,6 +56,20 @@ export class SessionChain implements RuntimeChain {
 
   async getPolicyView(accountAddr: string, allowlistCandidates: string[]): Promise<PolicyView> {
     return readPolicyView(this.publicClient, accountAddr, allowlistCandidates);
+  }
+
+  private readonly metaCache = new Map<string, { symbol: string; decimals: number }>();
+  async getErc20Meta(token: string): Promise<{ symbol: string; decimals: number }> {
+    const key = token.toLowerCase();
+    const hit = this.metaCache.get(key);
+    if (hit) return hit;
+    const [decimals, symbol] = await Promise.all([
+      this.publicClient.readContract({ address: token as Hex, abi: erc20MetaAbi, functionName: 'decimals' }),
+      this.publicClient.readContract({ address: token as Hex, abi: erc20MetaAbi, functionName: 'symbol' }),
+    ]);
+    const meta = { symbol: String(symbol), decimals: Number(decimals) };
+    this.metaCache.set(key, meta);
+    return meta;
   }
 
   async executeTransfer(input: {

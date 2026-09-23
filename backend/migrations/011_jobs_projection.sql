@@ -45,6 +45,11 @@ CREATE TABLE jobs (
   fee_token text NOT NULL,
   fee_amount_wei text NOT NULL,
   fee_recipient text NOT NULL,
+  -- Settlement-asset metadata (read on-chain at originate) so every surface can
+  -- DETECT + label the true asset (native 0G vs USDC vs TestUSD) instead of
+  -- assuming 0G. NULL ⇒ render as raw base units (unknown token).
+  fee_token_symbol text,
+  fee_token_decimals int,
   -- delivery (set when the provider delivers)
   deliverable jsonb,               -- PLAINTEXT hot copy (evaluator reads this)
   deliverable_root text,           -- 0G Storage Merkle root of the ECIES copy

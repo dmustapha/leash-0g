@@ -14,7 +14,7 @@ import type { AgentGoal, AgentRow, RequesterGoal, ProviderGoal, EvaluatorGoal } 
 import { CoordinationError, type DelegationCoordinator } from '../coordination/coordinator.js';
 import type { AlertService } from '../alerts/service.js';
 import { decodeLeashError } from '../chain/errors.js';
-import { formatG, shortAddr, inMinutes, sanitizeAgentIntent } from '../util/format.js';
+import { formatAsset, shortAddr, inMinutes, sanitizeAgentIntent } from '../util/format.js';
 import type { StorageUploader } from '../audit/batcher.js';
 import type { RuntimeChain } from '../runtime/session-chain.js';
 import type { InboundDelegationInput } from '../runtime/prompt.js';
@@ -230,6 +230,18 @@ export function buildJobGraph(deps: JobGraphDeps, ctx: JobAgentContext, checkpoi
     const jobId = randomUUID();
     const jobSpecHash = hashJobSpec(seeded.spec);
     const requesterSig = await signWithSessionKey(ctx.sessionPrivateKey, jobSpecHash);
+    // Detect the settlement asset once (symbol + decimals), so every downstream
+    // surface labels the true token instead of assuming 0G. Non-fatal: a read
+    // failure just leaves the meta null (rendered as raw base units).
+    let feeTokenSymbol: string | null = null;
+    let feeTokenDecimals: number | null = null;
+    try {
+      const meta = await deps.chain.getErc20Meta(goal.feeToken);
+      feeTokenSymbol = meta.symbol;
+      feeTokenDecimals = meta.decimals;
+    } catch {
+      /* unknown token metadata — surfaces fall back to raw base units */
+    }
     await createJob(deps.pool, {
       jobId,
       ownerAddr: ctx.agentRow.ownerAddr,
@@ -242,6 +254,8 @@ export function buildJobGraph(deps: JobGraphDeps, ctx: JobAgentContext, checkpoi
       feeToken: goal.feeToken,
       feeAmountWei: seeded.feeAmountWei,
       feeRecipient: goal.feeRecipient,
+      feeTokenSymbol,
+      feeTokenDecimals,
     });
     const deadlineUnix = Math.floor(Date.now() / 1000) + 3600;
     const issued = await issue(goal.providerAgentId, 'job.request', {
@@ -397,36 +411,48 @@ export function buildJobGraph(deps: JobGraphDeps, ctx: JobAgentContext, checkpoi
       verdict: p.verdict,
     });
     await markAwaitingApproval(deps.pool, p.jobId, approval.id);
+    // Label the true settlement asset (e.g. "2 USDC" / "0.5 0G"), never assume 0G.
+    const feeLabel = formatAsset(job.feeAmountWei, job.feeTokenDecimals, job.feeTokenSymbol);
     deps.hub.emit(
       ctx.agentId,
       'approval',
       approvalEvent({
         approvalId: approval.id,
-        summary: `settle job fee: ${job.feeAmountWei} to ${job.feeRecipient}`,
+        summary: `Release ${feeLabel} to ${shortAddr(job.feeRecipient)}?`,
         to: job.feeRecipient,
         valueWei: job.feeAmountWei,
+        assetLabel: feeLabel,
       }),
     );
     if (deps.alerts) {
       const deadline =
         deps.approvalTimeoutMs !== undefined
-          ? ` ⏱ Auto-denies ${inMinutes(deps.approvalTimeoutMs)} if you don't answer.`
+          ? ` ⏱ Auto-denies in ${inMinutes(deps.approvalTimeoutMs)} if you don't answer.`
           : ' ⏱ Auto-denies if you don\'t answer in time.';
       // Both the deliverable summary and the evaluator rationale are UNTRUSTED
       // (F-quar): sanitized, carried in refs, never in the verified summary.
       const deliverableIntent = sanitizeAgentIntent(job.deliverableSummary ?? undefined);
+      // Card redesign: name the JOB, state WHY approval is being asked (the work
+      // cleared both automatic checks), and frame the tap as the final release
+      // gate — approve pays the agreed fee now, deny withholds it.
+      const question = sanitizeAgentIntent(job.spec.question, 140);
       await deps.alerts.emit(ctx.agentRow.ownerAddr, {
         agentId: ctx.agentId,
         class: 'decision',
         kind: 'approval_required',
         summary:
-          `${ctx.agentRow.name} wants to settle a job fee of ${formatG(job.feeAmountWei)} to ${shortAddr(job.feeRecipient)} — ` +
-          `the deliverable passed the acceptance floor and the evaluator accepted it.` +
+          `${ctx.agentRow.name} finished a job${question ? ` (“${question}”)` : ''} and it cleared both automatic checks — ` +
+          `the deliverable passed the acceptance rules and the skeptic evaluator accepted it. ` +
+          `Your approval is the final gate: approve to release the agreed fee of ${feeLabel} to ${shortAddr(job.feeRecipient)}, or deny to withhold it.` +
           deadline,
         refs: {
           approvalId: approval.id,
           jobId: p.jobId,
           amountWei: job.feeAmountWei,
+          feeLabel,
+          ...(job.feeTokenSymbol ? { feeTokenSymbol: job.feeTokenSymbol } : {}),
+          ...(job.feeTokenDecimals !== null ? { feeTokenDecimals: job.feeTokenDecimals } : {}),
+          feeToken: job.feeToken,
           to: job.feeRecipient,
           ...(deliverableIntent ? { deliverableSummary: deliverableIntent } : {}),
           ...(deps.approvalTimeoutMs !== undefined

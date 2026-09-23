@@ -74,6 +74,9 @@ class FakeRuntimeChain implements RuntimeChain {
   }): Promise<{ txHash: string }> {
     return { txHash: '0x' + 'dd'.repeat(32) };
   }
+  async getErc20Meta(): Promise<{ symbol: string; decimals: number }> {
+    return { symbol: '0G', decimals: 18 };
+  }
 }
 
 let db: TestDb;

@@ -45,7 +45,13 @@ export function ApprovalCard({
       <p style={{ fontSize: '0.95rem' }}>{approval.summary}</p>
       {approval.to || approval.valueWei ? (
         <p className="code">
-          {approval.valueWei ? `${weiToOg(approval.valueWei)} 0G` : ''}
+          {/* Prefer the backend's pre-formatted true asset (e.g. "2 USDC");
+              only fall back to native 0G when no asset label was sent. */}
+          {approval.assetLabel
+            ? approval.assetLabel
+            : approval.valueWei
+              ? `${weiToOg(approval.valueWei)} 0G`
+              : ''}
           {approval.to ? ` → ${shortAddr(approval.to)}` : ''}
         </p>
       ) : null}
