@@ -21,7 +21,12 @@ const PROVIDER_CONTRACT = [
   'Do not wrap it in prose or markdown fences.',
 ];
 
-export function buildProviderRequest(model: string, spec: JobSpec, serviceSpec: string): Json {
+export function buildProviderRequest(
+  model: string,
+  spec: JobSpec,
+  serviceSpec: string,
+  acceptanceContract?: string,
+): Json {
   const system = [
     'You are a provider agent fulfilling an on-demand analysis job under a service agreement.',
     `Your service: ${serviceSpec}`,
@@ -36,6 +41,9 @@ export function buildProviderRequest(model: string, spec: JobSpec, serviceSpec: 
     `Job question: ${spec.question}`,
     spec.context ? `Context: ${spec.context}` : '',
     `Deliverable schema: ${spec.deliverableSchemaRef}`,
+    // D-JOB-10: the acceptance contract is the REAL required shape — a
+    // deliverable missing these exact top-level fields is rejected outright.
+    acceptanceContract ? `\n${acceptanceContract}` : '',
   ]
     .filter(Boolean)
     .join('\n');

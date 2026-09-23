@@ -100,9 +100,27 @@ async function privyLogin() {
   return (await authRes.json()).token;
 }
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// The drill polls for minutes across a free-tier host + a phone-paced approval.
+// A transient network drop ('fetch failed') must NOT kill the run — retry the
+// bare fetch a few times with backoff before surfacing the error.
+async function resilientFetch(url, init, tries = 5) {
+  let lastErr;
+  for (let i = 0; i < tries; i++) {
+    try {
+      return await fetch(url, init);
+    } catch (e) {
+      lastErr = e;
+      await sleep(3_000 * (i + 1));
+    }
+  }
+  throw lastErr;
+}
+
 let token;
 async function api(path, opts = {}, _retried = false) {
-  const res = await fetch(`${API}${path}`, {
+  const res = await resilientFetch(`${API}${path}`, {
     ...opts,
     headers: { 'content-type': 'application/json', authorization: `Bearer ${token}`, ...(opts.headers ?? {}) },
   });
@@ -115,7 +133,6 @@ async function api(path, opts = {}, _retried = false) {
   const body = await res.json().catch(() => ({}));
   return { status: res.status, body };
 }
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function waitReceipt(hash, tries = 5) {
   for (let i = 0; i < tries; i++) {

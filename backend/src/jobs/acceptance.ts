@@ -44,6 +44,59 @@ export interface AcceptanceResult {
   checked: number;
 }
 
+/**
+ * Render the rule set as a concrete field contract for the PROVIDER prompt
+ * (D-JOB-10 fix). The acceptance rules are the authoritative deliverable schema
+ * (`deliverableSchemaRef` is only an opaque handle), so the provider model must
+ * be TOLD the exact fields/types/ranges — otherwise it invents a shape that the
+ * deterministic floor rejects. This is descriptive only; the floor stays the
+ * authoritative gate.
+ */
+export function renderAcceptanceContract(ruleSet: AcceptanceRuleSet): string {
+  const byPath = new Map<string, string[]>();
+  const add = (path: string, note: string) => {
+    const list = byPath.get(path) ?? [];
+    list.push(note);
+    byPath.set(path, list);
+  };
+  for (const rule of ruleSet.rules) {
+    switch (rule.kind) {
+      case 'required':
+        add(rule.path, 'required');
+        break;
+      case 'type':
+        add(rule.path, `type ${rule.type}`);
+        break;
+      case 'numberRange': {
+        const bounds = [rule.min !== undefined ? `>= ${rule.min}` : '', rule.max !== undefined ? `<= ${rule.max}` : '']
+          .filter(Boolean)
+          .join(' and ');
+        add(rule.path, `a number${bounds ? ` ${bounds}` : ''}`);
+        break;
+      }
+      case 'stringLength': {
+        const bounds = [rule.min !== undefined ? `at least ${rule.min}` : '', rule.max !== undefined ? `at most ${rule.max}` : '']
+          .filter(Boolean)
+          .join(' and ');
+        add(rule.path, `a string${bounds ? ` (${bounds} chars)` : ''}`);
+        break;
+      }
+      case 'enum':
+        add(rule.path, `one of ${JSON.stringify(rule.values)}`);
+        break;
+      case 'arrayMinLength':
+        add(rule.path, `an array with at least ${rule.min} item(s)`);
+        break;
+    }
+  }
+  const lines = [...byPath.entries()].map(([path, notes]) => `- "${path}": ${notes.join(', ')}`);
+  return [
+    'The deliverable JSON MUST contain these fields (dotted paths are nested keys):',
+    ...lines,
+    'Put these fields at exactly these paths — do not nest them under a wrapper object.',
+  ].join('\n');
+}
+
 /** Resolve a dotted path (`a.b.0.c`) against a JSON value. undefined if absent. */
 function resolvePath(root: Json | undefined, path: string): Json | undefined {
   let cur: unknown = root;

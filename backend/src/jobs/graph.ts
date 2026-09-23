@@ -25,7 +25,7 @@ import {
   type JobEvaluatePayload,
   type JobVerdictPayload,
 } from './envelopes.js';
-import { evaluateAcceptance, type AcceptanceResult } from './acceptance.js';
+import { evaluateAcceptance, renderAcceptanceContract, type AcceptanceResult } from './acceptance.js';
 import { evaluateGate } from './gate.js';
 import { buildProviderRequest, parseDeliverable, buildEvaluatorRequest, parseVerdict } from './prompt.js';
 import { hashJobSpec, verdictMessage, signWithSessionKey, buildPoaRecord } from './poa.js';
@@ -250,6 +250,9 @@ export function buildJobGraph(deps: JobGraphDeps, ctx: JobAgentContext, checkpoi
       feeToken: goal.feeToken,
       feeAmountWei: seeded.feeAmountWei,
       deadlineUnix,
+      // D-JOB-10: tell the provider the exact required fields (the acceptance
+      // rules are the real schema; deliverableSchemaRef is only a name).
+      acceptanceContract: renderAcceptanceContract(seeded.acceptance),
     });
     if (!issued.ok) {
       await markJobStatus(deps.pool, jobId, 'failed', { blockedBy: `dispatch: ${issued.reason}` });
@@ -263,8 +266,8 @@ export function buildJobGraph(deps: JobGraphDeps, ctx: JobAgentContext, checkpoi
     const mode = classifyJobCycle(ctx.goal, state.inboundDelegation);
     if (mode.mode !== 'provider') return { outcome: { type: 'failed', reason: 'not a provider request' } };
     const goal = ctx.goal as ProviderGoal;
-    const { jobId, spec } = mode.payload;
-    const text = await gatewayReason(buildProviderRequest(model, spec, goal.serviceSpec));
+    const { jobId, spec, acceptanceContract } = mode.payload;
+    const text = await gatewayReason(buildProviderRequest(model, spec, goal.serviceSpec, acceptanceContract));
     const deliverable = parseDeliverable(text);
     if (deliverable === null) {
       return { outcome: { type: 'failed', reason: 'provider produced no schema-valid deliverable' } };

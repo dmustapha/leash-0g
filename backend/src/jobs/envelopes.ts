@@ -52,6 +52,13 @@ export const jobRequestPayloadSchema = z
     feeToken: hex40,
     feeAmountWei: z.string().regex(/^\d{1,30}$/),
     deadlineUnix: z.number().int().positive(),
+    /**
+     * Rendered field contract from the owner's acceptance rules (D-JOB-10 fix):
+     * `deliverableSchemaRef` is only an opaque name, so the provider is told the
+     * exact required fields/types here. The deterministic floor stays the
+     * authority — this only helps the model produce a conforming shape.
+     */
+    acceptanceContract: z.string().max(4000).optional(),
   })
   .strict();
 export type JobRequestPayload = z.infer<typeof jobRequestPayloadSchema>;
