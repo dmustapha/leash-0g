@@ -82,14 +82,19 @@ describe('CreateWizard — Phase-4 ACP roles', () => {
         onCreate={onCreate}
         walletReady
         jobAgents={{ providers: [{ id: 'prov-1', name: 'My provider' }], evaluators: [{ id: 'eval-1', name: 'My evaluator' }] }}
+        // D-A2: the requester is behind the advanced door and needs a saved job spec.
+        jobSpecs={[{ ref: 'eth-4000', label: 'ETH price', questionPreview: 'where is ETH heading' }]}
       />,
     );
     await startAndName(user);
 
+    // D-A1: open the advanced door to reach the requester role.
+    await user.click(screen.getByTestId('advanced-toggle'));
     await user.click(screen.getByTestId('role-requester'));
     await user.click(screen.getByTestId('wizard-next')); // → requester-config
 
-    await user.type(screen.getByLabelText('Job handle'), 'eth-4000');
+    // D-A2: the job handle is a picker over saved specs.
+    await user.selectOptions(screen.getByTestId('requester-jobspec'), 'eth-4000');
     await user.selectOptions(screen.getByTestId('requester-provider'), 'prov-1');
     await user.selectOptions(screen.getByTestId('requester-evaluator'), 'eval-1');
     await user.type(screen.getByLabelText('Pay the fee to'), RECIPIENT);
@@ -136,12 +141,14 @@ describe('CreateWizard — Phase-4 ACP roles', () => {
         onCreate={onCreate}
         walletReady
         jobAgents={{ providers: [{ id: 'prov-1', name: 'P' }], evaluators: [{ id: 'eval-1', name: 'E' }] }}
+        jobSpecs={[{ ref: 'j', label: 'J', questionPreview: 'q' }]}
       />,
     );
     await startAndName(user);
+    await user.click(screen.getByTestId('advanced-toggle'));
     await user.click(screen.getByTestId('role-requester'));
     await user.click(screen.getByTestId('wizard-next'));
-    await user.type(screen.getByLabelText('Job handle'), 'j');
+    await user.selectOptions(screen.getByTestId('requester-jobspec'), 'j');
     await user.selectOptions(screen.getByTestId('requester-provider'), 'prov-1');
     await user.selectOptions(screen.getByTestId('requester-evaluator'), 'eval-1');
     await user.type(screen.getByLabelText('Pay the fee to'), RECIPIENT);

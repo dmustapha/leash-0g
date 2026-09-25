@@ -78,6 +78,8 @@ export interface Settings {
   balanceCacheTtlMs: number;
   allowlistMax: number;
   rulesMax: number;
+  /** Phase-5 (D-B1): the 0G-catalog model spec-elevation runs on (LEASH's key). */
+  elevationModel: string;
   /** Delegation channel bounds (spec §3b) — see config.ts for rationale. */
   delegationTtlMs: number;
   delegationRatePerLinkPerHour: number;

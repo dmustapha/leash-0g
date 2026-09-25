@@ -66,7 +66,7 @@ export type JobOutcome =
   | { type: 'originated'; jobId: string }
   | { type: 'delivered'; jobId: string }
   | { type: 'evaluated'; jobId: string; verdict: 'accept' | 'reject' }
-  | { type: 'settled'; jobId: string; txHash: string; feeToken: string; feeAmountWei: string }
+  | { type: 'settled'; jobId: string; txHash: string; feeToken: string; feeAmountWei: string; feeTokenSymbol: string | null; feeTokenDecimals: number | null }
   | { type: 'rejected'; jobId: string; reason: string }
   | { type: 'denied'; jobId: string }
   | { type: 'noop'; reason: string }
@@ -392,7 +392,18 @@ export function buildJobGraph(deps: JobGraphDeps, ctx: JobAgentContext, checkpoi
     if (!job || job.requesterAgentId !== ctx.agentId) {
       return { outcome: { type: 'failed', reason: 'verdict for an unknown job' }, route: 'noop' };
     }
-    await recordVerdict(deps.pool, p.jobId, { verdict: p.verdict, rationaleRef: p.rationaleRef, evaluatorSig: p.evaluatorSig });
+    // P5C-2: a re-emitted / duplicate job.verdict must be idempotent. recordVerdict
+    // advances ONLY from an evaluatable state (returns false otherwise), and a job
+    // that already carries an approval_id must never spawn a second approval card
+    // (the settle CAS blocks double-pay, but a stray card confuses a fund action).
+    const advanced = await recordVerdict(deps.pool, p.jobId, {
+      verdict: p.verdict,
+      rationaleRef: p.rationaleRef,
+      evaluatorSig: p.evaluatorSig,
+    });
+    if (!advanced || job.approvalId) {
+      return { outcome: { type: 'rejected', jobId: p.jobId, reason: 'duplicate or out-of-state verdict ignored' }, route: 'noop' };
+    }
     const acceptance = job.acceptance ?? { passed: false, failures: ['acceptance not run'], checked: 0 };
     // Layered gate (spec §3d): acceptance floor → evaluator verdict → owner.
     const gate = evaluateGate({ acceptance, verdict: p.verdict, owner: 'pending' });
@@ -509,7 +520,15 @@ export function buildJobGraph(deps: JobGraphDeps, ctx: JobAgentContext, checkpoi
       // Storage, hash-chained). Only hashes/roots/sigs — never untrusted text.
       await appendOwnerRecord(deps.pool, ctx.agentRow.ownerAddr, 'poa', poa as unknown as Json);
       return {
-        outcome: { type: 'settled', jobId: job.jobId, txHash, feeToken: job.feeToken, feeAmountWei: job.feeAmountWei },
+        outcome: {
+          type: 'settled',
+          jobId: job.jobId,
+          txHash,
+          feeToken: job.feeToken,
+          feeAmountWei: job.feeAmountWei,
+          feeTokenSymbol: job.feeTokenSymbol,
+          feeTokenDecimals: job.feeTokenDecimals,
+        },
       };
     } catch (err) {
       const decoded = decodeLeashError(err);
@@ -548,6 +567,10 @@ export function buildJobGraph(deps: JobGraphDeps, ctx: JobAgentContext, checkpoi
         detail['category'] = 'jobFee';
         detail['feeToken'] = o.feeToken;
         detail['feeAmountWei'] = o.feeAmountWei;
+        // P5C-4: carry the asset meta so the digest can render the true amount
+        // ("2 TestUSD"), not just a count — data already computed at originate.
+        if (o.feeTokenSymbol !== null) detail['feeTokenSymbol'] = o.feeTokenSymbol;
+        if (o.feeTokenDecimals !== null) detail['feeTokenDecimals'] = o.feeTokenDecimals;
       }
       if ('jobId' in o) detail['jobId'] = o.jobId;
       const rec = await appendTrace(deps.pool, { agentId: ctx.agentId, kind, detail });

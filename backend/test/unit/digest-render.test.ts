@@ -77,6 +77,18 @@ describe('DigestService.renderText', () => {
     expect(out).not.toMatch(/0G total/);
   });
 
+  it('P5C-4: surfaces the job-fee AMOUNT (with symbol) when the token meta is known', () => {
+    const out = svc.renderText(
+      digest({
+        agents: [agent({ agentId: 'r1', name: 'Requester', jobFees: { count: 1, byToken: { '0xbeea': '2000000' }, feeLabel: '2 TestUSD' } })],
+        totals: { spendWei: '0', actions: 0, decisions: 0, jobFees: { count: 1, byToken: { '0xbeea': '2000000' }, feeLabel: '2 TestUSD' } },
+      }),
+    );
+    // The amount reaches the owner's briefing, not just a bare count (P5C-4).
+    expect(out).toContain('1 job fee settled (2 TestUSD)');
+    expect(out).toContain('settled 1 job fee (2 TestUSD)');
+  });
+
   it('§8: the real settlement shape (fee + owner decision, no native transfer) keeps BOTH clauses', () => {
     // actions=0, decisions>=1, jobFees>=1 — the exact digest the deployed job
     // drill produces. The lead must name the job fee AND the owner decision.

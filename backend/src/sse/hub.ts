@@ -29,9 +29,12 @@ export interface SseLimits {
   idleTimeoutMs: number;
 }
 
+// P5C-3 (I-02): defaults are the REAL production caps, not MAX_SAFE_INTEGER — a
+// caller that forgets to configure limits is safe-by-default (bounded), never
+// unbounded. index.ts still overrides from config (07 revisit trigger).
 const DEFAULT_LIMITS: SseLimits = {
-  maxGlobal: Number.MAX_SAFE_INTEGER,
-  maxPerOwner: Number.MAX_SAFE_INTEGER,
+  maxGlobal: 400,
+  maxPerOwner: 20,
   idleTimeoutMs: 300_000,
 };
 

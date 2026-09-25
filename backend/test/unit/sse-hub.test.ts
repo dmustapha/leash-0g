@@ -126,12 +126,15 @@ describe('SseHub connection caps (P4C-1)', () => {
     expect(b.status).toBe(429);
   });
 
-  it('unbounded by default (no limits passed) — existing behavior preserved', () => {
+  it('P5C-3 (I-02): SAFE real caps by default (no limits passed) — bounded, not unbounded', () => {
     const hub = new SseHub();
-    for (let i = 0; i < 50; i++) {
+    // Default per-owner cap is 20: the 21st connection from one owner is rejected.
+    for (let i = 0; i < 20; i++) {
       const r = makeRes();
       expect(hub.attach(`agent${i}`, r.res, '0xwhale')).toBe(true);
     }
-    expect(hub.totalConnections()).toBe(50);
+    const overflow = makeRes();
+    expect(hub.attach('agent20', overflow.res, '0xwhale')).toBe(false);
+    expect(hub.totalConnections()).toBe(20);
   });
 });

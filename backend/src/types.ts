@@ -115,6 +115,8 @@ export interface AgentRow {
   gatewayTokenEnc: string | null;
   /** Guardian address this account was created with (C-1/S7); null = legacy ops-key guardian pre-backfill. */
   guardianAddr: string | null;
+  /** Phase-5 (D-B9): freeform "what it's for" label (elevation-suggested, owner-edited). Inert — no taxonomy/discovery. */
+  capabilityLabel: string | null;
   createdAt: string;
 }
 

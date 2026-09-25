@@ -69,6 +69,8 @@ export type CreateAgentRequest = {
   encryptedAuditKey: string;
   /** Phase-4: required for a requester goal, forbidden otherwise (backend enforces). */
   tokenConfig?: TokenConfigInput;
+  /** Phase-5 (D-B9): optional freeform capability label (elevation-suggested, owner-edited). Inert. */
+  capabilityLabel?: string;
 };
 
 export type CreateAgentResponse = {
@@ -163,6 +165,8 @@ export type AgentDetail = {
     goal?: AgentGoal;
     gatewayRules?: GatewayRule[];
     createdAt?: string;
+    /** Phase-5 (D-B9): freeform "what it's for" label (publicAgent). Inert — display only. */
+    capabilityLabel?: string;
   };
 };
 
@@ -305,6 +309,8 @@ export type AgentDigest = {
   balanceWei: string;
   /** null until a snapshot exists (first digest has no baseline — honest). */
   balanceChangeWei: string | null;
+  /** P5C-4: pre-formatted human job-fee total ("2 TestUSD") when known. */
+  jobFees?: { count: number; byToken: Record<string, string>; feeLabel?: string };
   actions: number;
   blocks: number;
   modifies: number;
@@ -324,7 +330,7 @@ export type Digest = {
   since: string | null;
   agents: AgentDigest[];
   links: LinkDigest[];
-  totals: { spendWei: string; actions: number; decisions: number };
+  totals: { spendWei: string; actions: number; decisions: number; jobFees?: { count: number; byToken: Record<string, string>; feeLabel?: string } };
   empty: boolean;
 };
 
@@ -381,6 +387,45 @@ export type AcceptanceRule =
   | { kind: 'arrayMinLength'; path: string; min: number };
 
 export type AcceptanceRuleSet = { label?: string; rules: AcceptanceRule[] };
+
+// ── Phase 5 (Stage B): spec-elevation — the QUARANTINED create-funnel draft ──
+// Mirrors backend/src/create/elevation.ts (elevationDraftSchema). A SUGGESTION
+// only: never authority until the owner confirms on the read-back. NOTE the
+// deliberate absence of any recipient/allowlist/settlement-token ADDRESS field
+// and of a pre-filled fee — never-guess-money (spec §8). Authored ROLE-NEUTRAL
+// so Phase 5.5 reuses the read-back at direction-time (spec §9).
+
+/** Caps elevation may SUGGEST (native). Expiry stays an owner create-time choice. */
+export type SuggestedPolicy = { perTransferCapWei: string; windowCapWei: string; windowSeconds: number };
+
+export type ElevationDraft = {
+  proposedRole: AgentRole;
+  /** Plain-language "here's what I understood" — UNTRUSTED text, render as plain text. */
+  rationale: string;
+  /** Freeform "what it's for" (no taxonomy). */
+  capabilityLabel?: string;
+  jobSpec?: { fields: JobSpecFields; acceptance: AcceptanceRule[] };
+  serviceSpec?: string;
+  rubricRef?: string;
+  suggestedPolicy?: SuggestedPolicy;
+  suggestedTokenPerTransferWei?: string;
+  suggestedTokenWindowWei?: string;
+  /** ONLY set when the user's own intent stated an explicit base-units amount; never guessed. */
+  suggestedFeeBaseUnits?: string;
+  /** Plain-language translation of the role's money-power, so a wrong-role draft is human-catchable. */
+  moneyPower: 'can-move-money' | 'cannot-move-money';
+  /** Field paths elevation was unsure about → inline guided questions in the read-back. */
+  unsureFields: string[];
+  confidence: 'high' | 'low';
+};
+
+export type ElevateRequest = { intent: string; answers?: string[]; role?: AgentRole };
+
+/** A curated create template — a static ElevationDraft, no LLM call (D-B5). */
+export type CreateTemplate = { id: string; title: string; blurb: string; draft: ElevationDraft };
+
+/** A saved job-spec summary for the requester job-handle picker (D-A2). */
+export type JobSpecSummary = { ref: string; label: string; questionPreview: string };
 
 export type OwnerJobSpec = {
   spec: JobSpecFields;

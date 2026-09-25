@@ -163,6 +163,7 @@ export function testSettings(overrides: Partial<AppDeps['settings']> = {}): AppD
     balanceCacheTtlMs: 15_000,
     allowlistMax: 16,
     rulesMax: 32,
+    elevationModel: 'test-elevation-model',
     // Delegation bounds: the REAL production defaults (spec §5) — throttle
     // tests must exercise what ships; individual tests override deliberately.
     delegationTtlMs: 600_000,

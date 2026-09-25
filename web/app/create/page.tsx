@@ -1,6 +1,9 @@
 // File: web/app/create/page.tsx
-// Create-agent page: wires the wizard to the real create action — browser-side audit keypair,
-// signature-derived KEK (with determinism guard + passphrase fallback), backend create call.
+// Create-agent page (Phase 5): the intent-first FUNNEL wraps the role-first wizard.
+// 2-screen happy path: FunnelEntry (intent OR template) → ReadBack (tiered, edit, confirm) →
+// CreateWizard jumped to `review`. "Set it up manually" skips the funnel to the wizard.
+// The wizard still owns the real create action — browser audit keypair, signature-derived KEK,
+// backend create call — unchanged from Phase 1–4.
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -23,8 +26,13 @@ import {
   CreateWizard,
   PassphraseRequiredError,
   type WizardInput,
+  type WizardPrefill,
   type WizardResult,
 } from '@/components/create/CreateWizard';
+import { FunnelEntry } from '@/components/create/FunnelEntry';
+import { ReadBack } from '@/components/create/ReadBack';
+import { draftToPrefill } from '@/components/create/draft-to-prefill';
+import type { ElevationDraft, JobSpecSummary } from '@/lib/types';
 
 function download(filename: string, contents: string) {
   const url = URL.createObjectURL(new Blob([contents], { type: 'application/json' }));
@@ -35,28 +43,39 @@ function download(filename: string, contents: string) {
   URL.revokeObjectURL(url);
 }
 
+type Screen = 'funnel' | 'readback' | 'wizard';
+
 export default function CreatePage() {
   const wallet = useOwnerWallet();
   const { setAgentId } = useAgentId();
   const api = useMemo(() => makeApi(wallet.getToken), [wallet.getToken]);
 
-  // Phase-4: the owner's existing provider/evaluator agents, for a requester's
-  // provider/evaluator links (a requester can only point at agents that exist).
+  const [screen, setScreen] = useState<Screen>('funnel');
+  const [draft, setDraft] = useState<ElevationDraft | null>(null);
+  const [prefill, setPrefill] = useState<WizardPrefill | undefined>(undefined);
+
+  // Phase-4: the owner's existing provider/evaluator agents, for a requester's links.
   const [jobAgents, setJobAgents] = useState<{ providers: { id: string; name: string }[]; evaluators: { id: string; name: string }[] }>({
     providers: [],
     evaluators: [],
   });
+  // Phase-5 (D-A2): the owner's saved job specs, for the requester job-handle picker.
+  const [jobSpecs, setJobSpecs] = useState<JobSpecSummary[]>([]);
   useEffect(() => {
     void (async () => {
       try {
-        const { agents } = await api.listAgents();
+        const [{ agents }, specs] = await Promise.all([
+          api.listAgents(),
+          api.listJobSpecs().catch(() => ({ specs: [] as JobSpecSummary[] })),
+        ]);
         const active = agents.filter((a) => a.status === 'active');
         setJobAgents({
           providers: active.filter((a) => a.role === 'provider').map((a) => ({ id: a.agentId, name: a.name })),
           evaluators: active.filter((a) => a.role === 'evaluator').map((a) => ({ id: a.agentId, name: a.name })),
         });
+        setJobSpecs(specs.specs);
       } catch {
-        /* the requester picker just shows empty — non-fatal */
+        /* the pickers just show empty — non-fatal */
       }
     })();
   }, [api]);
@@ -87,9 +106,9 @@ export default function CreatePage() {
         goal: input.goal,
         auditPubKey: keypair.pubKeyHex,
         encryptedAuditKey: serializeBlob(blob),
-        // Phase-4: settlement-token config for a requester (F1) — the backend
-        // rejects it for any other role.
         ...(input.tokenConfig ? { tokenConfig: input.tokenConfig } : {}),
+        // Phase-5 (D-B9): thread the freeform capability label (inert display field).
+        ...(input.capabilityLabel ? { capabilityLabel: input.capabilityLabel } : {}),
       });
       setAgentId(response.agentId);
 
@@ -97,10 +116,6 @@ export default function CreatePage() {
         response,
         kekMode: blob.mode,
         downloadBackup: () =>
-          // C-6: encrypted blob ONLY — no plaintext privkey ever touches disk.
-          // Recovery = unwrap the blob with the same wallet signature (or
-          // passphrase) the audit page uses; losing BOTH loses the key, which
-          // is the self-sovereignty trade recorded in the spec.
           download(
             `leash-audit-key-${response.agentId}.json`,
             buildAuditBackup({ agentId: response.agentId, pubKeyHex: keypair.pubKeyHex, blob }),
@@ -110,8 +125,6 @@ export default function CreatePage() {
     [api, wallet.address, wallet.signMessage, setAgentId],
   );
 
-  // Fund-the-agent hooks for the done screen: a plain native transfer from the owner wallet
-  // plus a live balance readback. Balance polling is skipped in E2E mode (no live chain).
   const fund = useMemo(
     () => ({
       send: async (to: Address, valueWei: bigint) => {
@@ -124,9 +137,45 @@ export default function CreatePage() {
     [wallet],
   );
 
+  // — Funnel transitions —
+  const onElevate = useCallback(
+    async (intent: string) => {
+      const { draft: d } = await api.elevate({ intent });
+      setDraft(d);
+      setScreen('readback');
+    },
+    [api],
+  );
+  const onPick = useCallback((d: ElevationDraft) => {
+    setDraft(d);
+    setScreen('readback');
+  }, []);
+  const onConfirm = useCallback((edited: ElevationDraft, recipient?: string) => {
+    setPrefill(draftToPrefill(edited, recipient));
+    setScreen('wizard');
+  }, []);
+  const onManual = useCallback(() => {
+    setPrefill(undefined);
+    setScreen('wizard');
+  }, []);
+
   return (
     <div className="wrap-narrow" style={{ paddingBlock: 'clamp(2rem, 5vw, 4rem)', maxWidth: '640px' }}>
-      <CreateWizard onCreate={onCreate} walletReady={wallet.authenticated} fund={fund} jobAgents={jobAgents} />
+      {screen === 'funnel' ? (
+        <FunnelEntry onElevate={onElevate} onPick={onPick} onManual={onManual} />
+      ) : screen === 'readback' && draft ? (
+        <ReadBack draft={draft} onConfirm={onConfirm} onBack={() => setScreen('funnel')} />
+      ) : (
+        <CreateWizard
+          onCreate={onCreate}
+          walletReady={wallet.authenticated}
+          fund={fund}
+          jobAgents={jobAgents}
+          jobSpecs={jobSpecs}
+          {...(prefill ? { prefill } : {})}
+          onStartAgent={onManual}
+        />
+      )}
     </div>
   );
 }

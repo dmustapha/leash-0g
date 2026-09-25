@@ -22,7 +22,9 @@ import type { AlertService } from '../alerts/service.js';
 import { listAlerts, getAlert as getAlertRow, markAlertRead, markAllInfoRead, countUnread } from '../alerts/store.js';
 import { listOwnerRecords, verifyOwnerChainIncremental } from '../store/owner-records.js';
 import { listJobsForOwner, getJob } from '../store/jobs.js';
-import { upsertJobSpec, getJobSpec } from '../store/job-specs.js';
+import { upsertJobSpec, getJobSpec, listJobSpecs } from '../store/job-specs.js';
+import { elevateIntent } from '../create/elevation.js';
+import type { ComputeQueue } from '../gateway/compute-queue.js';
 import { jobSpecSchema } from '../jobs/envelopes.js';
 import { acceptanceRuleSetSchema } from '../jobs/acceptance.js';
 import {
@@ -53,6 +55,8 @@ import type { ChainOps, RuntimeManager, Settings } from '../server.js';
 export interface OwnerApiDeps {
   pool: Pool;
   privy: PrivyVerifier;
+  /** Phase-5: 0G Compute queue for LEASH-side spec-elevation (D-B1). */
+  queue: ComputeQueue;
   hub: SseHub;
   broker: ApprovalBroker;
   chain: ChainOps;
@@ -181,6 +185,8 @@ const createAgentSchema = z.object({
   encryptedAuditKey: z.string().min(1).max(20_000).optional(),
   /** Phase-4: settlement-token config — required for requester, forbidden otherwise. */
   tokenConfig: tokenConfigSchema.optional(),
+  /** Phase-5 (D-B9): optional freeform capability label (elevation-suggested, owner-edited). Inert. */
+  capabilityLabel: z.string().max(120).optional(),
 }).superRefine((v, issues) => {
   const role = v.goal.type ?? 'treasury';
   if (role === 'treasury' && v.allowlist.length < 1) {
@@ -237,6 +243,15 @@ const createAgentSchema = z.object({
 const decisionSchema = z.object({
   decision: z.enum(['approve', 'deny']),
   reason: z.string().max(500).optional(),
+});
+
+// Phase-5 (D-B1): spec-elevation input. `intent` is the owner's plain-language
+// description; `answers` are optional guided-question answers; `role` is an
+// optional hint from a template/manual pick. Length-capped (LLM-spam surface).
+const elevateSchema = z.object({
+  intent: z.string().min(1).max(2000),
+  answers: z.array(z.string().max(1000)).max(10).optional(),
+  role: z.enum(['treasury', 'sentinel', 'executor', 'requester', 'provider', 'evaluator']).optional(),
 });
 
 interface OwnerRequest extends Request {
@@ -387,6 +402,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       // is the gateway's only Phase-1 client and needs it at start().
       gatewayTokenEnc: encryptSecret(token.token, deps.settings.keyEncryptionSecret),
       guardianAddr: deployed.guardianAddr,
+      ...(input.capabilityLabel ? { capabilityLabel: input.capabilityLabel } : {}),
     });
 
     // The committed agent row carries the quota/rate count from here on —
@@ -417,6 +433,32 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
   // is an authed amplification surface — cache per account, short TTL.
   // In-process only (one Render instance; a restart just re-reads). The
   // agent DETAIL view keeps live reads.
+  // D-B1 elevate rate limit (LLM-spam vector): a per-owner sliding window,
+  // in-process (single Render instance, like balanceCache; a restart just resets
+  // — bounding an authed compute-cost surface, not a security control). Reuses
+  // the create-rate posture as the ceiling.
+  const elevateHits = new Map<string, number[]>();
+  function elevateRateOk(ownerAddr: string): boolean {
+    const now = Date.now();
+    const windowMs = 3_600_000;
+    const limit = deps.settings.createRatePerHour;
+    const recent = (elevateHits.get(ownerAddr) ?? []).filter((t) => now - t < windowMs);
+    if (recent.length >= limit) {
+      elevateHits.set(ownerAddr, recent);
+      return false;
+    }
+    recent.push(now);
+    elevateHits.set(ownerAddr, recent);
+    // L-01 hygiene: sweep owners whose window has fully aged out so the map does
+    // not grow unbounded with one entry per owner who ever elevated.
+    if (elevateHits.size > 1000) {
+      for (const [k, v] of elevateHits) {
+        if (v.every((t) => now - t >= windowMs)) elevateHits.delete(k);
+      }
+    }
+    return true;
+  }
+
   const balanceCache = new Map<string, { value: bigint; at: number }>();
   async function cachedBalance(addr: string): Promise<bigint> {
     const key = addr.toLowerCase();
@@ -448,6 +490,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
         // evaluator agents to a new requester (generality guard: derived here,
         // never a coordination-table column).
         role: goalRole(a.goal),
+        capabilityLabel: a.capabilityLabel,
         accountAddr: a.accountAddr,
         sessionKeyAddr: a.sessionKeyAddr,
         accountBalanceWei: (await cachedBalance(a.accountAddr)).toString(),
@@ -1194,6 +1237,41 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     res.json({ ok: true, sourceRef: ref });
   }));
 
+  // D-A2: list the owner's saved job specs for the requester job-handle picker
+  // (closes the free-text `js-ref` ↔ `getJobSpec` dead-end). Read-only,
+  // owner-scoped — a cross-owner caller only ever sees their own handles.
+  router.get('/api/job-specs', asyncRoute(async (req: OwnerRequest, res) => {
+    const specs = await listJobSpecs(deps.pool, req.ownerAddr as string);
+    res.json({ specs });
+  }));
+
+  // D-B1/B2: spec-elevation — turn rough intent into a QUARANTINED draft. This
+  // route WRITES NOTHING (the quarantine invariant, spec §8): authority is
+  // persisted only by the owner's confirm on the existing create path. Owner-
+  // authed (inherited) + a lightweight per-owner rate limit (LLM-spam vector).
+  router.post('/api/create/elevate', asyncRoute(async (req: OwnerRequest, res) => {
+    const ownerAddr = req.ownerAddr as string;
+    if (!elevateRateOk(ownerAddr)) {
+      res.status(429).json({ error: 'rate_limited' });
+      return;
+    }
+    const parsed = elevateSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: { message: 'invalid request body' } });
+      return;
+    }
+    const { intent, answers, role } = parsed.data;
+    const draft = await elevateIntent(
+      { queue: deps.queue, model: deps.settings.elevationModel },
+      {
+        intent,
+        ...(answers !== undefined ? { answers } : {}),
+        ...(role !== undefined ? { role } : {}),
+      },
+    );
+    res.json({ draft });
+  }));
+
   router.get('/api/job-specs/:ref', asyncRoute(async (req: OwnerRequest, res) => {
     const seeded = await getJobSpec(deps.pool, req.ownerAddr as string, req.params['ref'] ?? '');
     if (!seeded) {
@@ -1274,6 +1352,8 @@ function publicAgent(agent: AgentRow): Record<string, unknown> {
     auditPubKey: agent.auditPubkey,
     goal: agent.goal,
     gatewayRules: agent.gatewayRules,
+    // Phase-5 (D-B9): inert freeform label for cockpit display (no discovery).
+    capabilityLabel: agent.capabilityLabel,
     createdAt: agent.createdAt,
   };
 }

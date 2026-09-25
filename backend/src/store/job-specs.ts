@@ -40,6 +40,34 @@ export async function upsertJobSpec(
   );
 }
 
+/** A saved job-spec, summarised for the requester's job-handle picker (D-A2). */
+export interface JobSpecSummary {
+  ref: string;
+  label: string;
+  questionPreview: string;
+}
+
+/**
+ * List the owner's saved job specs for the requester job-handle picker (D-A2,
+ * closes the free-text `js-ref` ↔ `getJobSpec` dead-end). Read-only, owner-scoped
+ * — returns only a handle + label + short question preview, never the fee or the
+ * acceptance rules (those stay authority, read at run time).
+ */
+export async function listJobSpecs(pool: Pool, ownerAddr: string): Promise<JobSpecSummary[]> {
+  const res = await pool.query<{ source_ref: string; spec: JobSpec; acceptance: AcceptanceRuleSet }>(
+    `SELECT source_ref, spec, acceptance FROM job_specs WHERE owner_addr = $1 ORDER BY updated_at DESC`,
+    [ownerAddr.toLowerCase()],
+  );
+  return res.rows.map((r) => {
+    const question = typeof r.spec?.question === 'string' ? r.spec.question : '';
+    return {
+      ref: r.source_ref,
+      label: (typeof r.acceptance?.label === 'string' && r.acceptance.label) || r.source_ref,
+      questionPreview: question.length > 120 ? `${question.slice(0, 117)}…` : question,
+    };
+  });
+}
+
 export async function getJobSpec(
   pool: Pool,
   ownerAddr: string,
