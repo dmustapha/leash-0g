@@ -28,6 +28,9 @@ import type {
   TraceRecord,
   JobView,
   OwnerJobSpec,
+  JobSpecSummary,
+  ElevateRequest,
+  ElevationDraft,
 } from './types';
 
 export type TokenGetter = () => Promise<string | null>;
@@ -120,6 +123,13 @@ export function makeApi(getToken: TokenGetter) {
     rotate: (id: string) =>
       request<{ gatewayToken: string }>(getToken, 'POST', `/api/agents/${id}/rotate`),
     getAudit: (id: string) => request<AuditBatch[]>(getToken, 'GET', `/api/agents/${id}/audit`),
+
+    // — Phase 5 (create funnel) —
+    // D-A2: the owner's saved job specs, for the requester job-handle picker.
+    listJobSpecs: () => request<{ specs: JobSpecSummary[] }>(getToken, 'GET', '/api/job-specs'),
+    // D-B1: spec-elevation — returns a QUARANTINED draft (writes nothing server-side).
+    elevate: (body: ElevateRequest) =>
+      request<{ draft: ElevationDraft }>(getToken, 'POST', '/api/create/elevate', body),
     streamUrl: (id: string) => `${config.apiUrl}/api/agents/${id}/stream`,
 
     // — Phase 2 (spec §4) —

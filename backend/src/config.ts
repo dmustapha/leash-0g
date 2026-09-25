@@ -50,6 +50,12 @@ const envSchema = z.object({
   // needs no strong model.
   JOB_PROVIDER_MODEL: z.string().min(1).default('deepseek-v3'),
   JOB_EVALUATOR_MODEL: z.string().min(1).default('glm-5'),
+  // Phase-5 (D-B1): the create-funnel spec-elevation model. Runs on LEASH's
+  // Compute key (create-time cost deferred, 07 #6), NOT agent-keyed. Defaults to
+  // a capable 0G-catalog model already confirmed available via the router GET
+  // /models (deepseek-v3, same as the provider). goal.model does not apply —
+  // this is an owner create-time call, not a runtime agent.
+  ELEVATION_MODEL: z.string().min(1).default('deepseek-v3'),
   // C-1 limits (07 S6, config-driven testnet defaults; revisit at first
   // external users / mainnet). Quota counts ALL created rows incl. revoked —
   // ops create-gas is the drained resource; revoking must not refill quota.

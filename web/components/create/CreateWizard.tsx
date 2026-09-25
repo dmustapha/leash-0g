@@ -5,10 +5,11 @@
 'use client';
 
 import { useMemo, useState } from 'react';
+import Link from 'next/link';
 import { isAddress, type Address } from 'viem';
 import { ApiError } from '@/lib/api';
 import { isValidOgAmount, ogToWei, weiToOg } from '@/lib/format';
-import type { AgentGoal, CreateAgentResponse, Hex, PolicyInput, TokenConfigInput } from '@/lib/types';
+import type { AgentGoal, CreateAgentResponse, Hex, JobSpecSummary, PolicyInput, TokenConfigInput } from '@/lib/types';
 import { Disclosure } from '@/components/ui/Disclosure';
 import { Field } from '@/components/ui/Field';
 import { CopyButton } from '@/components/ui/CopyButton';
@@ -28,6 +29,8 @@ export type WizardInput = {
   goal: AgentGoal;
   /** Phase-4: present only for a requester (the sole token-capable role, F1). */
   tokenConfig?: TokenConfigInput;
+  /** Phase-5 (D-B9): optional freeform capability label (elevation-suggested, owner-edited). */
+  capabilityLabel?: string;
 };
 
 /** Role variant chooser (spec §3c/§3b): ONE plain-language choice on the goal step. */
@@ -42,6 +45,10 @@ export type WizardResult = {
   downloadBackup: () => void;
 };
 
+/** Phase-5 (D-B3): a confirmed ElevationDraft mapped to WizardInput, plus the capability label,
+ *  seeds all per-role fields and jumps straight to `review` (screen 2 of the 2-screen path). */
+export type WizardPrefill = WizardInput & { capabilityLabel?: string };
+
 export type CreateWizardProps = {
   onCreate: (input: WizardInput, passphrase?: string) => Promise<WizardResult>;
   walletReady: boolean;
@@ -52,6 +59,12 @@ export type CreateWizardProps = {
   };
   /** Phase-4: the owner's existing provider/evaluator agents, for a requester's links. */
   jobAgents?: { providers: JobAgentOption[]; evaluators: JobAgentOption[] };
+  /** Phase-5 (D-A2): the owner's saved job specs, for the requester job-handle picker. */
+  jobSpecs?: JobSpecSummary[];
+  /** Phase-5 (D-B3): seed all fields from a confirmed read-back draft and jump to `review`. */
+  prefill?: WizardPrefill;
+  /** Phase-5 (D-A1): CTA when the requester's advanced-door prerequisites are unmet. */
+  onStartAgent?: () => void;
 };
 
 type Step =
@@ -86,6 +99,9 @@ const STEP_ORDERS: Record<AgentRole, Step[]> = {
   requester: ['name', 'goal', 'requester-config', 'token-config', 'expiry', 'review'],
 };
 
+// D-A1: the requester is DEMOTED off the first-run surface. It is a two-sided commerce construct
+// with no supply yet, so a newcomer meets only the five single-agent roles; the requester is an
+// advanced door below, enabled only on owned provider + evaluator + saved job spec.
 const ROLE_OPTIONS: Array<{ value: AgentRole; label: string; explain: string }> = [
   {
     value: 'treasury',
@@ -101,11 +117,6 @@ const ROLE_OPTIONS: Array<{ value: AgentRole; label: string; explain: string }> 
     value: 'executor',
     label: 'Act on requests from another agent',
     explain: 'It waits for requests over a link you create, checks them against its own limits, then pays.',
-  },
-  {
-    value: 'requester',
-    label: 'Order a job and pay for good work',
-    explain: 'It posts a job you defined, waits for a verified deliverable, then pays a capped on-chain fee — with your approval.',
   },
   {
     value: 'provider',
@@ -149,34 +160,112 @@ function createErrorMessage(e: unknown): string {
 
 const DAY = 86_400;
 
-export function CreateWizard({ onCreate, walletReady, fund, jobAgents }: CreateWizardProps) {
-  const [step, setStep] = useState<Step>('name');
-  const [role, setRole] = useState<AgentRole>('treasury');
-  const [name, setName] = useState('');
-  const [beneficiary, setBeneficiary] = useState('');
-  const [targetBalance, setTargetBalance] = useState('0.1');
-  const [topUp, setTopUp] = useState('0.01');
-  const [perTransfer, setPerTransfer] = useState('0.01');
-  const [windowAmount, setWindowAmount] = useState('0.05');
+/** Where a confirmed prefill should DROP the owner in the wizard. Fully-seeded drafts
+ *  (provider/evaluator/treasury/template) land on `review` — the 2-screen happy path.
+ *  Drafts that legitimately can't be fully seeded — a requester (its settlement-token
+ *  ADDRESS + provider/evaluator picks + job handle are never guessed, never-guess-money)
+ *  and a sentinel (its watched beneficiary isn't collected in the read-back) — drop on
+ *  the FIRST incomplete step instead, so the owner is GUIDED to finish, never stranded on
+ *  a review with a disabled Create button (D-A5: no dead-end at any step). */
+function entryStepFor(role: AgentRole, fields: Partial<Record<string, string>>): Step {
+  const has = (k: string) => !!fields[k]?.trim();
+  switch (role) {
+    case 'provider':
+      return has('serviceSpec') ? 'review' : 'provider-service';
+    case 'evaluator':
+      return has('rubricRef') ? 'review' : 'evaluator-rubric';
+    case 'sentinel':
+      return has('beneficiary') ? 'review' : 'goal';
+    case 'treasury':
+      return !has('beneficiary') ? 'goal' : !has('payee') ? 'allowlist' : 'review';
+    case 'executor':
+      return has('payee') ? 'review' : 'allowlist';
+    case 'requester':
+      return has('jobSpecSource') && has('providerAgentId') && has('evaluatorAgentId') &&
+        has('feeToken') && has('feeRecipient') && has('feeCapPerJob') &&
+        has('tokenPerTransfer') && has('tokenWindow')
+        ? 'review'
+        : 'requester-config';
+  }
+}
+
+/** Extract a Step + seeded field values from a confirmed prefill draft (D-B3). */
+function seedFromPrefill(p: WizardPrefill): {
+  role: AgentRole;
+  entryStep: Step;
+  fields: Partial<Record<string, string>>;
+  allowlist: Address[];
+} {
+  const g = p.goal;
+  const role: AgentRole =
+    'type' in g && g.type ? (g.type as AgentRole) : 'treasury';
+  const fields: Record<string, string> = { name: p.name };
+  if (p.capabilityLabel) fields['capabilityLabel'] = p.capabilityLabel;
+  if (role === 'provider' && 'serviceSpec' in g) fields['serviceSpec'] = g.serviceSpec;
+  if (role === 'evaluator' && 'rubricRef' in g) fields['rubricRef'] = g.rubricRef;
+  if (role === 'requester' && 'jobSpecSource' in g) {
+    fields['jobSpecSource'] = g.jobSpecSource;
+    fields['providerAgentId'] = g.providerAgentId;
+    fields['evaluatorAgentId'] = g.evaluatorAgentId;
+    fields['feeToken'] = g.feeToken;
+    fields['feeRecipient'] = g.feeRecipient;
+    fields['feeCapPerJob'] = g.feeCapPerJobWei;
+  }
+  if ((role === 'treasury' || role === 'sentinel') && 'beneficiary' in g) {
+    fields['beneficiary'] = g.beneficiary;
+    fields['targetBalance'] = weiToOg(g.targetBalanceWei);
+    fields['topUp'] = weiToOg(g.topUpWei);
+  }
+  if (role === 'treasury' || role === 'executor') {
+    fields['perTransfer'] = weiToOg(p.policy.perTransferCapWei);
+    fields['windowAmount'] = weiToOg(p.policy.windowCapWei);
+  }
+  if (p.tokenConfig) {
+    fields['tokenPerTransfer'] = p.tokenConfig.perTransferCapTokenWei;
+    fields['tokenWindow'] = p.tokenConfig.windowCapTokenWei;
+  }
+  if (p.allowlist[0]) fields['payee'] = p.allowlist[0];
+  return { role, entryStep: entryStepFor(role, fields), fields, allowlist: p.allowlist };
+}
+
+export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs, prefill, onStartAgent }: CreateWizardProps) {
+  const seed = prefill ? seedFromPrefill(prefill) : null;
+  const [step, setStep] = useState<Step>(seed?.entryStep ?? 'name');
+  const [role, setRole] = useState<AgentRole>(seed?.role ?? 'treasury');
+  // D-A1: whether the requester advanced door is unlocked (≥1 provider AND ≥1 evaluator AND ≥1 job).
+  const [showAdvanced, setShowAdvanced] = useState(false);
+  const requesterEligible =
+    (jobAgents?.providers.length ?? 0) >= 1 &&
+    (jobAgents?.evaluators.length ?? 0) >= 1 &&
+    (jobSpecs?.length ?? 0) >= 1;
+  const [name, setName] = useState(seed?.fields['name'] ?? '');
+  const [beneficiary, setBeneficiary] = useState(seed?.fields['beneficiary'] ?? '');
+  const [targetBalance, setTargetBalance] = useState(seed?.fields['targetBalance'] ?? '0.1');
+  const [topUp, setTopUp] = useState(seed?.fields['topUp'] ?? '0.01');
+  const [perTransfer, setPerTransfer] = useState(seed?.fields['perTransfer'] ?? '0.01');
+  const [windowAmount, setWindowAmount] = useState(seed?.fields['windowAmount'] ?? '0.05');
   const [windowHours, setWindowHours] = useState('24');
-  const [payee, setPayee] = useState('');
+  const [payee, setPayee] = useState(seed?.fields['payee'] ?? '');
   const [expiryDays, setExpiryDays] = useState('7');
   const [passphrase, setPassphrase] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<WizardResult | null>(null);
   // Phase-4 job-role fields.
-  const [serviceSpec, setServiceSpec] = useState('');
-  const [rubricRef, setRubricRef] = useState('');
-  const [jobSpecSource, setJobSpecSource] = useState('');
-  const [providerAgentId, setProviderAgentId] = useState('');
-  const [evaluatorAgentId, setEvaluatorAgentId] = useState('');
-  const [feeToken, setFeeToken] = useState('');
-  const [feeRecipient, setFeeRecipient] = useState('');
-  const [feeCapPerJob, setFeeCapPerJob] = useState('');
-  const [tokenPerTransfer, setTokenPerTransfer] = useState('');
-  const [tokenWindow, setTokenWindow] = useState('');
+  const [serviceSpec, setServiceSpec] = useState(seed?.fields['serviceSpec'] ?? '');
+  const [rubricRef, setRubricRef] = useState(seed?.fields['rubricRef'] ?? '');
+  const [jobSpecSource, setJobSpecSource] = useState(seed?.fields['jobSpecSource'] ?? '');
+  const [providerAgentId, setProviderAgentId] = useState(seed?.fields['providerAgentId'] ?? '');
+  const [evaluatorAgentId, setEvaluatorAgentId] = useState(seed?.fields['evaluatorAgentId'] ?? '');
+  const [feeToken, setFeeToken] = useState(seed?.fields['feeToken'] ?? '');
+  const [feeRecipient, setFeeRecipient] = useState(seed?.fields['feeRecipient'] ?? '');
+  const [feeCapPerJob, setFeeCapPerJob] = useState(seed?.fields['feeCapPerJob'] ?? '');
+  const [tokenPerTransfer, setTokenPerTransfer] = useState(seed?.fields['tokenPerTransfer'] ?? '');
+  const [tokenWindow, setTokenWindow] = useState(seed?.fields['tokenWindow'] ?? '');
+  // Phase-5 (D-B9): freeform capability label (seeded from a confirmed read-back), carried
+  // inert through create. Edited upstream in ReadBack, not here — no setter needed.
+  const [capabilityLabel] = useState(seed?.fields['capabilityLabel'] ?? '');
 
-  const input = useMemo<WizardInput | null>(() => {
+  const baseInput = useMemo<WizardInput | null>(() => {
     if (!name.trim() || !/^\d+$/.test(expiryDays) || Number(expiryDays) < 1) return null;
     const expiresAt = Math.floor(Date.now() / 1000) + Number(expiryDays) * DAY;
 
@@ -291,6 +380,12 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents }: CreateW
     serviceSpec, rubricRef, jobSpecSource, providerAgentId, evaluatorAgentId, feeToken, feeRecipient, feeCapPerJob,
     tokenPerTransfer, tokenWindow,
   ]);
+
+  // D-B9: attach the freeform capability label (inert) without touching the per-role builders.
+  const input = useMemo<WizardInput | null>(
+    () => (baseInput ? { ...baseInput, ...(capabilityLabel.trim() ? { capabilityLabel: capabilityLabel.trim() } : {}) } : null),
+    [baseInput, capabilityLabel],
+  );
 
   // Reviewed constraint (TREASURY only): a single top-up is one payment, so it can never
   // exceed the per-payment cap the chain enforces. The sentinel never pays (its request
@@ -422,6 +517,63 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents }: CreateW
                 </label>
               ))}
             </fieldset>
+
+            {/* D-A1: the requester is an ADVANCED door, not a peer role. Enabled only when the
+                owner has ≥1 active provider AND ≥1 active evaluator AND ≥1 saved job spec. */}
+            <div data-testid="advanced-door" style={{ display: 'grid', gap: '0.5rem' }}>
+              {!showAdvanced ? (
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  data-testid="advanced-toggle"
+                  style={{ justifySelf: 'start' }}
+                  onClick={() => setShowAdvanced(true)}
+                >
+                  Advanced: order jobs from your other agents
+                </button>
+              ) : (
+                <div className="panel" style={{ padding: '0.7rem 0.85rem', display: 'grid', gap: '0.5rem' }}>
+                  {requesterEligible ? (
+                    <label style={{ display: 'flex', gap: '0.6rem', alignItems: 'flex-start', cursor: 'pointer' }}>
+                      <input
+                        type="radio"
+                        name="agent-role"
+                        value="requester"
+                        checked={role === 'requester'}
+                        onChange={() => setRole('requester')}
+                        style={{ marginTop: '0.25rem' }}
+                        data-testid="role-requester"
+                      />
+                      <span style={{ fontSize: '0.9rem' }}>
+                        <strong>Order a job and pay for good work</strong>
+                        <span style={{ display: 'block', color: 'var(--color-ink-dim)', fontSize: '0.82rem' }}>
+                          It posts a job you defined, waits for a verified deliverable, then pays a
+                          capped on-chain fee — with your approval.
+                        </span>
+                      </span>
+                    </label>
+                  ) : (
+                    <div data-testid="requester-locked" style={{ display: 'grid', gap: '0.5rem' }}>
+                      <p style={{ margin: 0, fontSize: '0.86rem', color: 'var(--color-ink-dim)' }}>
+                        This orders work from your other agents — first create a worker and a judge,
+                        and define a job. You have{' '}
+                        <strong>{jobAgents?.providers.length ?? 0}</strong> worker
+                        {(jobAgents?.providers.length ?? 0) === 1 ? '' : 's'},{' '}
+                        <strong>{jobAgents?.evaluators.length ?? 0}</strong> judge
+                        {(jobAgents?.evaluators.length ?? 0) === 1 ? '' : 's'}, and{' '}
+                        <strong>{jobSpecs?.length ?? 0}</strong> saved job
+                        {(jobSpecs?.length ?? 0) === 1 ? '' : 's'}.
+                      </p>
+                      {onStartAgent ? (
+                        <button type="button" className="btn btn-sm" data-testid="requester-cta" style={{ justifySelf: 'start' }} onClick={onStartAgent}>
+                          Start a worker or a judge first
+                        </button>
+                      ) : null}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
 
             {isTopUpRole(role) ? (
               <>
@@ -561,15 +713,36 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents }: CreateW
           'Point at a saved job, pick its provider and evaluator, set the fee recipient and cap.',
           <>
             <h1 style={{ fontSize: 'var(--text-h1)' }}>Order a job</h1>
-            <Field
-              id="requester-jobspec"
-              label="Job handle"
-              hint="The handle of a job you defined (Jobs → Define a job)."
-              value={jobSpecSource}
-              onChange={(e) => setJobSpecSource(e.target.value)}
-              placeholder="eth-4000"
-              autoFocus
-            />
+            {/* D-A2: job-handle is a PICKER over saved job specs (not free text). Empty state
+                routes to "Define a job" so there is no dead-end. */}
+            {(jobSpecs?.length ?? 0) > 0 ? (
+              <label className="label" style={{ color: 'var(--color-ink)' }}>
+                Job to order
+                <select
+                  className="field"
+                  data-testid="requester-jobspec"
+                  value={jobSpecSource}
+                  onChange={(e) => setJobSpecSource(e.target.value)}
+                >
+                  <option value="">— pick a job you defined —</option>
+                  {(jobSpecs ?? []).map((s) => (
+                    <option key={s.ref} value={s.ref}>
+                      {s.label || s.ref} — {s.questionPreview}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : (
+              <div data-testid="requester-jobspec-empty" className="panel" style={{ padding: '0.7rem 0.85rem', display: 'grid', gap: '0.5rem' }}>
+                <p style={{ margin: 0, fontSize: '0.86rem', color: 'var(--color-ink-dim)' }}>
+                  You have no saved jobs yet. Define a job first — the requester runs that exact
+                  spec (the fee and pass/fail rules live there, on your side).
+                </p>
+                <Link className="btn btn-sm" href="/jobs" data-testid="requester-define-job" style={{ justifySelf: 'start' }}>
+                  Define a job
+                </Link>
+              </div>
+            )}
             <label className="label" style={{ color: 'var(--color-ink)' }}>
               Provider agent
               <select
@@ -823,6 +996,7 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents }: CreateW
                       ['Budget', `${weiToOg(input?.policy.windowCapWei ?? '0')} 0G every ${windowHours} hours`],
                       ['Can pay', payee],
                     ]),
+              ...(capabilityLabel.trim() ? [['What it’s for', capabilityLabel.trim()]] : []),
               ['Expires', `in ${expiryDays} days`],
             ].map(([k, v]) => (
               <div key={k} style={{ display: 'flex', gap: '0.8rem', justifyContent: 'space-between', borderBottom: '1px solid var(--color-line-soft)', paddingBottom: '0.45rem' }}>

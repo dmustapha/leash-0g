@@ -239,16 +239,24 @@ export async function markEvaluating(pool: Pool, jobId: string): Promise<void> {
   await pool.query(`UPDATE jobs SET status = 'evaluating', updated_at = now() WHERE job_id = $1`, [jobId]);
 }
 
+/**
+ * Record the evaluator's verdict — P5C-2: advances ONLY from an evaluatable
+ * state (`delivered`/`evaluating`), so a duplicated/re-emitted `job.verdict` is
+ * idempotent (it cannot re-drive a job that already reached verdict/approval/
+ * settlement). Returns true iff it advanced; the caller skips approval creation
+ * when it did not.
+ */
 export async function recordVerdict(
   pool: Pool,
   jobId: string,
   input: { verdict: 'accept' | 'reject'; rationaleRef: string; evaluatorSig: string },
-): Promise<void> {
-  await pool.query(
+): Promise<boolean> {
+  const res = await pool.query(
     `UPDATE jobs SET verdict = $2, rationale_ref = $3, evaluator_sig = $4, status = 'verdict', updated_at = now()
-     WHERE job_id = $1`,
+     WHERE job_id = $1 AND status IN ('delivered','evaluating')`,
     [jobId, input.verdict, input.rationaleRef, input.evaluatorSig],
   );
+  return (res.rowCount ?? 0) > 0;
 }
 
 export async function markAwaitingApproval(pool: Pool, jobId: string, approvalId: string): Promise<void> {

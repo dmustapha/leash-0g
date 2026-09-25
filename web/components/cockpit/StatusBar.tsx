@@ -35,6 +35,12 @@ export function StatusBar({
         session {countdown(detail.sessionExpiry, now)}
       </span>
       <span className="badge">{weiToOg(detail.accountBalance)} 0G in account</span>
+      {/* D-B9: inert freeform capability label — display only, no taxonomy/filter/discovery. */}
+      {detail.agent?.capabilityLabel ? (
+        <span className="badge" data-testid="capability-label" title="What this agent is for">
+          {detail.agent.capabilityLabel}
+        </span>
+      ) : null}
       {chainVerified === true ? (
         <span
           className="pill pill-allow"

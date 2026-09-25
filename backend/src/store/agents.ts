@@ -18,6 +18,7 @@ interface DbAgentRow {
   encrypted_audit_key: string | null;
   gateway_token_enc: string | null;
   guardian_addr: string | null;
+  capability_label: string | null;
   created_at: Date;
 }
 
@@ -39,13 +40,14 @@ function mapRow(r: DbAgentRow): AgentRow {
     encryptedAuditKey: r.encrypted_audit_key,
     gatewayTokenEnc: r.gateway_token_enc,
     guardianAddr: r.guardian_addr,
+    capabilityLabel: r.capability_label,
     createdAt: r.created_at.toISOString(),
   };
 }
 
 const COLS = `id, chain_agent_id, owner_addr, account_addr, session_key_addr, session_key_enc,
   audit_pubkey, token_id, token_hash, name, status, gateway_rules, goal, encrypted_audit_key,
-  gateway_token_enc, guardian_addr, created_at`;
+  gateway_token_enc, guardian_addr, capability_label, created_at`;
 
 export async function getAgentById(pool: Pool, id: string): Promise<AgentRow | null> {
   if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
@@ -74,14 +76,16 @@ export interface InsertAgentInput {
   gatewayTokenEnc?: string;
   /** Guardian address the account was created with (C-1). */
   guardianAddr: string;
+  /** Phase-5 (D-B9): optional freeform capability label; null when unset. */
+  capabilityLabel?: string | null;
 }
 
 export async function insertAgent(pool: Pool, input: InsertAgentInput): Promise<string> {
   const res = await pool.query<{ id: string }>(
     `INSERT INTO agents (chain_agent_id, owner_addr, account_addr, session_key_addr, session_key_enc,
                          audit_pubkey, token_id, token_hash, name, gateway_rules, goal, encrypted_audit_key,
-                         gateway_token_enc, guardian_addr)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING id`,
+                         gateway_token_enc, guardian_addr, capability_label)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
     [
       input.chainAgentId.toString(),
       input.ownerAddr.toLowerCase(),
@@ -97,6 +101,7 @@ export async function insertAgent(pool: Pool, input: InsertAgentInput): Promise<
       input.encryptedAuditKey ?? null,
       input.gatewayTokenEnc ?? null,
       input.guardianAddr.toLowerCase(),
+      input.capabilityLabel ?? null,
     ],
   );
   const row = res.rows[0];

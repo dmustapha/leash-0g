@@ -43,6 +43,12 @@ export default function SiteNav() {
     { href: '/inbox', label: 'Inbox', badge: true },
     { href: '/digest', label: 'Digest' },
     { href: '/settings/alerts', label: 'Alerts' },
+    // Phase-5 note (D-A4): `agentId` is a localStorage convenience pointer to the last-created
+    // agent; it can go stale if that agent is later revoked/deleted (the Cockpit/Audit links
+    // would then 404 into the cockpit's own load-error state, which is legible, not silent).
+    // Fully resolving requires a fetch-to-validate on every nav render, which is disproportionate
+    // for a shortcut whose failure mode is already handled downstream — deferred. The `/app` fleet
+    // list is always the authoritative, never-stale entry to any live agent.
     ...(agentId
       ? [
           { href: `/agents/${agentId}`, label: 'Cockpit' },

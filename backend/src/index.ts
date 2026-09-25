@@ -209,6 +209,7 @@ async function main(): Promise<void> {
       balanceCacheTtlMs: cfg.BALANCE_CACHE_TTL_MS,
       allowlistMax: cfg.ALLOWLIST_MAX,
       rulesMax: cfg.RULES_MAX,
+      elevationModel: cfg.ELEVATION_MODEL,
       delegationTtlMs: cfg.DELEGATION_TTL_MS,
       delegationRatePerLinkPerHour: cfg.DELEGATION_RATE_PER_LINK_PER_HOUR,
       delegationMaxPendingPerLink: cfg.DELEGATION_MAX_PENDING_PER_LINK,

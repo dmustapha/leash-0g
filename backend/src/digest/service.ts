@@ -2,7 +2,7 @@ import type { Pool } from 'pg';
 import type { Json } from '../crypto/canonical.js';
 import { appendOwnerRecordInTx } from '../store/owner-records.js';
 import { getOwnerSettings, listDigestSchedulable } from '../store/owner-settings.js';
-import { formatG } from '../util/format.js';
+import { formatG, formatAsset } from '../util/format.js';
 
 /**
  * The digest (spec §3b "Digest service", D4): spend + balance change +
@@ -36,7 +36,7 @@ export interface AgentDigest {
    * SEPARATE from native `spendWei` (18dp 0G) — a 6dp token fee must never be
    * summed into the native total. count + summed amount per token address.
    */
-  jobFees: { count: number; byToken: Record<string, string> };
+  jobFees: { count: number; byToken: Record<string, string>; feeLabel?: string };
   balanceWei: string;
   /** null until a snapshot exists (first digest has no baseline — honest). */
   balanceChangeWei: string | null;
@@ -59,8 +59,26 @@ export interface Digest {
   since: string | null;
   agents: AgentDigest[];
   links: LinkDigest[];
-  totals: { spendWei: string; actions: number; decisions: number; jobFees: { count: number; byToken: Record<string, string> } };
+  totals: { spendWei: string; actions: number; decisions: number; jobFees: { count: number; byToken: Record<string, string>; feeLabel?: string } };
   empty: boolean;
+}
+
+/**
+ * P5C-4: render summed per-token job-fee amounts as a human string
+ * ("2 TestUSD", or "2 TestUSD + 1 USDC" across tokens). Uses each token's own
+ * decimals/symbol when known (falls back to "<n> units" — honest, never wrong).
+ */
+function buildFeeLabel(
+  byToken: Map<string, bigint>,
+  meta: Map<string, { symbol: string | null; decimals: number | null }>,
+): string | undefined {
+  if (byToken.size === 0) return undefined;
+  return [...byToken]
+    .map(([token, amt]) => {
+      const m = meta.get(token);
+      return formatAsset(amt.toString(), m?.decimals ?? null, m?.symbol ?? null);
+    })
+    .join(' + ');
 }
 
 export interface DigestServiceDeps {
@@ -104,6 +122,9 @@ export class DigestService {
     let totalDecisions = 0;
     const totalJobFeeByToken = new Map<string, bigint>();
     let totalJobFeeCount = 0;
+    // P5C-4: per-token asset meta (symbol/decimals), so the digest can render the
+    // true fee AMOUNT ("2 TestUSD"), not just a count.
+    const feeTokenMeta = new Map<string, { symbol: string | null; decimals: number | null }>();
 
     for (const a of agents.rows) {
       const prior = cursor?.agents[a.id];
@@ -140,6 +161,14 @@ export class DigestService {
                 const key = token.toLowerCase();
                 jobFeeByToken.set(key, (jobFeeByToken.get(key) ?? 0n) + BigInt(amt));
                 jobFeeCount += 1;
+                // P5C-4: remember the asset meta for this token (last write wins;
+                // the token is immutable per account so it never actually varies).
+                const sym = detail['feeTokenSymbol'];
+                const dec = detail['feeTokenDecimals'];
+                feeTokenMeta.set(key, {
+                  symbol: typeof sym === 'string' ? sym : null,
+                  decimals: typeof dec === 'number' ? dec : null,
+                });
               }
               break;
             }
@@ -177,12 +206,17 @@ export class DigestService {
       }
       const balance = await this.deps.chain.getBalance(a.account_addr);
       const priorBalance = prior?.balanceWei;
+      const agentFeeLabel = buildFeeLabel(jobFeeByToken, feeTokenMeta);
       perAgent.push({
         agentId: a.id,
         name: a.name,
         status: a.status,
         spendWei: spend.toString(),
-        jobFees: { count: jobFeeCount, byToken: Object.fromEntries([...jobFeeByToken].map(([t, v]) => [t, v.toString()])) },
+        jobFees: {
+          count: jobFeeCount,
+          byToken: Object.fromEntries([...jobFeeByToken].map(([t, v]) => [t, v.toString()])),
+          ...(agentFeeLabel ? { feeLabel: agentFeeLabel } : {}),
+        },
         balanceWei: balance.toString(),
         balanceChangeWei: priorBalance !== undefined ? (balance - BigInt(priorBalance)).toString() : null,
         actions,
@@ -226,6 +260,7 @@ export class DigestService {
     }
 
     const generatedAt = new Date().toISOString();
+    const totalsFeeLabel = buildFeeLabel(totalJobFeeByToken, feeTokenMeta);
     const links = [...linkMap.values()];
     const hasActivity =
       totalActions > 0 ||
@@ -252,6 +287,7 @@ export class DigestService {
           jobFees: {
             count: totalJobFeeCount,
             byToken: Object.fromEntries([...totalJobFeeByToken].map(([t, v]) => [t, v.toString()])),
+            ...(totalsFeeLabel ? { feeLabel: totalsFeeLabel } : {}),
           },
         },
         empty: !hasActivity,
@@ -333,7 +369,11 @@ export class DigestService {
     if (digest.totals.actions > 0) {
       clauses.push(`${plural(digest.totals.actions, 'transfer')} went out, ${formatG(digest.totals.spendWei)} total`);
     }
-    if (jobFeeCount > 0) clauses.push(`${plural(jobFeeCount, 'job fee')} settled`);
+    if (jobFeeCount > 0) {
+      // P5C-4: surface the AMOUNT, not just the count (the data is computed).
+      const feeLabel = digest.totals.jobFees.feeLabel;
+      clauses.push(`${plural(jobFeeCount, 'job fee')} settled${feeLabel ? ` (${feeLabel})` : ''}`);
+    }
     if (decisions > 0) clauses.push(`${plural(decisions, 'decision')} came to you`);
     const lead = clauses.length
       ? `Since you last looked: ${clauses.join(', ')}.`
@@ -344,7 +384,7 @@ export class DigestService {
     for (const a of digest.agents) {
       const bits: string[] = [];
       if (a.actions > 0) bits.push(`sent ${formatG(a.spendWei)} in ${plural(a.actions, 'transfer')}`);
-      if (a.jobFees.count > 0) bits.push(`settled ${plural(a.jobFees.count, 'job fee')}`);
+      if (a.jobFees.count > 0) bits.push(`settled ${plural(a.jobFees.count, 'job fee')}${a.jobFees.feeLabel ? ` (${a.jobFees.feeLabel})` : ''}`);
       if (a.balanceChangeWei !== null && a.balanceChangeWei !== '0') {
         bits.push(`balance ${formatG(a.balanceWei)} (${formatG(a.balanceChangeWei, true)})`);
       }

@@ -270,6 +270,24 @@ export async function installMockApi(page: Page, state: MockState): Promise<void
     if (method === 'GET' && path === '/api/agents') {
       return json(200, { agents: state.agents });
     }
+    // — Phase 5: create funnel —
+    if (method === 'GET' && path === '/api/job-specs') {
+      return json(200, { specs: [] });
+    }
+    if (method === 'POST' && path === '/api/create/elevate') {
+      // A deterministic, safe provider draft — no address, no fee (never-guess-money).
+      return json(200, {
+        draft: {
+          proposedRole: 'provider',
+          rationale: 'You want calibrated odds on market questions — set up as a provider that only produces work.',
+          capabilityLabel: 'market forecaster',
+          serviceSpec: 'calibrated probability estimates for market questions',
+          moneyPower: 'cannot-move-money',
+          unsureFields: [],
+          confidence: 'high',
+        },
+      });
+    }
     if (method === 'POST' && path === '/api/agents/revoke-batch') {
       state.revokeBatchBody = route.request().postDataJSON() as Record<string, unknown>;
       const ids = (state.revokeBatchBody['agentIds'] as string[] | undefined) ?? [];

@@ -16,7 +16,7 @@ import type { Json } from '../crypto/canonical.js';
  * layering-proof eval, F7-limit).
  */
 
-const ruleSchema = z.discriminatedUnion('kind', [
+export const ruleSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('required'), path: z.string().min(1) }).strict(),
   z.object({ kind: z.literal('type'), path: z.string().min(1), type: z.enum(['string', 'number', 'boolean', 'object', 'array']) }).strict(),
   z.object({ kind: z.literal('numberRange'), path: z.string().min(1), min: z.number().optional(), max: z.number().optional() }).strict(),

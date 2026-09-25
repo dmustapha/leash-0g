@@ -45,3 +45,15 @@ describe('StatusBar server-verified pill', () => {
     expect(screen.queryByTestId('server-verify-failed-pill')).not.toBeInTheDocument();
   });
 });
+
+describe('StatusBar capability label (D-B9)', () => {
+  it('shows the inert capabilityLabel when present', () => {
+    render(<StatusBar detail={{ ...DETAIL, agent: { id: 'a1', name: 'A', capabilityLabel: 'market forecaster' } }} />);
+    expect(screen.getByTestId('capability-label')).toHaveTextContent('market forecaster');
+  });
+
+  it('renders no label chip when absent', () => {
+    render(<StatusBar detail={DETAIL} />);
+    expect(screen.queryByTestId('capability-label')).not.toBeInTheDocument();
+  });
+});
