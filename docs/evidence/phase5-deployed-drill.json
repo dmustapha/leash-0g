@@ -1,0 +1,20 @@
+{
+  "ts": "2026-09-25T10:57:38.325Z",
+  "owner": "0x44bE4EC7486B2217C073D6B1EB0B77bE33d5A74f",
+  "jobSpecsReachable": true,
+  "elevate": {
+    "role": "provider",
+    "confidence": "high",
+    "noAddress": true,
+    "capabilityLabel": "research summarizer"
+  },
+  "quarantine_no_write_on_elevate": true,
+  "agentId": "05be412e-5008-4c4e-8331-831922d0f880",
+  "accountAddr": "0xCF96738724A8C7DD4DC394a5dBf0344dE9A8986c",
+  "createTxs": [
+    "0xcd09d7f7df747a99a9378967c33e8cc03fb5110719371707d621d1bb93254de2",
+    "0x52b9eaafac2c38b8c605cbb295a51630a47a49c09ed8786de9349e460aa8e1a2"
+  ],
+  "capabilityLabelRoundTrip": "research summarizer",
+  "operableStatus": "paused"
+}
