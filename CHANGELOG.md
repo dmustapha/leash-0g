@@ -2,6 +2,15 @@
 
 LEASH is built in phases, each ending in a scope + build review gate and proven on the 0G Galileo testnet (chain 16602) before the next begins. This log tracks those phases.
 
+## Phase 5 — Create funnel (2026-09)
+
+- Intent-first create funnel: describe an agent in plain words, an LLM on 0G Compute elevates it into a draft, and a tiered read-back shows exactly what was understood before anything is created. Two screens on the happy path; templates and a manual escape for experts.
+- Quarantine boundary: elevation only proposes — it writes nothing; authority is persisted only when the owner confirms on the existing create path.
+- Never-guess-money: elevation never emits a wallet address (always owner-typed, blank-required) and never pre-fills a fee unless the owner's own words stated one; a plain-language money-power line makes a wrong-role draft catchable.
+- Create-flow cleanup: the two-sided requester role is demoted behind an advanced door until its prerequisites exist, and its job handle is a picker over saved job specs (no more free-text dead-end).
+- On-chain leash audit: every enforcement path documented against its revert, its covering test, and its cockpit surface; enforcement unchanged.
+- Proven on the live stack: intent to elevation on real 0G Compute to a confirmed on-chain agent, end-to-end.
+
 ## Phase 4 — Real use-case: agent commerce (2026-09)
 
 - Requester / provider / evaluator agent triangle running a real job end-to-end.

@@ -33,6 +33,7 @@ LEASH lets autonomous AI agents hold and move real funds under limits the agent 
 
 ## What it does
 
+- **Intent-first create funnel.** A non-technical owner describes an agent in plain words; an LLM on 0G Compute elevates that into a draft (role, spec, suggested limits), and a tiered read-back shows exactly what was understood before anything is created. The draft only proposes — it writes nothing until the owner confirms — and it never guesses money: a wallet address is always owner-typed, and a fee is only pre-filled if the owner's own words stated one.
 - **On-chain policy engine.** Each agent's funds live in a self-enforcing `LeashAccount`: per-transfer and rolling-window spend caps, allowlist default-deny, session expiry, and a guardian revoke that fails closed. A fully hijacked agent still cannot exceed a cap, pay a non-allowlisted address, or survive a revoke.
 - **Human-in-the-loop approvals.** Boundary decisions (a settlement, a policy loosening) are pushed to the owner over Telegram and the web cockpit; consent is recorded on the tamper-evident trace before any action.
 - **Agent commerce loop.** A requester agent orders an owner-defined job, a provider delivers work over 0G, an evaluator verifies it, and the fee settles on-chain, each step gated: acceptance floor, then skeptic verdict, then owner approval, any one of which blocks release.
@@ -44,7 +45,7 @@ LEASH lets autonomous AI agents hold and move real funds under limits the agent 
 |---|---|---|
 | `contracts/` | `LeashAccount` (self-enforcing constrained account: native + governed ERC-20 execute, per-transfer/window caps, expiry, allowlist default-deny, guardian revoke-only, asymmetric timelock) · `AgentRegistry` · `LeashAccountFactory` | Solidity 0.8.30, Foundry, Slither |
 | `backend/` | Hardened OpenAI-compatible gateway to 0G Compute · hash-chained trace with consent-before-forward · ECIES-encrypted audit batches to 0G Storage · LangGraph agent runtime (treasury + agent-commerce graphs) · owner REST + SSE API (Privy auth) · Telegram approvals | Node 22, TypeScript, Postgres (Neon) |
-| `web/` | Guided create wizard, live cockpit (stream / approve / revoke), job lifecycle view, audit (owner-client decrypt + chain verify) | Next.js, Tailwind, Privy |
+| `web/` | Intent-first create funnel (spec elevation → tiered read-back → confirm) over the guided create wizard, live cockpit (stream / approve / revoke), job lifecycle view, audit (owner-client decrypt + chain verify) | Next.js, Tailwind, Privy |
 
 ## Security model
 

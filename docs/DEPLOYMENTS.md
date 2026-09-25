@@ -73,3 +73,14 @@ Contracts UNCHANGED (v2 singletons above; 57 forge tests incl. new expiry/spend-
 - act `0x7538aa5b3888ecaf048d3105f5d10aaf66b5a7e80da3777a197b78e326626ad4`, revoke fail-closed, 1 audit batch sealed.
 
 CI: run 35595910553 — all 7 lanes green on head-of-main (incl. live-0G lane, 13/13).
+
+## Phase-5 create-funnel deployed drill (2026-09-25) — D-A5/D-B7 live evidence
+Merged to `main` @ `2cefb83`; Render+Vercel auto-deploy (migration 013 `capability_label` on boot).
+Drill: `backend/scripts/deployed-create-funnel-drill.mjs` (real Privy-SIWE throwaway owner, real 0G Compute).
+- owner (throwaway): `0x44bE4EC7486B2217C073D6B1EB0B77bE33d5A74f`
+- elevate → `provider` draft (confidence high, label "research summarizer"), NO address in draft (never-guess-money)
+- quarantine: 0 agents before confirm (`/elevate` wrote nothing)
+- confirm→create agent `05be412e-5008-4c4e-8331-831922d0f880`, account `0xCF96738724A8C7DD4DC394a5dBf0344dE9A8986c`
+  - create tx `0xcd09d7f7df747a99a9378967c33e8cc03fb5110719371707d621d1bb93254de2`
+  - register tx `0x52b9eaafac2c38b8c605cbb295a51630a47a49c09ed8786de9349e460aa8e1a2`
+- capabilityLabel round-tripped in cockpit detail; agent operable (paused). Evidence: `docs/evidence/phase5-deployed-drill.json`.
