@@ -96,6 +96,10 @@ export type MockState = {
   /** GET /api/digest serves this; POST /mark swaps in the empty digest. */
   digest: Record<string, unknown>;
   digestMarked: boolean;
+  // — Phase 5.5: conversational direction —
+  /** Captured body of the last POST /direct/:id/confirm. */
+  confirmDirectionBody?: Record<string, unknown>;
+  windDownCalled: boolean;
 };
 
 export function mockAgent(agentId: string, name: string, over: Partial<MockAgent> = {}): MockAgent {
@@ -188,6 +192,7 @@ export function freshState(): MockState {
     telegramConfigured: true,
     digest: sampleDigest(),
     digestMarked: false,
+    windDownCalled: false,
   };
 }
 
@@ -444,6 +449,40 @@ export async function installMockApi(page: Page, state: MockState): Promise<void
     }
     if (method === 'GET' && path === '/api/owner/audit') {
       return json(200, []);
+    }
+
+    // — Phase 5.5: conversational direction —
+    if (method === 'POST' && /^\/api\/agents\/[^/]+\/direct\/[^/]+\/confirm$/.test(path)) {
+      state.confirmDirectionBody = route.request().postDataJSON() as Record<string, unknown>;
+      return json(200, { ok: true });
+    }
+    if (method === 'POST' && /^\/api\/agents\/[^/]+\/direct$/.test(path)) {
+      // A deterministic, safe treasury redirect — descriptive patch only, NO address/fee.
+      return json(200, {
+        direction: {
+          id: 'dir-1',
+          draft: {
+            agentId: state.agentId,
+            currentRole: 'treasury',
+            understanding: 'You want it to keep the balance at 2 0G instead of 1.',
+            goalPatch: { targetBalanceWei: '2000000000000000000', topUpWei: '500000000000000000' },
+            moneyPower: 'can-move-money',
+            unsureFields: [],
+            confidence: 'high',
+          },
+        },
+      });
+    }
+    if (method === 'GET' && /^\/api\/agents\/[^/]+\/status$/.test(path)) {
+      return json(200, {
+        answer: 'So far I have topped up the beneficiary once, sending 0.02 0G.',
+        asOfSeq: 3,
+        quarantined: true,
+      });
+    }
+    if (method === 'POST' && /^\/api\/agents\/[^/]+\/wind-down$/.test(path)) {
+      state.windDownCalled = true;
+      return json(200, { ok: true });
     }
 
     if (method === 'GET' && /^\/api\/agents\/[^/]+\/stream$/.test(path)) {

@@ -102,3 +102,55 @@ describe('PolicyPanel pending changes', () => {
     expect(screen.getByTestId('apply-allowlist')).toBeEnabled();
   });
 });
+
+describe('PolicyPanel — editable expiry/window (G-4) + lifecycle controls', () => {
+  it('raising the window length is treated as loosening (timelocked)', async () => {
+    vi.useRealTimers();
+    const onSubmitPolicy = vi.fn().mockResolvedValue(undefined);
+    render(<PolicyPanel detail={DETAIL} onSubmitPolicy={onSubmitPolicy} pending={NO_PENDING} onApply={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /change limits/i }));
+    // Caps unchanged; only the window length grows (86400s = 24h → 48h).
+    fireEvent.change(screen.getByLabelText(/budget window length/i), { target: { value: '48' } });
+    await act(async () => {
+      fireEvent.submit(screen.getByLabelText(/access expires/i).closest('form')!);
+      await Promise.resolve();
+    });
+    expect(onSubmitPolicy).toHaveBeenCalledTimes(1);
+    const [policy, loosening] = onSubmitPolicy.mock.calls[0]!;
+    expect(loosening).toBe(true);
+    expect(policy.windowSeconds).toBe(48 * 3600);
+    // Expiry is unchanged bar the minute-truncation the datetime-local input imposes.
+    expect(Math.abs(policy.expiresAt - DETAIL.policy.expiresAt)).toBeLessThan(60);
+  });
+
+  it('raising the expiry is treated as loosening (timelocked)', async () => {
+    vi.useRealTimers();
+    const onSubmitPolicy = vi.fn().mockResolvedValue(undefined);
+    render(<PolicyPanel detail={DETAIL} onSubmitPolicy={onSubmitPolicy} pending={NO_PENDING} onApply={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: /change limits/i }));
+    const later = new Date((DETAIL.policy.expiresAt + 30 * 86400) * 1000);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const local = `${later.getFullYear()}-${pad(later.getMonth() + 1)}-${pad(later.getDate())}T${pad(later.getHours())}:${pad(later.getMinutes())}`;
+    fireEvent.change(screen.getByLabelText(/access expires/i), { target: { value: local } });
+    await act(async () => {
+      fireEvent.submit(screen.getByLabelText(/access expires/i).closest('form')!);
+      await Promise.resolve();
+    });
+    const [, loosening] = onSubmitPolicy.mock.calls[0]!;
+    expect(loosening).toBe(true);
+  });
+
+  it('"Mark done / wind down" confirms then calls onWindDown', async () => {
+    vi.useRealTimers();
+    const onWindDown = vi.fn().mockResolvedValue(undefined);
+    render(
+      <PolicyPanel detail={DETAIL} onSubmitPolicy={vi.fn()} pending={NO_PENDING} onApply={vi.fn()} onWindDown={onWindDown} />,
+    );
+    fireEvent.click(screen.getByTestId('wind-down-btn'));
+    fireEvent.click(screen.getByTestId('confirm-wind-down-btn'));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(onWindDown).toHaveBeenCalledTimes(1);
+  });
+});

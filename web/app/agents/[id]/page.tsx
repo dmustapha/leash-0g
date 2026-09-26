@@ -37,6 +37,8 @@ import { AgentControls } from '@/components/cockpit/AgentControls';
 import { GuardianPanel } from '@/components/cockpit/GuardianPanel';
 import { MigrateGuardianBanner } from '@/components/cockpit/MigrateGuardianBanner';
 import { RulesEditor } from '@/components/cockpit/RulesEditor';
+import { DirectBox } from '@/components/cockpit/DirectBox';
+import { StatusChat } from '@/components/cockpit/StatusChat';
 
 type Approval = Extract<StreamEvent, { type: 'approval' }>;
 type Connection = 'connecting' | 'open' | 'reconnecting' | 'closed';
@@ -142,14 +144,17 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
   }, [detail, wallet, refresh]);
 
   const submitPolicy = useCallback(
-    async (p: { perTransferCapWei: string; windowCapWei: string }, loosening: boolean) => {
+    async (
+      p: { perTransferCapWei: string; windowCapWei: string; windowSeconds: number; expiresAt: number },
+      loosening: boolean,
+    ) => {
       if (!detail || !wallet.address) throw new Error('Connect your wallet first.');
       const provider = await wallet.getProvider();
       const policy = {
         perTransferCap: BigInt(p.perTransferCapWei),
         windowCap: BigInt(p.windowCapWei),
-        windowSeconds: detail.policy.windowSeconds,
-        expiresAt: BigInt(detail.policy.expiresAt),
+        windowSeconds: p.windowSeconds,
+        expiresAt: BigInt(p.expiresAt),
       };
       const fn = loosening ? proposePolicyOnchain : tightenPolicyOnchain;
       await fn(provider, wallet.address as Address, detail.addresses.account, policy);
@@ -197,6 +202,11 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
     },
     [detail, wallet],
   );
+
+  const windDown = useCallback(async () => {
+    await api.windDown(id);
+    await refresh();
+  }, [api, id, refresh]);
 
   const saveRules = useCallback(
     async (rules: GatewayRule[]) => {
@@ -306,13 +316,35 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
         <ApprovalCard key={a.approvalId} approval={a} onDecide={(d, r) => decide(a.approvalId, d, r)} />
       ))}
 
+      {detail && detail.status !== 'revoked' ? (
+        <section
+          aria-label="Direct this agent"
+          style={{ display: 'grid', gap: '1rem', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 340px), 1fr))', alignItems: 'start' }}
+        >
+          <DirectBox
+            onDirect={async (intent) => (await api.direct(id, { intent })).direction}
+            onConfirm={async (directionId, edited, recipient) => {
+              await api.confirmDirection(id, directionId, { edited, ...(recipient ? { recipient } : {}) });
+            }}
+          />
+          <StatusChat onAsk={async (q) => api.agentStatus(id, q)} />
+        </section>
+      ) : null}
+
       <div style={{ display: 'grid', gap: '1rem', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 340px), 1fr))', alignItems: 'start' }}>
         <StreamFeed items={items} connection={connection} />
         <div style={{ display: 'grid', gap: '1rem' }}>
           {detail ? (
             // Anchor for the inbox limit_hit "Adjust policy" deep-link (spec §3c).
             <div id="policy-panel">
-              <PolicyPanel detail={detail} onSubmitPolicy={submitPolicy} pending={pending} onApply={applyPending} />
+              <PolicyPanel
+                detail={detail}
+                onSubmitPolicy={submitPolicy}
+                pending={pending}
+                onApply={applyPending}
+                onWindDown={windDown}
+                onRearm={rearm}
+              />
             </div>
           ) : null}
           {detail ? (
