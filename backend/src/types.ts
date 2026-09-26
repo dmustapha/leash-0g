@@ -18,7 +18,8 @@ export type TraceKind =
   | 'error'
   | 'delegate' // issuer side: envelope issued (payload rides in the encrypted trace record)
   | 'delegation_update' // either side: accepted/completed/failed/declined/cancelled/expired
-  | 'config'; // owner config change (gatewayRules, link changes) — original+effective
+  | 'config' // owner config change (gatewayRules, link changes) — original+effective
+  | 'direction'; // Phase-5.5: owner conversational directive — confirmed (issuance) or applied (runtime)
 
 export interface TraceRecord {
   agentId: string;
@@ -329,7 +330,9 @@ export type AlertKind =
   | 'delegation_terminal' // info — failed | expired | declined | cancelled
   | 'runtime_error' // info, coalesced per (agent, hour)
   | 'throttle' // info, coalesced
-  | 'alert_storm'; // info — the rate guard tripped; counts suppressed emissions
+  | 'alert_storm' // info — the rate guard tripped; counts suppressed emissions
+  | 'wind_down_proposed' // info (Phase-5.5) — agent-PROPOSED completion, quarantined; owner confirms
+  | 'completed'; // info (Phase-5.5) — owner wound the agent down (lifespan dial)
 export type AlertStatus = 'unread' | 'read' | 'resolved' | 'dismissed';
 export type AlertResolution = 'approve' | 'deny' | 'expired' | 'dismissed';
 export type AlertChannel = 'app' | 'telegram' | 'system';

@@ -20,27 +20,51 @@ const PENDING_LABELS: Record<PendingKind, string> = {
   withdraw: 'withdrawal',
 };
 
+/** Format a unix-seconds expiry as the value a datetime-local input expects (local time). */
+function toDatetimeLocal(unixSec: number): string {
+  const d = new Date(unixSec * 1000);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 export function PolicyPanel({
   detail,
   onSubmitPolicy,
   pending,
   onApply,
+  onWindDown,
+  onRearm,
 }: {
   detail: AgentDetail;
-  /** Called with the new policy; implementation picks tightenPolicy vs proposePolicy. */
-  onSubmitPolicy: (p: { perTransferCapWei: string; windowCapWei: string }, loosening: boolean) => Promise<void>;
+  /** Called with the new policy; implementation picks tightenPolicy vs proposePolicy. Carries
+   *  windowSeconds + expiresAt too (both owner-editable; raising either is a loosen). */
+  onSubmitPolicy: (
+    p: { perTransferCapWei: string; windowCapWei: string; windowSeconds: number; expiresAt: number },
+    loosening: boolean,
+  ) => Promise<void>;
   /** Unix-seconds etas for the three timelock queues; 0 = nothing pending. */
   pending: PendingEtas;
   /** Fires the matching applyPolicy/applyAllowlist/applyWithdraw wallet tx. */
   onApply: (kind: PendingKind) => Promise<void>;
+  /** Mark done / wind the agent down (api.windDown). */
+  onWindDown?: () => Promise<void>;
+  /** Re-arm / extend — reuses the owner-wallet rearm tx. */
+  onRearm?: () => Promise<string>;
 }) {
   const [editing, setEditing] = useState(false);
   const [perTransfer, setPerTransfer] = useState(weiToOg(detail.policy.perTransferCapWei));
   const [windowCap, setWindowCap] = useState(weiToOg(detail.policy.windowCapWei));
+  const [windowHours, setWindowHours] = useState(String(Math.round(detail.policy.windowSeconds / 3600)));
+  const [expiresAtLocal, setExpiresAtLocal] = useState(toDatetimeLocal(detail.policy.expiresAt));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [applying, setApplying] = useState<PendingKind | null>(null);
   const [applyError, setApplyError] = useState<string | null>(null);
+  const [confirmingWindDown, setConfirmingWindDown] = useState(false);
+  const [confirmingRearm, setConfirmingRearm] = useState(false);
+  const [lifecycleBusy, setLifecycleBusy] = useState(false);
+  const [lifecycleError, setLifecycleError] = useState<string | null>(null);
+  const [rearmTx, setRearmTx] = useState<string | null>(null);
 
   // 1s tick drives the live countdowns on pending-change cards.
   const anyPending = pending.policy > 0 || pending.allowlist > 0 || pending.withdraw > 0;
@@ -63,13 +87,26 @@ export function PolicyPanel({
     }
   }
 
+  const nextWindowSeconds = useMemo(() => {
+    const h = Number(windowHours);
+    return Number.isFinite(h) && h > 0 ? Math.round(h * 3600) : NaN;
+  }, [windowHours]);
+  const nextExpiresAt = useMemo(() => {
+    const ms = Date.parse(expiresAtLocal);
+    return Number.isNaN(ms) ? NaN : Math.floor(ms / 1000);
+  }, [expiresAtLocal]);
+
   const loosening = useMemo(() => {
     if (!isValidOgAmount(perTransfer) || !isValidOgAmount(windowCap)) return false;
+    // Raising ANY of the four bounds (caps, window duration, or expiry) is a loosen. A larger
+    // window or a later expiry gives the agent more room, so both ride the timelocked path.
     return (
       BigInt(ogToWei(perTransfer)) > BigInt(detail.policy.perTransferCapWei) ||
-      BigInt(ogToWei(windowCap)) > BigInt(detail.policy.windowCapWei)
+      BigInt(ogToWei(windowCap)) > BigInt(detail.policy.windowCapWei) ||
+      (Number.isFinite(nextWindowSeconds) && nextWindowSeconds > detail.policy.windowSeconds) ||
+      (Number.isFinite(nextExpiresAt) && nextExpiresAt > detail.policy.expiresAt)
     );
-  }, [perTransfer, windowCap, detail.policy]);
+  }, [perTransfer, windowCap, nextWindowSeconds, nextExpiresAt, detail.policy]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -77,11 +114,24 @@ export function PolicyPanel({
       setError('Enter amounts greater than zero, like 0.01.');
       return;
     }
+    if (!Number.isFinite(nextWindowSeconds)) {
+      setError('Enter a budget window in hours, like 24.');
+      return;
+    }
+    if (!Number.isFinite(nextExpiresAt)) {
+      setError('Enter a valid expiry date and time.');
+      return;
+    }
     setBusy(true);
     setError(null);
     try {
       await onSubmitPolicy(
-        { perTransferCapWei: ogToWei(perTransfer), windowCapWei: ogToWei(windowCap) },
+        {
+          perTransferCapWei: ogToWei(perTransfer),
+          windowCapWei: ogToWei(windowCap),
+          windowSeconds: nextWindowSeconds,
+          expiresAt: nextExpiresAt,
+        },
         loosening,
       );
       setEditing(false);
@@ -89,6 +139,21 @@ export function PolicyPanel({
       setError(err instanceof Error ? err.message : 'The wallet transaction failed.');
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function runLifecycle(fn: () => Promise<unknown>) {
+    setLifecycleBusy(true);
+    setLifecycleError(null);
+    try {
+      const out = await fn();
+      if (typeof out === 'string') setRearmTx(out);
+      setConfirmingWindDown(false);
+      setConfirmingRearm(false);
+    } catch (err) {
+      setLifecycleError(err instanceof Error ? err.message : 'That action failed. Try again.');
+    } finally {
+      setLifecycleBusy(false);
     }
   }
 
@@ -126,17 +191,32 @@ export function PolicyPanel({
           />
           <Field
             id="edit-window-cap"
-            label={`Budget per ${Math.round(detail.policy.windowSeconds / 3600)}h`}
+            label="Budget per window"
             value={windowCap}
             onChange={(e) => setWindowCap(e.target.value)}
             inputMode="decimal"
             suffix="0G"
+          />
+          <Field
+            id="edit-window-hours"
+            label="Budget window length"
+            value={windowHours}
+            onChange={(e) => setWindowHours(e.target.value)}
+            inputMode="numeric"
+            suffix="h"
+          />
+          <Field
+            id="edit-expires-at"
+            label="Access expires"
+            type="datetime-local"
+            value={expiresAtLocal}
+            onChange={(e) => setExpiresAtLocal(e.target.value)}
             error={error}
           />
           {loosening ? (
             <p style={{ fontSize: '0.82rem', color: 'var(--color-accent)' }}>
-              You are raising a limit. For safety this waits a short delay on-chain before it
-              takes effect.
+              You are loosening the leash (a higher cap, a longer window, or a later expiry). For
+              safety this waits a short delay on-chain before it takes effect.
             </p>
           ) : null}
           <div style={{ display: 'flex', gap: '0.6rem' }}>
@@ -187,6 +267,89 @@ export function PolicyPanel({
         <p role="alert" style={{ color: 'var(--color-deny)', fontSize: '0.84rem' }}>
           {applyError}
         </p>
+      ) : null}
+
+      {(onWindDown || onRearm) ? (
+        <div className="panel" data-testid="lifecycle-controls" style={{ padding: '0.7rem 0.8rem', display: 'grid', gap: '0.6rem' }}>
+          <h3 style={{ fontSize: '0.92rem', margin: 0 }}>When the job is done</h3>
+          {onWindDown ? (
+            !confirmingWindDown ? (
+              <div>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  data-testid="wind-down-btn"
+                  disabled={lifecycleBusy}
+                  onClick={() => setConfirmingWindDown(true)}
+                >
+                  Mark done / wind down
+                </button>
+              </div>
+            ) : (
+              <div role="alertdialog" aria-label="Confirm wind down" style={{ display: 'grid', gap: '0.5rem' }}>
+                <p style={{ margin: 0, fontSize: '0.86rem' }}>
+                  Wind this agent down? It stops taking new work. You can re-arm it later.
+                </p>
+                <div style={{ display: 'flex', gap: '0.6rem' }}>
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    data-testid="confirm-wind-down-btn"
+                    disabled={lifecycleBusy}
+                    onClick={() => void runLifecycle(onWindDown)}
+                  >
+                    {lifecycleBusy ? 'Working…' : 'Yes, wind it down'}
+                  </button>
+                  <button type="button" className="btn btn-ghost btn-sm" disabled={lifecycleBusy} onClick={() => setConfirmingWindDown(false)}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )
+          ) : null}
+          {onRearm ? (
+            !confirmingRearm ? (
+              <div>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  data-testid="policy-rearm-btn"
+                  disabled={lifecycleBusy}
+                  onClick={() => setConfirmingRearm(true)}
+                >
+                  Re-arm / extend
+                </button>
+              </div>
+            ) : (
+              <div role="alertdialog" aria-label="Confirm re-arm" style={{ display: 'grid', gap: '0.5rem' }}>
+                <p style={{ margin: 0, fontSize: '0.86rem' }}>
+                  Re-arm this agent? Your wallet signs a rearm() transaction on its on-chain
+                  account so it can work again.
+                </p>
+                <div style={{ display: 'flex', gap: '0.6rem' }}>
+                  <button
+                    type="button"
+                    className="btn btn-primary btn-sm"
+                    data-testid="confirm-policy-rearm-btn"
+                    disabled={lifecycleBusy}
+                    onClick={() => void runLifecycle(onRearm)}
+                  >
+                    {lifecycleBusy ? 'Waiting for wallet…' : 'Yes, re-arm now'}
+                  </button>
+                  <button type="button" className="btn btn-ghost btn-sm" disabled={lifecycleBusy} onClick={() => setConfirmingRearm(false)}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )
+          ) : null}
+          {rearmTx ? <p className="code">tx {rearmTx}</p> : null}
+          {lifecycleError ? (
+            <p role="alert" style={{ color: 'var(--color-deny)', fontSize: '0.84rem', margin: 0 }}>
+              {lifecycleError}
+            </p>
+          ) : null}
+        </div>
       ) : null}
 
       <Disclosure label="Why do raises wait, but cuts apply instantly?">

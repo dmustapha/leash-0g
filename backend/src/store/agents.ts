@@ -188,6 +188,17 @@ export async function updateAgentRules(pool: Pool, id: string, rules: GatewayRul
   await pool.query(`UPDATE agents SET gateway_rules = $2 WHERE id = $1`, [id, JSON.stringify(rules)]);
 }
 
+/**
+ * Phase-5.5: replace the agent's goal JSONB wholesale (owner-authored, applied by
+ * the runtime `sense_direction` step or the confirm route). The caller has ALREADY
+ * validated the new goal through the R-1 generality guard (applyGoalPatch) — this
+ * is the persistence primitive only. A running loop caches `goal` at start(); the
+ * cycle-boundary `sense_direction` step mutates its in-memory copy alongside this.
+ */
+export async function updateAgentGoal(pool: Pool, id: string, goal: AgentGoal): Promise<void> {
+  await pool.query(`UPDATE agents SET goal = $2 WHERE id = $1`, [id, JSON.stringify(goal)]);
+}
+
 /** C-1 quota: ALL created rows count, incl. revoked (no quota refill by revoking). */
 export async function countAgentsByOwner(pool: Pool, ownerAddr: string): Promise<number> {
   const res = await pool.query<{ n: string }>(`SELECT count(*) AS n FROM agents WHERE owner_addr = $1`, [

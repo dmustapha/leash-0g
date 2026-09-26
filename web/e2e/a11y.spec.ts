@@ -29,6 +29,17 @@ test('cockpit has no serious/critical a11y violations', async ({ page }) => {
   await expectNoSeriousViolations(page);
 });
 
+test('cockpit direction surfaces (DirectBox read-back + StatusChat answer) have no serious/critical a11y violations', async ({ page }) => {
+  await installMockApi(page, freshState());
+  await page.goto('/agents/agent-1');
+  await expect(page.getByTestId('direct-box')).toBeVisible();
+  // Open the read-back and surface a status answer, then audit the fuller DOM.
+  await page.getByTestId('direct-intent').fill('keep the balance at 2 0G');
+  await page.getByTestId('direct-submit').click();
+  await expect(page.getByTestId('read-back')).toBeVisible();
+  await expectNoSeriousViolations(page);
+});
+
 test('audit page has no serious/critical a11y violations', async ({ page }) => {
   await installMockApi(page, freshState());
   await page.goto('/agents/agent-1/audit');
