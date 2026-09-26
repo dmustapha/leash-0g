@@ -45,6 +45,9 @@ export function sanitizeStatusAnswer(text: string): string {
   const stripped = text
     // Strip C0/C1 control chars EXCEPT tab (\u0009) and newline (\u000A).
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, ' ')
+    // Strip Unicode bidi/isolate overrides (round-2 red-team): a poisoned memory
+    // entry cannot reorder the plain-text readout to spoof a benign status line.
+    .replace(/[\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
   return stripped.length > MAX_ANSWER ? `${stripped.slice(0, MAX_ANSWER - 1)}\u2026` : stripped;

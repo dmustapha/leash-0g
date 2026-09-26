@@ -27,7 +27,7 @@ import { elevateIntent } from '../create/elevation.js';
 import { elevateDirection } from '../direction/direction.js';
 import { answerStatus } from '../direction/status.js';
 import { applyGoalPatch, applyRecipient, validateAcceptancePatch, type GoalPatch } from '../direction/goal-schema.js';
-import { insertDirectionDraft, getDirection, confirmDirection } from '../store/directions.js';
+import { insertDirectionDraft, getDirection, confirmDirection, pruneStaleDraftDirections } from '../store/directions.js';
 import type { ComputeQueue } from '../gateway/compute-queue.js';
 import { jobSpecSchema } from '../jobs/envelopes.js';
 import { acceptanceRuleSetSchema } from '../jobs/acceptance.js';
@@ -511,6 +511,24 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
   }
   const directRateOk = makeSlidingLimiter(deps.settings.createRatePerHour);
   const statusRateOk = makeSlidingLimiter(deps.settings.createRatePerHour);
+
+  // H-01 (round-2 red-team): the per-owner limiters are bypassable by rotating
+  // fresh wallet addresses (each new owner gets a fresh bucket), which could
+  // drain LEASH's shared 0G Compute key. Add an ADDRESS-AGNOSTIC global hourly
+  // ceiling across the owner-triggered LLM surface (elevate + direct + status)
+  // so aggregate cost is bounded regardless of address rotation. In-process
+  // (single instance); a durable cross-instance spend cap is the complete fix
+  // (tracked for a later hardening slice, like the recurring SSE cap).
+  const GLOBAL_LLM_PER_HOUR = 500;
+  const globalLlmHits: number[] = [];
+  function globalLlmOk(): boolean {
+    const now = Date.now();
+    const windowMs = 3_600_000;
+    while (globalLlmHits.length > 0 && now - (globalLlmHits[0] as number) >= windowMs) globalLlmHits.shift();
+    if (globalLlmHits.length >= GLOBAL_LLM_PER_HOUR) return false;
+    globalLlmHits.push(now);
+    return true;
+  }
 
   const balanceCache = new Map<string, { value: bigint; at: number }>();
   async function cachedBalance(addr: string): Promise<bigint> {
@@ -1304,7 +1322,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
   // authed (inherited) + a lightweight per-owner rate limit (LLM-spam vector).
   router.post('/api/create/elevate', asyncRoute(async (req: OwnerRequest, res) => {
     const ownerAddr = req.ownerAddr as string;
-    if (!elevateRateOk(ownerAddr)) {
+    if (!elevateRateOk(ownerAddr) || !globalLlmOk()) {
       res.status(429).json({ error: 'rate_limited' });
       return;
     }
@@ -1332,7 +1350,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
   router.post('/api/agents/:id/direct', asyncRoute(async (req: OwnerRequest, res) => {
     const agent = await requireOwnedAgent(req, res);
     if (!agent) return;
-    if (!directRateOk(req.ownerAddr as string)) {
+    if (!directRateOk(req.ownerAddr as string) || !globalLlmOk()) {
       res.status(429).json({ error: 'rate_limited' });
       return;
     }
@@ -1359,6 +1377,9 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       ...(answers !== undefined ? { answers } : {}),
       draft,
     });
+    // M-01: opportunistically bound the table — drop this owner's abandoned drafts
+    // older than 24h (never-confirmed read-back threads). Best-effort, non-blocking.
+    void pruneStaleDraftDirections(deps.pool, req.ownerAddr as string, 24 * 3600).catch(() => undefined);
     res.json({ direction: { id: row.id, draft } });
   }));
 
@@ -1443,7 +1464,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       kind: 'direction',
       decision: 'approve',
       decidedBy: 'owner',
-      originalRequest: { intent: dir.intent } as Json,
+      originalRequest: { intent: dir.intent },
       effectiveRequest: { effectiveGoal: g2.goal as unknown as Json, recipientSet: recipient ? true : false },
       detail: { directionId, summary: 'owner confirmed a conversational direction' },
     });
@@ -1456,7 +1477,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
   router.get('/api/agents/:id/status', asyncRoute(async (req: OwnerRequest, res) => {
     const agent = await requireOwnedAgent(req, res);
     if (!agent) return;
-    if (!statusRateOk(req.ownerAddr as string)) {
+    if (!statusRateOk(req.ownerAddr as string) || !globalLlmOk()) {
       res.status(429).json({ error: 'rate_limited' });
       return;
     }

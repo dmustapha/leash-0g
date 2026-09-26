@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1500 500" role="img" aria-label="LEASH — a live cockpit for on-chain AI agents you can actually trust with real money">
+  <defs>
+    <!-- deep editorial-dark field with a faint warm floor -->
+    <radialGradient id="field" cx="50%" cy="38%" r="80%">
+      <stop offset="0%" stop-color="#141416"/>
+      <stop offset="60%" stop-color="#0d0d0e"/>
+      <stop offset="100%" stop-color="#08080a"/>
+    </radialGradient>
+    <linearGradient id="tether" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#c6f24d"/>
+      <stop offset="100%" stop-color="#d6ff6a"/>
+    </linearGradient>
+    <!-- soft glow for the lime line -->
+    <filter id="glow" x="-20%" y="-40%" width="140%" height="180%">
+      <feGaussianBlur stdDeviation="3.5" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+
+  <!-- background -->
+  <rect width="1500" height="500" fill="url(#field)"/>
+
+  <!-- faint ledger grid: the on-chain undertone -->
+  <g stroke="#1c1c20" stroke-width="1">
+    <line x1="0" y1="125" x2="1500" y2="125"/>
+    <line x1="0" y1="250" x2="1500" y2="250"/>
+    <line x1="0" y1="375" x2="1500" y2="375"/>
+    <line x1="375" y1="0" x2="375" y2="500"/>
+    <line x1="750" y1="0" x2="750" y2="500"/>
+    <line x1="1125" y1="0" x2="1125" y2="500"/>
+  </g>
+
+  <!-- centered lockup: wordmark (scaled 3.4x from the 300x80 source) -->
+  <g transform="translate(240,118) scale(3.4)">
+    <!-- Wordmark: geometric slab caps in ink -->
+    <g fill="#f4f4ef" font-family="'Clash Display','Helvetica Neue',Arial,sans-serif" font-weight="700">
+      <text x="44" y="52" font-size="46" letter-spacing="1">LEASH</text>
+    </g>
+    <!-- The leash: a single fine lime line. Clasp/loop before L, threads the baseline, hook after H -->
+    <g fill="none" stroke="url(#tether)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)">
+      <circle cx="20" cy="60" r="9"/>
+      <path d="M27 55 l6 -4" stroke="#d6ff6a"/>
+      <path d="M29 60 C 60 66, 120 66, 210 62 C 240 60, 250 58, 258 56"/>
+      <path d="M258 56 c 8 -2 12 4 8 10 c -3 4 -9 3 -10 -2"/>
+    </g>
+  </g>
+
+  <!-- tagline -->
+  <text x="750" y="418" text-anchor="middle"
+        font-family="'Helvetica Neue',Arial,sans-serif" font-weight="400"
+        font-size="27" letter-spacing="3" fill="#a2a29c">
+    A LIVE COCKPIT FOR ON-CHAIN AI AGENTS YOU CAN TRUST WITH REAL MONEY
+  </text>
+
+  <!-- built-on chip -->
+  <text x="750" y="462" text-anchor="middle"
+        font-family="'Helvetica Neue',Arial,sans-serif" font-weight="600"
+        font-size="17" letter-spacing="4" fill="#5fd9d0">
+    BUILT ON 0G
+  </text>
+</svg>

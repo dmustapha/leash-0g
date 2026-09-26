@@ -152,6 +152,20 @@ export async function markDirectionApplied(pool: Pool, id: string): Promise<Dire
   return res.rows[0] ? mapRow(res.rows[0]) : null;
 }
 
+/**
+ * M-01 (round-2 red-team): bound the directions table — drop an owner's abandoned
+ * `draft` rows (never confirmed) older than ttlSeconds. Confirmed/applied rows are
+ * kept (they back the read-back thread + audit). Best-effort, owner-scoped.
+ */
+export async function pruneStaleDraftDirections(pool: Pool, ownerAddr: string, ttlSeconds: number): Promise<number> {
+  const res = await pool.query(
+    `DELETE FROM directions WHERE owner_addr = $1 AND status = 'draft'
+       AND created_at < now() - make_interval(secs => $2::int)`,
+    [ownerAddr.toLowerCase(), ttlSeconds],
+  );
+  return res.rowCount ?? 0;
+}
+
 /** Recent direction threads for an agent (cockpit display of the current directed intent). */
 export async function listDirections(pool: Pool, agentId: string, limit = 20): Promise<DirectionRow[]> {
   const res = await pool.query<DbDirectionRow>(

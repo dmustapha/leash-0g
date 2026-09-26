@@ -41,7 +41,9 @@ export async function appendMemory(
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
-    await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [lockKey(input.agentId)]);
+    // 64-bit key space (hashtextextended) for parity with the trace/consent chain
+    // lock (store/chained.ts) — avoids the smaller 32-bit hashtext collision space.
+    await client.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 42))`, [lockKey(input.agentId)]);
     const head = await client.query<{ seq: string }>(
       `SELECT COALESCE(max(seq), -1)::text AS seq FROM agent_memory WHERE agent_id = $1`,
       [input.agentId],
