@@ -54,7 +54,11 @@ export async function appendMemory(
        VALUES ($1, $2, now(), $3, $4) RETURNING agent_id, seq, ts, kind, content`,
       [input.agentId, nextSeq, input.kind, JSON.stringify(input.content)],
     );
-    // Prune the rolling window: keep only the newest `windowCap` entries.
+    // Prune the rolling window: keep only the newest `windowCap` entries. The
+    // migration-014 trigger forbids UPDATE (no content tampering) but ALLOWS this
+    // DELETE — safe because agent_memory is quarantined-untrusted convenience state
+    // (the "what've you got?" summary), NOT an audit surface. The tamper-evident
+    // record is the trace_records hash chain, which is separate + append-only.
     await client.query(
       `DELETE FROM agent_memory WHERE agent_id = $1 AND seq <= $2::bigint - $3::bigint`,
       [input.agentId, nextSeq, windowCap],

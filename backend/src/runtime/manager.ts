@@ -228,6 +228,12 @@ export class LeashRuntimeManager implements RuntimeManager {
 
   private async runCycle(loop: Loop): Promise<void> {
     // Fail-closed per cycle: never run against a revoked/deleted row.
+    // INVARIANT (Phase-5.5): `ctx.goal` is owned solely by the `sense_direction`
+    // head node — it is deliberately NOT refreshed from `fresh.goal` here. The
+    // only writer of agents.goal is sense_direction (via a confirmed directive),
+    // which mutates the in-memory ctx.goal alongside the DB write. Any FUTURE
+    // goal-writer MUST go through the cycle-boundary apply, not a direct
+    // agents.goal write, or a running loop would use a stale in-memory goal.
     const fresh = await getAgentById(this.deps.pool, loop.agent.id);
     if (loop.stopped) return;
     if (!fresh || fresh.status !== 'active') {
