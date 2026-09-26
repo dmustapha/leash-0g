@@ -6,6 +6,7 @@ import {
   confirmDirection,
   listConfirmedUnapplied,
   markDirectionApplied,
+  pruneStaleDraftDirections,
 } from '../../src/store/directions.js';
 import { appendMemory, listRecentMemory, countMemory } from '../../src/store/agent-memory.js';
 import type { DirectionDraft } from '../../src/direction/direction.js';
@@ -13,6 +14,7 @@ import type { AgentGoal } from '../../src/types.js';
 
 let db: TestDb;
 const OWNER = '0x' + '7a'.repeat(20);
+const OTHER = '0x' + '8b'.repeat(20);
 const BENE = '0x' + '11'.repeat(20);
 function effGoal(targetBalanceWei: string): AgentGoal {
   return { type: 'treasury', beneficiary: BENE, targetBalanceWei, topUpWei: '500' };
@@ -76,6 +78,32 @@ describe('directions store lifecycle', () => {
     const edited = draft(agentId, '999');
     const confirmed = await confirmDirection(db.pool, row.id, effGoal('999'), edited);
     expect(confirmed?.draft.goalPatch).toEqual({ targetBalanceWei: '999' });
+  });
+});
+
+describe('pruneStaleDraftDirections (M-01)', () => {
+  it('drops abandoned draft rows older than the TTL, keeps fresh drafts AND confirmed rows', async () => {
+    const agentId = await seedAgent(db.pool, { ownerAddr: OWNER, goal: effGoal('1000') as unknown as Record<string, unknown> });
+    const oldDraft = await insertDirectionDraft(db.pool, { agentId, ownerAddr: OWNER, intent: 'old', draft: draft(agentId, '1') });
+    const freshDraft = await insertDirectionDraft(db.pool, { agentId, ownerAddr: OWNER, intent: 'fresh', draft: draft(agentId, '2') });
+    const oldConfirmed = await insertDirectionDraft(db.pool, { agentId, ownerAddr: OWNER, intent: 'confirmed', draft: draft(agentId, '3') });
+    await confirmDirection(db.pool, oldConfirmed.id, effGoal('3'));
+    // backdate the old draft AND the confirmed row past the TTL
+    await db.pool.query(`UPDATE directions SET created_at = now() - interval '48 hours' WHERE id = ANY($1::uuid[])`, [[oldDraft.id, oldConfirmed.id]]);
+
+    const dropped = await pruneStaleDraftDirections(db.pool, OWNER, 24 * 3600);
+    expect(dropped).toBe(1); // only the old DRAFT
+    expect(await getDirection(db.pool, oldDraft.id)).toBeNull(); // gone
+    expect((await getDirection(db.pool, freshDraft.id))?.status).toBe('draft'); // fresh kept
+    expect((await getDirection(db.pool, oldConfirmed.id))?.status).toBe('confirmed'); // confirmed kept (audit)
+  });
+
+  it('is owner-scoped: never prunes another owner drafts', async () => {
+    const a = await seedAgent(db.pool, { ownerAddr: OTHER, goal: effGoal('1000') as unknown as Record<string, unknown> });
+    const row = await insertDirectionDraft(db.pool, { agentId: a, ownerAddr: OTHER, intent: 'x', draft: draft(a, '1') });
+    await db.pool.query(`UPDATE directions SET created_at = now() - interval '48 hours' WHERE id = $1`, [row.id]);
+    await pruneStaleDraftDirections(db.pool, OWNER, 24 * 3600); // prune OWNER, not OTHER
+    expect((await getDirection(db.pool, row.id))?.status).toBe('draft');
   });
 });
 
