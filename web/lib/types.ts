@@ -421,6 +421,32 @@ export type ElevationDraft = {
 
 export type ElevateRequest = { intent: string; answers?: string[]; role?: AgentRole };
 
+// ── Phase 5.5 (spec §9): conversational direction — the QUARANTINED redirect draft ──
+// A running agent is re-directed at cockpit-time. Like ElevationDraft it is a SUGGESTION
+// only, never authority: the owner reads it back and confirms. NOTE the deliberate absence
+// of any address/token/fee field on the draft — never-guess-money (spec §8) is structural.
+
+export type DirectionDraft = {
+  agentId: string;
+  currentRole: AgentRole;
+  /** Plain-language "here's the new task I understood" — UNTRUSTED text, render as plain text. */
+  understanding: string;
+  /** Descriptive-only goal patch (e.g. { targetBalanceWei, topUpWei } | { serviceSpec } | { rubricRef }).
+   *  NEVER carries an address/token/fee — those stay owner-typed and out-of-band. */
+  goalPatch: Record<string, unknown>;
+  acceptancePatch?: unknown[];
+  /** SHOWN, never armed here — a loosen rides the on-chain timelocked propose/apply. */
+  suggestedPolicy?: SuggestedPolicy;
+  /** ONLY set when the owner's own intent stated an explicit base-units amount; never guessed. */
+  suggestedFeeBaseUnits?: string;
+  /** SERVER-computed money-power of the current role — display only. */
+  moneyPower: 'can-move-money' | 'cannot-move-money';
+  unsureFields: string[];
+  confidence: 'high' | 'low';
+};
+
+export type DirectRequest = { intent: string; answers?: string[]; threadId?: string };
+
 /** A curated create template — a static ElevationDraft, no LLM call (D-B5). */
 export type CreateTemplate = { id: string; title: string; blurb: string; draft: ElevationDraft };
 

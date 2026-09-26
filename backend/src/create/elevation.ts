@@ -146,7 +146,7 @@ function buildUserMessage(req: ElevateRequest): string {
 }
 
 /** Pull the assistant text out of an OpenAI-shaped chat completion (or reasoning models). */
-function completionText(body: unknown): string {
+export function completionText(body: unknown): string {
   if (!body || typeof body !== 'object') return '';
   const choices = (body as { choices?: unknown }).choices;
   if (!Array.isArray(choices) || choices.length === 0) return '';
@@ -158,7 +158,7 @@ function completionText(body: unknown): string {
 }
 
 /** Extract the first JSON object from model text (tolerates stray prose / fences). */
-function extractJson(text: string): unknown {
+export function extractJson(text: string): unknown {
   const fenced = text.replace(/```(?:json)?/gi, '');
   const start = fenced.indexOf('{');
   const end = fenced.lastIndexOf('}');

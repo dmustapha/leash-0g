@@ -12,6 +12,8 @@ import { CoordinationError, type DelegationCoordinator } from '../coordination/c
 import type { AlertService } from '../alerts/service.js';
 import { BoundaryRegistry, policyFingerprint, DAMPABLE_ERRORS, type DampableError } from './boundary.js';
 import { decodeLeashError } from '../chain/errors.js';
+import { makeSenseDirection } from './sense-direction.js';
+import { appendMemory } from '../store/agent-memory.js';
 import { formatG, shortAddr, inMinutes, sanitizeAgentIntent } from '../util/format.js';
 import type { DecodedLeashError } from '../types.js';
 import type { RuntimeChain } from './session-chain.js';
@@ -159,6 +161,8 @@ export function buildTreasuryGraph(
 ) {
   const fetchFn = deps.fetchFn ?? fetch;
   const coordinator = (): DelegationCoordinator | null => deps.getCoordinator?.() ?? null;
+  // Phase-5.5: apply an owner-confirmed directive at the cycle boundary (head node).
+  const senseDirection = makeSenseDirection({ pool: deps.pool, hub: deps.hub }, ctx);
 
   async function sense(state: State): Promise<Partial<State>> {
     const mode = classifyCycle(ctx.goal, state.inboundDelegation);
@@ -484,6 +488,40 @@ export function buildTreasuryGraph(
             });
       deps.hub.emit(ctx.agentId, 'trace', traceEvent(rec));
     }
+    // Phase-5.5 working memory (spec §5, S23): accrue a salient, QUARANTINED-
+    // UNTRUSTED finding whenever the agent actually reasoned this cycle (idle /
+    // rejected-inbound cycles have empty reasoning and are skipped). Bounded
+    // rolling window; the status summary reads it read-only, never as authority.
+    if (state.reasoning && state.reasoning.trim()) {
+      await appendMemory(deps.pool, {
+        agentId: ctx.agentId,
+        kind: o.type,
+        content: {
+          summary: o.type === 'acted' ? `sent ${o.valueWei} wei to ${state.effectiveBeneficiary}` : outcomeSummary(o),
+          reasoning: state.reasoning.slice(0, 2000),
+        },
+      });
+    }
+    // Phase-5.5 lifespan dial (D-10): a task-scoped watcher whose goal is met
+    // PROPOSES wind-down — a quarantined, deduped INFO suggestion, never forced.
+    // Only the owner's wind-down confirm (POST /wind-down) stops the loop.
+    const role = ctx.goal.type ?? 'treasury';
+    if (
+      deps.alerts &&
+      o.type === 'stood_down' &&
+      'reason' in o &&
+      /target balance already met/i.test(o.reason) &&
+      (role === 'treasury' || role === 'sentinel')
+    ) {
+      await deps.alerts.emit(ctx.agentRow.ownerAddr, {
+        agentId: ctx.agentId,
+        class: 'info',
+        kind: 'wind_down_proposed',
+        summary: `${ctx.agentRow.name} reports its goal is met — you can wind it down (mark done) or leave it running.`,
+        refs: {},
+        dedupKey: `wind_down_proposed:${ctx.agentId}`,
+      });
+    }
     await postInboundOutcome(state);
     return {};
   }
@@ -586,6 +624,7 @@ export function buildTreasuryGraph(
   }
 
   return new StateGraph(TreasuryState)
+    .addNode('sense_direction', senseDirection)
     .addNode('sense', sense)
     .addNode('reason', reason)
     .addNode('decide', decide)
@@ -594,7 +633,8 @@ export function buildTreasuryGraph(
     .addNode('delegate', delegate)
     .addNode('standDown', standDown)
     .addNode('record', record)
-    .addEdge(START, 'sense')
+    .addEdge(START, 'sense_direction')
+    .addEdge('sense_direction', 'sense')
     .addEdge('sense', 'reason')
     .addEdge('reason', 'decide')
     .addConditionalEdges('decide', (state: State) => state.route, {
