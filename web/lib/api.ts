@@ -31,6 +31,8 @@ import type {
   JobSpecSummary,
   ElevateRequest,
   ElevationDraft,
+  DirectRequest,
+  DirectionDraft,
 } from './types';
 
 export type TokenGetter = () => Promise<string | null>;
@@ -131,6 +133,28 @@ export function makeApi(getToken: TokenGetter) {
     elevate: (body: ElevateRequest) =>
       request<{ draft: ElevationDraft }>(getToken, 'POST', '/api/create/elevate', body),
     streamUrl: (id: string) => `${config.apiUrl}/api/agents/${id}/stream`,
+
+    // — Phase 5.5 (spec §9): conversational direction —
+    // Re-direct a RUNNING agent: returns a QUARANTINED draft (writes nothing until confirm).
+    direct: (id: string, body: DirectRequest) =>
+      request<{ direction: { id: string; draft: DirectionDraft } }>(
+        getToken,
+        'POST',
+        `/api/agents/${id}/direct`,
+        body,
+      ),
+    // Confirm a direction: recipient (if any) is owner-typed, passed OUT-OF-BAND from the draft.
+    confirmDirection: (id: string, directionId: string, body: { edited: DirectionDraft; recipient?: string }) =>
+      request<{ ok: true }>(getToken, 'POST', `/api/agents/${id}/direct/${directionId}/confirm`, body),
+    // Ask the agent what it has done so far — the answer is quarantined agent-authored text.
+    agentStatus: (id: string, q: string) =>
+      request<{ answer: string; asOfSeq: number; quarantined: true }>(
+        getToken,
+        'GET',
+        `/api/agents/${id}/status?q=${encodeURIComponent(q)}`,
+      ),
+    // Mark done / wind the agent down — stops it accepting new work.
+    windDown: (id: string) => request<{ ok: true }>(getToken, 'POST', `/api/agents/${id}/wind-down`),
 
     // — Phase 2 (spec §4) —
     listAgents: (cursor?: string) =>

@@ -20,7 +20,7 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import type { AgentRole, ElevationDraft } from '@/lib/types';
+import type { AgentRole, DirectionDraft, ElevationDraft } from '@/lib/types';
 import { Disclosure } from '@/components/ui/Disclosure';
 
 /** Plain-language label for a role — no jargon on the surface (00 §2c). */
@@ -86,17 +86,19 @@ function EditField({
   showUnsure?: boolean;
 }) {
   const missing = required && !value.trim();
+  const fieldId = `field-${testid}`;
   return (
     <div style={{ display: 'grid', gap: '0.3rem' }}>
-      <span className="label" style={{ color: 'var(--color-ink)' }}>
+      <label htmlFor={fieldId} className="label" style={{ color: 'var(--color-ink)' }}>
         {label}
         {required ? <span style={{ color: 'var(--color-deny)' }}> *</span> : null}
-      </span>
+      </label>
       {requiredHint ? (
         <p style={{ fontSize: '0.78rem', color: 'var(--color-ink-dim)', margin: 0 }}>{requiredHint}</p>
       ) : null}
       {multiline ? (
         <textarea
+          id={fieldId}
           className="field"
           data-testid={testid}
           rows={2}
@@ -106,6 +108,7 @@ function EditField({
         />
       ) : (
         <input
+          id={fieldId}
           className="field"
           data-testid={testid}
           value={value}
@@ -119,7 +122,9 @@ function EditField({
   );
 }
 
-export type ReadBackProps = {
+export type CreateReadBackProps = {
+  /** Defaults to 'create' so existing callers are unchanged. */
+  mode?: 'create';
   draft: ElevationDraft;
   /** `recipient` is the owner-typed address authority (never from the model) — undefined for
    *  spend-incapable roles. Kept out of the draft so the quarantined suggestion stays clean. */
@@ -127,7 +132,24 @@ export type ReadBackProps = {
   onBack: () => void;
 };
 
-export function ReadBack({ draft, onConfirm, onBack }: ReadBackProps) {
+export type DirectReadBackProps = {
+  mode: 'direct';
+  draft: DirectionDraft;
+  /** `recipient` stays the owner-typed, out-of-band address contract — undefined for
+   *  roles that cannot move money. Never merged into the quarantined draft. */
+  onConfirm: (edited: DirectionDraft, recipient?: string) => void;
+  onBack: () => void;
+};
+
+export type ReadBackProps = CreateReadBackProps | DirectReadBackProps;
+
+// ONE component, two shapes. Create mode is unchanged; direct mode renders a DirectionDraft.
+export function ReadBack(props: ReadBackProps) {
+  if (props.mode === 'direct') return <DirectReadBack {...props} />;
+  return <CreateReadBack {...props} />;
+}
+
+function CreateReadBack({ draft, onConfirm, onBack }: CreateReadBackProps) {
   const role = draft.proposedRole;
   const movesMoney = roleMovesMoney(role);
 
@@ -385,6 +407,193 @@ export function ReadBack({ draft, onConfirm, onBack }: ReadBackProps) {
         </button>
         <button type="button" className="btn btn-primary" data-testid="read-back-confirm" onClick={confirm}>
           Looks right — continue
+        </button>
+      </div>
+    </section>
+  );
+}
+
+// ───────── Phase 5.5 (spec §9): direct-mode read-back over a DirectionDraft ─────────
+// A running agent's redirect. Same discipline as create: understanding is UNTRUSTED plain
+// text; the recipient address is owner-typed + blank-required (never-guess-money); the
+// suggestedPolicy is SHOWN read-only, never armed here (a loosen rides the timelocked path).
+
+/** Keys that are money authority — never rendered or accepted inside a goalPatch (spec §8). */
+const FORBIDDEN_PATCH_KEY = /address|recipient|allowlist|token|fee|payee|wallet/i;
+
+/** A goalPatch entry we render as an editable descriptive field: primitive value, safe key. */
+function editablePatchEntries(patch: Record<string, unknown>): [string, string][] {
+  return Object.entries(patch)
+    .filter(([k]) => !FORBIDDEN_PATCH_KEY.test(k))
+    .filter(([, v]) => typeof v === 'string' || typeof v === 'number')
+    .map(([k, v]) => [k, String(v)]);
+}
+
+/** Plain-language label for a goalPatch key — no jargon on the surface. */
+function patchLabel(key: string): string {
+  const map: Record<string, string> = {
+    targetBalanceWei: 'Keep the balance at (wei)',
+    topUpWei: 'Top up by at most (wei)',
+    serviceSpec: 'Service it offers',
+    rubricRef: 'How it judges',
+    question: 'The job’s question',
+  };
+  return map[key] ?? key;
+}
+
+function DirectReadBack({ draft, onConfirm, onBack }: DirectReadBackProps) {
+  const role = draft.currentRole;
+  const movesMoney = roleMovesMoney(role);
+
+  // Editable descriptive patch fields (never any money-authority key).
+  const initial = useMemo(() => editablePatchEntries(draft.goalPatch), [draft.goalPatch]);
+  const [patch, setPatch] = useState<Record<string, string>>(() => Object.fromEntries(initial));
+
+  // NEVER pre-filled: the recipient. Always blank-required for a can-move-money role.
+  const [recipient, setRecipient] = useState('');
+  const [error, setError] = useState<string | null>(null);
+
+  const moneyPowerLine = useMemo(
+    () =>
+      draft.moneyPower === 'can-move-money'
+        ? 'This agent can move money.'
+        : 'This agent can never move money.',
+    [draft.moneyPower],
+  );
+
+  function confirm() {
+    if (movesMoney && !recipient.trim()) {
+      setError('Enter the wallet address this agent may pay. It is never guessed for you.');
+      return;
+    }
+    setError(null);
+    // Rebuild the goalPatch: overwrite only the descriptive fields the owner could edit, and
+    // preserve any non-editable (non-money) keys untouched. Money-authority keys never existed.
+    const editedGoalPatch: Record<string, unknown> = { ...draft.goalPatch };
+    for (const [k, v] of Object.entries(patch)) {
+      const original = draft.goalPatch[k];
+      editedGoalPatch[k] = typeof original === 'number' && v.trim() !== '' && !Number.isNaN(Number(v)) ? Number(v) : v;
+    }
+    const edited: DirectionDraft = { ...draft, goalPatch: editedGoalPatch };
+    onConfirm(edited, movesMoney ? recipient.trim() : undefined);
+  }
+
+  return (
+    <section className="card" data-testid="read-back" style={{ padding: 'clamp(1.2rem, 3vw, 2rem)', display: 'grid', gap: '1.2rem' }}>
+      <header style={{ display: 'grid', gap: '0.4rem' }}>
+        <p className="eyebrow">Redirect</p>
+        <h1 style={{ fontSize: 'var(--text-h1)' }}>Here is how I understand the new task</h1>
+        {/* understanding is UNTRUSTED agent-facing text — rendered as PLAIN TEXT (no HTML). */}
+        <p data-testid="read-back-understanding" style={{ color: 'var(--color-ink-dim)', fontSize: '0.92rem', margin: 0 }}>
+          {draft.understanding}
+        </p>
+        {draft.confidence === 'low' ? (
+          <p data-testid="read-back-low-confidence" style={{ color: 'var(--color-accent)', fontSize: '0.82rem', margin: 0 }}>
+            I wasn’t fully sure about parts of this — the flagged fields are worth a second look.
+          </p>
+        ) : null}
+      </header>
+
+      {/* ───────── Tier 1: "What changes" (low-stakes descriptive) ───────── */}
+      <section data-testid="tier-what-it-does" aria-label="What changes" className="panel" style={{ padding: '1rem 1.1rem', display: 'grid', gap: '0.9rem' }}>
+        <h2 style={{ fontSize: '1.05rem', margin: 0 }}>What changes</h2>
+        {initial.length === 0 ? (
+          <p data-testid="read-back-no-patch" style={{ margin: 0, fontSize: '0.88rem', color: 'var(--color-ink-dim)' }}>
+            Nothing descriptive to change here — this only redirects the agent’s task.
+          </p>
+        ) : (
+          initial.map(([key]) => (
+            <EditField
+              key={key}
+              label={patchLabel(key)}
+              testid={`rb-patch-${key}`}
+              value={patch[key] ?? ''}
+              onChange={(v) => setPatch((p) => ({ ...p, [key]: v }))}
+              showUnsure={draft.unsureFields.includes(`goalPatch.${key}`)}
+            />
+          ))
+        )}
+      </section>
+
+      {/* ───────── Tier 2: "The leash" (money / authority — visually distinct) ───────── */}
+      <section
+        data-testid="tier-the-leash"
+        aria-label="The leash"
+        style={{
+          padding: '1rem 1.1rem',
+          display: 'grid',
+          gap: '0.9rem',
+          border: '1px solid var(--color-accent)',
+          borderRadius: 'var(--radius-md)',
+          background: 'rgba(255,184,76,0.05)',
+        }}
+      >
+        <h2 style={{ fontSize: '1.05rem', margin: 0 }}>The leash</h2>
+
+        <p
+          data-testid="read-back-money-power"
+          style={{
+            margin: 0,
+            fontSize: '0.95rem',
+            fontWeight: 600,
+            color: draft.moneyPower === 'can-move-money' ? 'var(--color-accent)' : 'var(--color-ink)',
+          }}
+        >
+          {moneyPowerLine}
+        </p>
+
+        {/* suggestedPolicy is SHOWN read-only — never armed here (a raise rides the timelock). */}
+        {draft.suggestedPolicy ? (
+          <div data-testid="read-back-suggested-policy" className="panel" style={{ padding: '0.7rem 0.8rem', display: 'grid', gap: '0.4rem' }}>
+            <p style={{ margin: 0, fontSize: '0.86rem' }}>
+              Suggested limits (not applied): up to{' '}
+              <strong>{draft.suggestedPolicy.perTransferCapWei}</strong> wei per payment,{' '}
+              <strong>{draft.suggestedPolicy.windowCapWei}</strong> wei per window.
+            </p>
+            <Disclosure label="Why isn’t this limit applied now?">
+              Raising a limit is a separate, time-locked step. This is only a suggestion to read —
+              nothing here changes the on-chain caps. To raise a limit, use the agent’s Limits
+              panel: it proposes the change and applies it after a short on-chain safety delay.
+            </Disclosure>
+          </div>
+        ) : null}
+
+        {movesMoney ? (
+          <EditField
+            label="Who it can pay"
+            testid="rb-recipient"
+            value={recipient}
+            onChange={setRecipient}
+            placeholder="0x… — you must enter this"
+            required
+            requiredHint="A wallet address is never guessed for you. Type the one address this agent may pay."
+          />
+        ) : (
+          <p data-testid="read-back-no-money-note" style={{ margin: 0, fontSize: '0.88rem', color: 'var(--color-ink-dim)' }}>
+            Nothing to set here. This agent cannot move money, so redirecting its task never gives
+            it a way to spend.
+          </p>
+        )}
+
+        <Disclosure label="Why is money handled separately?">
+          Money and authority are the scary part, so they live in their own tier and are never
+          guessed. A wallet address is always yours to type, and any limit change is a separate
+          time-locked step — this read-back is a redirect, not a way to loosen the leash.
+        </Disclosure>
+      </section>
+
+      {error ? (
+        <p role="alert" style={{ color: 'var(--color-deny)', fontSize: '0.85rem', margin: 0 }}>
+          {error}
+        </p>
+      ) : null}
+
+      <div style={{ display: 'flex', gap: '0.6rem' }}>
+        <button type="button" className="btn btn-ghost" data-testid="read-back-back" onClick={onBack}>
+          Back
+        </button>
+        <button type="button" className="btn btn-primary" data-testid="read-back-confirm" onClick={confirm}>
+          Confirm and redirect
         </button>
       </div>
     </section>

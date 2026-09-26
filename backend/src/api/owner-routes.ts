@@ -24,6 +24,10 @@ import { listOwnerRecords, verifyOwnerChainIncremental } from '../store/owner-re
 import { listJobsForOwner, getJob } from '../store/jobs.js';
 import { upsertJobSpec, getJobSpec, listJobSpecs } from '../store/job-specs.js';
 import { elevateIntent } from '../create/elevation.js';
+import { elevateDirection } from '../direction/direction.js';
+import { answerStatus } from '../direction/status.js';
+import { applyGoalPatch, applyRecipient, validateAcceptancePatch, type GoalPatch } from '../direction/goal-schema.js';
+import { insertDirectionDraft, getDirection, confirmDirection } from '../store/directions.js';
 import type { ComputeQueue } from '../gateway/compute-queue.js';
 import { jobSpecSchema } from '../jobs/envelopes.js';
 import { acceptanceRuleSetSchema } from '../jobs/acceptance.js';
@@ -254,6 +258,30 @@ const elevateSchema = z.object({
   role: z.enum(['treasury', 'sentinel', 'executor', 'requester', 'provider', 'evaluator']).optional(),
 });
 
+// Phase-5.5 direction-time elevation input (own limiter, N-1).
+const directSchema = z.object({
+  intent: z.string().min(1).max(2000),
+  answers: z.array(z.string().max(1000)).max(10).optional(),
+  threadId: z.string().max(80).optional(),
+});
+
+// Confirm: only the owner-confirmed goalPatch / acceptancePatch are trusted (the
+// server re-validates them, R-1); the recipient is owner-typed + out-of-band.
+// Other DirectionDraft fields are display-only and ignored for authority.
+const directConfirmSchema = z
+  .object({
+    // Only goalPatch / acceptancePatch are authority-bearing (server re-validated);
+    // the rest of the DirectionDraft is display-only, so ignore any extra fields.
+    edited: z
+      .object({
+        goalPatch: z.record(z.unknown()).optional(),
+        acceptancePatch: z.array(z.unknown()).optional(),
+      })
+      .strip(),
+    recipient: z.string().max(64).optional(),
+  })
+  .strip();
+
 interface OwnerRequest extends Request {
   ownerAddr?: string;
 }
@@ -458,6 +486,31 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     }
     return true;
   }
+
+  // N-1 (Phase-5.5): /direct and /status each get their OWN per-owner sliding
+  // ceiling, mirroring the elevate limiter — separate from the create limit and
+  // from each other (an owner iterating direction drafts or status queries must
+  // never trip the create limiter). In-process (single Render instance).
+  function makeSlidingLimiter(limit: number): (ownerAddr: string) => boolean {
+    const hits = new Map<string, number[]>();
+    return (ownerAddr: string): boolean => {
+      const now = Date.now();
+      const windowMs = 3_600_000;
+      const recent = (hits.get(ownerAddr) ?? []).filter((t) => now - t < windowMs);
+      if (recent.length >= limit) {
+        hits.set(ownerAddr, recent);
+        return false;
+      }
+      recent.push(now);
+      hits.set(ownerAddr, recent);
+      if (hits.size > 1000) {
+        for (const [k, v] of hits) if (v.every((t) => now - t >= windowMs)) hits.delete(k);
+      }
+      return true;
+    };
+  }
+  const directRateOk = makeSlidingLimiter(deps.settings.createRatePerHour);
+  const statusRateOk = makeSlidingLimiter(deps.settings.createRatePerHour);
 
   const balanceCache = new Map<string, { value: bigint; at: number }>();
   async function cachedBalance(addr: string): Promise<bigint> {
@@ -1270,6 +1323,178 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       },
     );
     res.json({ draft });
+  }));
+
+  // ---- Phase-5.5: Conversational Direction (spine) --------------------------
+  // POST /api/agents/:id/direct — direction-time elevation. QUARANTINE (D-2):
+  // WRITES NO AUTHORITY (persists only a `draft` directions row; no goal/policy/
+  // job-spec write). Returns the agent's own read-back for the owner to confirm.
+  router.post('/api/agents/:id/direct', asyncRoute(async (req: OwnerRequest, res) => {
+    const agent = await requireOwnedAgent(req, res);
+    if (!agent) return;
+    if (!directRateOk(req.ownerAddr as string)) {
+      res.status(429).json({ error: 'rate_limited' });
+      return;
+    }
+    const parsed = directSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: { message: 'invalid request body' } });
+      return;
+    }
+    const { intent, answers } = parsed.data;
+    const draft = await elevateDirection(
+      { queue: deps.queue, model: deps.settings.elevationModel },
+      {
+        agentId: agent.id,
+        currentGoal: agent.goal,
+        capabilityLabel: agent.capabilityLabel,
+        intent,
+        ...(answers !== undefined ? { answers } : {}),
+      },
+    );
+    const row = await insertDirectionDraft(deps.pool, {
+      agentId: agent.id,
+      ownerAddr: req.ownerAddr as string,
+      intent,
+      ...(answers !== undefined ? { answers } : {}),
+      draft,
+    });
+    res.json({ direction: { id: row.id, draft } });
+  }));
+
+  // POST /api/agents/:id/direct/:directionId/confirm — the SOLE authority write
+  // for a directive (D-3). Server re-validates the owner-confirmed patch at this
+  // boundary (R-1), computes the EFFECTIVE goal (recipient owner-typed out-of-band),
+  // appends an ordered hash-chained `direction` consent record, and marks the
+  // directive confirmed. The runtime sense_direction step applies it next cycle.
+  router.post('/api/agents/:id/direct/:directionId/confirm', asyncRoute(async (req: OwnerRequest, res) => {
+    const agent = await requireOwnedAgent(req, res);
+    if (!agent) return;
+    const directionId = req.params['directionId'] ?? '';
+    const dir = await getDirection(deps.pool, directionId);
+    if (!dir || dir.agentId !== agent.id) {
+      res.status(404).json({ error: { message: 'not found' } });
+      return;
+    }
+    if (dir.status !== 'draft') {
+      res.status(409).json({ error: 'already_decided' });
+      return;
+    }
+    const parsed = directConfirmSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: { message: 'invalid request body' } });
+      return;
+    }
+    const { edited, recipient } = parsed.data;
+    // R-1 at confirm: only-descriptive, in-union, role-locked.
+    const g1 = applyGoalPatch(agent.goal, edited.goalPatch as GoalPatch | undefined);
+    if (!g1.ok) {
+      res.status(400).json({ error: 'invalid_directive', reason: g1.reason });
+      return;
+    }
+    // Never-guess-money: an address is owner-typed + out-of-band, never in the patch.
+    const g2 = applyRecipient(g1.goal, recipient);
+    if (!g2.ok) {
+      res.status(400).json({ error: 'invalid_recipient', reason: g2.reason });
+      return;
+    }
+    // Optional acceptance tuning (R-1): validate against the AcceptanceRule union
+    // and resolve the target job spec FIRST (pure/read-only), but DEFER the
+    // authority write until AFTER the confirm CAS wins — so a double/racing
+    // confirm that loses the CAS (409) never mutates the job spec (atomicity).
+    let acceptanceWrite:
+      | { ref: string; spec: import('../store/job-specs.js').OwnerJobSpec; rules: import('../jobs/acceptance.js').AcceptanceRule[] }
+      | null = null;
+    if (edited.acceptancePatch !== undefined) {
+      const va = validateAcceptancePatch(edited.acceptancePatch);
+      if (!va.ok) {
+        res.status(400).json({ error: 'invalid_acceptance', reason: va.reason });
+        return;
+      }
+      if (goalRole(agent.goal) !== 'requester') {
+        res.status(400).json({ error: 'acceptance_requires_job_agent' });
+        return;
+      }
+      const ref = (agent.goal as { jobSpecSource?: string }).jobSpecSource ?? '';
+      const spec = await getJobSpec(deps.pool, req.ownerAddr as string, ref);
+      if (!spec) {
+        res.status(400).json({ error: 'job_spec_not_found' });
+        return;
+      }
+      acceptanceWrite = { ref, spec, rules: va.rules };
+    }
+    const confirmed = await confirmDirection(deps.pool, directionId, g2.goal);
+    if (!confirmed) {
+      res.status(409).json({ error: 'already_decided' });
+      return;
+    }
+    // CAS won ⇒ the directive is durably confirmed; only now apply the acceptance
+    // tuning (owner-authored authority), so it is atomic-with-confirm in effect.
+    if (acceptanceWrite) {
+      await upsertJobSpec(deps.pool, req.ownerAddr as string, acceptanceWrite.ref, {
+        ...acceptanceWrite.spec,
+        acceptance: { ...acceptanceWrite.spec.acceptance, rules: acceptanceWrite.rules },
+      });
+    }
+    // The ordered, hash-chained `direction` consent record (00 §7, D-3): original
+    // intent + effective directive, decidedBy owner. Same two-tier proof as spend.
+    const rec = await appendTrace(deps.pool, {
+      agentId: agent.id,
+      kind: 'direction',
+      decision: 'approve',
+      decidedBy: 'owner',
+      originalRequest: { intent: dir.intent } as Json,
+      effectiveRequest: { effectiveGoal: g2.goal as unknown as Json, recipientSet: recipient ? true : false },
+      detail: { directionId, summary: 'owner confirmed a conversational direction' },
+    });
+    deps.hub.emit(agent.id, 'trace', traceEvent(rec));
+    res.json({ ok: true });
+  }));
+
+  // GET /api/agents/:id/status?q=… — read-only conversational status (D-7). WRITES
+  // NOTHING. The answer is quarantined-untrusted plain text (never authority).
+  router.get('/api/agents/:id/status', asyncRoute(async (req: OwnerRequest, res) => {
+    const agent = await requireOwnedAgent(req, res);
+    if (!agent) return;
+    if (!statusRateOk(req.ownerAddr as string)) {
+      res.status(429).json({ error: 'rate_limited' });
+      return;
+    }
+    const qRaw = req.query['q'];
+    const q = (typeof qRaw === 'string' ? qRaw : '').trim().slice(0, 500);
+    if (!q) {
+      res.status(400).json({ error: { message: 'q is required' } });
+      return;
+    }
+    const answer = await answerStatus(
+      { pool: deps.pool, queue: deps.queue, model: deps.settings.elevationModel },
+      { agentId: agent.id, agentName: agent.name, q },
+    );
+    res.json(answer);
+  }));
+
+  // POST /api/agents/:id/wind-down — lifespan dial (D-10): owner marks the agent
+  // done. Stops the loop and emits a completion alert. Revoke stays a separate
+  // explicit owner/guardian action; expiry lapses on its own. Never agent-forced
+  // (this route is owner-authed — the agent has no path to it).
+  router.post('/api/agents/:id/wind-down', asyncRoute(async (req: OwnerRequest, res) => {
+    const agent = await requireOwnedAgent(req, res);
+    if (!agent) return;
+    await deps.runtime.stop(agent.id);
+    const rec = await appendTrace(deps.pool, {
+      agentId: agent.id,
+      kind: 'decision',
+      detail: { summary: `${agent.name} was wound down by the owner (marked done)` },
+    });
+    deps.hub.emit(agent.id, 'trace', traceEvent(rec));
+    await deps.alerts?.emit(agent.ownerAddr, {
+      agentId: agent.id,
+      class: 'info',
+      kind: 'completed',
+      summary: `${agent.name} was wound down (marked done). Its loop is stopped and its on-chain access lapses at expiry; re-arm or restart it to resume.`,
+      refs: {},
+    });
+    res.json({ ok: true });
   }));
 
   router.get('/api/job-specs/:ref', asyncRoute(async (req: OwnerRequest, res) => {

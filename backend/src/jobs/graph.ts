@@ -14,6 +14,8 @@ import type { AgentGoal, AgentRow, RequesterGoal, ProviderGoal, EvaluatorGoal } 
 import { CoordinationError, type DelegationCoordinator } from '../coordination/coordinator.js';
 import type { AlertService } from '../alerts/service.js';
 import { decodeLeashError } from '../chain/errors.js';
+import { makeSenseDirection } from '../runtime/sense-direction.js';
+import { appendMemory } from '../store/agent-memory.js';
 import { formatAsset, shortAddr, inMinutes, sanitizeAgentIntent } from '../util/format.js';
 import type { StorageUploader } from '../audit/batcher.js';
 import type { RuntimeChain } from '../runtime/session-chain.js';
@@ -169,6 +171,8 @@ export function buildJobGraph(deps: JobGraphDeps, ctx: JobAgentContext, checkpoi
         ? deps.providerModel
         : deps.defaultModel;
   const model = ctx.goal.model ?? roleModelDefault;
+  // Phase-5.5: apply an owner-confirmed directive at the cycle boundary (head node).
+  const senseDirection = makeSenseDirection({ pool: deps.pool, hub: deps.hub }, ctx);
 
   // ---- inference through OUR OWN gateway (interception + trace + queue) ----
   async function gatewayReason(body: Json): Promise<string> {
@@ -575,6 +579,9 @@ export function buildJobGraph(deps: JobGraphDeps, ctx: JobAgentContext, checkpoi
       if ('jobId' in o) detail['jobId'] = o.jobId;
       const rec = await appendTrace(deps.pool, { agentId: ctx.agentId, kind, detail });
       deps.hub.emit(ctx.agentId, 'trace', traceEvent(rec));
+      // Phase-5.5 working memory (S23): a salient, QUARANTINED-UNTRUSTED finding
+      // for the conversational-status query. Bounded rolling window; read-only.
+      await appendMemory(deps.pool, { agentId: ctx.agentId, kind: o.type, content: detail as Json });
     }
     await postInboundOutcome(state);
     return {};
@@ -618,6 +625,7 @@ export function buildJobGraph(deps: JobGraphDeps, ctx: JobAgentContext, checkpoi
   }
 
   return new StateGraph(JobState)
+    .addNode('sense_direction', senseDirection)
     .addNode('classify', classify)
     .addNode('originate', originate)
     .addNode('providerWork', providerWork)
@@ -627,7 +635,8 @@ export function buildJobGraph(deps: JobGraphDeps, ctx: JobAgentContext, checkpoi
     .addNode('requestApproval', requestApproval)
     .addNode('noop', noop)
     .addNode('record', record)
-    .addEdge(START, 'classify')
+    .addEdge(START, 'sense_direction')
+    .addEdge('sense_direction', 'classify')
     .addConditionalEdges('classify', (s: State) => s.route, {
       provider: 'providerWork',
       originate: 'originate',
