@@ -1,0 +1,30 @@
+owner (throwaway): 0xfcB225fe6A43e90301892610c52669D83440a450
+backend healthy
+privy SIWE login OK (real access token)
+created treasury agent 3e113cef-2f71-42ee-a06b-261ba67b1335 account 0xC2E59C08F6859E5e1Aa7927108d3Ad62a3f015Ac
+agent started; waiting a cycle (30s interval) so it reasons on real 0G Compute...
+D-6 /direct OK — directionId 954c9272-490b-4863-9573-dd65de62eeb6 | understanding: "Increase the target balance for wallet top-ups."
+never-guess-money OK (no address in draft) + R-2 OK (moneyPower server-computed: can-move-money)
+quarantine OK — goal unchanged by /direct (still 1000000000000000000)
+confirm OK — sole authority write (edited target 2000000000000000000)
+waiting a cycle for sense_direction to apply at the boundary...
+D-6 OK — running goal rerouted to 2000000000000000000 by sense_direction at the cycle boundary
+direction traces on the chain: 2
+D-9 OK — status answer (quarantined): "The AI agent recently stood down because its output wasn't a valid decision for a treasury allowance task. Before that, it successfully applied the owner's dir
+lifespan/D-10 OK — wind-down accepted; completed alert present: true
+
+DEPLOYED DIRECTION DRILL: PASS
+{
+  "ts": "2026-09-26T14:51:12.651Z",
+  "owner": "0xfcB225fe6A43e90301892610c52669D83440a450",
+  "agentId": "3e113cef-2f71-42ee-a06b-261ba67b1335",
+  "directionId": "954c9272-490b-4863-9573-dd65de62eeb6",
+  "neverGuessMoney": true,
+  "moneyPowerServerComputed": "can-move-money",
+  "quarantineNoWriteOnDirect": true,
+  "reroutedTargetWei": "2000000000000000000",
+  "directionTraces": 2,
+  "statusQuarantined": true,
+  "windDownCompletedAlert": true
+}
+DRILL3 EXIT 0
