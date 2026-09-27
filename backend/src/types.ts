@@ -376,6 +376,7 @@ export interface DelegationEvent {
 export type AlertClass = 'decision' | 'info';
 export type AlertKind =
   | 'approval_required' // decision — actionable approve/deny on both channels
+  | 'capability_request' // decision (Stage D L2 JIT) — a novel governed call needs an owner grant; deep-links into the app to sign on-chain
   | 'limit_hit' // decision — NOT approvable (the contract reverts regardless); adjust/dismiss
   | 'revoked' // info
   | 'revoke_failed' // info — actionable steer to owner-wallet fallback
