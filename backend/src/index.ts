@@ -145,6 +145,7 @@ async function main(): Promise<void> {
       jobProviderModel: cfg.JOB_PROVIDER_MODEL,
       jobEvaluatorModel: cfg.JOB_EVALUATOR_MODEL,
       chainConfig: { maxDepth: cfg.CHAIN_MAX_DEPTH, maxEligiblePerHop: cfg.CHAIN_MAX_ELIGIBLE_PER_HOP },
+      jitTtlMs: cfg.JIT_TTL_MS,
     },
   });
 

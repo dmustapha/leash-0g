@@ -18,11 +18,17 @@ import { appendMemory } from '../store/agent-memory.js';
 import { formatG, shortAddr, inMinutes, sanitizeAgentIntent } from '../util/format.js';
 import type { DecodedLeashError } from '../types.js';
 import type { RuntimeChain } from './session-chain.js';
+import { loadGrantState } from './grant-state.js';
+import { buildGovernedCall, SELECTORS } from '../governed-call/index.js';
+import { classifyIntendedCall } from '../gateway/call-gate.js';
+import { raiseCapabilityRequest, type CapabilityDeps } from '../capabilities/service.js';
+import { listGrants } from '../store/capabilities.js';
 import {
   buildReasonRequest,
   completionContent,
   parseDecision,
   type AgentDecision,
+  type CapabilityView,
   type InboundDelegationInput,
   type PolicySnapshot,
 } from './prompt.js';
@@ -46,13 +52,13 @@ import {
  */
 
 export type CycleOutcome =
-  | { type: 'acted'; txHash: string; valueWei: string; approved?: boolean }
+  | { type: 'acted'; txHash: string; valueWei: string; approved?: boolean; callTarget?: string }
   | { type: 'delegated'; delegationId: string }
   | { type: 'stood_down'; reason: string }
   | { type: 'denied'; reason: string }
   | { type: 'failed'; reason: string; decoded?: DecodedLeashError };
 
-type Route = 'act' | 'approval' | 'delegate' | 'stand_down';
+type Route = 'act' | 'approval' | 'delegate' | 'call' | 'stand_down';
 
 const TreasuryState = Annotation.Root({
   /** Set by the manager when this cycle processes an inbound delegation (spec §3b). */
@@ -62,9 +68,15 @@ const TreasuryState = Annotation.Root({
   /** Transfer target this cycle: goal beneficiary, or the inbound request's. */
   effectiveBeneficiary: Annotation<string>,
   policy: Annotation<PolicySnapshot>,
+  /** Stage D (D-10): the governed calls this agent may make this cycle (serializable). */
+  capabilities: Annotation<CapabilityView[]>,
   reasoning: Annotation<string>,
   decision: Annotation<AgentDecision>,
   route: Annotation<Route>,
+  /** Stage D (D-10): the resolved governed-call `executeCall` args for the `call` route. */
+  callTarget: Annotation<string>,
+  callData: Annotation<string>,
+  callValue: Annotation<string>,
   /** Verbatim markFailed reason for a rejected inbound envelope (spec §3b). */
   inboundReject: Annotation<string>,
   approvalId: Annotation<string>,
@@ -83,6 +95,13 @@ export interface TreasuryGraphDeps {
   /** For the approval-card deadline copy (falls back to a generic line when absent). */
   approvalTimeoutMs?: number | undefined;
   chain: RuntimeChain;
+  /**
+   * Stage D (D-10): the capability service for the L2 JIT rail. When a governed
+   * `call` intent is NOVEL the decide node raises a quarantined capability request
+   * here instead of a doomed on-chain submit (P3C-6). Absent in coordination-free
+   * / alert-free test setups — a novel call then simply stands down, traced.
+   */
+  capabilities?: CapabilityDeps | undefined;
   gatewayUrl: string;
   defaultModel: string;
   /**
@@ -207,6 +226,26 @@ export function buildTreasuryGraph(
   // Phase-5.5: apply an owner-confirmed directive at the cycle boundary (head node).
   const senseDirection = makeSenseDirection({ pool: deps.pool, hub: deps.hub }, ctx);
 
+  /**
+   * Stage D (D-10): the server-authored capability envelope for the prompt — the
+   * governed calls this agent may make. Sourced from the read-model (DISPLAY; the
+   * on-chain account stays authoritative — the decide node re-derives every
+   * authority arg from a LIVE grant-state read). Only the treasury role acts on
+   * governed calls autonomously (sentinel delegates, executor is inbound-driven).
+   */
+  async function senseCapabilities(mode: CycleMode): Promise<CapabilityView[]> {
+    const role = ctx.goal.type ?? 'treasury';
+    if (role !== 'treasury') return [];
+    if (mode.mode !== 'autonomous' && mode.mode !== 'inbound_chain') return [];
+    const grants = await listGrants(deps.pool, ctx.agentId);
+    return grants.map((g) => ({
+      target: g.target,
+      selector: g.selector,
+      signature: SELECTORS.get(g.selector.toLowerCase())?.signature ?? null,
+      perCallCap: g.perCallCap,
+    }));
+  }
+
   async function sense(state: State): Promise<Partial<State>> {
     const mode = classifyCycle(ctx.goal, state.inboundDelegation);
     // No transfer intent this cycle (idle executor / rejected inbound): skip
@@ -217,6 +256,7 @@ export function buildTreasuryGraph(
         beneficiaryBalanceWei: '0',
         accountBalanceWei: '0',
         effectiveBeneficiary: '',
+        capabilities: [],
         policy: {
           perTransferCapWei: '0',
           windowCapWei: '0',
@@ -232,10 +272,11 @@ export function buildTreasuryGraph(
     }
     const autoGoal = autonomousGoalOf(mode);
     const beneficiary = mode.mode === 'inbound_transfer' ? mode.request.beneficiary : (autoGoal?.beneficiary ?? '');
-    const [beneficiaryBalance, account, policy] = await Promise.all([
+    const [beneficiaryBalance, account, policy, capabilities] = await Promise.all([
       deps.chain.getBalance(beneficiary),
       deps.chain.getBalance(ctx.accountAddr),
       deps.chain.getPolicyView(ctx.accountAddr, [beneficiary]),
+      senseCapabilities(mode),
     ]);
     // P3C-6(i): window observability with the contract's OWN lazy-rollover
     // math (LeashAccount.execute) — past the boundary the window has
@@ -249,6 +290,7 @@ export function buildTreasuryGraph(
       beneficiaryBalanceWei: beneficiaryBalance.toString(),
       accountBalanceWei: account.toString(),
       effectiveBeneficiary: beneficiary,
+      capabilities,
       policy: {
         perTransferCapWei: policy.perTransferCap.toString(),
         windowCapWei: policy.windowCap.toString(),
@@ -281,6 +323,8 @@ export function buildTreasuryGraph(
       accountBalanceWei: state.accountBalanceWei,
       policy: state.policy,
       nowSec: Math.floor(Date.now() / 1000),
+      // Stage D (D-10): the governed-call envelope the model may act on this cycle.
+      ...(state.capabilities && state.capabilities.length > 0 ? { capabilities: state.capabilities } : {}),
       // Inbound delegation rides the observation as LABELED UNTRUSTED input
       // (spec §3b) — the model re-reasons; the decide overlay re-validates.
       ...(state.inboundDelegation ? { inboundDelegation: state.inboundDelegation } : {}),
@@ -303,6 +347,10 @@ export function buildTreasuryGraph(
 
   async function decide(state: State): Promise<Partial<State>> {
     const verdict = evaluateDecision(state, ctx);
+    // Stage D (D-10): a governed call is classified against a LIVE grant-state
+    // read (never native-transfer window damping — its caps live on-chain +
+    // in classify). Resolve it BEFORE the transfer-damping block.
+    if (verdict.route === 'call') return decideCall(verdict.decision);
     // P3C-6(iii): boundary damping. Refresh clear conditions first (window
     // reset / policy change / re-arm — clearing resolves the limit_hit
     // alert and re-enables normal flow), then short-circuit outcomes that
@@ -453,6 +501,75 @@ export function buildTreasuryGraph(
     return { outcome: await transfer(state, state.effectiveBeneficiary, state.decision.amountWei) };
   }
 
+  /**
+   * Stage D (D-10): resolve a governed `call` intent. The model chose only a
+   * granted (target, selector) + amount; EVERY authority arg (spender/recipient/
+   * from) is pinned from a LIVE on-chain grant-state read (never-guess-money), then
+   * the built calldata is re-classified against that same envelope:
+   *   L1 (in-envelope)  → route 'call' (silent on-chain submit via executeCall)
+   *   L2 (novel)        → raise a quarantined JIT request (NOT a doomed submit, P3C-6)
+   *   forbidden / unbuildable → stand down, traced (never a fabricated call)
+   * The on-chain V4 wall is the sole enforcement guarantee regardless.
+   */
+  async function decideCall(decision: AgentDecision): Promise<Partial<State>> {
+    const self = ctx.accountAddr;
+    const standDownResult = (reason: string): Partial<State> => ({
+      decision: { action: 'stand_down', amountWei: '0', reason },
+      route: 'stand_down',
+    });
+    const grant = await loadGrantState(deps.pool, deps.chain, ctx.agentId, self);
+    const built = buildGovernedCall(
+      { target: decision.target ?? '', selector: decision.selector ?? '', amountWei: decision.amountWei },
+      grant,
+      self,
+    );
+    if (!built.ok) {
+      // An authority arg couldn't be pinned from grant state (no grant, ambiguous
+      // spender, allowlist recipient, free-route arg, bad amount, unknown selector).
+      return standDownResult(`governed call not authority-determined (${built.reason})`);
+    }
+    const gate = classifyIntendedCall(built.target, built.value, built.data, grant, self);
+    if (gate.classification.lane === 'l1') {
+      return {
+        decision,
+        route: 'call',
+        callTarget: built.target,
+        callData: built.data,
+        callValue: built.value.toString(),
+      };
+    }
+    if (gate.classification.lane === 'l2') {
+      // Novel → the L2 JIT rail (owner grants on-chain before it can ever run).
+      if (deps.capabilities) {
+        await raiseCapabilityRequest(deps.capabilities, ctx.agentRow, gate);
+        return standDownResult('novel governed call — raised a capability request for owner approval');
+      }
+      return standDownResult('novel governed call — no capability rail configured, standing down');
+    }
+    return standDownResult(`governed call forbidden (${gate.classification.reason})`);
+  }
+
+  async function callAct(state: State): Promise<Partial<State>> {
+    try {
+      const { txHash } = await deps.chain.executeCall({
+        sessionPrivateKey: ctx.sessionPrivateKey,
+        accountAddr: ctx.accountAddr,
+        target: state.callTarget,
+        valueWei: BigInt(state.callValue),
+        data: state.callData,
+      });
+      return { outcome: { type: 'acted', txHash, valueWei: state.callValue, callTarget: state.callTarget } };
+    } catch (err) {
+      // The on-chain wall refused (a boundary hit) — record, never crash; never
+      // recorded as a completed action (assertReceiptSuccess throws on revert).
+      const decoded = decodeLeashError(err);
+      const reason = decoded
+        ? `governed call refused: ${decoded.plain}`
+        : `governed call failed: ${err instanceof Error ? err.message : String(err)}`;
+      return { outcome: { type: 'failed', reason, ...(decoded ? { decoded } : {}) } };
+    }
+  }
+
   async function requestApproval(state: State): Promise<Partial<State>> {
     // Pauses here; the manager persists the consent record BEFORE resuming.
     const resume = interrupt<Json, ApprovalDecision>({
@@ -514,10 +631,12 @@ export function buildTreasuryGraph(
               kind: 'action',
               ...(state.approvalId ? { approvalId: state.approvalId } : {}),
               detail: {
-                to: state.effectiveBeneficiary,
+                to: o.callTarget ?? state.effectiveBeneficiary,
                 valueWei: o.valueWei,
                 txHash: o.txHash,
-                summary: `sent ${o.valueWei} wei to ${state.effectiveBeneficiary}${o.approved ? ' (owner-approved)' : ''}`,
+                summary: o.callTarget
+                  ? `governed call to ${o.callTarget}${o.valueWei !== '0' ? ` (${o.valueWei} wei)` : ''}`
+                  : `sent ${o.valueWei} wei to ${state.effectiveBeneficiary}${o.approved ? ' (owner-approved)' : ''}`,
               },
             })
           : await appendTrace(deps.pool, {
@@ -541,7 +660,12 @@ export function buildTreasuryGraph(
         agentId: ctx.agentId,
         kind: o.type,
         content: {
-          summary: o.type === 'acted' ? `sent ${o.valueWei} wei to ${state.effectiveBeneficiary}` : outcomeSummary(o),
+          summary:
+            o.type === 'acted'
+              ? o.callTarget
+                ? `governed call to ${o.callTarget}`
+                : `sent ${o.valueWei} wei to ${state.effectiveBeneficiary}`
+              : outcomeSummary(o),
           reasoning: state.reasoning.slice(0, 2000),
         },
       });
@@ -698,6 +822,7 @@ export function buildTreasuryGraph(
     .addNode('reason', reason)
     .addNode('decide', decide)
     .addNode('act', act)
+    .addNode('callAct', callAct)
     .addNode('requestApproval', requestApproval)
     .addNode('delegate', delegate)
     .addNode('standDown', standDown)
@@ -708,11 +833,13 @@ export function buildTreasuryGraph(
     .addEdge('reason', 'decide')
     .addConditionalEdges('decide', (state: State) => state.route, {
       act: 'act',
+      call: 'callAct',
       approval: 'requestApproval',
       delegate: 'delegate',
       stand_down: 'standDown',
     })
     .addEdge('act', 'record')
+    .addEdge('callAct', 'record')
     .addEdge('requestApproval', 'record')
     .addEdge('delegate', 'record')
     .addEdge('standDown', 'record')
@@ -753,6 +880,17 @@ function evaluateDecision(
   if (!parsed) return stand('model output was not a valid decision');
   if (parsed.action === 'stand_down') {
     return { decision: parsed, route: 'stand_down' };
+  }
+
+  // Stage D (D-10): a governed call. Deterministic pre-checks here; the async
+  // grant-state classify + never-guess-money build happens in the decide node.
+  if (parsed.action === 'call') {
+    const role = ctx.goal.type ?? 'treasury';
+    if (role !== 'treasury') return stand('governed calls are only for the treasury role');
+    if (!parsed.target || !parsed.selector) return stand('call decision missing target/selector');
+    if (state.policy.revoked) return stand('account is revoked');
+    if (state.policy.expiresAt <= Math.floor(Date.now() / 1000)) return stand('session expired');
+    return { decision: parsed, route: 'call' };
   }
 
   const amount = BigInt(parsed.amountWei);

@@ -28,6 +28,7 @@ import {
 import type { Json } from '../crypto/canonical.js';
 import type { RuntimeChain } from './session-chain.js';
 import { buildTreasuryGraph, type TreasuryGraph } from './treasury-graph.js';
+import type { CapabilityDeps } from '../capabilities/service.js';
 import { buildJobGraph, type JobGraph } from '../jobs/graph.js';
 import type { StorageUploader } from '../audit/batcher.js';
 import type { InboundDelegationInput } from './prompt.js';
@@ -44,6 +45,8 @@ export interface RuntimeSettings {
   jobEvaluatorModel?: string | undefined;
   /** Phase 5.6 chaining bounds (depth cap + eligible-set cap; defaults if unset). */
   chainConfig?: ChainConfig | undefined;
+  /** Stage D (D-8): how long a JIT capability card stays actionable (ms; default 10 min). */
+  jitTtlMs?: number | undefined;
   fetchFn?: typeof fetch;
 }
 
@@ -110,6 +113,18 @@ export class LeashRuntimeManager implements RuntimeManager {
     this.coordinator = coordinator;
   }
 
+  /** Stage D: the capability service deps for the JIT rail (undefined without alerts). */
+  private capabilityDeps(): CapabilityDeps | undefined {
+    if (!this.deps.alerts) return undefined;
+    return {
+      pool: this.deps.pool,
+      hub: this.deps.hub,
+      broker: this.deps.broker,
+      alerts: this.deps.alerts,
+      jitTtlMs: this.deps.settings.jitTtlMs ?? 600_000,
+    };
+  }
+
   /** A job role cannot run without the 0G Storage uploader (deliverable/PoA sink). */
   private requireUploader(): StorageUploader {
     if (!this.deps.uploader) throw new Error('job role requires a StorageUploader (uploader dep missing)');
@@ -164,6 +179,11 @@ export class LeashRuntimeManager implements RuntimeManager {
             alerts: this.deps.alerts,
             boundaries: this.boundaries,
             approvalTimeoutMs: this.deps.settings.approvalTimeoutMs,
+            // Stage D (D-8/D-10): the L2 JIT rail for a novel governed call. Only
+            // wired when the alert engine is present (raiseCapabilityRequest needs
+            // it); a coordination-free/alert-free test setup then stands down on
+            // novelty instead.
+            ...(this.capabilityDeps() ? { capabilities: this.capabilityDeps() } : {}),
             ...(this.deps.settings.fetchFn ? { fetchFn: this.deps.settings.fetchFn } : {}),
           },
           ctx,
