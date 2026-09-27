@@ -1,9 +1,26 @@
-import { createPublicClient, createWalletClient, http, type Hex, type PublicClient } from 'viem';
+import { createPublicClient, createWalletClient, encodePacked, http, keccak256, type Hex, type PublicClient } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { leashAccountAbi, leashAccountV4Abi, erc20MetaAbi } from '../chain/abis.js';
 import { readPolicyView, zeroGChain } from '../chain/ops.js';
 import type { PolicyView } from '../types.js';
 import { waitReceipt } from '../chain/wait-receipt.js';
+import type { CallRule, GrantState } from '../governed-call/index.js';
+
+/**
+ * Stage D (D-10): the candidate set the runtime enumerates from the read-model to
+ * live-read the AUTHORITATIVE on-chain grant state. The read-model tells us WHICH
+ * (target,selector) + spenders + tokens to probe; the on-chain account tells us
+ * what is ACTUALLY granted (allowed rules + spenders + per-token budgets). The
+ * on-chain account is the sole authority — a read-model row that never applied
+ * on-chain yields no rule here (so a not-yet-applied grant classifies novel → JIT,
+ * never a doomed L1 submit).
+ */
+export interface GrantStateCandidates {
+  accountAddr: string;
+  rules: { target: string; selector: string; spenders: string[] }[];
+  /** distinct token contracts to probe for a per-token cumulative budget (D-3). */
+  tokens: string[];
+}
 
 /**
  * The chain surface the agent runtime needs — reads plus ONE write:
@@ -52,6 +69,14 @@ export interface RuntimeChain {
    * assuming 0G. Read once per job at originate and stored on the job row.
    */
   getErc20Meta(token: string): Promise<{ symbol: string; decimals: number }>;
+  /**
+   * Stage D (D-10): live-read the on-chain governed-call envelope for the given
+   * candidates and build the authoritative `GrantState` the off-chain classify +
+   * call-builder consult. The read-model has no per-token budget, so budgets are
+   * ALWAYS read live here (never trusted from the mirror). Only ACTIVE on-chain
+   * rules are returned; the account is the source of truth (live-chain-read).
+   */
+  readCallGrantState(candidates: GrantStateCandidates): Promise<GrantState>;
 }
 
 export class SessionChain implements RuntimeChain {
@@ -138,6 +163,63 @@ export class SessionChain implements RuntimeChain {
     const receipt = await waitReceipt(this.publicClient, txHash);
     assertReceiptSuccess(receipt.status, txHash);
     return { txHash };
+  }
+
+  async readCallGrantState(candidates: GrantStateCandidates): Promise<GrantState> {
+    const account = candidates.accountAddr as Hex;
+    const rules = new Map<string, CallRule>();
+    const budgets = new Map<string, string>();
+
+    await Promise.all([
+      ...candidates.rules.map(async (c) => {
+        const target = c.target.toLowerCase();
+        const selector = c.selector.toLowerCase();
+        const ruleKey = keccak256(encodePacked(['address', 'bytes4'], [target as Hex, selector as Hex]));
+        const r = (await this.publicClient.readContract({
+          address: account,
+          abi: leashAccountV4Abi,
+          functionName: 'callRules',
+          args: [ruleKey],
+        }));
+        const [allowed, recipientMode, perCallCap, windowCapCall] = r;
+        if (!allowed) return; // not active on-chain → no rule (classifies novel → JIT)
+        // Which of the candidate spenders are ACTUALLY allowlisted on-chain.
+        const spenderSet: string[] = [];
+        await Promise.all(
+          [...new Set(c.spenders.map((s) => s.toLowerCase()))].map(async (spender) => {
+            const ok = (await this.publicClient.readContract({
+              address: account,
+              abi: leashAccountV4Abi,
+              functionName: 'callRuleSpender',
+              args: [ruleKey, spender as Hex],
+            }));
+            if (ok) spenderSet.push(spender);
+          }),
+        );
+        rules.set(`${target}:${selector}`, {
+          target,
+          selector,
+          recipientMode: recipientMode === 1 ? 'allowlist' : 'self',
+          spenderSet,
+          perCallCap: perCallCap.toString(),
+          windowCapCall: windowCapCall.toString(),
+        });
+      }),
+      ...[...new Set(candidates.tokens.map((t) => t.toLowerCase()))].map(async (token) => {
+        const b = (await this.publicClient.readContract({
+          address: account,
+          abi: leashAccountV4Abi,
+          functionName: 'spendBudget',
+          args: [token as Hex],
+        }));
+        if (b[0]) budgets.set(token, b[1].toString()); // set → windowCap
+      }),
+    ]);
+
+    // The recipient allowlist is not enumerable from the read-model; v1 pins
+    // recipients to self (call-builder refuses allowlist-mode), so an empty set
+    // is correct + fail-safe (an allowlist-mode recipient classifies novel → JIT).
+    return { rules, budgets, allowlist: new Set<string>() };
   }
 
   async executeCall(input: {

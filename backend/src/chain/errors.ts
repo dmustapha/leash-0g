@@ -1,5 +1,5 @@
 import { BaseError, ContractFunctionRevertedError, decodeErrorResult, toFunctionSelector } from 'viem';
-import { leashAccountAbi } from './abis.js';
+import { leashAccountAbi, leashAccountV4Abi } from './abis.js';
 import type { DecodedLeashError } from '../types.js';
 import type { Json } from '../crypto/canonical.js';
 
@@ -7,12 +7,17 @@ import type { Json } from '../crypto/canonical.js';
  * P3C-6(ii): decode LeashAccount custom errors into {errorName, args, plain}.
  * The plain string is the SHARED plain-language copy (00 §2c) — the web app
  * ships the same map (web/lib/leash-errors.ts) so cockpit and inbox never
- * show a raw selector.
+ * show a raw selector. Covers the v1/v3 account AND the Stage-D V4 governed-call
+ * wall (D-10/D-13) so a governed-call revert also surfaces plain language.
  */
 
-const errorAbi = leashAccountAbi.filter((item) => item.type === 'error');
+const v1Errors = leashAccountAbi.filter((item) => item.type === 'error');
+const v4Errors = leashAccountV4Abi.filter((item) => item.type === 'error');
+// Merge, deduping by name (V4 adds only Stage-D-specific errors; no name clash).
+const v1Names = new Set<string>(v1Errors.map((e) => e.name));
+const errorAbi = [...v1Errors, ...v4Errors.filter((e) => !v1Names.has(e.name))];
 
-/** All 17 error names — pinned by test against the contract source. */
+/** All error names (v1/v3 + Stage-D V4) — pinned by test against the contract source. */
 export const LEASH_ERROR_NAMES = errorAbi.map((e) => e.name);
 
 export function plainLeashError(errorName: string, args: Json): string {
@@ -62,6 +67,37 @@ export function plainLeashError(errorName: string, args: Json): string {
       return `That would go over the token spending-window cap${caps(a)} — the window has to reset (or the owner raise it) first.`;
     case 'TokenTransferFailed':
       return 'The token transfer itself failed (the token rejected it or returned false).';
+    // Stage-D V4 governed-call wall (D-10/D-13).
+    case 'TargetNotAllowlisted':
+      return `That contract is not on the agent’s allowlist${typeof a[0] === 'string' ? ` (${String(a[0])})` : ''} — grant the capability first.`;
+    case 'SelectorNotAllowlisted':
+      return 'That function is not granted on this contract — grant the capability first.';
+    case 'SelfCallForbidden':
+      return 'The account can never call itself — that action is refused.';
+    case 'InfiniteApprovalForbidden':
+      return 'Unlimited (infinite) approvals are never allowed — approve a specific amount instead.';
+    case 'BlanketApprovalForbidden':
+      return 'Blanket “approve-for-all” is never allowed on this account.';
+    case 'RecipientNotSelf':
+      return `That call would send funds to another address${typeof a[0] === 'string' ? ` (${String(a[0])})` : ''} — this capability only lets the agent act for itself.`;
+    case 'SpenderNotAllowlisted':
+      return `That spender is not on the grant${typeof a[0] === 'string' ? ` (${String(a[0])})` : ''} — approve it first.`;
+    case 'OverPerCallCap':
+      return `That call is over its per-call cap${caps(a)} — the account refuses it no matter who asks.`;
+    case 'OverCumulativeSpend':
+      return `That would go over the cumulative spending budget${caps(a)} — the window has to reset (or the owner raise it) first.`;
+    case 'OverCallWindowCap':
+      return `That would go over this call’s spending-window cap${caps(a)} — the window has to reset (or the owner raise it) first.`;
+    case 'BudgetNotSet':
+      return 'No spending budget is set for that token — the owner has to set one before the agent can spend it.';
+    case 'DecodeMismatch':
+      return 'The call arguments did not match the expected safe shape — the account refuses to guess.';
+    case 'CodehashMismatch':
+      return 'The target contract’s code changed from what was pinned — the account refuses to call it.';
+    case 'OneShotExpired':
+      return 'That one-time approval has expired — ask the owner to approve it again.';
+    case 'EmptyCodeTarget':
+      return 'That target has no contract code — the account refuses to call an empty address.';
     default:
       return 'The account contract refused this action.';
   }

@@ -9,6 +9,7 @@ export * from './types.js';
 export { decodeCall } from './decoder.js';
 export { classify, ruleKey } from './classify.js';
 export { computeCallHash } from './call-hash.js';
+export { buildGovernedCall, type GovernedCallIntent, type BuildGovernedCallResult } from './call-builder.js';
 export {
   expandPreset,
   getPresetDef,

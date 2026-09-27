@@ -34,6 +34,25 @@ export const LEASH_ERROR_COPY = {
   OverWindowCapToken:
     'That would go over the token spending-window cap — the window has to reset (or the owner raise it) first.',
   TokenTransferFailed: 'The token transfer itself failed (the token rejected it or returned false).',
+  // Stage-D V4 governed-call wall (D-10/D-13) — the no-args copy; amount/cap
+  // variants are composed backend-side into the trace.
+  TargetNotAllowlisted: 'That contract is not on the agent’s allowlist — grant the capability first.',
+  SelectorNotAllowlisted: 'That function is not granted on this contract — grant the capability first.',
+  SelfCallForbidden: 'The account can never call itself — that action is refused.',
+  InfiniteApprovalForbidden: 'Unlimited (infinite) approvals are never allowed — approve a specific amount instead.',
+  BlanketApprovalForbidden: 'Blanket “approve-for-all” is never allowed on this account.',
+  RecipientNotSelf: 'That call would send funds to another address — this capability only lets the agent act for itself.',
+  SpenderNotAllowlisted: 'That spender is not on the grant — approve it first.',
+  OverPerCallCap: 'That call is over its per-call cap — the account refuses it no matter who asks.',
+  OverCumulativeSpend:
+    'That would go over the cumulative spending budget — the window has to reset (or the owner raise it) first.',
+  OverCallWindowCap:
+    'That would go over this call’s spending-window cap — the window has to reset (or the owner raise it) first.',
+  BudgetNotSet: 'No spending budget is set for that token — the owner has to set one before the agent can spend it.',
+  DecodeMismatch: 'The call arguments did not match the expected safe shape — the account refuses to guess.',
+  CodehashMismatch: 'The target contract’s code changed from what was pinned — the account refuses to call it.',
+  OneShotExpired: 'That one-time approval has expired — ask the owner to approve it again.',
+  EmptyCodeTarget: 'That target has no contract code — the account refuses to call an empty address.',
 } as const satisfies Record<string, string>;
 
 export type LeashErrorName = keyof typeof LEASH_ERROR_COPY;

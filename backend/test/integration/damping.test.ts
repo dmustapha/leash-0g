@@ -12,6 +12,7 @@ import { listAlerts, getAlert } from '../../src/alerts/store.js';
 import { LeashRuntimeManager } from '../../src/runtime/manager.js';
 import { leashAccountAbi } from '../../src/chain/abis.js';
 import type { RuntimeChain } from '../../src/runtime/session-chain.js';
+import type { GrantState } from '../../src/governed-call/index.js';
 import type { PolicyView } from '../../src/types.js';
 
 /**
@@ -85,6 +86,9 @@ class FakeRuntimeChain implements RuntimeChain {
   }
   async getErc20Meta(): Promise<{ symbol: string; decimals: number }> {
     return { symbol: '0G', decimals: 18 };
+  }
+  async readCallGrantState(): Promise<GrantState> {
+    return { rules: new Map(), budgets: new Map(), allowlist: new Set() };
   }
 }
 

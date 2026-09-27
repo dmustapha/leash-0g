@@ -17,6 +17,7 @@ import { PrivateKey } from 'eciesjs';
 import { privateKeyToAccount } from 'viem/accounts';
 import type { Hex } from 'viem';
 import type { RuntimeChain } from '../../src/runtime/session-chain.js';
+import type { GrantState } from '../../src/governed-call/index.js';
 import type { AgentGoal, PolicyView } from '../../src/types.js';
 import type { StorageUploader } from '../../src/audit/batcher.js';
 
@@ -102,6 +103,9 @@ class FakeChain implements RuntimeChain {
   }
   async getErc20Meta(): Promise<{ symbol: string; decimals: number }> {
     return { symbol: 'TUSD', decimals: 6 };
+  }
+  async readCallGrantState(): Promise<GrantState> {
+    return { rules: new Map(), budgets: new Map(), allowlist: new Set() };
   }
 }
 

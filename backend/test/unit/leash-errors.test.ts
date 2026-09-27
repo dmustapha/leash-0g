@@ -1,17 +1,19 @@
 import { describe, it, expect } from 'vitest';
 import { encodeErrorResult } from 'viem';
-import { leashAccountAbi } from '../../src/chain/abis.js';
+import { leashAccountAbi, leashAccountV4Abi } from '../../src/chain/abis.js';
 import { decodeLeashError, LEASH_ERROR_NAMES, plainLeashError } from '../../src/chain/errors.js';
 import { BoundaryRegistry, policyFingerprint } from '../../src/runtime/boundary.js';
 import type { PolicySnapshot } from '../../src/runtime/prompt.js';
 
 /**
- * P3C-6(ii): decode ALL 17 LeashAccount errors from REAL revert-data fixtures
- * (spec §8 contracts row) + the plain-language copy map. Plus the (iii)
- * boundary clear-condition unit coverage.
+ * P3C-6(ii): decode ALL LeashAccount errors (v1/v3 + Stage-D V4 governed-call
+ * wall) from REAL revert-data fixtures (spec §8 contracts row) + the
+ * plain-language copy map. Plus the (iii) boundary clear-condition unit coverage.
  */
 
-const errorAbi = leashAccountAbi.filter((i) => i.type === 'error');
+const v1ErrorAbi = leashAccountAbi.filter((i) => i.type === 'error');
+const v1Names = new Set<string>(v1ErrorAbi.map((e) => e.name));
+const errorAbi = [...v1ErrorAbi, ...leashAccountV4Abi.filter((i) => i.type === 'error' && !v1Names.has(i.name))];
 
 // (name, args) fixture per error — args typed per the contract signatures.
 const FIXTURES: Array<{ name: string; args: unknown[] }> = [
@@ -38,11 +40,27 @@ const FIXTURES: Array<{ name: string; args: unknown[] }> = [
   { name: 'OverPerTransferCapToken', args: [101_000_000n, 100_000_000n] },
   { name: 'OverWindowCapToken', args: [300_000_000n, 250_000_000n] },
   { name: 'TokenTransferFailed', args: [] },
+  // Stage-D V4 governed-call wall errors (D-10/D-13).
+  { name: 'TargetNotAllowlisted', args: ['0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1'] },
+  { name: 'SelectorNotAllowlisted', args: ['0x095ea7b3'] },
+  { name: 'SelfCallForbidden', args: [] },
+  { name: 'InfiniteApprovalForbidden', args: [] },
+  { name: 'BlanketApprovalForbidden', args: [] },
+  { name: 'RecipientNotSelf', args: ['0xe5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5'] },
+  { name: 'SpenderNotAllowlisted', args: ['0xb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2'] },
+  { name: 'OverPerCallCap', args: [2000n, 1000n] },
+  { name: 'OverCumulativeSpend', args: [6000n, 5000n] },
+  { name: 'OverCallWindowCap', args: [6000n, 5000n] },
+  { name: 'BudgetNotSet', args: ['0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1'] },
+  { name: 'DecodeMismatch', args: [] },
+  { name: 'CodehashMismatch', args: [] },
+  { name: 'OneShotExpired', args: [] },
+  { name: 'EmptyCodeTarget', args: ['0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1'] },
 ];
 
-describe('P3C-6(ii) — decodeLeashError over all 22 errors', () => {
-  it('the fixture list covers exactly the contract error set (pin: 22 = 17 native + 5 token)', () => {
-    expect(LEASH_ERROR_NAMES).toHaveLength(22);
+describe('P3C-6(ii) — decodeLeashError over all 37 errors', () => {
+  it('the fixture list covers exactly the contract error set (pin: 37 = 22 v1/v3 + 15 Stage-D V4)', () => {
+    expect(LEASH_ERROR_NAMES).toHaveLength(37);
     expect([...FIXTURES.map((f) => f.name)].sort()).toEqual([...LEASH_ERROR_NAMES].sort());
   });
 

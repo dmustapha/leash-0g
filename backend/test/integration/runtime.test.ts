@@ -11,6 +11,7 @@ import { listTraces, verifyAgentChain } from '../../src/trace/trace-store.js';
 import { applyRevokeFanout } from '../../src/agents/revoke-fanout.js';
 import { LeashRuntimeManager } from '../../src/runtime/manager.js';
 import type { RuntimeChain } from '../../src/runtime/session-chain.js';
+import type { GrantState } from '../../src/governed-call/index.js';
 import type { PolicyView, TraceRecord } from '../../src/types.js';
 
 const OWNER = '0x' + '5a'.repeat(20);
@@ -79,6 +80,10 @@ class FakeRuntimeChain implements RuntimeChain {
   }
   async getErc20Meta(): Promise<{ symbol: string; decimals: number }> {
     return { symbol: '0G', decimals: 18 };
+  }
+  public grantState: GrantState = { rules: new Map(), budgets: new Map(), allowlist: new Set() };
+  async readCallGrantState(): Promise<GrantState> {
+    return this.grantState;
   }
 }
 
