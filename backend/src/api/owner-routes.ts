@@ -27,7 +27,7 @@ import { elevateIntent } from '../create/elevation.js';
 import { elevateDirection } from '../direction/direction.js';
 import { answerStatus } from '../direction/status.js';
 import { applyGoalPatch, applyRecipient, validateAcceptancePatch, type GoalPatch } from '../direction/goal-schema.js';
-import { insertDirectionDraft, getDirection, confirmDirection, pruneStaleDraftDirections } from '../store/directions.js';
+import { insertDirectionDraft, getDirection, confirmDirection } from '../store/directions.js';
 import { checkGlobalLlmRate } from '../store/llm-rate.js';
 import type { ComputeQueue } from '../gateway/compute-queue.js';
 import { jobSpecSchema } from '../jobs/envelopes.js';
@@ -47,9 +47,13 @@ import {
   setLinkMode,
   setLinkStatus,
   listDelegations,
+  listChainHopDelegations,
   DuplicateLinkError,
 } from '../coordination/store.js';
 import type { DelegationCoordinator } from '../coordination/coordinator.js';
+import { validateChainPlan } from '../coordination/chain.js';
+import { insertPlannedChain, getChain, listChainsByOwner } from '../store/chains.js';
+import type { ChainStep } from '../types.js';
 import type { TelegramBot } from '../telegram/bot.js';
 import type { DigestService } from '../digest/service.js';
 import type { AgentRow, AuditBatch, Link } from '../types.js';
@@ -280,6 +284,10 @@ const directConfirmSchema = z
       })
       .strip(),
     recipient: z.string().max(64).optional(),
+    // Phase 5.6 (D-1): an optional owner-authored chain plan riding the SAME
+    // confirm. Deep-validated by validateChainPlan (ownership + links + caps +
+    // cycle) — here we only bound the outer shape (raw hops stay opaque).
+    chainPlan: z.array(z.unknown()).max(16).optional(),
   })
   .strip();
 
@@ -512,6 +520,9 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
   }
   const directRateOk = makeSlidingLimiter(deps.settings.createRatePerHour);
   const statusRateOk = makeSlidingLimiter(deps.settings.createRatePerHour);
+  // Phase 5.6 (N-1): the chain read-model GETs get their OWN per-owner ceiling
+  // (read-only, no LLM — a generous but bounded cap).
+  const chainsRateOk = makeSlidingLimiter(deps.settings.createRatePerHour);
 
   // H-01 (round-2 red-team): the per-owner limiters above are bypassable by
   // rotating fresh wallet addresses (each new owner gets a fresh bucket), which
@@ -1370,9 +1381,9 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       ...(answers !== undefined ? { answers } : {}),
       draft,
     });
-    // M-01: opportunistically bound the table — drop this owner's abandoned drafts
-    // older than 24h (never-confirmed read-back threads). Best-effort, non-blocking.
-    void pruneStaleDraftDirections(deps.pool, req.ownerAddr as string, 24 * 3600).catch(() => undefined);
+    // C2 (Phase 5.6): abandoned-draft pruning moved OFF this hot path to a
+    // periodic sweep (index.ts, mirroring the Phase-2 delegation sweeper) — the
+    // 5.5 review flagged prune-on-every-call as a NIT.
     res.json({ direction: { id: row.id, draft } });
   }));
 
@@ -1437,6 +1448,20 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       }
       acceptanceWrite = { ref, spec, rules: va.rules };
     }
+    // Phase 5.6 (D-1): validate the optional owner-authored chain plan BEFORE
+    // the authority write — an invalid/cross-owner/unlinked/cyclic plan is a
+    // visible 400, never silently dropped, and no chain is armed. Pure/read-only.
+    const chainPlan = parsed.data.chainPlan;
+    if (chainPlan !== undefined) {
+      const v = await validateChainPlan(deps.pool, req.ownerAddr as string, agent.id, chainPlan, {
+        maxDepth: deps.settings.chainMaxDepth,
+        maxEligiblePerHop: deps.settings.chainMaxEligiblePerHop,
+      });
+      if (!v.ok) {
+        res.status(400).json({ error: v.error, reason: v.reason });
+        return;
+      }
+    }
     const confirmed = await confirmDirection(deps.pool, directionId, g2.goal);
     if (!confirmed) {
       res.status(409).json({ error: 'already_decided' });
@@ -1462,7 +1487,50 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       detail: { directionId, summary: 'owner confirmed a conversational direction' },
     });
     deps.hub.emit(agent.id, 'trace', traceEvent(rec));
+    // Phase 5.6 (D-1/D-2): the CAS won ⇒ record the owner-authored plan as a
+    // `planned` chain projection — QUARANTINED, holds NO armed authority (no
+    // delegation, no policy tx). The runtime proposes hop 0 after this directed
+    // agent's next cycle; each spender hop still needs the owner's approval.
+    if (chainPlan !== undefined && chainPlan.length > 0) {
+      await insertPlannedChain(deps.pool, {
+        ownerAddr: req.ownerAddr as string,
+        originAgentId: agent.id,
+        directionId,
+        plan: chainPlan as unknown as ChainStep[],
+      });
+    }
     res.json({ ok: true });
+  }));
+
+  // GET /api/chains — owner-scoped chain read-model (D-6). Read-only, writes
+  // NOTHING, its OWN rate ceiling (N-1). Confers no authority.
+  router.get('/api/chains', asyncRoute(async (req: OwnerRequest, res) => {
+    if (!chainsRateOk(req.ownerAddr as string)) {
+      res.status(429).json({ error: 'rate_limited' });
+      return;
+    }
+    const cursor = typeof req.query['cursor'] === 'string' ? req.query['cursor'] : undefined;
+    const { chains, nextCursor } = await listChainsByOwner(deps.pool, req.ownerAddr as string, {
+      ...(cursor ? { cursor } : {}),
+    });
+    res.json({ chains, ...(nextCursor ? { nextCursor } : {}) });
+  }));
+
+  // GET /api/chains/:id — one chain + its ordered hops (D-6). Owner-scoped
+  // (cross-owner → 404, D-8); read-only.
+  router.get('/api/chains/:id', asyncRoute(async (req: OwnerRequest, res) => {
+    if (!chainsRateOk(req.ownerAddr as string)) {
+      res.status(429).json({ error: 'rate_limited' });
+      return;
+    }
+    const chain = await getChain(deps.pool, req.params['id'] ?? '');
+    if (!chain || chain.ownerAddr !== req.ownerAddr) {
+      res.status(404).json({ error: { message: 'not found' } });
+      return;
+    }
+    // Ordered hops: the chain's hop delegations (by chainId in payload), oldest-first.
+    const hops = await listChainHopDelegations(deps.pool, chain.id);
+    res.json({ chain, hops });
   }));
 
   // GET /api/agents/:id/status?q=… — read-only conversational status (D-7). WRITES

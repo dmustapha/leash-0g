@@ -453,6 +453,22 @@ export async function listCancellableByLink(pool: Pool, linkId: string): Promise
   return res.rows.map(mapDelegation);
 }
 
+/**
+ * Phase 5.6: all hop delegations of a chain, oldest-first — matched by the
+ * chainId in the OPAQUE payload (the coordination layer stores payload as
+ * jsonb; it does not interpret it). Powers the chain-ordered view (D-6).
+ */
+export async function listChainHopDelegations(pool: Pool, chainId: string): Promise<Delegation[]> {
+  if (!/^[0-9a-f-]{36}$/i.test(chainId)) return [];
+  const res = await pool.query<DbDelegationRow>(
+    `SELECT * FROM delegations
+     WHERE kind = 'chain.handoff' AND payload->>'chainId' = $1
+     ORDER BY created_at ASC`,
+    [chainId],
+  );
+  return res.rows.map(mapDelegation);
+}
+
 /** Every non-terminal delegation touching an agent, for revoke fan-out (spec §3b). */
 export async function listOpenByAgent(pool: Pool, agentId: string): Promise<Delegation[]> {
   const res = await pool.query<DbDelegationRow>(

@@ -166,6 +166,21 @@ export async function pruneStaleDraftDirections(pool: Pool, ownerAddr: string, t
   return res.rowCount ?? 0;
 }
 
+/**
+ * C2 (Phase 5.6): the periodic-sweep variant of pruneStaleDraftDirections —
+ * drops ALL owners' abandoned `draft` rows older than ttlSeconds in one pass
+ * (mirrors the Phase-2 60s delegation sweeper). Replaces the per-call prune on
+ * the /direct hot path (prune-on-every-call was a NIT in the 5.5 review).
+ */
+export async function pruneAllStaleDraftDirections(pool: Pool, ttlSeconds: number): Promise<number> {
+  const res = await pool.query(
+    `DELETE FROM directions WHERE status = 'draft'
+       AND created_at < now() - make_interval(secs => $1::int)`,
+    [ttlSeconds],
+  );
+  return res.rowCount ?? 0;
+}
+
 /** Recent direction threads for an agent (cockpit display of the current directed intent). */
 export async function listDirections(pool: Pool, agentId: string, limit = 20): Promise<DirectionRow[]> {
   const res = await pool.query<DbDirectionRow>(
