@@ -84,3 +84,22 @@ Drill: `backend/scripts/deployed-create-funnel-drill.mjs` (real Privy-SIWE throw
   - create tx `0xcd09d7f7df747a99a9378967c33e8cc03fb5110719371707d621d1bb93254de2`
   - register tx `0x52b9eaafac2c38b8c605cbb295a51630a47a49c09ed8786de9349e460aa8e1a2`
 - capabilityLabel round-tripped in cockpit detail; agent operable (paused). Evidence: `docs/evidence/phase5-deployed-drill.json`.
+
+## Stage D — governed calldata (v4) deployed (2026-09-27) — D-15 milestone
+First contract change since Phase 4. Legacy `LeashAccountFactory` (v3) UNCHANGED; v4 gets a
+DEDICATED factory (`LeashAccountV4Factory`) because a combined v3+v4 factory exceeds the
+EIP-170 24,576-byte limit (33,852 > 24,576 — caught by the deployed drill; regression-guarded
+by `test_factory_underEip170SizeLimit`). Chain 16602. Deployer/ops `0xc211C942946011859ca634F22400d80570ED12A5`.
+- **LeashAccountV4Factory:** `0x037537a84560aEb359d989A940c5980f6CA602B1`
+- **MockERC20 (TUSD-D):** `0xf936390897f72A92c8B008A1371bb54a606E5451`
+- **MockRouter:** `0x4CD6ed4E6abd715D10E49AD99d2e3866bF46ee30`
+- **MockVault:** `0xf951F8655C0a549c6187aB4b6Aec9fE76E402e2d`
+- **Drill account (v4, timelockDelay=0 for the drill):** `0x47E5c2665E00D224527c128919c942eCeF1cEc0F`
+  - granted: target=TUSD-D · selector=approve · spender=MockRouter · perCallCap 200e6 · windowCap 400e6 · budget 500e6
+
+### D-15 deployed ADVERSARIAL drill (`contracts/script/adversarial-drill.sh`) — 6/6 PASS live
+- HAPPY governed `approve(router,100e6)` landed: `0xe925b4794e4a238295b413f703255aa0f1e6ee0dd53183ad936c07d476b6a8b5` (allowance=100e6)
+- MALICIOUS reverts live (eth_call, exact error selectors): `approve(max)` → `InfiniteApprovalForbidden` 0xcd9e3525 · off-allowlist spender → `SpenderNotAllowlisted` 0x6eed196c · over per-call cap → `OverPerCallCap` 0x2671b8a6 · off-allowlist target → `TargetNotAllowlisted` 0x042a9b0d
+- MALICIOUS `approve(max)` real tx reverted on-chain. Evidence: `docs/evidence/stage-d-adversarial-drill.json`.
+
+Note: the v4 account `execute(data≠0)` still reverts `CalldataForbidden`; governed calldata is a THIRD path. Contract sourcify verification: pending (0G sourcify endpoint).

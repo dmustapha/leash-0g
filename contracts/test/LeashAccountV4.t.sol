@@ -3,7 +3,6 @@ pragma solidity 0.8.30;
 
 import {Test} from "forge-std/Test.sol";
 import {LeashAccountV4} from "../src/LeashAccountV4.sol";
-import {LeashAccountFactory} from "../src/LeashAccountFactory.sol";
 import {MockERC20} from "../src/MockERC20.sol";
 import {MockRouter} from "../src/MockRouter.sol";
 import {MockVault} from "../src/MockVault.sol";

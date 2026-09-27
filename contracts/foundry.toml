@@ -6,6 +6,17 @@ solc_version = "0.8.30"
 evm_version = "cancun"
 optimizer = true
 optimizer_runs = 200
+# D-15 differential decode oracle reads the viem-generated corpus fixture.
+fs_permissions = [{ access = "read", path = "./test/corpus" }]
+
+# D-15 SMTChecker profile — over/underflow + assertion safety on the wall.
+# Run: forge build --profile smt   (BMC + CHC; targets the account contract)
+[profile.smt.model_checker]
+engine = "bmc"
+timeout = 60000
+bmc_loop_iterations = 3
+targets = ["overflow", "underflow", "assert", "divByZero", "outOfBounds"]
+contracts = { "src/LeashAccountV4.sol" = ["LeashAccountV4"] }
 
 [fuzz]
 runs = 512

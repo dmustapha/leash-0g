@@ -4,6 +4,7 @@ pragma solidity 0.8.30;
 import {Test} from "forge-std/Test.sol";
 import {LeashAccountV4} from "../src/LeashAccountV4.sol";
 import {MockERC20} from "../src/MockERC20.sol";
+import {MockRouter} from "../src/MockRouter.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /// A token whose transfer/approve returns false without reverting (fake-success, H-05).
@@ -176,6 +177,34 @@ contract LeashAccountV4AdversarialTest is Test {
         vm.prank(session);
         vm.expectRevert(LeashAccountV4.CodehashMismatch.selector);
         acct.executeCall(address(usd), 0, abi.encodeWithSelector(SEL_APPROVE, spender, 10e6));
+    }
+
+    // ============ H-01: swap path attacker pools + minOut=0 ============
+    // v1 (decision (a)): router `swap` is NOT an on-chain structured decoder — swap-arg
+    // legibility (path/minOut/deadline) runs OFF-CHAIN. The ON-CHAIN guarantee for H-01
+    // is that the token a swap can pull is bounded by the capped + cumulative-budgeted
+    // `approve` envelope: even a zero-floor swap can never drain more than the funding
+    // approve. Proven here: the approve is budget-bounded, so the router allowance (=
+    // max extractable) can never exceed the budget, regardless of minOut.
+    function test_H01_swapLossBoundedByApproveEnvelope() public {
+        MockRouter router = new MockRouter();
+        _budget(address(usd), 50e6); // cumulative approve budget = 50 TestUSD
+        _grant(address(usd), SEL_APPROVE, 0, _spenders(address(router)), 50e6, 50e6);
+
+        // agent approves the router up to the budget
+        vm.prank(session);
+        acct.executeCall(address(usd), 0, abi.encodeWithSelector(SEL_APPROVE, address(router), 50e6));
+        assertEq(usd.allowance(address(acct), address(router)), 50e6);
+
+        // a further approve to widen the router's pull-limit is refused — the router can
+        // never be allowed to pull more than 50e6 of the account's 1000e6 balance.
+        vm.prank(session);
+        vm.expectRevert(abi.encodeWithSelector(LeashAccountV4.OverCumulativeSpend.selector, 60e6, 50e6));
+        acct.executeCall(address(usd), 0, abi.encodeWithSelector(SEL_APPROVE, address(router), 10e6));
+
+        // and the router fixture itself rejects a zero-floor swap (defense-in-depth).
+        vm.expectRevert(bytes("minOut=0"));
+        router.swap(address(usd), address(usd), 10e6, 0, address(acct), block.timestamp + 1);
     }
 
     // ============ H-02: value via args, not msg.value (cumulative amount caps) ============
