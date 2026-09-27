@@ -5,7 +5,15 @@ import { createApp } from '../../src/server.js';
 import { createTestDb, seedAgent, type TestDb } from '../helpers/db.js';
 import { buildTestApp, ownerAuth, type TestApp } from '../helpers/app.js';
 import { TelegramBot } from '../../src/telegram/bot.js';
-import type { TelegramApi, SendMessageInput, EditMessageInput } from '../../src/telegram/api.js';
+import type {
+  TelegramApi,
+  SendMessageInput,
+  EditMessageInput,
+  InlineKeyboardButton,
+} from '../../src/telegram/api.js';
+
+/** Narrow a button union to its callback_data (empty string for url buttons). */
+const cbData = (b?: InlineKeyboardButton): string => (b && 'callback_data' in b ? b.callback_data : '');
 import { createApproval, getApproval } from '../../src/store/approvals.js';
 import { getOwnerSettings } from '../../src/store/owner-settings.js';
 import { listTraces } from '../../src/trace/trace-store.js';
@@ -61,13 +69,16 @@ interface TgHarness {
   bot: TelegramBot;
 }
 
-function buildTelegramHarness(): TgHarness {
+const WEB_APP_URL = 'https://leash-0g-web.vercel.app';
+
+function buildTelegramHarness(opts: { webAppUrl?: string | undefined } = { webAppUrl: WEB_APP_URL }): TgHarness {
   const t = buildTestApp(db.pool);
   const api = new MockTelegramApi();
   const bot = new TelegramBot({
     pool: db.pool,
     api,
     botUsername: 'leash_test_bot',
+    webAppUrl: opts.webAppUrl,
     decide: { pool: db.pool, hub: t.hub, broker: t.broker, coordinator: t.coordinator, alerts: t.alerts },
   });
   t.alerts.setTelegramDelivery(bot.delivery());
@@ -108,8 +119,8 @@ async function pushApprovalCard(
   const card = h.api.sent[h.api.sent.length - 1];
   if (!card?.reply_markup) throw new Error('no inline keyboard pushed');
   const [row] = card.reply_markup.inline_keyboard;
-  const approveData = row?.[0]?.callback_data ?? '';
-  const denyData = row?.[1]?.callback_data ?? '';
+  const approveData = cbData(row?.[0]);
+  const denyData = cbData(row?.[1]);
   const stored = await getAlert(db.pool, alert.id);
   return {
     approvalId: approval.id,
@@ -220,6 +231,57 @@ describe('approval card — agent intent', () => {
     while (h.api.sent.length <= baseline && Date.now() - start < 5000) await new Promise((r) => setTimeout(r, 25));
     const text = h.api.sent[h.api.sent.length - 1]?.text ?? '';
     expect(text).not.toContain('Agent says');
+  });
+});
+
+describe('capability_request card (Stage D L2 JIT) — surface + deep-link, NEVER tap-to-grant', () => {
+  async function pushCapabilityCard(
+    h: TgHarness,
+    owner: string,
+    agentId: string,
+    chatId: string,
+  ): Promise<SendMessageInput> {
+    await linkOwner(h, owner, chatId);
+    const approvalId = (await createApproval(db.pool, agentId, { type: 'capability' })).id;
+    const baseline = h.api.sent.length;
+    await h.t.alerts.emit(owner, {
+      agentId,
+      class: 'decision',
+      kind: 'capability_request',
+      summary: 'trader wants to make a new on-chain call it isn\'t yet allowed to: swap 100 TUSD → TUSDC. Review and grant it (once or always) in the app.',
+      refs: { approvalId, capabilityRequestId: 'req-abc-123' },
+    });
+    const start = Date.now();
+    while (h.api.sent.length <= baseline && Date.now() - start < 5000) await new Promise((r) => setTimeout(r, 25));
+    const card = h.api.sent[h.api.sent.length - 1];
+    if (!card) throw new Error('no capability card pushed');
+    return card;
+  }
+
+  it('pushes a deep-link URL button (opens the app to sign) — no approve/deny callback buttons', async () => {
+    const owner = uniqueOwner();
+    const h = buildTelegramHarness();
+    const agentId = await seedAgent(db.pool, { ownerAddr: owner, name: 'trader' });
+    const card = await pushCapabilityCard(h, owner, agentId, '1201');
+
+    expect(card.text).toContain('new on-chain call'); // legible, quarantined summary
+    const buttons = card.reply_markup?.inline_keyboard.flat() ?? [];
+    expect(buttons).toHaveLength(1);
+    const [btn] = buttons;
+    // NEVER a tap-to-grant: a grant is an on-chain owner tx, not a callback.
+    expect(btn && 'callback_data' in btn).toBe(false);
+    expect(btn && 'url' in btn ? btn.url : '').toBe(
+      `${WEB_APP_URL}/app?agent=${agentId}&jit=req-abc-123`,
+    );
+  });
+
+  it('no web app URL configured ⇒ card is still delivered (legible), just without a link button', async () => {
+    const owner = uniqueOwner();
+    const h = buildTelegramHarness({ webAppUrl: undefined });
+    const agentId = await seedAgent(db.pool, { ownerAddr: owner, name: 'trader2' });
+    const card = await pushCapabilityCard(h, owner, agentId, '1202');
+    expect(card.text).toContain('new on-chain call');
+    expect(card.reply_markup).toBeUndefined();
   });
 });
 
@@ -516,7 +578,7 @@ describe('two-way commands', () => {
     await h.bot.handleUpdate({ message: { chat: { id: '2020' }, text: '/pending' } });
     const repushed = h.api.sent.find((m) => m.reply_markup);
     expect(repushed).toBeDefined();
-    const fresh = repushed?.reply_markup?.inline_keyboard[0]?.[0]?.callback_data ?? '';
+    const fresh = cbData(repushed?.reply_markup?.inline_keyboard[0]?.[0]);
     await h.bot.handleUpdate({
       callback_query: { id: 'q1', data: fresh, message: { chat: { id: '2020' }, message_id: 9999 } },
     });
