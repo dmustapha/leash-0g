@@ -51,7 +51,7 @@ import {
   DuplicateLinkError,
 } from '../coordination/store.js';
 import type { DelegationCoordinator } from '../coordination/coordinator.js';
-import { validateChainPlan } from '../coordination/chain.js';
+import { validateChainPlan, terminateOriginChainsForWindDown } from '../coordination/chain.js';
 import { insertPlannedChain, getChain, listChainsByOwner } from '../store/chains.js';
 import type { ChainStep } from '../types.js';
 import type { TelegramBot } from '../telegram/bot.js';
@@ -1563,6 +1563,20 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     const agent = await requireOwnedAgent(req, res);
     if (!agent) return;
     await deps.runtime.stop(agent.id);
+    // Phase 5.6 (D-4, §8 "wind-down fails safe"): stopping the loop is NOT enough
+    // — a chain advances via the loop-independent terminal callback. Terminate the
+    // agent's advancing chains where it is the origin AND cancel the in-flight /
+    // pending hop, so a running chain can't keep advancing and a planned chain
+    // can't resume on restart.
+    await terminateOriginChainsForWindDown(
+      {
+        pool: deps.pool,
+        hub: deps.hub,
+        coordinator: deps.coordinator,
+        config: { maxDepth: deps.settings.chainMaxDepth, maxEligiblePerHop: deps.settings.chainMaxEligiblePerHop },
+      },
+      agent.id,
+    );
     const rec = await appendTrace(deps.pool, {
       agentId: agent.id,
       kind: 'decision',
