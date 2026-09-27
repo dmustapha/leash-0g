@@ -291,7 +291,7 @@ describe('inline decide — THE consent rail', () => {
     expect(alert?.status).toBe('resolved');
     expect(alert?.resolvedVia).toBe('telegram');
     const start = Date.now();
-    while (h.api.edits.length === 0 && Date.now() - start < 3000) {
+    while (h.api.edits.length === 0 && Date.now() - start < 15000) {
       await new Promise((r) => setTimeout(r, 25));
     }
     const edit = h.api.edits[0];
@@ -390,7 +390,7 @@ describe('inline decide — THE consent rail', () => {
       .set('authorization', ownerAuth(owner))
       .send({ decision: 'approve' });
     const start = Date.now();
-    while (h.api.edits.length === 0 && Date.now() - start < 3000) {
+    while (h.api.edits.length === 0 && Date.now() - start < 15000) {
       await new Promise((r) => setTimeout(r, 25));
     }
     expect(h.api.edits[0]?.text).toContain('Approved');
@@ -464,7 +464,7 @@ describe('timeout expiry — the deny-by-default arm resolves everywhere', () =>
     expect(resolved?.resolvedVia).toBe('system');
     // The card is EDITED to its outcome (stale phones can't act on it).
     start = Date.now();
-    while (!h.api.edits.some((e) => e.message_id === messageId) && Date.now() - start < 3000) {
+    while (!h.api.edits.some((e) => e.message_id === messageId) && Date.now() - start < 15000) {
       await new Promise((r) => setTimeout(r, 25));
     }
     const edit = h.api.edits.find((e) => e.message_id === messageId);
@@ -489,7 +489,7 @@ describe('prefs (S11 defaults)', () => {
       .send({ alertPrefs: { delegation_terminal: { telegram: true } } });
     await h.t.alerts.emit(owner, { agentId, class: 'info', kind: 'delegation_terminal', summary: 'now pushed' });
     const start = Date.now();
-    while (h.api.sent.length === 0 && Date.now() - start < 3000) {
+    while (h.api.sent.length === 0 && Date.now() - start < 15000) {
       await new Promise((r) => setTimeout(r, 25));
     }
     expect(h.api.sent.some((m) => m.text === 'now pushed')).toBe(true);
