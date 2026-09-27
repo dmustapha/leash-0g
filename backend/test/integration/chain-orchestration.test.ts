@@ -5,11 +5,18 @@ import { getAgentById } from '../../src/store/agents.js';
 import { createLink, listDelegations } from '../../src/coordination/store.js';
 import { DelegationCoordinator } from '../../src/coordination/coordinator.js';
 import { insertDirectionDraft } from '../../src/store/directions.js';
-import { getChain, insertPlannedChain } from '../../src/store/chains.js';
+import {
+  getChain,
+  insertPlannedChain,
+  listAdvancingChainsForOrigin,
+  settleChainHop,
+  terminateChain,
+} from '../../src/store/chains.js';
 import {
   DEFAULT_CHAIN_CONFIG,
   onHopSettled,
   proposeNextHop,
+  terminateOriginChainsForWindDown,
   type ChainDeps,
 } from '../../src/coordination/chain.js';
 import type { AgentRow, ChainStep } from '../../src/types.js';
@@ -221,6 +228,48 @@ describe('onHopSettled — advance / complete / terminate', () => {
     expect(out.kind).toBe('completed');
     const { delegations } = await listDelegations(db.pool, { agentId: end.id });
     expect(delegations).toHaveLength(0); // no phantom hop issued
+  });
+
+  it('wind-down on the origin mid-chain terminates the chain + cancels the in-flight hop (fails safe)', async () => {
+    const { chain, mid, origin } = await build2HopChain();
+    const { deps } = wiredCoordinator();
+    // Hop 0 is in flight (auto link, spend-incapable → pending) to `mid`.
+    const h0 = await proposeNextHop(deps(), chain.id, null, { auto: true });
+    if (h0.kind !== 'advanced') throw new Error('hop0 not advanced');
+    // Owner winds down the ORIGIN mid-chain (§8 fail-safe, D-4).
+    await terminateOriginChainsForWindDown(deps(), origin.id);
+    const after = await getChain(db.pool, chain.id);
+    expect(after?.status).toBe('terminated');
+    expect(after?.currentDelegationId).toBeNull();
+    // The in-flight hop delegation was cancelled — it can no longer be picked up.
+    const { delegations } = await listDelegations(db.pool, { agentId: mid.id });
+    expect(delegations).toHaveLength(1);
+    expect(delegations[0]!.status).toBe('cancelled');
+  });
+
+  it('a planned chain does not resume after wind-down + restart', async () => {
+    const { chain, origin } = await build2HopChain(); // 'planned', no hop proposed yet
+    const { deps } = wiredCoordinator();
+    await terminateOriginChainsForWindDown(deps(), origin.id);
+    const after = await getChain(db.pool, chain.id);
+    expect(after?.status).toBe('terminated');
+    // The runtime restart hook (maybeAdvanceChains) reads listAdvancingChainsForOrigin
+    // — a terminated chain is gone from it, so hop 0 is never proposed on restart.
+    const advancing = await listAdvancingChainsForOrigin(db.pool, origin.id);
+    expect(advancing).toHaveLength(0);
+    // And a direct re-propose is a no-op (chain not advancing).
+    const out = await proposeNextHop(deps(), chain.id, null, { auto: true });
+    expect(out.kind).toBe('noop');
+  });
+
+  it('settleChainHop is a no-op on a terminated chain (a late completed-outcome cannot resurrect it)', async () => {
+    const { chain } = await build2HopChain();
+    await terminateChain(db.pool, chain.id);
+    // A late/duplicate completed-outcome tries to settle the already-terminated chain.
+    const settled = await settleChainHop(db.pool, chain.id, 'completed');
+    expect(settled).toBeNull();
+    const after = await getChain(db.pool, chain.id);
+    expect(after?.status).toBe('terminated'); // never resurrected to completed/running
   });
 
   it('a denied supervised hop (declined before delivery) terminates the chain', async () => {

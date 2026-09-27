@@ -93,6 +93,23 @@ export async function listAdvancingChainsForOrigin(pool: Pool, originAgentId: st
   return res.rows.map(mapRow);
 }
 
+/**
+ * Every advancing chain an agent originates, INCLUDING one with an in-flight hop
+ * (unlike listAdvancingChainsForOrigin, which excludes in-flight for the hop-0
+ * runtime hook). Used by owner wind-down (D-4) to fail every origin chain safe —
+ * a `planned` chain (must not resume on restart) as well as a `running` chain
+ * whose current hop must be cancelled.
+ */
+export async function listAllAdvancingChainsForOrigin(pool: Pool, originAgentId: string): Promise<Chain[]> {
+  const res = await pool.query<DbChainRow>(
+    `SELECT ${COLS} FROM chains
+     WHERE origin_agent_id = $1 AND status IN ('planned','running')
+     ORDER BY created_at ASC`,
+    [originAgentId],
+  );
+  return res.rows.map(mapRow);
+}
+
 export interface ListChainsOptions {
   cursor?: string;
   limit?: number;
@@ -204,16 +221,27 @@ export async function setChainCurrentDelegation(
  * Settle the in-flight hop: clear current_delegation_id so the NEXT hop can be
  * claimed, and (optionally) move the chain to a terminal status. A no-op if the
  * chain isn't pointing at this delegation (raced with another settle path).
+ *
+ * Guarded (D-12 races): only an ADVANCING chain (`planned`/`running`) can be
+ * settled — a late/duplicate completed-outcome can NEVER resurrect a
+ * `terminated`/`completed` chain back to running/completed. When the caller knows
+ * which delegation it is settling, it passes `expectedDelegationId` so the write
+ * additionally requires the chain to still be pointing at exactly that hop
+ * (the W2 reconciliation path passes undefined, having already re-derived the
+ * chain from the payload hint under its own null-current-delegation guard).
  */
 export async function settleChainHop(
   pool: Pool,
   chainId: string,
   status: Chain['status'],
+  expectedDelegationId?: string,
 ): Promise<Chain | null> {
   const res = await pool.query<DbChainRow>(
     `UPDATE chains SET current_delegation_id = NULL, status = $2, updated_at = now()
-     WHERE id = $1 RETURNING ${COLS}`,
-    [chainId, status],
+     WHERE id = $1 AND status IN ('planned','running')
+       AND ($3::uuid IS NULL OR current_delegation_id = $3::uuid)
+     RETURNING ${COLS}`,
+    [chainId, status, expectedDelegationId ?? null],
   );
   return res.rows[0] ? mapRow(res.rows[0]) : null;
 }

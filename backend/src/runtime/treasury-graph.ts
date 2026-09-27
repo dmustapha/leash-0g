@@ -12,6 +12,7 @@ import { CoordinationError, type DelegationCoordinator } from '../coordination/c
 import type { AlertService } from '../alerts/service.js';
 import { BoundaryRegistry, policyFingerprint, DAMPABLE_ERRORS, type DampableError } from './boundary.js';
 import { decodeLeashError } from '../chain/errors.js';
+import { DEFAULT_CHAIN_CONFIG } from '../coordination/chain.js';
 import { makeSenseDirection } from './sense-direction.js';
 import { appendMemory } from '../store/agent-memory.js';
 import { formatG, shortAddr, inMinutes, sanitizeAgentIntent } from '../util/format.js';
@@ -128,7 +129,10 @@ type TransferRequest = z.infer<typeof transferRequestSchema>;
 const chainHandoffSchema = z
   .object({
     chainId: z.string().regex(/^[0-9a-f-]{36}$/i),
-    hopIndex: z.number().int().min(0).max(64),
+    // Coarse defensive bound tied to the depth cap (a hopIndex is 0-based, so a
+    // valid plan reaches maxDepth-1); the chain projection's next_hop is the real
+    // gate. Kept ≥ the cap so config never rejects a legitimate final hop.
+    hopIndex: z.number().int().min(0).max(DEFAULT_CHAIN_CONFIG.maxDepth),
     ownerDirectedIntent: z.string().max(2000),
     upstreamOutput: z.unknown(),
   })

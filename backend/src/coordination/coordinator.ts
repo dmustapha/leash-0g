@@ -387,6 +387,36 @@ export class DelegationCoordinator {
   }
 
   /**
+   * Cancel ONE delegation by id (Phase 5.6 owner wind-down, D-4). Mirrors the
+   * per-row revoke fan-out for a single delegation: an in-flight (`accepted`)
+   * delegation fails with the reason (its act can no longer land); a
+   * pending/pending_approval delegation is cancelled. Traced on the issuer's
+   * chain; the generic terminal callback fires (so a chain hop is contained).
+   * A no-op (returns null) if the delegation is missing or already terminal.
+   */
+  async cancelDelegation(delegationId: string, reason: string): Promise<Delegation | null> {
+    const row = await getDelegation(this.deps.pool, delegationId);
+    if (!row) return null;
+    let d: Delegation | null;
+    let summary: string;
+    if (row.status === 'accepted') {
+      d = await transitionDelegation(this.deps.pool, row.id, ['accepted'], 'failed', {
+        result: { error: reason },
+        decidedAt: true,
+      });
+      summary = `in-flight delegation '${row.kind}' failed: ${reason}`;
+    } else {
+      d = await transitionDelegation(this.deps.pool, row.id, ['pending', 'pending_approval'], 'cancelled', {
+        decidedAt: true,
+      });
+      summary = `delegation '${row.kind}' cancelled: ${reason}`;
+    }
+    if (!d) return null; // raced — the winning transition already traced
+    await this.traceUpdate(d.fromAgentId, d, summary);
+    return d;
+  }
+
+  /**
    * Expiry point B (spec §3b): periodic sweeper for stale envelopes. 60s
    * default ≪ the 10-min TTL — an expired row is terminal within a minute of
    * its deadline even if nobody ever polls it.
