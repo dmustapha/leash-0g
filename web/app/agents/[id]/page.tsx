@@ -9,7 +9,8 @@ import { makeApi } from '@/lib/api';
 import { config } from '@/lib/config';
 import { useOwnerWallet } from '@/lib/owner-wallet';
 import { connectSse } from '@/lib/sse';
-import type { AgentDetail, GatewayRule, StreamEvent } from '@/lib/types';
+import type { AgentDetail, Chain, Delegation, GatewayRule, StreamEvent } from '@/lib/types';
+import { ChainView } from '@/components/cockpit/ChainView';
 import { weiToOg } from '@/lib/format';
 import {
   applyAllowlistOnchain,
@@ -56,6 +57,40 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
   const [pending, setPending] = useState<PendingEtas>({ policy: 0, allowlist: 0, withdraw: 0 });
   const [chainVerified, setChainVerified] = useState<boolean | undefined>(undefined);
   const [guardian, setGuardian] = useState<Address | undefined>(undefined);
+  // Phase 5.6: the owner's OWN linked capabilities this agent can chain to, the
+  // agent-name map (human-readable timeline), and this agent's chains.
+  const [chainCandidates, setChainCandidates] = useState<{ id: string; label: string }[]>([]);
+  const [agentNames, setAgentNames] = useState<Record<string, string>>({});
+  const [chains, setChains] = useState<{ chain: Chain; hops: Delegation[] }[]>([]);
+
+  const loadChains = useCallback(async () => {
+    try {
+      const { chains: all } = await api.listChains();
+      const mine = all.filter((c) => c.originAgentId === id);
+      setChains(await Promise.all(mine.map((c) => api.getChain(c.id))));
+    } catch {
+      /* non-fatal: the chain view is a read-model convenience */
+    }
+  }, [api, id]);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const [{ links }, { agents }] = await Promise.all([api.listLinks(), api.listAgents()]);
+        const names: Record<string, string> = {};
+        for (const a of agents) names[a.agentId] = a.name;
+        setAgentNames(names);
+        setChainCandidates(
+          links
+            .filter((l) => l.fromAgentId === id && l.status === 'active')
+            .map((l) => ({ id: l.toAgentId, label: names[l.toAgentId] ?? `${l.toAgentId.slice(0, 8)}…` })),
+        );
+      } catch {
+        /* non-fatal */
+      }
+      void loadChains();
+    })();
+  }, [api, id, loadChains]);
   const seqRef = useRef(0);
 
   const refresh = useCallback(async () => {
@@ -323,11 +358,25 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
         >
           <DirectBox
             onDirect={async (intent) => (await api.direct(id, { intent })).direction}
-            onConfirm={async (directionId, edited, recipient) => {
-              await api.confirmDirection(id, directionId, { edited, ...(recipient ? { recipient } : {}) });
+            onConfirm={async (directionId, edited, recipient, chainPlan) => {
+              await api.confirmDirection(id, directionId, {
+                edited,
+                ...(recipient ? { recipient } : {}),
+                ...(chainPlan && chainPlan.length > 0 ? { chainPlan } : {}),
+              });
+              void loadChains();
             }}
+            chainCandidates={chainCandidates}
           />
           <StatusChat onAsk={async (q) => api.agentStatus(id, q)} />
+        </section>
+      ) : null}
+
+      {chains.length > 0 ? (
+        <section aria-label="Chains" data-testid="chains-section" style={{ display: 'grid', gap: '1rem' }}>
+          {chains.map(({ chain, hops }) => (
+            <ChainView key={chain.id} chain={chain} hops={hops} agentNames={agentNames} />
+          ))}
         </section>
       ) : null}
 

@@ -96,6 +96,9 @@ const envSchema = z.object({
   DELEGATION_RATE_PER_LINK_PER_HOUR: z.coerce.number().int().positive().default(12),
   DELEGATION_MAX_PENDING_PER_LINK: z.coerce.number().int().positive().default(3),
   DELEGATION_PAYLOAD_MAX_BYTES: z.coerce.number().int().positive().default(16_384),
+  // Phase 5.6 chaining bounds (spec §5; config-driven testnet defaults, 07 S6).
+  CHAIN_MAX_DEPTH: z.coerce.number().int().positive().max(16).default(3),
+  CHAIN_MAX_ELIGIBLE_PER_HOP: z.coerce.number().int().positive().max(16).default(3),
 });
 
 export type Config = z.infer<typeof envSchema>;

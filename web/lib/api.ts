@@ -12,6 +12,8 @@ import type {
   AlertStatus,
   ApprovalDecision,
   AuditBatch,
+  Chain,
+  ChainStep,
   CreateAgentRequest,
   CreateAgentResponse,
   Delegation,
@@ -144,8 +146,21 @@ export function makeApi(getToken: TokenGetter) {
         body,
       ),
     // Confirm a direction: recipient (if any) is owner-typed, passed OUT-OF-BAND from the draft.
-    confirmDirection: (id: string, directionId: string, body: { edited: DirectionDraft; recipient?: string }) =>
-      request<{ ok: true }>(getToken, 'POST', `/api/agents/${id}/direct/${directionId}/confirm`, body),
+    // chainPlan (Phase 5.6) is the owner-authored chain — quarantined, arms no delegation.
+    confirmDirection: (
+      id: string,
+      directionId: string,
+      body: { edited: DirectionDraft; recipient?: string; chainPlan?: ChainStep[] },
+    ) => request<{ ok: true }>(getToken, 'POST', `/api/agents/${id}/direct/${directionId}/confirm`, body),
+    // Phase 5.6 chain read-model (owner-scoped, read-only, writes nothing).
+    listChains: (cursor?: string) =>
+      request<{ chains: Chain[]; nextCursor?: string }>(
+        getToken,
+        'GET',
+        `/api/chains${cursor !== undefined ? `?cursor=${encodeURIComponent(cursor)}` : ''}`,
+      ),
+    getChain: (id: string) =>
+      request<{ chain: Chain; hops: Delegation[] }>(getToken, 'GET', `/api/chains/${id}`),
     // Ask the agent what it has done so far — the answer is quarantined agent-authored text.
     agentStatus: (id: string, q: string) =>
       request<{ answer: string; asOfSeq: number; quarantined: true }>(

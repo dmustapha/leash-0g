@@ -6,18 +6,22 @@
 'use client';
 
 import { useState } from 'react';
-import type { DirectionDraft } from '@/lib/types';
+import type { ChainStep, DirectionDraft } from '@/lib/types';
 import { ReadBack } from '@/components/create/ReadBack';
+import type { ChainCandidate } from '@/components/cockpit/ChainPlanEditor';
 import { Disclosure } from '@/components/ui/Disclosure';
 
 export type DirectBoxProps = {
   /** Runs api.direct(agentId, { intent }); resolves to the quarantined draft + its id. */
   onDirect: (intent: string) => Promise<{ id: string; draft: DirectionDraft }>;
-  /** Runs api.confirmDirection(agentId, directionId, { edited, recipient }). */
-  onConfirm: (directionId: string, edited: DirectionDraft, recipient?: string) => Promise<void>;
+  /** Runs api.confirmDirection(agentId, directionId, { edited, recipient, chainPlan }). */
+  onConfirm: (directionId: string, edited: DirectionDraft, recipient?: string, chainPlan?: ChainStep[]) => Promise<void>;
+  /** Phase 5.6: the owner's OWN linked capabilities this agent can chain to (optional). */
+  chainCandidates?: ChainCandidate[];
+  chainConfig?: { maxDepth: number; maxEligiblePerHop: number };
 };
 
-export function DirectBox({ onDirect, onConfirm }: DirectBoxProps) {
+export function DirectBox({ onDirect, onConfirm, chainCandidates, chainConfig }: DirectBoxProps) {
   const [intent, setIntent] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -37,12 +41,12 @@ export function DirectBox({ onDirect, onConfirm }: DirectBoxProps) {
     }
   }
 
-  async function confirm(edited: DirectionDraft, recipient?: string) {
+  async function confirm(edited: DirectionDraft, recipient?: string, chainPlan?: ChainStep[]) {
     if (!direction) return;
     setBusy(true);
     setError(null);
     try {
-      await onConfirm(direction.id, edited, recipient);
+      await onConfirm(direction.id, edited, recipient, chainPlan);
       setDirection(null);
       setIntent('');
       setConfirmed(true);
@@ -58,8 +62,10 @@ export function DirectBox({ onDirect, onConfirm }: DirectBoxProps) {
       <ReadBack
         mode="direct"
         draft={direction.draft}
-        onConfirm={(edited, recipient) => void confirm(edited, recipient)}
+        onConfirm={(edited, recipient, chainPlan) => void confirm(edited, recipient, chainPlan)}
         onBack={() => setDirection(null)}
+        {...(chainCandidates !== undefined ? { chainCandidates } : {})}
+        {...(chainConfig !== undefined ? { chainConfig } : {})}
       />
     );
   }
