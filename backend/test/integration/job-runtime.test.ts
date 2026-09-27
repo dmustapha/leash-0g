@@ -91,6 +91,15 @@ class FakeChain implements RuntimeChain {
     });
     return { txHash: '0x' + 'dd'.repeat(32) };
   }
+  async executeCall(_input: {
+    sessionPrivateKey: string;
+    accountAddr: string;
+    target: string;
+    valueWei: bigint;
+    data: string;
+  }): Promise<{ txHash: string }> {
+    return { txHash: '0x' + 'cc'.repeat(32) };
+  }
   async getErc20Meta(): Promise<{ symbol: string; decimals: number }> {
     return { symbol: 'TUSD', decimals: 6 };
   }
