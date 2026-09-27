@@ -118,6 +118,25 @@ const transferRequestSchema = z.object({
 type TransferRequest = z.infer<typeof transferRequestSchema>;
 
 /**
+ * Phase 5.6 (D-11/§3b): the inbound chain-hop envelope, interpreted ONLY here in
+ * the runtime graph (opaque to the coordination layer). Strict-Zod — a
+ * hostile/oversized/type-smuggled payload is rejected → markFailed, the chain
+ * terminates. `upstreamOutput` is LABELED-UNTRUSTED input, NEVER authority: the
+ * downstream re-reasons under its OWN goal/policy and its action target comes
+ * from its OWN server link-state (D-3), never from this payload.
+ */
+const chainHandoffSchema = z
+  .object({
+    chainId: z.string().regex(/^[0-9a-f-]{36}$/i),
+    hopIndex: z.number().int().min(0).max(64),
+    ownerDirectedIntent: z.string().max(2000),
+    upstreamOutput: z.unknown(),
+  })
+  .strip();
+
+type ChainHandoff = z.infer<typeof chainHandoffSchema>;
+
+/**
  * Deterministic per-cycle classification (pure — safe to call from several
  * nodes). Roles interpret the cycle (spec §3b):
  * - autonomous: treasury (Phase-1 unchanged) or sentinel (delegates).
@@ -132,6 +151,9 @@ type CycleMode =
   | { mode: 'autonomous'; goal: TreasuryGoal | SentinelGoal }
   | { mode: 'executor_idle' }
   | { mode: 'inbound_transfer'; request: TransferRequest }
+  // Phase 5.6: a chain hop the downstream re-reasons on under its OWN goal — the
+  // handoff is context (labeled-untrusted), the goal is authority (F4/F5, D-3).
+  | { mode: 'inbound_chain'; goal: TreasuryGoal | SentinelGoal; handoff: ChainHandoff }
   | { mode: 'inbound_reject'; reason: 'unsupported kind' | 'malformed payload' };
 
 function classifyCycle(goal: AgentGoal, inbound: InboundDelegationInput | null | undefined): CycleMode {
@@ -144,6 +166,17 @@ function classifyCycle(goal: AgentGoal, inbound: InboundDelegationInput | null |
     if (isLegacyAutonomous) return { mode: 'autonomous', goal: goal as TreasuryGoal | SentinelGoal };
     return { mode: 'inbound_reject', reason: 'unsupported kind' };
   }
+  // Phase 5.6 chain hop: a goal-bearing (treasury/sentinel) downstream
+  // re-reasons under its OWN goal/policy, informed by the labeled-untrusted
+  // handoff. A malformed/oversized payload is rejected (markFailed → chain
+  // terminates). A role with no autonomous action surface (executor) can't
+  // consume a handoff → unsupported (the chain terminates, traced).
+  if (inbound.kind === 'chain.handoff') {
+    if (!isLegacyAutonomous) return { mode: 'inbound_reject', reason: 'unsupported kind' };
+    const parsed = chainHandoffSchema.safeParse(inbound.payload);
+    if (!parsed.success) return { mode: 'inbound_reject', reason: 'malformed payload' };
+    return { mode: 'inbound_chain', goal: goal as TreasuryGoal | SentinelGoal, handoff: parsed.data };
+  }
   // Only the specimen executor interprets 'transfer.request' (spec §3b) —
   // every other (role, kind) combination is generically unsupported.
   if (goal.type !== 'executor' || inbound.kind !== 'transfer.request') {
@@ -152,6 +185,12 @@ function classifyCycle(goal: AgentGoal, inbound: InboundDelegationInput | null |
   const parsed = transferRequestSchema.safeParse(inbound.payload);
   if (!parsed.success) return { mode: 'inbound_reject', reason: 'malformed payload' };
   return { mode: 'inbound_transfer', request: parsed.data };
+}
+
+/** The autonomous goal a cycle re-reasons under (Phase 5.6 folds inbound_chain in). */
+function autonomousGoalOf(mode: CycleMode): TreasuryGoal | SentinelGoal | null {
+  if (mode.mode === 'autonomous' || mode.mode === 'inbound_chain') return mode.goal;
+  return null;
 }
 
 export function buildTreasuryGraph(
@@ -187,7 +226,8 @@ export function buildTreasuryGraph(
         },
       };
     }
-    const beneficiary = mode.mode === 'inbound_transfer' ? mode.request.beneficiary : mode.goal.beneficiary;
+    const autoGoal = autonomousGoalOf(mode);
+    const beneficiary = mode.mode === 'inbound_transfer' ? mode.request.beneficiary : (autoGoal?.beneficiary ?? '');
     const [beneficiaryBalance, account, policy] = await Promise.all([
       deps.chain.getBalance(beneficiary),
       deps.chain.getBalance(ctx.accountAddr),
@@ -297,10 +337,10 @@ export function buildTreasuryGraph(
       // until the window resets or policy changes. (windowCap 0 = the
       // spend-incapable shape — never a window boundary.)
       const mode = classifyCycle(ctx.goal, state.inboundDelegation);
+      const autoGoal = autonomousGoalOf(mode);
       const wantsTransfer =
         mode.mode === 'inbound_transfer' ||
-        (mode.mode === 'autonomous' &&
-          BigInt(state.beneficiaryBalanceWei) < BigInt(mode.goal.targetBalanceWei));
+        (autoGoal !== null && BigInt(state.beneficiaryBalanceWei) < BigInt(autoGoal.targetBalanceWei));
       if (
         wantsTransfer &&
         BigInt(state.policy.windowCapWei) > 0n &&
@@ -540,6 +580,31 @@ export function buildTreasuryGraph(
     const c = coordinator();
     if (!c) return;
     const o = state.outcome;
+    // Phase 5.6 chain hop: the downstream COMPLETING its re-reasoning is a
+    // success even when it stands down (an analyst "completes" by producing
+    // analysis + not spending) — so the chain advances carrying the
+    // downstream's OWN output. Only an owner-deny / hard failure / rejected
+    // envelope terminates the chain. The output rides `result.output` for
+    // onHopSettled (the next hop's labeled-untrusted upstreamOutput).
+    if (inbound.kind === 'chain.handoff') {
+      if (o.type === 'denied') {
+        await c.markFailed(inbound.delegationId, 'owner denied');
+      } else if (o.type === 'failed') {
+        await c.markFailed(inbound.delegationId, o.reason);
+      } else if (state.inboundReject) {
+        await c.markFailed(inbound.delegationId, state.inboundReject);
+      } else {
+        await c.markCompleted(inbound.delegationId, {
+          output: {
+            outcome: o.type,
+            ...(o.type === 'acted' ? { txHash: o.txHash, valueWei: o.valueWei } : {}),
+            ...(o.type === 'delegated' ? { delegationId: o.delegationId } : {}),
+            ...(state.reasoning ? { reasoning: state.reasoning.slice(0, 2000) } : {}),
+          },
+        });
+      }
+      return;
+    }
     if (o.type === 'acted') {
       await c.markCompleted(inbound.delegationId, { txHash: o.txHash });
     } else if (state.inboundReject) {
@@ -706,10 +771,12 @@ function evaluateDecision(
   if (!policy.allowlist.includes(state.effectiveBeneficiary.toLowerCase())) {
     return stand('beneficiary is not allowlisted');
   }
-  if (mode.mode === 'autonomous') {
-    // Treasury/sentinel target check — an inbound transfer.request has no goal
-    // target; the executor honours the request bounded by its policy instead.
-    if (BigInt(state.beneficiaryBalanceWei) >= BigInt(mode.goal.targetBalanceWei)) {
+  const autoGoal = autonomousGoalOf(mode);
+  if (autoGoal) {
+    // Treasury/sentinel (incl. a re-reasoned chain hop) target check — an
+    // inbound transfer.request has no goal target; the executor honours the
+    // request bounded by its policy instead.
+    if (BigInt(state.beneficiaryBalanceWei) >= BigInt(autoGoal.targetBalanceWei)) {
       return stand('target balance already met');
     }
   }

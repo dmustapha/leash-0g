@@ -16,6 +16,16 @@ import type { DelegationCoordinator } from '../coordination/coordinator.js';
 import type { AlertService } from '../alerts/service.js';
 import { BoundaryRegistry } from './boundary.js';
 import { listActivatablePendingFor } from '../coordination/store.js';
+import { listAdvancingChainsForOrigin } from '../store/chains.js';
+import {
+  DEFAULT_CHAIN_CONFIG,
+  proposeNextHop,
+  selectHopTargetViaGateway,
+  type ChainConfig,
+  type ChainDeps,
+  type HopSelection,
+} from '../coordination/chain.js';
+import type { Json } from '../crypto/canonical.js';
 import type { RuntimeChain } from './session-chain.js';
 import { buildTreasuryGraph, type TreasuryGraph } from './treasury-graph.js';
 import { buildJobGraph, type JobGraph } from '../jobs/graph.js';
@@ -32,6 +42,8 @@ export interface RuntimeSettings {
   /** §0.6/F8 strong models for the ACP reasoning roles (fall back to defaultModel). */
   jobProviderModel?: string | undefined;
   jobEvaluatorModel?: string | undefined;
+  /** Phase 5.6 chaining bounds (depth cap + eligible-set cap; defaults if unset). */
+  chainConfig?: ChainConfig | undefined;
   fetchFn?: typeof fetch;
 }
 
@@ -64,6 +76,8 @@ interface Loop {
    * interrupt on getState().tasks[].interrupts, resume via Command. */
   graph: TreasuryGraph | JobGraph;
   agent: AgentRow;
+  /** Decrypted gateway token — Phase 5.6 uses it for the isolated hop selector. */
+  gatewayToken: string;
 }
 
 /**
@@ -155,7 +169,7 @@ export class LeashRuntimeManager implements RuntimeManager {
           ctx,
           this.deps.checkpointer,
         );
-    const loop: Loop = { stopped: false, timer: null, current: Promise.resolve(), busy: false, pendingApprovalId: null, graph, agent };
+    const loop: Loop = { stopped: false, timer: null, current: Promise.resolve(), busy: false, pendingApprovalId: null, graph, agent, gatewayToken: ctx.gatewayToken };
     this.loops.set(agentId, loop);
     this.schedule(loop, 0);
   }
@@ -249,7 +263,12 @@ export class LeashRuntimeManager implements RuntimeManager {
     const snapshot = await loop.graph.getState(config);
     // 0.2.x: pending interrupts live on tasks[].interrupts, NOT result.__interrupt__ (PHASE-0 §1b).
     const pending = snapshot.tasks.flatMap((t) => t.interrupts)[0];
-    if (!pending) return;
+    if (!pending) {
+      // Cycle completed without an approval interrupt — the directed origin's
+      // output is ready; propose the chain's first hop (Phase 5.6).
+      await this.maybeAdvanceChains(loop, config);
+      return;
+    }
     const { approvalId } = pending.value as { approvalId: string };
 
     loop.pendingApprovalId = approvalId;
@@ -287,6 +306,59 @@ export class LeashRuntimeManager implements RuntimeManager {
     const resolved: ApprovalDecision =
       decision === 'timeout' ? { decision: 'deny', reason: 'approval timed out' } : decision;
     await loop.graph.invoke(new Command({ resume: resolved }), config);
+    await this.maybeAdvanceChains(loop, config);
+  }
+
+  /**
+   * Phase 5.6 runtime hook (spec §3b — the ONLY new runtime behavior): after a
+   * DIRECTED agent completes a cycle, if it originates an owner-confirmed chain
+   * plan with an un-proposed FIRST hop, propose that hop carrying this cycle's
+   * output as labeled-untrusted upstreamOutput. Owner-plan-gated (never invents
+   * a hop or a target), rides the cycle boundary, idempotent (the CAS in the
+   * chains projection makes a hop proposed exactly once). Only hop 0 is kicked
+   * here — every later hop advances via onHopSettled when the prior hop settles.
+   */
+  private async maybeAdvanceChains(
+    loop: Loop,
+    config: { configurable: { thread_id: string } },
+  ): Promise<void> {
+    if (!this.coordinator) return;
+    const agentId = loop.agent.id;
+    const chains = (await listAdvancingChainsForOrigin(this.deps.pool, agentId)).filter((c) => c.nextHop === 0);
+    if (chains.length === 0) return;
+    const snapshot = await loop.graph.getState(config);
+    const values = (snapshot.values ?? {}) as Record<string, unknown>;
+    const rawReasoning = values['reasoning'];
+    const reasoning = typeof rawReasoning === 'string' ? rawReasoning.slice(0, 2000) : '';
+    const upstreamOutput = { outcome: (values['outcome'] as Json) ?? null, reasoning } as unknown as Json;
+    const chainDeps: ChainDeps = {
+      pool: this.deps.pool,
+      hub: this.deps.hub,
+      coordinator: this.coordinator,
+      config: this.deps.settings.chainConfig ?? DEFAULT_CHAIN_CONFIG,
+    };
+    for (const c of chains) {
+      const hop0 = c.plan[0];
+      // Option-C (S25): a MULTI-member hop gets a model-driven pick (isolated
+      // gateway selector); the emitted id is UNTRUSTED → proposeNextHop's BC-2
+      // re-validates it ∈ eligibleTargetIds (an off-set emit HARD-terminates the
+      // chain). A one-member hop, or a failed/garbled selection, falls back to
+      // deterministic in-set selection.
+      let selection: HopSelection = { auto: true };
+      if (hop0 && hop0.eligibleTargetIds.length > 1) {
+        const emitted = await selectHopTargetViaGateway(
+          {
+            gatewayUrl: this.deps.settings.gatewayUrl,
+            gatewayToken: loop.gatewayToken,
+            model: this.deps.settings.defaultModel,
+            ...(this.deps.settings.fetchFn ? { fetchFn: this.deps.settings.fetchFn } : {}),
+          },
+          { eligibleTargetIds: hop0.eligibleTargetIds, directedIntent: hop0.directedIntent, upstreamOutput },
+        );
+        if (emitted !== undefined) selection = { emitted };
+      }
+      await proposeNextHop(chainDeps, c.id, upstreamOutput, selection);
+    }
   }
 
   /**

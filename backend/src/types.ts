@@ -303,6 +303,58 @@ export interface Delegation {
   expiresAt: string;
 }
 
+/**
+ * Phase 5.6 agent chaining (spec §4). A chain is the OWNER directing a SEQUENCE
+ * of their OWN capabilities where each downstream hop's input carries the prior
+ * hop's output. Everything here is a runtime read model / opaque envelope — it
+ * confers ZERO authority (the downstream's own on-chain leash binds every act).
+ */
+
+/**
+ * An owner-authored chain step (QUARANTINED until each hop is owner-approved).
+ * `eligibleTargetIds` is the owner-authored SHORTLIST of OWNED, linked
+ * capabilities (Option-C, S24) resolved against EXISTING owner-scoped active
+ * links (server-state, NEVER model text, NEVER an address). At runtime the
+ * upstream selects ONE from the shortlist; the selection is re-validated
+ * server-side ∈ this set (BC-2). A one-member set = a fixed hop (no choice);
+ * >1 = caged runtime selection.
+ */
+export interface ChainStep {
+  eligibleTargetIds: string[];
+  /** Owner-authored, descriptive, quarantined task text for the downstream. */
+  directedIntent: string;
+}
+
+/** The chain read-model projection (runtime read model, NOT authority; §5). */
+export interface Chain {
+  id: string;
+  ownerAddr: string;
+  originAgentId: string;
+  directionId: string;
+  plan: ChainStep[];
+  status: 'planned' | 'running' | 'completed' | 'terminated';
+  /** 0-based index of the next hop the runtime will propose. */
+  nextHop: number;
+  /** Realised path: origin + each selected target, in order (cycle re-check). */
+  path: string[];
+  currentDelegationId: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * The opaque hop envelope (interpreted ONLY in the runtime graph; opaque to
+ * coordination). Rides the EXISTING delegations table (kind/payload already
+ * opaque) — no schema change. `upstreamOutput` is LABELED-UNTRUSTED input,
+ * NEVER authority; `ownerDirectedIntent` is owner-authored descriptive intent.
+ */
+export interface ChainHandoffPayload {
+  chainId: string;
+  hopIndex: number;
+  ownerDirectedIntent: string;
+  upstreamOutput: Json;
+}
+
 /** SSE event emitted on BOTH agents' streams at every lifecycle transition (spec §4). */
 export interface DelegationEvent {
   type: 'delegation';

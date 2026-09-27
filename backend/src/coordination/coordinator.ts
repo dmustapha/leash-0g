@@ -62,14 +62,40 @@ export interface CoordinatorDeps {
   runtime: { nudge(agentId: string): void };
   /** Phase-3 alert engine (optional in coordination-only test setups). */
   alerts?: AlertService | undefined;
+  /**
+   * Phase 5.6 (generality-guard-clean): fired whenever a delegation reaches a
+   * TERMINAL status (completed/failed/declined/cancelled/expired). The
+   * coordinator stays generic — it never learns what any `kind` means; the
+   * chain service registers this to advance/terminate a chain when its in-flight
+   * hop settles (onHopSettled is idempotent + keyed on the chain projection, so
+   * a non-chain delegation is a cheap no-op). Best-effort: a throw is logged,
+   * never crashing the transition.
+   */
+  onDelegationTerminal?: ((d: Delegation) => Promise<void>) | undefined;
   settings: CoordinatorSettings;
 }
+
+const TERMINAL: ReadonlySet<Delegation['status']> = new Set([
+  'completed',
+  'failed',
+  'declined',
+  'cancelled',
+  'expired',
+]);
 
 export interface IssueDelegationInput {
   fromAgent: AgentRow;
   kind: string;
   payload: Json;
   toAgentId?: string;
+  /**
+   * Phase 5.6 (Gap-2/D-2): force the supervised (owner-approval) path even on
+   * an `auto` link. A chain hop targeting a SPENDER downstream MUST be
+   * owner-approved regardless of the link's mode — this makes "no spender hop
+   * without an owner approval" structural, never dependent on how the owner set
+   * the link mode. ORs with `link.mode === 'supervised'`.
+   */
+  forceSupervised?: boolean;
 }
 
 export class DelegationCoordinator {
@@ -109,7 +135,7 @@ export class DelegationCoordinator {
     // P3C-1: throttle check + insert are atomic under a per-link advisory
     // lock (createDelegationGuarded) — a parallel issue burst can no longer
     // slip past the pending/rate bounds between count and insert.
-    const supervised = link.mode === 'supervised';
+    const supervised = link.mode === 'supervised' || input.forceSupervised === true;
     const guarded = await createDelegationGuarded(
       pool,
       {
@@ -380,12 +406,27 @@ export class DelegationCoordinator {
 
   /** One sweep pass (timer-driven; also called directly by tests). */
   async sweepOnce(): Promise<Delegation[]> {
-    return sweepAndTrace(this.deps.pool, this.deps.hub, this.deps.alerts);
+    const swept = await sweepAndTrace(this.deps.pool, this.deps.hub, this.deps.alerts);
+    // Phase 5.6: an expired hop terminates its chain (the callback no-ops for
+    // non-chain delegations).
+    for (const d of swept) await this.fireTerminal(d);
+    return swept;
   }
 
   /** Shared trace + both-sides SSE for every lifecycle transition. */
   private async traceUpdate(traceAgentId: string, d: Delegation, summary: string): Promise<void> {
     await traceDelegationUpdate(this.deps.pool, this.deps.hub, traceAgentId, d, summary, this.deps.alerts);
+    await this.fireTerminal(d);
+  }
+
+  /** Phase 5.6: notify the terminal-delegation observer (chain advance/terminate). */
+  private async fireTerminal(d: Delegation): Promise<void> {
+    if (!this.deps.onDelegationTerminal || !TERMINAL.has(d.status)) return;
+    try {
+      await this.deps.onDelegationTerminal(d);
+    } catch (err) {
+      console.error('onDelegationTerminal observer failed', err);
+    }
   }
 
   private emitBothSides(d: Delegation): void {

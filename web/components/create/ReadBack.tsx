@@ -20,8 +20,9 @@
 'use client';
 
 import { useMemo, useState } from 'react';
-import type { AgentRole, DirectionDraft, ElevationDraft } from '@/lib/types';
+import type { AgentRole, ChainStep, DirectionDraft, ElevationDraft } from '@/lib/types';
 import { Disclosure } from '@/components/ui/Disclosure';
+import { ChainPlanEditor, type ChainCandidate } from '@/components/cockpit/ChainPlanEditor';
 
 /** Plain-language label for a role — no jargon on the surface (00 §2c). */
 const ROLE_LABEL: Record<AgentRole, string> = {
@@ -136,9 +137,14 @@ export type DirectReadBackProps = {
   mode: 'direct';
   draft: DirectionDraft;
   /** `recipient` stays the owner-typed, out-of-band address contract — undefined for
-   *  roles that cannot move money. Never merged into the quarantined draft. */
-  onConfirm: (edited: DirectionDraft, recipient?: string) => void;
+   *  roles that cannot move money. Never merged into the quarantined draft.
+   *  `chainPlan` (Phase 5.6) is the OPTIONAL owner-authored chain — quarantined, arms
+   *  no delegation; omitted/empty when the owner doesn't build one. */
+  onConfirm: (edited: DirectionDraft, recipient?: string, chainPlan?: ChainStep[]) => void;
   onBack: () => void;
+  /** Phase 5.6: the owner's OWN linked capabilities this agent can hand off to. */
+  chainCandidates?: ChainCandidate[];
+  chainConfig?: { maxDepth: number; maxEligiblePerHop: number };
 };
 
 export type ReadBackProps = CreateReadBackProps | DirectReadBackProps;
@@ -441,7 +447,7 @@ function patchLabel(key: string): string {
   return map[key] ?? key;
 }
 
-function DirectReadBack({ draft, onConfirm, onBack }: DirectReadBackProps) {
+function DirectReadBack({ draft, onConfirm, onBack, chainCandidates, chainConfig }: DirectReadBackProps) {
   const role = draft.currentRole;
   const movesMoney = roleMovesMoney(role);
 
@@ -451,6 +457,8 @@ function DirectReadBack({ draft, onConfirm, onBack }: DirectReadBackProps) {
 
   // NEVER pre-filled: the recipient. Always blank-required for a can-move-money role.
   const [recipient, setRecipient] = useState('');
+  // Phase 5.6: the OPTIONAL owner-authored chain plan (quarantined; arms nothing).
+  const [chainPlan, setChainPlan] = useState<ChainStep[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const moneyPowerLine = useMemo(
@@ -475,7 +483,11 @@ function DirectReadBack({ draft, onConfirm, onBack }: DirectReadBackProps) {
       editedGoalPatch[k] = typeof original === 'number' && v.trim() !== '' && !Number.isNaN(Number(v)) ? Number(v) : v;
     }
     const edited: DirectionDraft = { ...draft, goalPatch: editedGoalPatch };
-    onConfirm(edited, movesMoney ? recipient.trim() : undefined);
+    // Only send hops the owner actually completed (≥1 target + a non-blank intent);
+    // the server re-validates every hop (ownership/links/caps/cycle) and rejects
+    // an incomplete/invalid plan with a visible error.
+    const plan = chainPlan.filter((h) => h.eligibleTargetIds.length > 0 && h.directedIntent.trim() !== '');
+    onConfirm(edited, movesMoney ? recipient.trim() : undefined, plan.length > 0 ? plan : undefined);
   }
 
   return (
@@ -581,6 +593,17 @@ function DirectReadBack({ draft, onConfirm, onBack }: DirectReadBackProps) {
           time-locked step — this read-back is a redirect, not a way to loosen the leash.
         </Disclosure>
       </section>
+
+      {/* ───────── Phase 5.6 (optional): hand the result to another of your agents ───────── */}
+      {chainCandidates !== undefined ? (
+        <ChainPlanEditor
+          candidates={chainCandidates}
+          maxDepth={chainConfig?.maxDepth ?? 3}
+          maxEligiblePerHop={chainConfig?.maxEligiblePerHop ?? 3}
+          value={chainPlan}
+          onChange={setChainPlan}
+        />
+      ) : null}
 
       {error ? (
         <p role="alert" style={{ color: 'var(--color-deny)', fontSize: '0.85rem', margin: 0 }}>
