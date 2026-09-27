@@ -1,6 +1,6 @@
 import { createPublicClient, createWalletClient, http, type Hex, type PublicClient } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { leashAccountAbi, erc20MetaAbi } from '../chain/abis.js';
+import { leashAccountAbi, leashAccountV4Abi, erc20MetaAbi } from '../chain/abis.js';
 import { readPolicyView, zeroGChain } from '../chain/ops.js';
 import type { PolicyView } from '../types.js';
 import { waitReceipt } from '../chain/wait-receipt.js';
@@ -31,6 +31,20 @@ export interface RuntimeChain {
     token: string;
     to: string;
     amountWei: bigint;
+  }): Promise<{ txHash: string }>;
+  /**
+   * Stage D (D-10): the generic governed-call path. The agent's scoped session
+   * key submits `executeCall(target, value, data)`; the on-chain V4 wall enforces
+   * the grant + caps + decoders. The runtime NEVER submits an out-of-envelope
+   * call (it routes novelty to JIT first, P3C-6) — a revert here is a genuine
+   * boundary hit, never recorded as a completed action.
+   */
+  executeCall(input: {
+    sessionPrivateKey: string;
+    accountAddr: string;
+    target: string;
+    valueWei: bigint;
+    data: string;
   }): Promise<{ txHash: string }>;
   /**
    * Read an ERC-20's symbol + decimals so the settlement surfaces can DETECT
@@ -120,6 +134,34 @@ export class SessionChain implements RuntimeChain {
       abi: leashAccountAbi,
       functionName: 'executeTokenTransfer',
       args: [input.token as Hex, input.to as Hex, input.amountWei],
+    });
+    const receipt = await waitReceipt(this.publicClient, txHash);
+    assertReceiptSuccess(receipt.status, txHash);
+    return { txHash };
+  }
+
+  async executeCall(input: {
+    sessionPrivateKey: string;
+    accountAddr: string;
+    target: string;
+    valueWei: bigint;
+    data: string;
+  }): Promise<{ txHash: string }> {
+    const account = privateKeyToAccount(input.sessionPrivateKey as Hex);
+    const wallet = createWalletClient({
+      chain: zeroGChain(this.opts.rpcUrl, this.opts.chainId),
+      transport: http(this.opts.rpcUrl),
+      account,
+    });
+    // Stage D: the agent supplies (target, value, data); the V4 account decodes
+    // + enforces the grant. No raw arg authority ever originates off-chain.
+    const txHash = await wallet.writeContract({
+      chain: wallet.chain,
+      account,
+      address: input.accountAddr as Hex,
+      abi: leashAccountV4Abi,
+      functionName: 'executeCall',
+      args: [input.target as Hex, input.valueWei, (input.data || '0x') as Hex],
     });
     const receipt = await waitReceipt(this.publicClient, txHash);
     assertReceiptSuccess(receipt.status, txHash);
