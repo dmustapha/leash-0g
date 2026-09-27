@@ -1,0 +1,17 @@
+{
+  "phase": "5.6",
+  "drill": "deployed-chain-drill (D-7)",
+  "ts": "2026-09-27T09:52:46.815Z",
+  "stack": "leash-0g-backend.onrender.com + 0G Galileo testnet (16602)",
+  "owner": "0x05b105B9133aD6cD30Eb7a3a6088C53865F5732E",
+  "upstream": "15c58833-1e13-4ef7-af28-b34864ddb582",
+  "downstream": "32f584dd-ed0b-4256-a432-70679a805805",
+  "chainId": "7c2294ae-0ae9-4532-ace6-ddb6c8be5ce0",
+  "verified": {
+    "D-1_D-2_quarantine": "planned chain + 0 hop delegations at confirm",
+    "Gap-2_supervised": "hop 0 proposed as pending_approval (spender downstream), approvalId 202f4f4e-a9cc-4cd8-b5ad-8a265345811b",
+    "hop_settled": "completed",
+    "chain_status": "completed"
+  },
+  "result": "PASS"
+}

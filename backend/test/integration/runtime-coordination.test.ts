@@ -10,7 +10,9 @@ import { encryptSecret } from '../../src/crypto/keycrypt.js';
 import { listTraces } from '../../src/trace/trace-store.js';
 import { LeashRuntimeManager } from '../../src/runtime/manager.js';
 import { DelegationCoordinator } from '../../src/coordination/coordinator.js';
-import { createLink, createDelegation, getDelegation } from '../../src/coordination/store.js';
+import { createLink, createDelegation, getDelegation, listDelegations } from '../../src/coordination/store.js';
+import { insertPlannedChain, getChain } from '../../src/store/chains.js';
+import { insertDirectionDraft } from '../../src/store/directions.js';
 import type { RuntimeChain } from '../../src/runtime/session-chain.js';
 import type { AgentGoal, PolicyView, TraceRecord } from '../../src/types.js';
 import type { Json } from '../../src/crypto/canonical.js';
@@ -582,5 +584,35 @@ describe('chain.handoff inbound (Phase 5.6, D-3)', () => {
     await waitFor(async () => (await getDelegation(db.pool, delegId))?.status === 'failed');
     await manager.settle(downstream.id);
     expect(fakeChain.executed).toHaveLength(0);
+  });
+});
+
+// ───────── Phase 5.6: origin-side runtime hook (maybeAdvanceChains proposes hop 0) ─────────
+
+describe('chain origin hook (Phase 5.6, D-7 repro)', () => {
+  it('a directed origin with a chain plan PROPOSES hop 0 after its cycle', async () => {
+    const origin = await seedRoleAgent(TREASURY_GOAL);
+    const downstream = await seedRoleAgent(TREASURY_GOAL);
+    await createLink(db.pool, { ownerAddr: OWNER, fromAgentId: origin.id, toAgentId: downstream.id, mode: 'supervised' });
+    // A confirmed direction row (FK target for the chain) + the planned chain.
+    const draft = { agentId: origin.id, currentRole: 'treasury', understanding: 'x', goalPatch: {}, moneyPower: 'can-move-money', unsureFields: [], confidence: 'high' };
+    const dir = await insertDirectionDraft(db.pool, { agentId: origin.id, ownerAddr: OWNER, intent: 'x', draft: draft as never });
+    const chain = await insertPlannedChain(db.pool, {
+      ownerAddr: OWNER,
+      originAgentId: origin.id,
+      directionId: dir.id,
+      plan: [{ eligibleTargetIds: [downstream.id], directedIntent: 'go' }],
+    });
+    fakeChain.balances.set(BENEFICIARY, 0n);
+    mockModelDecision(JSON.stringify({ action: 'stand_down', amountWei: '0', reason: 'watching' }), 3);
+
+    await start(origin.id);
+    await waitFor(async () => (await getChain(db.pool, chain.id))?.nextHop === 1, 20_000).catch(() => {});
+    await manager.settle(origin.id);
+
+    const after = await getChain(db.pool, chain.id);
+    const { delegations } = await listDelegations(db.pool, { agentId: downstream.id });
+    expect(delegations.filter((d) => d.kind === 'chain.handoff')).toHaveLength(1);
+    expect(after?.nextHop).toBe(1);
   });
 });
