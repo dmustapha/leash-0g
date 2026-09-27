@@ -1,0 +1,12 @@
+{
+  "phase": "Stage D — governed calldata",
+  "kind": "deployed adversarial drill (D-15)",
+  "chainId": 16602,
+  "account": "0x47E5c2665E00D224527c128919c942eCeF1cEc0F",
+  "grantedTarget": "0xf936390897f72A92c8B008A1371bb54a606E5451",
+  "grantedSpender": "0x4CD6ed4E6abd715D10E49AD99d2e3866bF46ee30",
+  "happyApproveTx": "0xe925b4794e4a238295b413f703255aa0f1e6ee0dd53183ad936c07d476b6a8b5",
+  "happyAllowance": "100000000 [1e8]",
+  "checks": { "passed": 6, "failed": 0 },
+  "vectors": ["approve(max)", "off-allowlist spender", "over per-call cap", "off-allowlist target", "malicious real-tx revert"]
+}
