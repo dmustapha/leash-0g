@@ -246,6 +246,12 @@ async function main(): Promise<void> {
       delegationPayloadMaxBytes: cfg.DELEGATION_PAYLOAD_MAX_BYTES,
       chainMaxDepth: cfg.CHAIN_MAX_DEPTH,
       chainMaxEligiblePerHop: cfg.CHAIN_MAX_ELIGIBLE_PER_HOP,
+      capabilityCatalog: {
+        ...(cfg.CAP_ROUTER_ADDR ? { router: cfg.CAP_ROUTER_ADDR.toLowerCase() } : {}),
+        ...(cfg.CAP_VAULT_ADDR ? { vault: cfg.CAP_VAULT_ADDR.toLowerCase() } : {}),
+        ...(cfg.CAP_SETTLEMENT_TOKEN_ADDR ? { settlement_token: cfg.CAP_SETTLEMENT_TOKEN_ADDR.toLowerCase() } : {}),
+      },
+      jitTtlMs: cfg.JIT_TTL_MS,
     },
   };
   // M-01 split surfaces: the public server carries owner API + SSE + healthz

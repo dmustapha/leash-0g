@@ -1,6 +1,7 @@
 import express, { type Express, type Request, type Response, type NextFunction } from 'express';
 import type { Pool } from 'pg';
 import type { ComputeQueue } from './gateway/compute-queue.js';
+import type { TargetCatalog } from './governed-call/index.js';
 import { gatewayRouter } from './gateway/routes.js';
 import { ownerRouter } from './api/owner-routes.js';
 import type { PrivyVerifier } from './api/privy.js';
@@ -88,6 +89,10 @@ export interface Settings {
   /** Phase 5.6 chaining bounds (spec §5) — depth cap + per-hop eligible-set cap. */
   chainMaxDepth: number;
   chainMaxEligiblePerHop: number;
+  /** Stage D (spec §5): per-network target catalog (mock targets on 0G, decision (c)). */
+  capabilityCatalog: TargetCatalog;
+  /** Stage D: how long a JIT (L2) capability card stays actionable (ms). */
+  jitTtlMs: number;
 }
 
 export interface AppDeps {

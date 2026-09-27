@@ -99,6 +99,18 @@ const envSchema = z.object({
   // Phase 5.6 chaining bounds (spec §5; config-driven testnet defaults, 07 S6).
   CHAIN_MAX_DEPTH: z.coerce.number().int().positive().max(16).default(3),
   CHAIN_MAX_ELIGIBLE_PER_HOP: z.coerce.number().int().positive().max(16).default(3),
+  // Stage D governed-calldata (spec §5, config-driven testnet defaults, 07 S6).
+  // The per-network TARGET CATALOG (decision (c)): logical preset keys
+  // (router/vault/settlement_token) → the deployed MOCK target addresses on 0G
+  // testnet (DEPLOYMENTS.md "Stage D"). Real protocols are Stage E. Optional so
+  // local/CI without a deployment still boots (preset resolve just returns
+  // unresolvable_target — never a partial grant).
+  CAP_ROUTER_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  CAP_VAULT_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  CAP_SETTLEMENT_TOKEN_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  // How long a JIT (L2) capability card stays actionable before it auto-expires
+  // (the sweep resolves it). Reuses the approval-timeout posture as the default.
+  JIT_TTL_MS: z.coerce.number().int().positive().default(600_000),
 });
 
 export type Config = z.infer<typeof envSchema>;

@@ -39,6 +39,21 @@ import {
 } from '../store/owner-settings.js';
 import { getApproval } from '../store/approvals.js';
 import { decideApprovalWithConsent } from '../approvals/decide.js';
+import {
+  resolvePreset,
+  recordPresetGrants,
+  decideCapabilityRequest,
+  type CapabilityDeps,
+} from '../capabilities/service.js';
+import {
+  listGrants,
+  listAppliedPresets,
+  listRecentRequests,
+  upsertGrant,
+  setGrantStatus,
+  getCapabilityRequest,
+} from '../store/capabilities.js';
+import { presetKeys, type CallRule, type PresetKey } from '../governed-call/index.js';
 import { applyRevokeFanout } from '../agents/revoke-fanout.js';
 import {
   createLink,
@@ -253,6 +268,47 @@ const decisionSchema = z.object({
   decision: z.enum(['approve', 'deny']),
   reason: z.string().max(500).optional(),
 });
+
+// Stage D (spec §4) — governed-calldata grant surfaces. A rule mirrors the
+// on-chain CallRule; caps are base-units decimal strings; the owner signs the
+// on-chain tx client-side (Privy), reporting its hash back to record the
+// read-model (the backend never holds owner authority / never submits it).
+const callRuleSchema = z.object({
+  target: addressSchema,
+  selector: z.string().regex(/^0x[0-9a-fA-F]{8}$/),
+  recipientMode: z.enum(['self', 'allowlist']),
+  spenderSet: z.array(addressSchema).max(16).default([]),
+  perCallCap: weiSchema,
+  windowCapCall: weiSchema,
+  codehash: z.string().regex(/^0x[0-9a-fA-F]{64}$/).optional(),
+});
+const presetApplySchema = z.object({
+  presetKey: z.string().min(1).max(40),
+  txHash: z.string().max(80).optional(),
+});
+const capabilityRuleSchema = z.object({
+  action: z.enum(['propose', 'tighten', 'remove']),
+  rule: callRuleSchema,
+  txHash: z.string().max(80).optional(),
+});
+const capabilityDecisionSchema = z.object({
+  decision: z.enum(['approve_once', 'always_allow', 'deny']),
+  txHash: z.string().max(80).optional(),
+  rule: callRuleSchema.optional(),
+});
+
+/** Normalize a validated rule into the CallRule shape (lowercased, no partials). */
+function toCallRule(r: z.infer<typeof callRuleSchema>): CallRule {
+  return {
+    target: r.target.toLowerCase(),
+    selector: r.selector.toLowerCase(),
+    recipientMode: r.recipientMode,
+    spenderSet: r.spenderSet.map((s) => s.toLowerCase()),
+    perCallCap: r.perCallCap,
+    windowCapCall: r.windowCapCall,
+    ...(r.codehash ? { codehash: r.codehash.toLowerCase() } : {}),
+  };
+}
 
 // Phase-5 (D-B1): spec-elevation input. `intent` is the owner's plain-language
 // description; `answers` are optional guided-question answers; `role` is an
@@ -523,6 +579,15 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
   // Phase 5.6 (N-1): the chain read-model GETs get their OWN per-owner ceiling
   // (read-only, no LLM — a generous but bounded cap).
   const chainsRateOk = makeSlidingLimiter(deps.settings.createRatePerHour);
+  // Stage D: the capability grant/envelope routes get their OWN per-owner ceiling.
+  const capabilitiesRateOk = makeSlidingLimiter(deps.settings.createRatePerHour);
+  const capabilityDeps: CapabilityDeps = {
+    pool: deps.pool,
+    hub: deps.hub,
+    broker: deps.broker,
+    alerts: deps.alerts,
+    jitTtlMs: deps.settings.jitTtlMs,
+  };
 
   // H-01 (round-2 red-team): the per-owner limiters above are bypassable by
   // rotating fresh wallet addresses (each new owner gets a fresh bucket), which
@@ -670,11 +735,10 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
   }));
 
   router.post('/api/approvals/:id', asyncRoute(async (req: OwnerRequest, res) => {
-    const parsed = decisionSchema.safeParse(req.body);
-    if (!parsed.success) {
-      res.status(400).json({ error: { message: 'invalid request body' } });
-      return;
-    }
+    // Fetch + owner-check FIRST so we can branch on the approval TYPE: a Stage-D
+    // capability (JIT) decision carries a richer body (approve_once/always_allow/
+    // deny + the owner-signed tx) than the approve/deny consent used by
+    // delegation/gateway approvals — they must not share one schema.
     const approval = await getApproval(deps.pool, req.params['id'] ?? '');
     if (!approval) {
       res.status(404).json({ error: { message: 'not found' } });
@@ -683,6 +747,39 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     const agent = await getAgentById(deps.pool, approval.agentId);
     if (!agent || agent.ownerAddr !== req.ownerAddr) {
       res.status(403).json({ error: { message: 'forbidden' } });
+      return;
+    }
+    const ref = approval.requestRef;
+    const isCapability =
+      ref !== null && typeof ref === 'object' && !Array.isArray(ref) && ref['type'] === 'capability';
+    if (isCapability) {
+      const parsedCap = capabilityDecisionSchema.safeParse(req.body);
+      if (!parsedCap.success) {
+        res.status(400).json({ error: { message: 'invalid request body' } });
+        return;
+      }
+      const requestId = (ref as Record<string, unknown>)['requestId'];
+      const request = typeof requestId === 'string' ? await getCapabilityRequest(deps.pool, requestId) : null;
+      if (!request) {
+        res.status(404).json({ error: { message: 'not found' } });
+        return;
+      }
+      const outcome = await decideCapabilityRequest(capabilityDeps, agent, request, parsedCap.data.decision, {
+        txHash: parsedCap.data.txHash,
+        rule: parsedCap.data.rule ? toCallRule(parsedCap.data.rule) : undefined,
+        channel: 'app',
+      });
+      if (!outcome.ok) {
+        res.status(outcome.reason === 'already_decided' ? 409 : 400).json({ error: { message: outcome.reason } });
+        return;
+      }
+      res.json({ ok: true, request: { id: request.id, status: outcome.status } });
+      return;
+    }
+
+    const parsed = decisionSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: { message: 'invalid request body' } });
       return;
     }
     // THE shared decision path (approvals/decide.ts) — the exact rails the
@@ -1553,6 +1650,90 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       { agentId: agent.id, agentName: agent.name, q },
     );
     res.json(answer);
+  }));
+
+  // ---- Stage D: governed-calldata grant surfaces (spec §3b/§4) ----------------
+  // The owner signs every on-chain grant tx CLIENT-SIDE (Privy owner wallet, the
+  // proposePolicy/proposeAllowlist path since Phase 1). These routes RESOLVE the
+  // exact rule params (from server-side catalog state, never model text) + RECORD
+  // the read-model after the owner reports the tx hash — the backend never holds
+  // owner authority and never submits a grant tx.
+
+  // Apply a capability preset (D-9): resolve → the batch of proposeCallRule params
+  // the FE signs; when a txHash is supplied (owner already signed the batch),
+  // record the applied preset + its grants (proposed, loosen-timelock in flight).
+  router.post('/api/agents/:id/capabilities/preset', asyncRoute(async (req: OwnerRequest, res) => {
+    if (!capabilitiesRateOk(req.ownerAddr ?? '')) {
+      res.status(429).json({ error: { message: 'rate limited' } });
+      return;
+    }
+    const agent = await requireOwnedAgent(req, res);
+    if (!agent) return;
+    const parsed = presetApplySchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: { message: 'invalid request body' } });
+      return;
+    }
+    if (!presetKeys().includes(parsed.data.presetKey as PresetKey)) {
+      res.status(400).json({ error: { message: 'unknown preset' } });
+      return;
+    }
+    const resolved = resolvePreset(parsed.data.presetKey as PresetKey, deps.settings.capabilityCatalog);
+    if (!resolved.ok) {
+      res.status(422).json({ error: { message: resolved.reason } });
+      return;
+    }
+    if (parsed.data.txHash) await recordPresetGrants(deps.pool, agent, resolved.preset, parsed.data.txHash);
+    res.json({ ok: true, preset: resolved.preset, recorded: Boolean(parsed.data.txHash) });
+  }));
+
+  // Propose / tighten / remove a custom governed-call rule. propose = loosen
+  // (timelocked on-chain); tighten = instant; remove = instant. The read-model is
+  // recorded after the owner reports the signed tx (remove is recorded eagerly —
+  // a tighten/remove is instant and fail-safe).
+  router.post('/api/agents/:id/capabilities/rule', asyncRoute(async (req: OwnerRequest, res) => {
+    if (!capabilitiesRateOk(req.ownerAddr ?? '')) {
+      res.status(429).json({ error: { message: 'rate limited' } });
+      return;
+    }
+    const agent = await requireOwnedAgent(req, res);
+    if (!agent) return;
+    const parsed = capabilityRuleSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: { message: 'invalid request body' } });
+      return;
+    }
+    const rule = toCallRule(parsed.data.rule);
+    if (parsed.data.action === 'remove') {
+      await setGrantStatus(deps.pool, agent.id, rule.target, rule.selector, 'removed');
+      res.json({ ok: true, action: 'remove' });
+      return;
+    }
+    if (parsed.data.txHash) {
+      await upsertGrant(deps.pool, {
+        agentId: agent.id,
+        ownerAddr: agent.ownerAddr,
+        rule,
+        source: 'custom',
+        status: parsed.data.action === 'tighten' ? 'active' : 'proposed',
+        txHash: parsed.data.txHash,
+      });
+    }
+    res.json({ ok: true, action: parsed.data.action, rule, recorded: Boolean(parsed.data.txHash) });
+  }));
+
+  // Read-only capability envelope (D-14): granted rules + applied presets +
+  // recent JIT decisions. The on-chain account stays authoritative; this is the
+  // read-model view for the cockpit.
+  router.get('/api/agents/:id/capabilities', asyncRoute(async (req: OwnerRequest, res) => {
+    const agent = await requireOwnedAgent(req, res);
+    if (!agent) return;
+    const [grants, presets, recentRequests] = await Promise.all([
+      listGrants(deps.pool, agent.id),
+      listAppliedPresets(deps.pool, agent.id),
+      listRecentRequests(deps.pool, agent.id, 20),
+    ]);
+    res.json({ grants, presets, recentRequests });
   }));
 
   // POST /api/agents/:id/wind-down — lifespan dial (D-10): owner marks the agent

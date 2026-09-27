@@ -172,6 +172,13 @@ export function testSettings(overrides: Partial<AppDeps['settings']> = {}): AppD
     delegationPayloadMaxBytes: 16_384,
     chainMaxDepth: 3,
     chainMaxEligiblePerHop: 3,
+    // Stage D: a resolvable mock catalog so preset-apply tests exercise the real path.
+    capabilityCatalog: {
+      router: '0x' + 'd0'.repeat(20),
+      vault: '0x' + 'e0'.repeat(20),
+      settlement_token: '0x' + 'c0'.repeat(20),
+    },
+    jitTtlMs: 600_000,
     ...overrides,
   };
 }
