@@ -86,6 +86,12 @@ const envSchema = z.object({
   TELEGRAM_WEBHOOK_SECRET: z.string().min(16).optional(),
   TELEGRAM_BOT_USERNAME: z.string().min(1).optional(),
   PUBLIC_BASE_URL: z.string().url().optional(),
+  // Stage D (spec §3b): the FRONTEND base URL used to build the JIT
+  // capability-request deep-link on the Telegram card (opens the app so the
+  // owner can sign the on-chain grant — never a tap-to-grant here). Optional:
+  // unset ⇒ the card is delivered without a link (still legible + actionable
+  // in-app), so local/CI without a web deploy still boots.
+  WEB_APP_URL: z.string().url().optional(),
   ALLOWLIST_MAX: z.coerce.number().int().positive().default(16),
   RULES_MAX: z.coerce.number().int().positive().default(32),
   // Coordination channel bounds (spec §3b): zero-authority contains SPENDING,

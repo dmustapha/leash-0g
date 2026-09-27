@@ -202,6 +202,7 @@ async function main(): Promise<void> {
       pool,
       api: new FetchTelegramApi({ botToken: cfg.TELEGRAM_BOT_TOKEN }),
       botUsername: cfg.TELEGRAM_BOT_USERNAME,
+      webAppUrl: cfg.WEB_APP_URL,
       decide: { pool, hub, broker, coordinator, alerts },
     });
     alerts.setTelegramDelivery(bot.delivery());

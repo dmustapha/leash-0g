@@ -6,10 +6,12 @@
  * into callers beyond its promise.
  */
 
-export interface InlineKeyboardButton {
-  text: string;
-  callback_data: string;
-}
+// A callback button rides the consent rail (approve/deny); a url button opens
+// an external surface (the app, to sign an on-chain grant — a capability grant
+// is on-chain, NEVER a tap-to-grant on this delivery-only surface, spec §3b).
+export type InlineKeyboardButton =
+  | { text: string; callback_data: string }
+  | { text: string; url: string };
 
 export interface SendMessageInput {
   chat_id: string;

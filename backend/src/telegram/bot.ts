@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import type { Pool } from 'pg';
 import { z } from 'zod';
-import type { TelegramApi } from './api.js';
+import type { TelegramApi, InlineKeyboardButton } from './api.js';
 import type { Alert } from '../types.js';
 import type { TelegramDelivery } from '../alerts/service.js';
 import { getAgentById } from '../store/agents.js';
@@ -55,6 +55,13 @@ export interface TelegramBotDeps {
   pool: Pool;
   api: TelegramApi;
   botUsername: string;
+  /**
+   * Stage D (spec §3b): the FRONTEND base URL for the JIT capability-request
+   * deep-link. A capability grant is an on-chain owner tx, so the card links
+   * OUT to the app to sign — never a tap-to-grant on this delivery surface.
+   * Unset ⇒ the card is delivered legible but without a link button.
+   */
+  webAppUrl?: string | undefined;
   /** Consent-rail deps — identical to POST /api/approvals/:id (spec §3b). */
   decide: DecideDeps;
   /** Late-bound digest provider (task-order: the digest service lands after the bot). */
@@ -376,8 +383,22 @@ export class TelegramBot {
     // Minimal disclosure (00 §6b): the alert summary is edge-composed plain
     // language (agent name, kind, amount/address where relevant) — never
     // reasoning content, trace payloads, or delegation payloads.
-    let replyMarkup: { inline_keyboard: { text: string; callback_data: string }[][] } | undefined;
-    if (alert.kind === 'approval_required' && typeof alert.refs.approvalId === 'string') {
+    let replyMarkup: { inline_keyboard: InlineKeyboardButton[][] } | undefined;
+    // Stage D L2 JIT (spec §3b): a novel governed call needs an on-chain owner
+    // grant. The card is SURFACE-ONLY — it links OUT to the app to sign, never
+    // a tap-to-grant (a grant is an on-chain tx, not a Telegram callback).
+    if (
+      alert.kind === 'capability_request' &&
+      this.deps.webAppUrl &&
+      typeof alert.agentId === 'string' &&
+      typeof alert.refs.capabilityRequestId === 'string'
+    ) {
+      const url =
+        `${this.deps.webAppUrl.replace(/\/$/, '')}/app` +
+        `?agent=${encodeURIComponent(alert.agentId)}` +
+        `&jit=${encodeURIComponent(alert.refs.capabilityRequestId)}`;
+      replyMarkup = { inline_keyboard: [[{ text: '🔗 Review & grant in the app', url }]] };
+    } else if (alert.kind === 'approval_required' && typeof alert.refs.approvalId === 'string') {
       const approve = randomBytes(24).toString('base64url');
       const deny = randomBytes(24).toString('base64url');
       await this.deps.pool.query(
