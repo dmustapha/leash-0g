@@ -146,6 +146,30 @@ export type Delegation = {
   expiresAt: string;
 };
 
+/**
+ * Phase 5.6 agent chaining (spec §4). Owner-authored, quarantined until each hop
+ * is approved. eligibleTargetIds are OWNED, linked agents (server-state, never
+ * an address). A one-member set = a fixed hop; >1 = caged runtime selection.
+ */
+export type ChainStep = {
+  eligibleTargetIds: string[];
+  directedIntent: string;
+};
+
+export type Chain = {
+  id: string;
+  ownerAddr: Address;
+  originAgentId: string;
+  directionId: string;
+  plan: ChainStep[];
+  status: 'planned' | 'running' | 'completed' | 'terminated';
+  nextHop: number;
+  path: string[];
+  currentDelegationId: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type AgentDetail = {
   status: AgentStatus;
   policy: PolicyInput & { allowlist: Address[] };

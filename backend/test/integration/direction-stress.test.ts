@@ -102,7 +102,9 @@ describe('STRESS: route input abuse', () => {
     const res = await request(t.app).post(`/api/agents/${id}/direct/${d.body.direction.id}/confirm`).set('authorization', ownerAuth(OWNER))
       .send({ edited: { goalPatch: huge } });
     expect(res.status).toBe(400);
-    expect(({} as Record<string, unknown>)['polluted']).toBeUndefined();
+    // (C2: removed the hollow `({})['polluted']` assert — JSON transport turns
+    // `__proto__` into a plain key, so it never pollutes Object.prototype and the
+    // check was trivially true. The real proof is the goal below is UNCHANGED.)
     expect((await getAgentById(db.pool, id))?.goal).toEqual(TREASURY);
   });
   it('confirm a well-formed but nonexistent directionId → 404', async () => {

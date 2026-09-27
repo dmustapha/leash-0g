@@ -158,11 +158,43 @@ export function revalidateEffectiveGoal(currentGoal: AgentGoal, effective: unkno
   if (!parsed.success) {
     return { ok: false, reason: `effective goal is not in the goal union: ${parsed.error.issues[0]?.message ?? 'invalid'}` };
   }
-  if (goalRole(parsed.data) !== goalRole(currentGoal)) {
+  const role = goalRole(currentGoal);
+  if (goalRole(parsed.data) !== role) {
     return { ok: false, reason: 'effective goal changes the agent role' };
+  }
+  // C1 (Phase 5.5 INFO-1, folded into 5.6 — a chain AMPLIFIES blast radius):
+  // money-authority fields are NEVER conversationally patchable; the ONLY
+  // sanctioned money change at this boundary is the owner-typed out-of-band
+  // recipient address (applyRecipient). Assert every OTHER money-authority field
+  // is byte-identical to the live goal — a tampered/stale effective goal that
+  // widened a spend ceiling, swapped the settlement token, or re-bound the
+  // provider/evaluator is rejected here (defence-in-depth, in addition to the
+  // confirm-time applyGoalPatch whitelist).
+  const cur = currentGoal as unknown as Record<string, unknown>;
+  const eff = parsed.data as unknown as Record<string, unknown>;
+  for (const f of MONEY_INVARIANT_FIELDS[role]) {
+    if (cur[f] !== eff[f]) {
+      return { ok: false, reason: `effective goal changes a money-authority field (${f})` };
+    }
   }
   return { ok: true, goal: parsed.data };
 }
+
+/**
+ * Money-authority fields that a conversational directive may NEVER change at the
+ * apply boundary (C1). The single recipient ADDRESS (beneficiary/feeRecipient)
+ * is deliberately excluded — it is the sanctioned owner-typed out-of-band
+ * re-target (applyRecipient). Everything else that moves/bounds money or binds
+ * authority is invariant across a directive.
+ */
+const MONEY_INVARIANT_FIELDS: Record<AgentRole, readonly string[]> = {
+  treasury: [],
+  sentinel: [],
+  executor: [],
+  requester: ['feeToken', 'feeCapPerJobWei', 'jobSpecSource', 'providerAgentId', 'evaluatorAgentId'],
+  provider: [],
+  evaluator: [],
+};
 
 export type ValidateAcceptanceResult =
   | { ok: true; rules: AcceptanceRule[] }

@@ -19,8 +19,11 @@ import { SessionChain } from './runtime/session-chain.js';
 import { LeashRuntimeManager } from './runtime/manager.js';
 import { backfillLegacyGuardian } from './store/agents.js';
 import { sweepStaleReservations } from './store/reservations.js';
+import { pruneAllStaleDraftDirections } from './store/directions.js';
 import { sweepOrphanedApprovals } from './approvals/sweep.js';
 import { DelegationCoordinator, runBootSweep } from './coordination/coordinator.js';
+import { onHopSettled } from './coordination/chain.js';
+import type { Json } from './crypto/canonical.js';
 import { AlertService } from './alerts/service.js';
 import { TelegramBot } from './telegram/bot.js';
 import { FetchTelegramApi } from './telegram/api.js';
@@ -67,6 +70,17 @@ async function main(): Promise<void> {
     );
   }, cfg.RESERVATION_TTL_MS);
   reservationSweepTimer.unref();
+
+  // C2 (Phase 5.6): periodic prune of abandoned draft directions (moved off the
+  // /direct hot path, mirroring the reservation/delegation sweepers). 1h cadence,
+  // drops never-confirmed drafts older than 24h.
+  const DIRECTIONS_DRAFT_TTL_S = 24 * 3600;
+  const directionsSweepTimer = setInterval(() => {
+    void pruneAllStaleDraftDirections(pool, DIRECTIONS_DRAFT_TTL_S).catch((err: unknown) =>
+      console.error('directions draft sweep tick failed', err),
+    );
+  }, 3600_000);
+  directionsSweepTimer.unref();
 
   const checkpointer = new PostgresSaver(pool, undefined, { schema: 'public' });
   if (migratePool === pool) {
@@ -130,11 +144,13 @@ async function main(): Promise<void> {
       defaultModel: cfg.RUNTIME_DEFAULT_MODEL,
       jobProviderModel: cfg.JOB_PROVIDER_MODEL,
       jobEvaluatorModel: cfg.JOB_EVALUATOR_MODEL,
+      chainConfig: { maxDepth: cfg.CHAIN_MAX_DEPTH, maxEligiblePerHop: cfg.CHAIN_MAX_ELIGIBLE_PER_HOP },
     },
   });
 
   // Coordination layer (spec §3b): links/delegations lifecycle + channel
   // throttles + expiry sweeper. The nudge is delivery-latency only.
+  const chainConfig = { maxDepth: cfg.CHAIN_MAX_DEPTH, maxEligiblePerHop: cfg.CHAIN_MAX_ELIGIBLE_PER_HOP };
   const coordinator = new DelegationCoordinator({
     pool,
     hub,
@@ -145,6 +161,20 @@ async function main(): Promise<void> {
       delegationRatePerLinkPerHour: cfg.DELEGATION_RATE_PER_LINK_PER_HOUR,
       delegationMaxPendingPerLink: cfg.DELEGATION_MAX_PENDING_PER_LINK,
       delegationPayloadMaxBytes: cfg.DELEGATION_PAYLOAD_MAX_BYTES,
+    },
+    // Phase 5.6 (generality-guard-clean): advance/terminate a chain when its
+    // in-flight hop settles. onHopSettled is idempotent + a no-op for non-chain
+    // delegations. The closure resolves `coordinator` lazily (fires at runtime).
+    onDelegationTerminal: async (d) => {
+      const output = ((d.result as { output?: unknown } | undefined)?.output ?? d.result ?? null) as Json;
+      // W2: pass the chainId/hopIndex from the OPAQUE payload as a reconciliation
+      // hint (the coordinator stays generic — it just forwards the payload it holds).
+      const p = (d.payload ?? {}) as { chainId?: unknown; hopIndex?: unknown };
+      await onHopSettled({ pool, hub, coordinator, config: chainConfig }, d.id, {
+        status: d.status,
+        output,
+        hint: { chainId: p.chainId, hopIndex: p.hopIndex },
+      });
     },
   });
   // Late-bind (spec §3b): the runtime's delegate route + inbound channel need
@@ -214,6 +244,8 @@ async function main(): Promise<void> {
       delegationRatePerLinkPerHour: cfg.DELEGATION_RATE_PER_LINK_PER_HOUR,
       delegationMaxPendingPerLink: cfg.DELEGATION_MAX_PENDING_PER_LINK,
       delegationPayloadMaxBytes: cfg.DELEGATION_PAYLOAD_MAX_BYTES,
+      chainMaxDepth: cfg.CHAIN_MAX_DEPTH,
+      chainMaxEligiblePerHop: cfg.CHAIN_MAX_ELIGIBLE_PER_HOP,
     },
   };
   // M-01 split surfaces: the public server carries owner API + SSE + healthz

@@ -170,6 +170,8 @@ export function testSettings(overrides: Partial<AppDeps['settings']> = {}): AppD
     delegationRatePerLinkPerHour: 12,
     delegationMaxPendingPerLink: 3,
     delegationPayloadMaxBytes: 16_384,
+    chainMaxDepth: 3,
+    chainMaxEligiblePerHop: 3,
     ...overrides,
   };
 }

@@ -85,6 +85,9 @@ export interface Settings {
   delegationRatePerLinkPerHour: number;
   delegationMaxPendingPerLink: number;
   delegationPayloadMaxBytes: number;
+  /** Phase 5.6 chaining bounds (spec §5) — depth cap + per-hop eligible-set cap. */
+  chainMaxDepth: number;
+  chainMaxEligiblePerHop: number;
 }
 
 export interface AppDeps {

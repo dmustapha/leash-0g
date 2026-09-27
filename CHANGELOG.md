@@ -2,6 +2,14 @@
 
 LEASH is built in phases, each ending in a scope + build review gate and proven on the 0G Galileo testnet (chain 16602) before the next begins. This log tracks those phases.
 
+## Phase 5.6 — Agent chaining across capabilities (2026-09)
+
+- Direct one of your agents to hand its result to another of your OWN agents: a confirmed directive can carry an owner-authored chain plan ("run my analyst, then hand the finding to my trader"), built in the same read-back, one confirm.
+- Each hop is a supervised delegation on a link you already made; the downstream re-reasons on the upstream's output as untrusted input under its OWN on-chain leash. A chained agent still cannot invent a payment, exceed a cap, pay off-allowlist, or survive a revoke.
+- Owner-only origin, single-owner scope: a hop can originate only from your directive + your approval, never from agent output. Each hop's targets are an owner-authored shortlist of your own linked agents (never a model-authored address); at runtime the upstream picks one, re-validated server-side to that shortlist — a hijacked agent can never reach an off-list target.
+- Any hop that can move money asks for your approval (reusing the existing handoff card); analyst-style hops that can't spend flow automatically, still leash-bound. Chains are bounded and acyclic (depth cap, per-hop shortlist cap, cycle prevention) and halt on revoke or wind-down.
+- Built entirely on the existing links/delegations + job-envelope substrate as a runtime read-model projection — no new on-chain enforcement, zero contract change.
+
 ## Phase 5 — Create funnel (2026-09)
 
 - Intent-first create funnel: describe an agent in plain words, an LLM on 0G Compute elevates it into a draft, and a tiered read-back shows exactly what was understood before anything is created. Two screens on the happy path; templates and a manual escape for experts.
