@@ -58,13 +58,13 @@ async function api(path, opts = {}) {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function makeTreasury(name, beneficiary) {
+async function makeTreasury(name, beneficiary, targetBalanceWei = '2000000000000000000') {
   const auditKey = new PrivateKey();
   const create = await api('/api/agents', {
     method: 'POST',
     body: JSON.stringify({
       name,
-      goal: { type: 'treasury', beneficiary, targetBalanceWei: '2000000000000000000', topUpWei: '100000000000000' },
+      goal: { type: 'treasury', beneficiary, targetBalanceWei, topUpWei: '100000000000000' },
       policy: { perTransferCapWei: '1000000000000000', windowCapWei: '5000000000000000', windowSeconds: 3600, expiresAt: Math.floor(Date.now() / 1000) + 7 * 86400 },
       allowlist: [beneficiary],
       auditPubKey: auditKey.publicKey.toHex(),
@@ -82,7 +82,10 @@ async function main() {
 
   const benUpstream = privateKeyToAccount(generatePrivateKey()).address;
   const benDownstream = privateKeyToAccount(generatePrivateKey()).address;
-  const upstream = await makeTreasury('chain-drill upstream', benUpstream);
+  // Upstream target 0 → its beneficiary already "meets" it → the upstream always
+  // stands down cleanly (never its own approval-interrupt), so its directed cycle
+  // completes and the chain hook proposes hop 0. The CHAIN itself is what we test.
+  const upstream = await makeTreasury('chain-drill upstream', benUpstream, '0');
   const downstream = await makeTreasury('chain-drill downstream', benDownstream);
   console.log('agents:', { upstream, downstream });
 
@@ -90,16 +93,22 @@ async function main() {
   if (link.status !== 200 && link.status !== 201) throw new Error(`link failed ${link.status}: ${JSON.stringify(link.body)}`);
   console.log('link upstream→downstream (supervised) OK');
 
+  // BOTH must run: the upstream to propose the hop, the DOWNSTREAM to pick up
+  // and process the inbound chain.handoff once the owner approves it.
   await api(`/api/agents/${upstream}/start`, { method: 'POST' });
+  await api(`/api/agents/${downstream}/start`, { method: 'POST' });
   await sleep(40000); // one directed cycle on real 0G Compute
 
   const direct = await api(`/api/agents/${upstream}/direct`, { method: 'POST', body: JSON.stringify({ intent: 'analyze the balance then hand the finding to my other agent' }) });
   if (direct.status !== 200) throw new Error(`/direct ${direct.status}: ${JSON.stringify(direct.body)} — is Phase-5.6 deployed?`);
   const { id: directionId } = direct.body.direction;
 
+  // Pass an empty goalPatch so the directive can't raise the upstream's target
+  // (which would make it want to spend and hit its own approval interrupt).
+  const editedDraft = { ...direct.body.direction.draft, goalPatch: {} };
   const confirm = await api(`/api/agents/${upstream}/direct/${directionId}/confirm`, {
     method: 'POST',
-    body: JSON.stringify({ edited: direct.body.direction.draft, chainPlan: [{ eligibleTargetIds: [downstream], directedIntent: 'rebalance based on the analysis' }] }),
+    body: JSON.stringify({ edited: editedDraft, chainPlan: [{ eligibleTargetIds: [downstream], directedIntent: 'rebalance based on the analysis' }] }),
   });
   if (confirm.status !== 200) throw new Error(`/confirm+chainPlan ${confirm.status}: ${JSON.stringify(confirm.body)}`);
   console.log('confirm + chainPlan OK');
@@ -114,9 +123,9 @@ async function main() {
 
   // Wait for the runtime hook to propose hop 0 as a SUPERVISED delegation.
   let approvalId = null;
-  for (let i = 0; i < 10; i++) {
-    await sleep(15000);
-    const alerts = await api('/api/alerts');
+  for (let i = 0; i < 18; i++) {
+    await sleep(20000);
+    const alerts = await api(`/api/alerts`);
     const card = (alerts.body.alerts ?? []).find((a) => a.kind === 'approval_required' && a.refs?.delegationId);
     if (card) { approvalId = card.refs.approvalId; break; }
   }
@@ -129,8 +138,8 @@ async function main() {
 
   // The downstream re-reasons under its OWN leash and the hop settles → chain advances.
   let settled = false;
-  for (let i = 0; i < 10; i++) {
-    await sleep(15000);
+  for (let i = 0; i < 15; i++) {
+    await sleep(20000);
     const c = await api(`/api/chains/${chain.id}`);
     const hop = (c.body.hops ?? [])[0];
     if (hop && ['completed', 'failed'].includes(hop.status)) { settled = true; console.log('hop 0 settled:', hop.status, '| chain status:', c.body.chain?.status); break; }
