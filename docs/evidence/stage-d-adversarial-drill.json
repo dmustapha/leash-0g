@@ -2,11 +2,20 @@
   "phase": "Stage D — governed calldata",
   "kind": "deployed adversarial drill (D-15)",
   "chainId": 16602,
-  "account": "0x47E5c2665E00D224527c128919c942eCeF1cEc0F",
-  "grantedTarget": "0xf936390897f72A92c8B008A1371bb54a606E5451",
-  "grantedSpender": "0x4CD6ed4E6abd715D10E49AD99d2e3866bF46ee30",
-  "happyApproveTx": "0xe925b4794e4a238295b413f703255aa0f1e6ee0dd53183ad936c07d476b6a8b5",
-  "happyAllowance": "100000000 [1e8]",
-  "checks": { "passed": 6, "failed": 0 },
-  "vectors": ["approve(max)", "off-allowlist spender", "over per-call cap", "off-allowlist target", "malicious real-tx revert"]
+  "account": "0x2FDbfa0e76D4dC455C95C4e7d445595E714cDCDF",
+  "grantedTarget": "0x4E51f90C8Cf60307E01A6abF555762e69Ef0eC2A",
+  "grantedSpender": "0x425B8638e1B851486F397715EA414d52A1Ab7a65",
+  "happyApproveTx": "0x85c4e3b6f263d63919b58acd9b95d35b48a5c36acf092f83fc307459da30215a",
+  "happyAllowance": "100000000",
+  "depositDecoder": {
+    "vault": "0x6F370dd513bF45D69178cb2E1BEe2BF15bAFCE87",
+    "redirectRevert": "RecipientNotSelf 0x239e7696",
+    "overCapRevert": "OverPerCallCap 0x2671b8a6",
+    "happyApproveTx": "0x70b7846912348764aae2168278a3e03d0656edc8d1e7bd6e277a3843606e815a",
+    "happyDepositTx": "0x667123fea08f6076ca1360fd03ad63bb4419376d992c4b91e1633806526624d9",
+    "sharesBefore": "200000000",
+    "sharesAfter": "300000000"
+  },
+  "checks": { "passed": 9, "failed": 0 },
+  "vectors": ["approve(max)", "off-allowlist spender", "over per-call cap", "off-allowlist target", "malicious real-tx revert", "deposit redirect (RecipientNotSelf)", "deposit over per-call cap", "deposit happy self-credit"]
 }

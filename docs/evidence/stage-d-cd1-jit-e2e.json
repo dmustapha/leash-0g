@@ -1,0 +1,21 @@
+{
+  "phase": "Stage D — governed calldata (DEPLOY)",
+  "carry": "C-D1 — backend-orchestrated JIT E2E on the LIVE 0G stack",
+  "kind": "deployed integration drill (real SessionChain vs 0G 16602 + hermetic Neon schema; only the LLM money-decision mocked, deterministic)",
+  "chainId": 16602,
+  "account": "0x2FDbfa0e76D4dC455C95C4e7d445595E714cDCDF",
+  "target": "0x4E51f90C8Cf60307E01A6abF555762e69Ef0eC2A",
+  "spender": "0x425B8638e1B851486F397715EA414d52A1Ab7a65",
+  "runner": "backend/test/integration/governed-call-deployed.test.ts (RUN_DEPLOYED_DRILL=1)",
+  "result": "1/1 PASS (153s)",
+  "loop": {
+    "1_novel_call_raises_jit": "runtime live-read the on-chain grant (perCallCap 200e6), classified the agent's approve(250e6) as L2 over_cap → raised a QUARANTINED capability_request (status pending, novelty over_cap) + a capability_request alert; NO submit (P3C-6 never-doomed-submit)",
+    "2_owner_always_allow": "owner loosened the on-chain rule (proposeCallRule 300e6 → applyCallRule) + decideCapabilityRequest('always_allow') recorded the standing read-model grant + a consent record (tx 0xfe2d6434437efb3cd5d9013802cef490bd7f2e136c1f700414d15420dba8b540)",
+    "3_runtime_retry_lands": "the next runtime cycle live-read the LOOSENED rule (300e6), classified L1, and submitted executeCall that LANDED ON-CHAIN — action trace 'governed call to 0x4e51f90c…', tx 0x083ce66340b4e5419d83fb5ce8bdc27f8d1116a9c88f50815ff44eac92cf682e; allowance(account→router) corroborated == 250000000",
+    "4_failsafe_bonus": "one intermediate cycle's 0G receipt-fetch flaked ('no matching receipts found') and was recorded as a 'governed call failed' DECISION — never as an action (assertReceiptSuccess fail-safe proven live under real 0G roughness)"
+  },
+  "findings_documented_in_results": [
+    "create-flow does not yet mint V4 accounts (ops.ts createAccount on the v2 factory; no createAccountV4 in backend/src) — the drill seeds the agent onto the deployed V4 drill account",
+    "approve-once has NO runtime auto-retry (decideCapabilityRequest never submits; the runtime only does L1 executeCall / L2 raise) — approve-once is proven as an ON-CHAIN primitive by contracts/script/jit-drill.sh (5/5), not as a backend retry. always-allow (proven here) IS the backend-orchestrable loop."
+  ]
+}
