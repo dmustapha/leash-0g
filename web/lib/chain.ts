@@ -15,6 +15,7 @@ import {
 } from 'viem';
 import { config } from './config';
 import leashAccountAbi from './abi/LeashAccount.json';
+import { LEASH_ACCOUNT_V4_ABI } from './abi/leashAccountV4';
 
 export const zeroGGalileo = defineChain({
   id: config.chainId,
@@ -178,4 +179,164 @@ export function readAccountBalance(account: Address): Promise<bigint> {
 
 export function txUrl(hash: Hex): string {
   return `https://chainscan-galileo.0g.ai/tx/${hash}`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Stage D — governed-calldata capability grants (LeashAccountV4).
+// Owner-signed, client-side, mirroring writeAccount(): loosen paths (proposeCallRule,
+// proposeSpendBudget) are TIMELOCKED (~15 min) → applyCallRule/applySpendBudget after eta;
+// tighten/remove/authorizeOnce are INSTANT. The on-chain V4 account is the sole enforcement
+// wall; the read-model only ever mirrors what these writes do.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** No-codehash-pin sentinel (v1): the contract treats 32 zero bytes as "no pin". */
+export const ZERO_CODEHASH = ('0x' + '0'.repeat(64)) as Hex;
+
+/** recipientMode enum: 0 = self (recipient must equal the account), 1 = allowlist. */
+export type RecipientMode = 'self' | 'allowlist';
+export function recipientModeToUint(mode: RecipientMode): 0 | 1 {
+  return mode === 'allowlist' ? 1 : 0;
+}
+
+// The V4 grammar has many overloadable owner writes; a dynamic functionName defeats viem's
+// strict per-function arg inference. We narrow to a loose abi type at the call boundary — the
+// human-readable signatures above stay the single source of truth (byte-exact to the backend).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const V4_ABI_LOOSE = LEASH_ACCOUNT_V4_ABI as any;
+
+async function writeAccountV4(
+  provider: EIP1193Provider,
+  owner: Address,
+  accountAddr: Address,
+  functionName: string,
+  args: readonly unknown[] = [],
+): Promise<Hex> {
+  const wallet = walletClientFor(provider, owner);
+  const { request } = await publicClient.simulateContract({
+    address: accountAddr,
+    abi: V4_ABI_LOOSE,
+    functionName,
+    args: args as unknown[],
+    account: owner,
+  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return wallet.writeContract(request as any);
+}
+
+/** A governed-call rule the owner grants (loosen/tighten). Amounts are base-units strings. */
+export type CallRuleInput = {
+  target: Address;
+  selector: Hex; // 0x + 8 hex (bytes4)
+  recipientMode: RecipientMode;
+  spenderSet: Address[];
+  perCallCap: string; // base units
+  windowCapCall: string; // base units
+  codehash?: Hex; // defaults to ZERO_CODEHASH (no pin) in v1
+};
+
+/** Loosen: add or widen a (target,selector) rule. TIMELOCKED — apply after its eta. */
+export function proposeCallRuleOnchain(
+  provider: EIP1193Provider,
+  owner: Address,
+  account: Address,
+  rule: CallRuleInput,
+) {
+  return writeAccountV4(provider, owner, account, 'proposeCallRule', [
+    rule.target,
+    rule.selector,
+    recipientModeToUint(rule.recipientMode),
+    rule.spenderSet,
+    BigInt(rule.perCallCap),
+    BigInt(rule.windowCapCall),
+    rule.codehash ?? ZERO_CODEHASH,
+  ]);
+}
+
+/** Apply the single pending call-rule once its eta has passed. */
+export function applyCallRuleOnchain(provider: EIP1193Provider, owner: Address, account: Address) {
+  return writeAccountV4(provider, owner, account, 'applyCallRule');
+}
+
+/** Tighten a (target,selector) rule's caps. INSTANT. */
+export function tightenCallRuleOnchain(
+  provider: EIP1193Provider,
+  owner: Address,
+  account: Address,
+  args: { target: Address; selector: Hex; perCallCap: string; windowCapCall: string },
+) {
+  return writeAccountV4(provider, owner, account, 'tightenCallRule', [
+    args.target,
+    args.selector,
+    BigInt(args.perCallCap),
+    BigInt(args.windowCapCall),
+  ]);
+}
+
+/** Remove one selector under a target. INSTANT. */
+export function removeCallSelectorOnchain(
+  provider: EIP1193Provider,
+  owner: Address,
+  account: Address,
+  target: Address,
+  selector: Hex,
+) {
+  return writeAccountV4(provider, owner, account, 'removeCallSelector', [target, selector]);
+}
+
+/** Remove an entire target (all its selectors). INSTANT. */
+export function removeCallTargetOnchain(
+  provider: EIP1193Provider,
+  owner: Address,
+  account: Address,
+  target: Address,
+) {
+  return writeAccountV4(provider, owner, account, 'removeCallTarget', [target]);
+}
+
+/** One-shot JIT approve-once for a specific decoded call hash. INSTANT. */
+export function authorizeOnceOnchain(
+  provider: EIP1193Provider,
+  owner: Address,
+  account: Address,
+  callHash: Hex,
+  expiryUnixSec: number,
+) {
+  return writeAccountV4(provider, owner, account, 'authorizeOnce', [callHash, BigInt(expiryUnixSec)]);
+}
+
+/** Propose a per-token cumulative outflow budget. TIMELOCKED — apply after its eta. */
+export function proposeSpendBudgetOnchain(
+  provider: EIP1193Provider,
+  owner: Address,
+  account: Address,
+  token: Address,
+  windowCap: string,
+) {
+  return writeAccountV4(provider, owner, account, 'proposeSpendBudget', [token, BigInt(windowCap)]);
+}
+
+/** Apply the pending spend budget once its eta has passed. */
+export function applySpendBudgetOnchain(provider: EIP1193Provider, owner: Address, account: Address) {
+  return writeAccountV4(provider, owner, account, 'applySpendBudget');
+}
+
+/** Read the pending call-rule eta (unix s); 0 = nothing pending. */
+export async function readPendingCallRuleEta(account: Address): Promise<number> {
+  const r = (await publicClient.readContract({
+    address: account,
+    abi: LEASH_ACCOUNT_V4_ABI,
+    functionName: 'pendingCallRule',
+  })) as readonly unknown[];
+  return Number(r[6] as bigint);
+}
+
+/** Read the pending spend-budget eta (unix s); 0 = nothing pending. */
+export async function readPendingBudgetEta(account: Address): Promise<number> {
+  return Number(
+    (await publicClient.readContract({
+      address: account,
+      abi: LEASH_ACCOUNT_V4_ABI,
+      functionName: 'pendingBudgetEta',
+    })) as bigint,
+  );
 }

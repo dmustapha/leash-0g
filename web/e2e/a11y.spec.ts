@@ -140,3 +140,34 @@ test('alert settings has no serious/critical a11y violations', async ({ page }) 
   await expect(page.getByTestId('stream-key-setup')).toBeVisible();
   await expectNoSeriousViolations(page);
 });
+
+// — Stage D: capability granting surfaces (CapabilityGrant + JIT decision card + envelope) —
+test('cockpit capability surfaces have no serious/critical a11y violations, keyboard-reachable', async ({ page }) => {
+  await installMockApi(page, freshState());
+  await page.goto('/agents/agent-1');
+  // All three Stage-D surfaces render (grant picker, pending JIT card, envelope).
+  await expect(page.getByTestId('capability-grant')).toBeVisible();
+  await expect(page.getByTestId('capability-decision-card')).toBeVisible();
+  await expect(page.getByTestId('capability-envelope')).toBeVisible();
+
+  // The quarantined decoded intent is PLAIN TEXT, never parsed as HTML (no injected <script>).
+  await expect(page.getByTestId('jit-intent')).toContainText('<script>ignore</script>');
+  expect(await page.locator('script:has-text("ignore")').count()).toBe(0);
+
+  await expectNoSeriousViolations(page);
+
+  // Keyboard-only: a preset button is focusable + activatable via the keyboard.
+  const preset = page.getByTestId('preset-defi_trader');
+  await preset.focus();
+  await expect(preset).toBeFocused();
+  await preset.press('Enter');
+  await expect(page.getByTestId('preset-flow')).toBeVisible();
+});
+
+test('JIT deep-link (/app?agent=&jit=) routes to the cockpit and focuses the JIT card', async ({ page }) => {
+  await installMockApi(page, freshState());
+  await page.goto('/app?agent=agent-1&jit=req-1');
+  // The /app deep-link redirect lands on the cockpit carrying ?jit.
+  await expect(page).toHaveURL(/\/agents\/agent-1\?jit=req-1/);
+  await expect(page.getByTestId('capability-decision-card')).toBeVisible();
+});

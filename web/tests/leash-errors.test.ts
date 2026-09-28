@@ -28,12 +28,28 @@ const EXPECTED_NAMES = [
   'OverPerTransferCapToken',
   'OverWindowCapToken',
   'TokenTransferFailed',
+  // Stage-D governed-calldata wall (v4 executeCall) — the 15 V4 errors.
+  'TargetNotAllowlisted',
+  'SelectorNotAllowlisted',
+  'SelfCallForbidden',
+  'InfiniteApprovalForbidden',
+  'BlanketApprovalForbidden',
+  'RecipientNotSelf',
+  'SpenderNotAllowlisted',
+  'OverPerCallCap',
+  'OverCumulativeSpend',
+  'OverCallWindowCap',
+  'BudgetNotSet',
+  'DecodeMismatch',
+  'CodehashMismatch',
+  'OneShotExpired',
+  'EmptyCodeTarget',
 ];
 
 describe('leash-errors copy map', () => {
-  it('has exactly 22 entries — every LeashAccount custom error, nothing else', () => {
+  it('has exactly 37 entries — every LeashAccount custom error, nothing else', () => {
     expect(Object.keys(LEASH_ERROR_COPY).sort()).toEqual([...EXPECTED_NAMES].sort());
-    expect(Object.keys(LEASH_ERROR_COPY)).toHaveLength(22);
+    expect(Object.keys(LEASH_ERROR_COPY)).toHaveLength(37);
   });
 
   it('never outputs a raw selector or hex — plain language only', () => {

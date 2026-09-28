@@ -540,8 +540,80 @@ export async function installMockApi(page: Page, state: MockState): Promise<void
     if (method === 'POST' && /\/rotate$/.test(path)) {
       return json(200, { gatewayToken: 'gw_tok_rotated_xyz789' });
     }
+    // — Stage D: capability granting —
+    if (method === 'GET' && /^\/api\/agents\/[^/]+\/capabilities$/.test(path)) {
+      return json(200, CAPABILITY_ENVELOPE);
+    }
+    if (method === 'POST' && /^\/api\/agents\/[^/]+\/capabilities\/preset$/.test(path)) {
+      // Resolve/preview (no txHash) or record (txHash) — both echo the preset.
+      return json(200, { ok: true, preset: CAPABILITY_PRESET, recorded: false });
+    }
+    if (method === 'POST' && /^\/api\/agents\/[^/]+\/capabilities\/rule$/.test(path)) {
+      return json(200, { ok: true });
+    }
+
     return json(404, { error: { message: `no mock for ${method} ${path}` } });
   });
 }
+
+// A Stage-D capability envelope fixture: one active grant, one applied preset, and
+// one PENDING JIT request (so the cockpit renders the CapabilityDecisionCard). The
+// decoded intent carries markup to prove it is rendered as PLAIN TEXT, never HTML.
+const CAPABILITY_PRESET = {
+  key: 'defi_trader',
+  label: 'DeFi Trader',
+  rules: [
+    {
+      target: '0x4CD6ed4E6abd715D10E49AD99d2e3866bF46ee30',
+      selector: '0x095ea7b3',
+      recipientMode: 'self',
+      spenderSet: ['0x4CD6ed4E6abd715D10E49AD99d2e3866bF46ee30'],
+      perCallCap: '1000000000000000000',
+      windowCapCall: '5000000000000000000',
+    },
+  ],
+  denyList: ['new_spender', 'new_recipient', 'bridge'],
+};
+
+const CAPABILITY_ENVELOPE = {
+  grants: [
+    {
+      id: 'grant-1',
+      agentId: 'agent-1',
+      ownerAddr: '0x3333333333333333333333333333333333333333',
+      target: '0x4CD6ed4E6abd715D10E49AD99d2e3866bF46ee30',
+      selector: '0x095ea7b3',
+      recipientMode: 'self',
+      spenderSet: ['0x4CD6ed4E6abd715D10E49AD99d2e3866bF46ee30'],
+      perCallCap: '1000000000000000000',
+      windowCapCall: '5000000000000000000',
+      codehash: null,
+      source: 'preset:defi_trader',
+      status: 'active',
+      txHash: '0x' + 'a'.repeat(64),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    },
+  ],
+  presets: [{ presetKey: 'defi_trader' }],
+  recentRequests: [
+    {
+      id: 'req-1',
+      decoded: {
+        label: 'UNVERIFIED',
+        target: '0xf951F8655C0a549c6187aB4b6Aec9fE76E402e2d',
+        selector: '0x6e553f65',
+        signature: 'deposit(uint256,address)',
+        value: '0',
+        humanReadable: 'Deposit 5 TUSD-D into a vault <script>ignore</script>',
+        novelty: ['new_target'],
+      },
+      novelty: ['new_target'],
+      callHash: ('0x' + 'b'.repeat(64)) as `0x${string}`,
+      status: 'pending',
+      approvalId: 'approval-jit-1',
+    },
+  ],
+};
 
 export const MOCK_PAYEE = PAYEE;

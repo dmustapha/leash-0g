@@ -4,12 +4,24 @@
 
 import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
+import { useSearchParams } from 'next/navigation';
 import type { Address, Hex } from 'viem';
 import { makeApi } from '@/lib/api';
 import { config } from '@/lib/config';
 import { useOwnerWallet } from '@/lib/owner-wallet';
 import { connectSse } from '@/lib/sse';
-import type { AgentDetail, Chain, Delegation, GatewayRule, StreamEvent } from '@/lib/types';
+import type {
+  AgentDetail,
+  CallRule,
+  CapabilityEnvelopeView,
+  CapabilityRuleAction,
+  Chain,
+  Delegation,
+  GatewayRule,
+  PresetKey,
+  ResolvedPreset,
+  StreamEvent,
+} from '@/lib/types';
 import { ChainView } from '@/components/cockpit/ChainView';
 import { weiToOg } from '@/lib/format';
 import {
@@ -40,6 +52,17 @@ import { MigrateGuardianBanner } from '@/components/cockpit/MigrateGuardianBanne
 import { RulesEditor } from '@/components/cockpit/RulesEditor';
 import { DirectBox } from '@/components/cockpit/DirectBox';
 import { StatusChat } from '@/components/cockpit/StatusChat';
+import { CapabilityGrant } from '@/components/cockpit/CapabilityGrant';
+import { CapabilityDecisionCard } from '@/components/cockpit/CapabilityDecisionCard';
+import { CapabilityEnvelope } from '@/components/cockpit/CapabilityEnvelope';
+import {
+  applyCallRuleOnchain,
+  authorizeOnceOnchain,
+  proposeCallRuleOnchain,
+  removeCallSelectorOnchain,
+  tightenCallRuleOnchain,
+  type CallRuleInput,
+} from '@/lib/chain';
 
 type Approval = Extract<StreamEvent, { type: 'approval' }>;
 type Connection = 'connecting' | 'open' | 'reconnecting' | 'closed';
@@ -62,6 +85,19 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
   const [chainCandidates, setChainCandidates] = useState<{ id: string; label: string }[]>([]);
   const [agentNames, setAgentNames] = useState<Record<string, string>>({});
   const [chains, setChains] = useState<{ chain: Chain; hops: Delegation[] }[]>([]);
+  // Stage D: the capability envelope (grants + presets + recent JIT decisions).
+  const [capabilities, setCapabilities] = useState<CapabilityEnvelopeView | null>(null);
+  // Deep-link focus: /agents/<id>?jit=<requestId> highlights & scrolls to that JIT card.
+  const searchParams = useSearchParams();
+  const focusJitId = searchParams.get('jit');
+
+  const loadCapabilities = useCallback(async () => {
+    try {
+      setCapabilities(await api.listCapabilities(id));
+    } catch {
+      /* non-fatal: the envelope is a read-model convenience */
+    }
+  }, [api, id]);
 
   const loadChains = useCallback(async () => {
     try {
@@ -89,8 +125,9 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
         /* non-fatal */
       }
       void loadChains();
+      void loadCapabilities();
     })();
-  }, [api, id, loadChains]);
+  }, [api, id, loadChains, loadCapabilities]);
   const seqRef = useRef(0);
 
   const refresh = useCallback(async () => {
@@ -260,6 +297,114 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
     [detail, wallet],
   );
 
+  // ── Stage D: capability grant handlers (owner-signed, client-side) ──
+  const requireProvider = useCallback(async () => {
+    if (!detail || !wallet.address) throw new Error('Connect your wallet first.');
+    return { provider: await wallet.getProvider(), owner: wallet.address as Address, account: detail.addresses.account };
+  }, [detail, wallet]);
+
+  const toChainRule = (r: CallRule): CallRuleInput => ({
+    target: r.target,
+    selector: r.selector,
+    recipientMode: r.recipientMode,
+    spenderSet: r.spenderSet,
+    perCallCap: r.perCallCap,
+    windowCapCall: r.windowCapCall,
+    ...(r.codehash ? { codehash: r.codehash } : {}),
+  });
+
+  const resolvePreset = useCallback(
+    async (key: PresetKey): Promise<ResolvedPreset> => (await api.resolvePreset(id, key)).preset,
+    [api, id],
+  );
+
+  const grantPresetRule = useCallback(
+    async (rule: CallRule): Promise<string> => {
+      const { provider, owner, account } = await requireProvider();
+      return proposeCallRuleOnchain(provider, owner, account, toChainRule(rule));
+    },
+    [requireProvider],
+  );
+
+  const applyCallRule = useCallback(async () => {
+    const { provider, owner, account } = await requireProvider();
+    await applyCallRuleOnchain(provider, owner, account);
+    await loadCapabilities();
+  }, [requireProvider, loadCapabilities]);
+
+  const recordPreset = useCallback(
+    async (key: PresetKey, txHash: string) => {
+      await api.recordPreset(id, key, txHash);
+      await loadCapabilities();
+    },
+    [api, id, loadCapabilities],
+  );
+
+  const customRule = useCallback(
+    async (action: CapabilityRuleAction, rule: CallRule) => {
+      const { provider, owner, account } = await requireProvider();
+      let txHash: string | undefined;
+      if (action === 'propose') {
+        txHash = await proposeCallRuleOnchain(provider, owner, account, toChainRule(rule));
+      } else if (action === 'tighten') {
+        txHash = await tightenCallRuleOnchain(provider, owner, account, {
+          target: rule.target,
+          selector: rule.selector,
+          perCallCap: rule.perCallCap,
+          windowCapCall: rule.windowCapCall,
+        });
+      } else {
+        txHash = await removeCallSelectorOnchain(provider, owner, account, rule.target, rule.selector);
+      }
+      await api.capabilityRule(id, { action, rule, txHash });
+      await loadCapabilities();
+    },
+    [requireProvider, api, id, loadCapabilities],
+  );
+
+  // JIT decision handlers — the request row carries its own approvalId + callHash.
+  const jitApproveOnce = useCallback(
+    async (approvalId: string, callHash: Hex) => {
+      const { provider, owner, account } = await requireProvider();
+      const expiry = Math.floor(Date.now() / 1000) + 15 * 60; // ~15 min JIT window
+      const txHash = await authorizeOnceOnchain(provider, owner, account, callHash, expiry);
+      await api.decideCapability(approvalId, { decision: 'approve_once', txHash });
+      await loadCapabilities();
+    },
+    [requireProvider, api, loadCapabilities],
+  );
+
+  const jitAlwaysAllow = useCallback(
+    async (approvalId: string, rule: CallRule) => {
+      const { provider, owner, account } = await requireProvider();
+      const txHash = await proposeCallRuleOnchain(provider, owner, account, toChainRule(rule));
+      await api.decideCapability(approvalId, { decision: 'always_allow', txHash, rule });
+      await loadCapabilities();
+    },
+    [requireProvider, api, loadCapabilities],
+  );
+
+  const jitDeny = useCallback(
+    async (approvalId: string) => {
+      await api.decideCapability(approvalId, { decision: 'deny' });
+      await loadCapabilities();
+    },
+    [api, loadCapabilities],
+  );
+
+  // Pending JIT requests (need a decision) — from the read-model, bound to an approval.
+  const pendingJit = useMemo(
+    () => (capabilities?.recentRequests ?? []).filter((r) => r.status === 'pending' && r.approvalId),
+    [capabilities],
+  );
+
+  // Deep-link: scroll to & highlight the focused JIT card once it's on screen.
+  useEffect(() => {
+    if (!focusJitId || pendingJit.length === 0) return;
+    const el = document.getElementById(`jit-${focusJitId}`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, [focusJitId, pendingJit]);
+
   const lowBalance =
     detail !== null && BigInt(detail.accountBalance) < BigInt(detail.policy.windowCapWei);
 
@@ -351,6 +496,27 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
         <ApprovalCard key={a.approvalId} approval={a} onDecide={(d, r) => decide(a.approvalId, d, r)} />
       ))}
 
+      {/* Stage D: JIT capability decisions — the agent paused to ask before something new. */}
+      {pendingJit.map((r) => (
+        <div
+          key={r.id}
+          id={`jit-${r.id}`}
+          data-testid={`jit-card-${r.id}`}
+          style={
+            focusJitId === r.id
+              ? { outline: '2px solid var(--color-accent)', borderRadius: 'var(--radius-md)' }
+              : undefined
+          }
+        >
+          <CapabilityDecisionCard
+            request={r}
+            onApproveOnce={(callHash) => jitApproveOnce(r.approvalId as string, callHash)}
+            onAlwaysAllow={(rule) => jitAlwaysAllow(r.approvalId as string, rule)}
+            onDeny={() => jitDeny(r.approvalId as string)}
+          />
+        </div>
+      ))}
+
       {detail && detail.status !== 'revoked' ? (
         <section
           aria-label="Direct this agent"
@@ -405,6 +571,18 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
           {detail ? (
             <RulesEditor rules={detail.agent?.gatewayRules ?? []} onSave={saveRules} />
           ) : null}
+          {detail && detail.status !== 'revoked' ? (
+            <div id="capability-grant">
+              <CapabilityGrant
+                onResolvePreset={resolvePreset}
+                onGrantPresetRule={grantPresetRule}
+                onApplyCallRule={applyCallRule}
+                onRecordPreset={recordPreset}
+                onCustomRule={customRule}
+              />
+            </div>
+          ) : null}
+          {capabilities ? <CapabilityEnvelope envelope={capabilities} /> : null}
           <RevokeButton
             revoked={detail?.status === 'revoked'}
             onRevoke={revokeGuardian}
