@@ -485,6 +485,106 @@ export type OwnerJobSpec = {
 
 export type AcceptanceResult = { passed: boolean; failures: string[]; checked: number };
 
+// ── Stage D (spec §7): governed-calldata capability grants ──
+// The on-chain LeashAccountV4 wall is the sole enforcement guarantee; every type
+// here mirrors the backend read-model (capability_grants / capability_requests)
+// and the CallRule the account enforces, so the surface can never claim more than
+// the wall grants. Decoded agent intent is QUARANTINED (label 'UNVERIFIED') — plain
+// text, never markup.
+
+export type PresetKey = 'defi_trader' | 'yield_manager' | 'treasury_topper' | 'dca' | 'rebalancer' | 'leverage_adv';
+
+/** Novelty categories the JIT gate raises (mirrors backend Novelty). */
+export type Novelty =
+  | 'new_target'
+  | 'new_selector'
+  | 'over_cap'
+  | 'over_budget'
+  | 'new_spender'
+  | 'new_recipient'
+  | 'bridge'
+  | 'self_edit';
+
+export type RecipientMode = 'self' | 'allowlist';
+
+/** The call-rule object the backend accepts (custom rule / always-allow). */
+export type CallRule = {
+  target: Address;
+  selector: Hex; // 0x + 8 hex
+  recipientMode: RecipientMode;
+  spenderSet: Address[];
+  perCallCap: string; // base units
+  windowCapCall: string; // base units
+  codehash?: Hex; // 0x + 64 hex; omit ⇒ no pin (v1)
+};
+
+/** Server mirror of the resolved preset (rules + budgets + JIT deny-list). */
+export type ResolvedPreset = {
+  key: PresetKey;
+  label: string;
+  description: string;
+  rules: CallRule[];
+  budgets: { token: Address; windowCap: string }[];
+  denyList: Novelty[];
+};
+
+export type GrantStatus = 'proposed' | 'active' | 'removed';
+
+/** A capability_grants row (read-model; the account stays authoritative). */
+export type CapabilityGrantRow = {
+  id: string;
+  agentId: string;
+  ownerAddr: Address;
+  target: Address;
+  selector: Hex;
+  recipientMode: RecipientMode;
+  spenderSet: Address[];
+  perCallCap: string;
+  windowCapCall: string;
+  codehash: string | null;
+  source: string; // 'preset' | 'custom'
+  status: GrantStatus;
+  txHash: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** An applied-preset row. */
+export type AppliedPresetRow = { presetKey: PresetKey };
+
+export type RequestStatus = 'pending' | 'approved_once' | 'always_allowed' | 'denied' | 'expired';
+
+/** Quarantined decoded intent on a JIT request — 'UNVERIFIED', render as PLAIN TEXT. */
+export type DecodedIntent = {
+  label: 'UNVERIFIED';
+  target: Address;
+  selector: Hex;
+  signature: string | null;
+  value: string;
+  humanReadable: string;
+  novelty: Novelty[];
+};
+
+/** A capability_requests row (recent JIT decisions / pending). */
+export type CapabilityRequestRow = {
+  id: string;
+  decoded: DecodedIntent;
+  novelty: Novelty[];
+  callHash: Hex;
+  status: RequestStatus;
+  approvalId: string | null;
+};
+
+/** GET /api/agents/:id/capabilities response. */
+export type CapabilityEnvelopeView = {
+  grants: CapabilityGrantRow[];
+  presets: AppliedPresetRow[];
+  recentRequests: CapabilityRequestRow[];
+};
+
+export type CapabilityRuleAction = 'propose' | 'tighten' | 'remove';
+export type CapabilityDecision = 'approve_once' | 'always_allow' | 'deny';
+
 export type JobStatus =
   | 'originated'
   | 'delivered'

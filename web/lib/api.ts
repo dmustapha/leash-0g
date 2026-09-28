@@ -35,6 +35,12 @@ import type {
   ElevationDraft,
   DirectRequest,
   DirectionDraft,
+  CallRule,
+  CapabilityDecision,
+  CapabilityEnvelopeView,
+  CapabilityRuleAction,
+  PresetKey,
+  ResolvedPreset,
 } from './types';
 
 export type TokenGetter = () => Promise<string | null>;
@@ -261,6 +267,50 @@ export function makeApi(getToken: TokenGetter) {
       request<{ ok: true; sourceRef: string }>(getToken, 'PUT', `/api/job-specs/${encodeURIComponent(ref)}`, body),
     getJobSpec: (ref: string) =>
       request<OwnerJobSpec>(getToken, 'GET', `/api/job-specs/${encodeURIComponent(ref)}`),
+
+    // — Stage D (spec §7): governed-calldata capability grants —
+    // Preview a preset's resolved rules BEFORE signing (no txHash → recorded:false).
+    resolvePreset: (agentId: string, presetKey: PresetKey) =>
+      request<{ ok: true; preset: ResolvedPreset; recorded: false }>(
+        getToken,
+        'POST',
+        `/api/agents/${agentId}/capabilities/preset`,
+        { presetKey },
+      ),
+    // Record the applied preset read-model AFTER the owner signed (carries the txHash).
+    recordPreset: (agentId: string, presetKey: PresetKey, txHash: string) =>
+      request<{ ok: true; preset: ResolvedPreset; recorded: boolean }>(
+        getToken,
+        'POST',
+        `/api/agents/${agentId}/capabilities/preset`,
+        { presetKey, txHash },
+      ),
+    // Propose (loosen, timelocked) / tighten (instant) / remove (instant) a custom rule.
+    capabilityRule: (
+      agentId: string,
+      body: { action: CapabilityRuleAction; rule: CallRule; txHash?: string },
+    ) =>
+      request<{ ok: true; action: CapabilityRuleAction; rule?: CallRule; recorded?: boolean }>(
+        getToken,
+        'POST',
+        `/api/agents/${agentId}/capabilities/rule`,
+        body,
+      ),
+    // Read-only capability envelope: standing grants + applied presets + recent JIT decisions.
+    listCapabilities: (agentId: string) =>
+      request<CapabilityEnvelopeView>(getToken, 'GET', `/api/agents/${agentId}/capabilities`),
+    // Decide a JIT capability request. approve_once/always_allow require an owner-signed tx;
+    // always_allow also carries the rule the owner confirmed. deny sends no tx.
+    decideCapability: (
+      approvalId: string,
+      body: { decision: CapabilityDecision; txHash?: string; rule?: CallRule },
+    ) =>
+      request<{ ok: true; request: { id: string; status: string } }>(
+        getToken,
+        'POST',
+        `/api/approvals/${approvalId}`,
+        body,
+      ),
   };
 }
 
