@@ -141,16 +141,19 @@ export function decodeLeashError(err: unknown): DecodedLeashError | null {
       const args = (decoded.args ?? []).map(jsonify) as Json;
       return { errorName: decoded.errorName, args, plain: plainLeashError(decoded.errorName, args) };
     } catch {
-      // fall through to bare-selector matching
-    }
-  }
-  const selMatch = /0x[0-9a-fA-F]{8}\b/.exec(text);
-  if (selMatch) {
-    const sel = selMatch[0].toLowerCase();
-    for (const e of errorAbi) {
-      const signature = `${e.name}(${e.inputs.map((i) => i.type).join(',')})`;
-      if (toFunctionSelector(signature).toLowerCase() === sel) {
-        return { errorName: e.name, args: [], plain: plainLeashError(e.name, []) };
+      // Full decode failed. Fall back to selector-only matching, but ONLY on
+      // word-aligned revert-data shape (selector + N 32-byte words) — so a stray
+      // hex token in arbitrary prose can't collide with a Leash error selector
+      // (L-01, security-audit 2026-09-28). Cosmetic path; never gates money.
+      const data = dataMatch[0].toLowerCase();
+      if ((data.length - 10) % 64 === 0) {
+        const sel = data.slice(0, 10);
+        for (const e of errorAbi) {
+          const signature = `${e.name}(${e.inputs.map((i) => i.type).join(',')})`;
+          if (toFunctionSelector(signature).toLowerCase() === sel) {
+            return { errorName: e.name, args: [], plain: plainLeashError(e.name, []) };
+          }
+        }
       }
     }
   }

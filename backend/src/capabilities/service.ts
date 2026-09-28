@@ -143,7 +143,14 @@ export async function raiseCapabilityRequest(
     novelty,
     callHash,
   });
-  if (!created) return { request: row, created: false };
+  // Repair-forward (W2, code-review 2026-09-28): a reused row that already has
+  // its approval bound is a true no-op. But a reused row with NO approval bound
+  // is a crash remnant (a prior cycle died between insertCapabilityRequest and
+  // setRequestApproval) — left as-is it's stuck pending forever
+  // (decideCapabilityRequest → no_approval) until TTL. Fall through to bind +
+  // surface it. This is idempotent: the insert/reuse already de-duped the row,
+  // so at most one unbound row can exist, and it gets exactly one card here.
+  if (!created && row.approvalId) return { request: row, created: false };
 
   // Ride the EXISTING approval/consent rail so the JIT card is surfaced,
   // auto-expires with the sweep, and resolves on any channel.
@@ -168,7 +175,7 @@ export async function raiseCapabilityRequest(
     dedupKey: `capability_request:${row.id}`,
   });
 
-  return { request: { ...row, approvalId: approval.id }, created: true };
+  return { request: { ...row, approvalId: approval.id }, created };
 }
 
 export type JitDecision = 'approve_once' | 'always_allow' | 'deny';

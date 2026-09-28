@@ -109,8 +109,16 @@ export const SELECTORS: ReadonlyMap<string, SelectorSpec> = new Map<string, Sele
   }),
 ]);
 
-/** Known call-wrapper selectors (C-03) — default-denied on-chain, recursively unwrapped off-chain. */
-export const WRAPPER_SELECTORS: ReadonlyMap<string, { signature: string; kind: 'multicall_bytes' | 'aggregate' }> =
+/**
+ * Known call-wrapper selectors (C-03) — default-denied on-chain, recursively
+ * unwrapped off-chain. ONLY self-targeting `bytes[]` batchers are permitted:
+ * their leaves execute as calls to the wrapper itself (address(this)), so
+ * `classifyInner` correctly re-checks every leaf against the SAME target. A
+ * per-leaf-target batcher (Multicall3 `aggregate3((address,bytes)[])`) would
+ * break that assumption — deliberately NOT a kind here, so adding one fails to
+ * compile until per-leaf target extraction is wired (W1, code-review 2026-09-28).
+ */
+export const WRAPPER_SELECTORS: ReadonlyMap<string, { signature: string; kind: 'multicall_bytes' }> =
   new Map([
     [
       toFunctionSelector('function multicall(bytes[] data)').toLowerCase(),
