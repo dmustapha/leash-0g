@@ -74,9 +74,10 @@ export function classify(decoded: DecodedCall, grant: GrantState, self: string):
     const cap = safeBig(rule.perCallCap);
     if (cap !== null && decoded.args.amount > cap) novelty.push('over_cap');
     // budget-existence: a structured spend against a token with no on-chain budget would
-    // revert BudgetNotSet — treat as over_budget novelty (owner must propose the budget).
+    // revert BudgetNotSet — surface as over_budget (owner must propose the budget), NOT
+    // over_cap (a set-but-exceeded budget) so the JIT card says the right thing.
     if (decoded.args.spendToken !== ZERO && !grant.budgets.has(decoded.args.spendToken.toLowerCase())) {
-      novelty.push('over_cap');
+      novelty.push('over_budget');
     }
   }
 

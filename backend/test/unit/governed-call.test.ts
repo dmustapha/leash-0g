@@ -212,10 +212,10 @@ describe('classify — three-lane routing', () => {
     expect(classify(d, grant([approveRule]), SELF)).toEqual({ lane: 'forbidden', reason: 'infinite_approval' });
   });
 
-  it('spend against a token with no on-chain budget → L2 (over_cap / must propose budget)', () => {
+  it('spend against a token with no on-chain budget → L2 (over_budget / must propose budget)', () => {
     const d = decodeCall(TOKEN, 0n, enc(erc20, 'approve', [ROUTER, 10n]));
     const c = classify(d, grant([approveRule], []), SELF); // no budgets
-    if (c.lane === 'l2') expect(c.novelty).toContain('over_cap');
+    if (c.lane === 'l2') expect(c.novelty).toContain('over_budget');
     else throw new Error('expected l2');
   });
 });

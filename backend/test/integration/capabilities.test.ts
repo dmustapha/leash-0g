@@ -221,6 +221,29 @@ describe('raiseCapabilityRequest (D-8)', () => {
     expect(pending).toHaveLength(1);
   });
 
+  it('repair-forward (W2): a reused row that never got its approval bound (crash) is completed, not stuck', async () => {
+    const agent = await seedOwnedAgent();
+    if (!agent) throw new Error('agent');
+    const deps = makeDeps();
+    const gate = classifyIntendedCall(TOKEN, 0n, enc('approve', [ROUTER, 7n]), emptyGrant(), SELF);
+    const first = await raiseCapabilityRequest(deps, agent, gate);
+    expect(first.created).toBe(true);
+
+    // Simulate a crash between insertCapabilityRequest and setRequestApproval:
+    // the pending row exists but has no approval bound. Left as-is it can never
+    // be decided (decideCapabilityRequest → no_approval) until TTL expiry.
+    await db.pool.query(`UPDATE capability_requests SET approval_id = NULL WHERE id = $1`, [first.request.id]);
+
+    // The next runtime cycle re-raises the identical novel call — it must REPAIR
+    // the unbound row: same request id, a freshly bound approval, a fresh card.
+    const repaired = await raiseCapabilityRequest(deps, agent, gate);
+    expect(repaired.created).toBe(false); // not a NEW request…
+    expect(repaired.request.id).toBe(first.request.id);
+    expect(repaired.request.approvalId).toBeTruthy(); // …but now bound + decidable
+    const approval = await getApproval(db.pool, nn(repaired.request.approvalId));
+    expect(approval?.state).toBe('pending');
+  });
+
   it('throws if handed a non-L2 classification (in-envelope calls must never raise a JIT)', async () => {
     const agent = await seedOwnedAgent();
     if (!agent) throw new Error('agent');

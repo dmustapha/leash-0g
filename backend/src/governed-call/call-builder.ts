@@ -113,9 +113,10 @@ export function buildGovernedCall(
   }
 
   const data = encodeCall(selector, spec, words);
-  // Native value is only sent for non-structured msg.value-charged selectors; the
-  // structured ERC-20 set moves value via the amount arg, never msg.value.
-  const value = spec.structured ? 0n : 0n;
+  // v1 selector set (structured ERC-20 + curated swap/deposit) moves value via the
+  // amount arg, never msg.value — every governed call is zero-value for now. A
+  // value-bearing selector (e.g. a payable deposit) would set this explicitly.
+  const value = 0n;
   return { ok: true, target, value, data };
 }
 

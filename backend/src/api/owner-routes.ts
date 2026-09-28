@@ -284,16 +284,16 @@ const callRuleSchema = z.object({
 });
 const presetApplySchema = z.object({
   presetKey: z.string().min(1).max(40),
-  txHash: z.string().max(80).optional(),
+  txHash: z.string().regex(/^0x[0-9a-fA-F]{64}$/).optional(),
 });
 const capabilityRuleSchema = z.object({
   action: z.enum(['propose', 'tighten', 'remove']),
   rule: callRuleSchema,
-  txHash: z.string().max(80).optional(),
+  txHash: z.string().regex(/^0x[0-9a-fA-F]{64}$/).optional(),
 });
 const capabilityDecisionSchema = z.object({
   decision: z.enum(['approve_once', 'always_allow', 'deny']),
-  txHash: z.string().max(80).optional(),
+  txHash: z.string().regex(/^0x[0-9a-fA-F]{64}$/).optional(),
   rule: callRuleSchema.optional(),
 });
 

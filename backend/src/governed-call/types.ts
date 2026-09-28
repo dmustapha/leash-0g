@@ -116,6 +116,7 @@ export type Novelty =
   | 'new_target'
   | 'new_selector'
   | 'over_cap'
+  | 'over_budget'
   | 'new_spender'
   | 'new_recipient'
   | 'bridge'

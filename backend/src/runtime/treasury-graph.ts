@@ -350,7 +350,7 @@ export function buildTreasuryGraph(
     // Stage D (D-10): a governed call is classified against a LIVE grant-state
     // read (never native-transfer window damping — its caps live on-chain +
     // in classify). Resolve it BEFORE the transfer-damping block.
-    if (verdict.route === 'call') return decideCall(verdict.decision);
+    if (verdict.route === 'call') return decideCall(state, verdict.decision);
     // P3C-6(iii): boundary damping. Refresh clear conditions first (window
     // reset / policy change / re-arm — clearing resolves the limit_hit
     // alert and re-enables normal flow), then short-circuit outcomes that
@@ -511,12 +511,21 @@ export function buildTreasuryGraph(
    *   forbidden / unbuildable → stand down, traced (never a fabricated call)
    * The on-chain V4 wall is the sole enforcement guarantee regardless.
    */
-  async function decideCall(decision: AgentDecision): Promise<Partial<State>> {
+  async function decideCall(state: State, decision: AgentDecision): Promise<Partial<State>> {
     const self = ctx.accountAddr;
     const standDownResult = (reason: string): Partial<State> => ({
       decision: { action: 'stand_down', amountWei: '0', reason },
       route: 'stand_down',
     });
+    // W3 (code-review 2026-09-28): evaluateDecision already gated revoke/expiry
+    // at SENSE time, but a 30s cycle leaves a window where the session lapses
+    // between sense and here. Re-check the absolute expiry against fresh time so
+    // we never burn gas on a doomed submit the wall would revert (P3C-6). Revoke
+    // is a rarer race and is caught by the wall regardless.
+    if (state.policy.revoked) return standDownResult('account revoked since sense — not submitting');
+    if (state.policy.expiresAt <= Math.floor(Date.now() / 1000)) {
+      return standDownResult('session expired since sense — not submitting a doomed governed call');
+    }
     const grant = await loadGrantState(deps.pool, deps.chain, ctx.agentId, self);
     const built = buildGovernedCall(
       { target: decision.target ?? '', selector: decision.selector ?? '', amountWei: decision.amountWei },
