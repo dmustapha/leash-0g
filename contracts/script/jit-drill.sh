@@ -24,15 +24,16 @@ RPC=$(grep -E '^ZERO_G_RPC=' ~/leash/backend/.env | cut -d= -f2- | tr -d '"')
 OPS=$(grep -E '^OPS_PRIVATE_KEY=' ~/leash/backend/.env | cut -d= -f2- | tr -d '"')
 SESSION_ADDR=$(cast wallet address --private-key "$OPS")   # session key == owner in the drill setup
 
-A=0x47E5c2665E00D224527c128919c942eCeF1cEc0F        # DrillAccount (v4, timelockDelay=0)
-USD=0xf936390897f72A92c8B008A1371bb54a606E5451      # TUSD-D (granted target)
-ROUTER=0x4CD6ed4E6abd715D10E49AD99d2e3866bF46ee30   # granted spender
+# cfabfdb (post-FIX-1) redeploy on 0G 16602 — Stage-D DEPLOY (2026-09-28).
+A=0x2FDbfa0e76D4dC455C95C4e7d445595E714cDCDF        # DrillAccount (v4, timelockDelay=0, fixed bytecode)
+USD=0x4E51f90C8Cf60307E01A6abF555762e69Ef0eC2A      # TUSD-D (granted target)
+ROUTER=0x425B8638e1B851486F397715EA414d52A1Ab7a65   # granted spender
 
 APPROVE=0x095ea7b3
 OVER_CAP=250000000      # 250e6 — OVER the standing perCallCap (200e6)
 STANDING=300000000      # 300e6 — over the OLD cap, within the LOOSENED cap
 NEW_CAP=400000000       # loosened perCallCap
-NEW_WINDOW=1000000000   # loosened windowCapCall (headroom over spentInWindow)
+NEW_WINDOW=1000000000000 # loosened windowCapCall (generous headroom over accumulated spentInWindow)
 
 pass=0; fail=0
 

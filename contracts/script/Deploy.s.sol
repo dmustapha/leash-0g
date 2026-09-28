@@ -66,14 +66,27 @@ contract DeployStageD is Script {
         );
         usd.mint(acct, 1_000e6);
 
-        // grant: approve(usd → router) within a cumulative budget, so the drill can prove
-        // a HAPPY governed approve lands and MALICIOUS shapes revert.
+        // grant: approve(usd → router|vault) within a cumulative budget, so the drill can
+        // prove a HAPPY governed approve lands and MALICIOUS shapes revert. Vault is a
+        // second allowed spender so the deposit sub-drill can `approve(vault) → deposit`.
+        // Per-token budgets get generous headroom (5_000e6) so all three drills
+        // (adversarial + deposit + JIT) run in one session without tripping the
+        // cumulative-spend cap; per-call/window caps stay at the asserted 200e6/400e6.
         LeashAccountV4 a = LeashAccountV4(payable(acct));
-        a.proposeSpendBudget(address(usd), 500e6);
+        a.proposeSpendBudget(address(usd), 5_000e6);
         a.applySpendBudget();
-        address[] memory sp = new address[](1);
+        a.proposeSpendBudget(address(vault), 5_000e6);
+        a.applySpendBudget();
+        address[] memory sp = new address[](2);
         sp[0] = address(router);
+        sp[1] = address(vault);
         a.proposeCallRule(address(usd), 0x095ea7b3, 0, sp, 200e6, 400e6, bytes32(0));
+        a.applyCallRule();
+        // deposit rule on the curated vault: recipientMode 0 (receiver must == self),
+        // no spenders, assets charged vs the per-call cap + the vault-keyed budget. Proves
+        // the FIX-1 on-chain deposit decoder: a hijacked key can't redirect minted shares.
+        address[] memory noSpenders = new address[](0);
+        a.proposeCallRule(address(vault), 0x6e553f65, 0, noSpenders, 200e6, 400e6, bytes32(0));
         a.applyCallRule();
         vm.stopBroadcast();
 

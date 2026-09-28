@@ -103,3 +103,35 @@ by `test_factory_underEip170SizeLimit`). Chain 16602. Deployer/ops `0xc211C94294
 - MALICIOUS `approve(max)` real tx reverted on-chain. Evidence: `docs/evidence/stage-d-adversarial-drill.json`.
 
 Note: the v4 account `execute(data≠0)` still reverts `CalldataForbidden`; governed calldata is a THIRD path. Contract sourcify verification: pending (0G sourcify endpoint).
+
+## Stage D — cfabfdb REDEPLOY (2026-09-28) — C-D3 (post-FIX-1 bytecode, the wall changed)
+The Gate-② fix pass (`cfabfdb`, FIX-1 on-chain `deposit` structured decoder) changed the
+`LeashAccountV4` bytecode; the prior deploy (`0x47E5c2…`) + its 6/6 adversarial / 5/5 JIT drills
+ran on PRE-FIX bytecode and are now STALE. C-D3 redeploys the fixed bytecode via a fresh
+`LeashAccountV4Factory` (the account creation code is inlined into the factory, so the fixed
+account bytecode requires a fresh factory — the prior `0x0375…` factory embeds pre-fix bytecode).
+Chain 16602. Deployer/ops `0xc211C942946011859ca634F22400d80570ED12A5`.
+- **LeashAccountV4Factory (cfabfdb):** `0x70673e447CbE7B11B5193BDb047677cE29ECcf8c`
+  - deploy tx `0xca207b4d51bfb1b4a58684dbe6c683461f6a17dff4c2fcff4ceb085a90316f46`
+- **MockERC20 (TUSD-D):** `0x4E51f90C8Cf60307E01A6abF555762e69Ef0eC2A` — deploy tx `0xa3636f899f868c06ac8cb9ddbd8400e81ddd32975e469da7e5e7e96290084ca0`
+- **MockRouter:** `0x425B8638e1B851486F397715EA414d52A1Ab7a65` — deploy tx `0x037f695f3b87471cddee7fc36336f7ca6539ec457b165a7cf2d7a39c587d3cfe`
+- **MockVault:** `0x6F370dd513bF45D69178cb2E1BEe2BF15bAFCE87` — deploy tx `0xb5e2543bf5163baeb54d23682710035fbcc6cb87986d8fe4e8d85a762ccade6b`
+- **Drill account (v4, cfabfdb, timelockDelay=0):** `0x2FDbfa0e76D4dC455C95C4e7d445595E714cDCDF`
+  - create tx `0xb21bf3f2d81d9167350e00eaa1699cca819a0f75b95290be41fad4c08288fa84`
+  - grants: `approve` (spenders MockRouter+MockVault, perCallCap 200e6/window loosened) + `deposit`
+    (MockVault, recipientMode=self, perCallCap 200e6/window loosened) + per-token budgets (usd/vault).
+    NOTE: a mid-deploy tx was dropped by the 0G RPC (external roughness, surfaced) → the vault
+    budget + approve/deposit rules were completed via `cast` (owner txs, timelockDelay=0).
+
+### C-D3 deployed ADVERSARIAL drill (extended with the FIX-1 deposit decoder) — 9/9 PASS live
+`contracts/script/adversarial-drill.sh` @ `0x2FDbfa…`:
+- HAPPY governed `approve(router,100e6)` landed (allowance=100e6) tx `0x85c4e3b6…`
+- MALICIOUS reverts live (eth_call, exact selectors): `approve(max)` → `InfiniteApprovalForbidden` 0xcd9e3525 · off-allowlist spender → `SpenderNotAllowlisted` 0x6eed196c · over per-call cap → `OverPerCallCap` 0x2671b8a6 · off-allowlist target → `TargetNotAllowlisted` 0x042a9b0d
+- MALICIOUS `approve(max)` real tx mined status=0 (reverted on-chain) tx `0x3a2d1c78…`
+- **FIX-1 deposit decoder (the wall that changed):** deposit redirect `deposit(100e6,ATTACKER)` → `RecipientNotSelf` 0x239e7696 · deposit over-cap `deposit(300e6,self)` → `OverPerCallCap` 0x2671b8a6 · **HAPPY `approve(vault)→deposit(100e6,self)` settled + credited shares to self** (shares +100e6; approve tx `0x70b78469…` deposit tx `0x667123fe…`). Evidence: `docs/evidence/stage-d-adversarial-drill.json`.
+
+### C-D3 deployed JIT-rail drill (on-chain grant primitives) — 5/5 PASS live (re-run on new bytecode)
+`contracts/script/jit-drill.sh` @ `0x2FDbfa…`: over-cap out-of-envelope reverts · **approve-once** one-shot retry landed `0x6f3c5d52…` (allowance 250e6) + replay refused (consumed) · **always-allow** loosen `proposeCallRule`→`applyCallRule` → standing retry landed `0x74a8147b…` (allowance 300e6). Evidence: `docs/evidence/stage-d-jit-drill.json`.
+
+### C-D1 backend-orchestrated JIT E2E (always-allow) — ✅ 1/1 PASS live
+`backend/test/integration/governed-call-deployed.test.ts` (RUN_DEPLOYED_DRILL=1) — the REAL runtime (`SessionChain` vs 0G + hermetic Neon schema) drives the full loop against `0x2FDbfa…`: agent novel over-cap call → runtime L2 raise (quarantined `capability_request` + alert, no submit) → owner always-allow (on-chain loosen `proposeCallRule 300e6`→`applyCallRule` + `decideCapabilityRequest`) → next cycle runtime L1 `executeCall` **landed on-chain** tx `0x083ce663…` (allowance 250e6). Fail-safe: an intermediate 0G receipt-fetch flake was recorded failed-not-acted. Evidence: `docs/evidence/stage-d-cd1-jit-e2e.json`. NOTE: approve-once is proven as an on-chain primitive (jit-drill 5/5), not a backend retry (finding F-D2 in `07`/DEPLOY-RESULTS).
