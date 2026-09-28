@@ -372,8 +372,10 @@ contract LeashAccountV4Test is Test {
     function test_flow_approveThenVaultDeposit_succeeds() public {
         _grantBudget(address(usd), 500e6);
         _grantRule(address(usd), SEL_APPROVE, 0, _spenders(address(vault)), 200e6, 1_000e6);
-        _grantBudget(address(0), 0);
-        _grantRule(address(vault), SEL_DEPOSIT, 0, new address[](0), 0, 1_000e6);
+        // deposit is now a structured selector: pin receiver==self (mode 0), charge
+        // `assets` against a per-call cap + the vault-keyed cumulative budget.
+        _grantBudget(address(vault), 500e6);
+        _grantRule(address(vault), SEL_DEPOSIT, 0, new address[](0), 200e6, 1_000e6);
         vm.startPrank(session);
         acct.executeCall(address(usd), 0, _approveData(address(vault), 100e6));
         bytes memory depData = abi.encodeWithSelector(SEL_DEPOSIT, uint256(100e6), address(acct));

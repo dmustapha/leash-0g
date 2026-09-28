@@ -53,6 +53,8 @@ const mutations = [
   { id: 'callrule_timelock_disable', find: 'if (block.timestamp < pr.eta) revert TimelockNotElapsed(pr.eta)', to: 'if (block.timestamp < 0) revert TimelockNotElapsed(pr.eta)' },
   // tighten direction: allow raising (loosen via tighten)
   { id: 'tighten_direction_flip', find: 'if (perCallCap > r.perCallCap || windowCapCall > r.windowCapCall) revert NotTightening', to: 'if (perCallCap < r.perCallCap || windowCapCall < r.windowCapCall) revert NotTightening' },
+  // deposit charge: stop charging the `assets` arg (drops per-call cap + budget debit for vault deposits)
+  { id: 'deposit_no_charge', find: '_checkRecipient(receiver, rule.recipientMode);\n            return (assets, target, false);', to: '_checkRecipient(receiver, rule.recipientMode);\n            return (0, target, false);' },
 ];
 
 // integrity: every `find` must be unique in the source

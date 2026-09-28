@@ -4,12 +4,13 @@ pragma solidity 0.8.30;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /// @title MockVault — a TEST-ONLY ERC-4626-shaped target for LEASH Stage D.
-/// @notice Proves the governed-calldata wall against a vault-deposit shape
-///         (approve → deposit) on 0G. `deposit(uint256 assets, address receiver)` is
-///         the canonical ERC-4626 static signature; the wall pins `receiver == self`
-///         (C-04) via the structured decoder only when granted with recipientMode.
-///         Pulls `assets` of the underlying from the caller (requires a prior
-///         `approve`) and credits `shares[receiver]`.
+/// @notice An ERC-4626-shaped deposit target used to exercise the governed-calldata
+///         wall against a vault-deposit flow (approve → deposit) on 0G.
+///         `deposit(uint256 assets, address receiver)` is the canonical ERC-4626 static
+///         signature. Recipient pinning + amount capping for this selector live in the
+///         account's `_checkStructuredArgs` deposit decoder — NOT here. This mock only
+///         pulls `assets` of the underlying from the caller (requires a prior `approve`)
+///         and credits `shares[receiver]`.
 contract MockVault {
     IERC20 public immutable asset;
     mapping(address => uint256) public shares;

@@ -25,6 +25,14 @@ const ROUTER = '0x' + 'd0'.repeat(20); // matches testSettings catalog
 const TOKEN = '0x' + 'c0'.repeat(20);
 const SELF = '0x' + '55'.repeat(20);
 
+// Realistic client-signed grant tx hashes (the route enforces /^0x[0-9a-fA-F]{64}$/
+// after the L-02 tightening — the owner reports a real on-chain hash, never a stub).
+const TX_PRESET = '0x' + '1a'.repeat(32);
+const TX_PROPOSE = '0x' + '2b'.repeat(32);
+const TX_TIGHTEN = '0x' + '3c'.repeat(32);
+const TX_ALWAYS_ALLOW = '0x' + '4d'.repeat(32);
+const TX_APPROVE_ONCE = '0x' + '5e'.repeat(32);
+
 const erc20 = parseAbi(['function approve(address,uint256)']);
 const encApprove = (spender: string, amt: bigint): string =>
   encodeFunctionData({ abi: erc20, functionName: 'approve', args: [spender as `0x${string}`, amt] });
@@ -79,7 +87,7 @@ describe('POST /api/agents/:id/capabilities/preset', () => {
     const rec = await request(t.app)
       .post(`/api/agents/${a.id}/capabilities/preset`)
       .set('authorization', ownerAuth(OWNER))
-      .send({ presetKey: 'defi_trader', txHash: '0xabc' });
+      .send({ presetKey: 'defi_trader', txHash: TX_PRESET });
     expect(rec.body.recorded).toBe(true);
     env = await request(t.app).get(`/api/agents/${a.id}/capabilities`).set('authorization', ownerAuth(OWNER));
     expect(env.body.grants.length).toBe(dry.body.preset.rules.length);
@@ -127,7 +135,7 @@ describe('POST /api/agents/:id/capabilities/rule', () => {
     await request(t.app)
       .post(`/api/agents/${a.id}/capabilities/rule`)
       .set('authorization', ownerAuth(OWNER))
-      .send({ action: 'propose', rule: customRule, txHash: '0x1' });
+      .send({ action: 'propose', rule: customRule, txHash: TX_PROPOSE });
     let env = await request(t.app).get(`/api/agents/${a.id}/capabilities`).set('authorization', ownerAuth(OWNER));
     expect(env.body.grants).toHaveLength(1);
     expect(env.body.grants[0].status).toBe('proposed');
@@ -135,7 +143,7 @@ describe('POST /api/agents/:id/capabilities/rule', () => {
     await request(t.app)
       .post(`/api/agents/${a.id}/capabilities/rule`)
       .set('authorization', ownerAuth(OWNER))
-      .send({ action: 'tighten', rule: { ...customRule, perCallCap: '10000000' }, txHash: '0x2' });
+      .send({ action: 'tighten', rule: { ...customRule, perCallCap: '10000000' }, txHash: TX_TIGHTEN });
     env = await request(t.app).get(`/api/agents/${a.id}/capabilities`).set('authorization', ownerAuth(OWNER));
     expect(env.body.grants[0].status).toBe('active');
     expect(env.body.grants[0].perCallCap).toBe('10000000');
@@ -171,7 +179,7 @@ describe('POST /api/approvals/:id — capability (JIT) decision branch', () => {
     const res = await request(t.app)
       .post(`/api/approvals/${req.approvalId}`)
       .set('authorization', ownerAuth(OWNER))
-      .send({ decision: 'always_allow', txHash: '0xfeed', rule: customRule });
+      .send({ decision: 'always_allow', txHash: TX_ALWAYS_ALLOW, rule: customRule });
     expect(res.status).toBe(200);
     expect(res.body.request.status).toBe('always_allowed');
     const env = await request(t.app).get(`/api/agents/${a.id}/capabilities`).set('authorization', ownerAuth(OWNER));
@@ -190,12 +198,12 @@ describe('POST /api/approvals/:id — capability (JIT) decision branch', () => {
     const ok = await request(t.app)
       .post(`/api/approvals/${req.approvalId}`)
       .set('authorization', ownerAuth(OWNER))
-      .send({ decision: 'approve_once', txHash: '0x99' });
+      .send({ decision: 'approve_once', txHash: TX_APPROVE_ONCE });
     expect(ok.status).toBe(200);
     const again = await request(t.app)
       .post(`/api/approvals/${req.approvalId}`)
       .set('authorization', ownerAuth(OWNER))
-      .send({ decision: 'approve_once', txHash: '0x99' });
+      .send({ decision: 'approve_once', txHash: TX_APPROVE_ONCE });
     expect(again.status).toBe(409);
   });
 

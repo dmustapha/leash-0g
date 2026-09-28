@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {LeashAccountV4} from "../src/LeashAccountV4.sol";
 import {MockERC20} from "../src/MockERC20.sol";
 import {MockRouter} from "../src/MockRouter.sol";
+import {MockVault} from "../src/MockVault.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /// A token whose transfer/approve returns false without reverting (fake-success, H-05).
@@ -61,6 +62,7 @@ contract LeashAccountV4AdversarialTest is Test {
     bytes4 constant SEL_TRANSFER = 0xa9059cbb;
     bytes4 constant SEL_TRANSFER_FROM = 0x23b872dd;
     bytes4 constant SEL_SET_APPROVAL_FOR_ALL = 0xa22cb465;
+    bytes4 constant SEL_DEPOSIT = 0x6e553f65; // deposit(uint256,address)
     bytes4 constant SEL_MULTICALL = 0xac9650d8; // multicall(bytes[])
     bytes4 constant SEL_ISVALIDSIGNATURE = 0x1626ba7e; // ERC-1271
 
@@ -164,6 +166,40 @@ contract LeashAccountV4AdversarialTest is Test {
         vm.prank(session);
         vm.expectRevert(abi.encodeWithSelector(LeashAccountV4.RecipientNotSelf.selector, attacker));
         acct.executeCall(address(usd), 0, abi.encodeWithSelector(SEL_TRANSFER, attacker, 10e6));
+    }
+
+    // ============ C-04 (deposit): autonomous vault-deposit redirect / over-cap / dirty-bits ============
+    // deposit(uint256 assets, address receiver) is AUTONOMOUS + preset-granted (yield_manager /
+    // treasury_topper). The on-chain structured decoder must pin the receiver and cap the amount so a
+    // fully-hijacked session key can never redirect the minted shares to an attacker (§8 F4/F5).
+    function test_C04_depositRedirect_reverts() public {
+        MockVault vault = new MockVault(IERC20(address(usd)));
+        _budget(address(vault), 500e6);
+        _grant(address(vault), SEL_DEPOSIT, 0, new address[](0), 200e6, 400e6); // mode 0 = receiver must be self
+        vm.prank(session);
+        vm.expectRevert(abi.encodeWithSelector(LeashAccountV4.RecipientNotSelf.selector, attacker));
+        acct.executeCall(address(vault), 0, abi.encodeWithSelector(SEL_DEPOSIT, uint256(10e6), attacker));
+    }
+
+    function test_C04_depositOverPerCallCap_reverts() public {
+        MockVault vault = new MockVault(IERC20(address(usd)));
+        _budget(address(vault), 500e6);
+        _grant(address(vault), SEL_DEPOSIT, 0, new address[](0), 50e6, 400e6);
+        vm.prank(session);
+        vm.expectRevert(abi.encodeWithSelector(LeashAccountV4.OverPerCallCap.selector, 60e6, uint128(50e6)));
+        acct.executeCall(address(vault), 0, abi.encodeWithSelector(SEL_DEPOSIT, uint256(60e6), address(acct)));
+    }
+
+    function test_C04_depositDirtyReceiverBits_reverts() public {
+        MockVault vault = new MockVault(IERC20(address(usd)));
+        _budget(address(vault), 500e6);
+        _grant(address(vault), SEL_DEPOSIT, 0, new address[](0), 200e6, 400e6);
+        bytes memory data = abi.encodePacked(
+            SEL_DEPOSIT, uint256(10e6), bytes32(uint256(0xdead) << 160 | uint256(uint160(address(acct))))
+        );
+        vm.prank(session);
+        vm.expectRevert(LeashAccountV4.DecodeMismatch.selector);
+        acct.executeCall(address(vault), 0, data);
     }
 
     // ============ C-05: proxy upgrade / metamorphic (codehash pin) ============

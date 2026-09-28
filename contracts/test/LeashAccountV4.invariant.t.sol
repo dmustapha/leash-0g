@@ -4,12 +4,15 @@ pragma solidity 0.8.30;
 import {Test} from "forge-std/Test.sol";
 import {LeashAccountV4} from "../src/LeashAccountV4.sol";
 import {MockERC20} from "../src/MockERC20.sol";
+import {MockVault} from "../src/MockVault.sol";
+import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
-/// Handler: random governed calls (approve/transfer to varied recipients incl. an
-/// attacker), warps, and revoke/rearm — across ANY sequence the spine must hold.
+/// Handler: random governed calls (approve/transfer/deposit to varied recipients incl.
+/// an attacker), warps, and revoke/rearm — across ANY sequence the spine must hold.
 contract V4Handler is Test {
     LeashAccountV4 public acct;
     MockERC20 public usd;
+    MockVault public vault;
     address public owner;
     address public guardian;
     address public session;
@@ -19,10 +22,22 @@ contract V4Handler is Test {
 
     bytes4 constant SEL_APPROVE = 0x095ea7b3;
     bytes4 constant SEL_TRANSFER = 0xa9059cbb;
+    bytes4 constant SEL_DEPOSIT = 0x6e553f65;
 
-    constructor(LeashAccountV4 a, MockERC20 t, address o, address g, address s, address d, address atk, address sp) {
+    constructor(
+        LeashAccountV4 a,
+        MockERC20 t,
+        MockVault v,
+        address o,
+        address g,
+        address s,
+        address d,
+        address atk,
+        address sp
+    ) {
         acct = a;
         usd = t;
+        vault = v;
         owner = o;
         guardian = g;
         session = s;
@@ -43,6 +58,15 @@ contract V4Handler is Test {
         address to = who % 3 == 0 ? dest : (who % 3 == 1 ? attacker : address(acct));
         vm.prank(session);
         try acct.executeCall(address(usd), 0, abi.encodeWithSelector(SEL_TRANSFER, to, uint256(amount))) {} catch {}
+    }
+
+    /// Try to deposit into the vault crediting shares to {dest, attacker, self} —
+    /// attacker/dest MUST always revert (recipientMode 0 = self-only); self may succeed.
+    function doDeposit(uint96 amount, uint8 who) external {
+        amount = uint96(bound(amount, 1, 300e6));
+        address to = who % 3 == 0 ? dest : (who % 3 == 1 ? attacker : address(acct));
+        vm.prank(session);
+        try acct.executeCall(address(vault), 0, abi.encodeWithSelector(SEL_DEPOSIT, uint256(amount), to)) {} catch {}
     }
 
     /// A hijacked agent tries to grant itself a rule — MUST always revert (owner-only).
@@ -72,6 +96,7 @@ contract V4Handler is Test {
 contract LeashAccountV4InvariantTest is Test {
     LeashAccountV4 internal acct;
     MockERC20 internal usd;
+    MockVault internal vault;
     V4Handler internal handler;
 
     address internal owner = makeAddr("owner");
@@ -86,6 +111,7 @@ contract LeashAccountV4InvariantTest is Test {
     function setUp() public {
         vm.warp(1_700_000_000);
         usd = new MockERC20("Test USD", "TestUSD", 6);
+        vault = new MockVault(IERC20(address(usd)));
         address[] memory list = new address[](1);
         list[0] = dest;
         acct = new LeashAccountV4(
@@ -115,9 +141,19 @@ contract LeashAccountV4InvariantTest is Test {
         acct.proposeCallRule(address(usd), 0xa9059cbb, 1, new address[](0), 100e6, 200e6, bytes32(0));
         vm.warp(block.timestamp + 15 minutes);
         acct.applyCallRule();
+        // deposit rule (recipientMode 0 = shares must be minted to self) + vault-keyed budget.
+        acct.proposeSpendBudget(address(vault), BUDGET);
+        acct.proposeCallRule(address(vault), 0x6e553f65, 0, new address[](0), 100e6, 200e6, bytes32(0));
+        vm.warp(block.timestamp + 15 minutes);
+        acct.applySpendBudget();
+        acct.applyCallRule();
         vm.stopPrank();
 
-        handler = new V4Handler(acct, usd, owner, guardian, session, dest, attacker, spender);
+        // let the vault pull the underlying so self-deposits can actually settle.
+        vm.prank(address(acct));
+        usd.approve(address(vault), type(uint256).max);
+
+        handler = new V4Handler(acct, usd, vault, owner, guardian, session, dest, attacker, spender);
         targetContract(address(handler));
     }
 
@@ -144,6 +180,9 @@ contract LeashAccountV4InvariantTest is Test {
     function invariant_attackerNeverReceives() public view {
         assertEq(usd.balanceOf(attacker), 0);
         assertEq(attacker.balance, 0);
+        // and no autonomous vault deposit can ever mint shares to the attacker (or dest).
+        assertEq(vault.shares(attacker), 0);
+        assertEq(vault.shares(dest), 0);
     }
 
     /// The agent (session key) can never widen its own grant — the pending slot is

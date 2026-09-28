@@ -186,6 +186,7 @@ contract LeashAccountV4 is ReentrancyGuard {
     bytes4 internal constant SEL_TRANSFER = 0xa9059cbb; // transfer(address,uint256)
     bytes4 internal constant SEL_TRANSFER_FROM = 0x23b872dd; // transferFrom(address,address,uint256)
     bytes4 internal constant SEL_SET_APPROVAL_FOR_ALL = 0xa22cb465; // setApprovalForAll(address,bool)
+    bytes4 internal constant SEL_DEPOSIT = 0x6e553f65; // deposit(uint256,address) — ERC-4626 curated-vault
 
     mapping(address => bool) public callTargetAllowlist;
     mapping(bytes32 => CallRule) public callRules; // key = keccak256(target, selector)
@@ -462,6 +463,21 @@ contract LeashAccountV4 is ReentrancyGuard {
             if (approvedRaw == 1) revert BlanketApprovalForbidden();
             if (!callRuleSpender[ruleKey][operator]) revert SpenderNotAllowlisted(operator);
             return (0, target, false);
+        }
+        // D-2 curated vault set: deposit(uint256 assets, address receiver) — ERC-4626
+        // canonical static shape. Pin the recipient (receiver == self | ∈ allowlist),
+        // charge `assets` against the per-call cap + the cumulative budget keyed by the
+        // VAULT address (a legible per-vault cap, not the underlying asset the vault
+        // pulls — that pull is separately bounded by the governed `approve` envelope).
+        // Autonomous yield deposits are legible on-chain: a
+        // hijacked session key can never redirect the minted shares to an attacker.
+        // Returns no bool (deposit returns uint256 shares), so no SafeERC20 check.
+        if (selector == SEL_DEPOSIT) {
+            if (data.length != 4 + 64) revert DecodeMismatch();
+            uint256 assets = _decodeUint(data, 4);
+            address receiver = _decodeAddress(data, 36);
+            _checkRecipient(receiver, rule.recipientMode);
+            return (assets, target, false);
         }
         // Non-structured allowlisted selector: bound msg.value against the native
         // budget; the off-chain gate supplies rich arg legibility + recursive unwrap.
