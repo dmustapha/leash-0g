@@ -1,0 +1,10 @@
+{
+  "phase": "Stage D — governed calldata",
+  "kind": "deployed JIT-rail drill (D-11, on-chain grant primitives)",
+  "chainId": 16602,
+  "account": "0x47E5c2665E00D224527c128919c942eCeF1cEc0F",
+  "approveOnce": { "callHash": "0x5019fd75f7f8645bec42828b3311359f6ea29ce92fa762eb2c7ce0c290c7a2d7", "retryTx": "0x1b25c9292c10d474044a8cd774a65cf6906c8868529dc3e1d1106d5854032aa1", "allowanceAfter": "250000000 [2.5e8]", "replayRefused": true },
+  "alwaysAllow": { "loosenedPerCallCap": "400000000", "loosenedWindowCap": "1000000000", "retryTx": "0x0038faedeca024ef604af94ee578fa49c1ea7b0f5da671966a8362d94a455289", "allowanceAfter": "300000000 [3e8]" },
+  "checks": { "passed": 5, "failed": 0 },
+  "note": "On-chain half of the JIT rail. Full backend-runtime-driven E2E (agent novel call -> quarantined JIT request -> owner approves from notification -> runtime retry) is integration-tested (governed-call-runtime 5/5) and gated on the Stage-D deploy (Gate 2), as Phase-5.6 D-7 was."
+}
