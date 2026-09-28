@@ -88,6 +88,13 @@ contract LeashAccountV4DifferentialTest is Test {
                 address a0 = h.decodeAddress(data, 4);
                 assertEq(a0, _addr(i, ".expect.addr0"), _s(i, ".name"));
                 checked++;
+            } else if (k == keccak256("deposit")) {
+                // deposit(uint256 assets, address receiver): amount @ 4, receiver @ 36
+                uint256 amt = h.decodeUint(data, 4);
+                address a0 = h.decodeAddress(data, 36);
+                assertEq(amt, _uintStr(_s(i, ".expect.amount")), _s(i, ".name"));
+                assertEq(a0, _addr(i, ".expect.addr0"), _s(i, ".name"));
+                checked++;
             }
         }
         assertGe(checked, 5, "expected >=5 structured corpus entries");
@@ -106,6 +113,21 @@ contract LeashAccountV4DifferentialTest is Test {
             ranOne = true;
         }
         assertTrue(ranOne, "dirty-bits mutation not found in corpus");
+    }
+
+    /// Dirty-high-bits on the deposit RECEIVER word (offset 36) MUST revert DecodeMismatch.
+    function test_differential_depositDirtyReceiverBits_revert() public {
+        uint256 n = _count();
+        bool ranOne;
+        for (uint256 i = 0; i < n; i++) {
+            if (!_bool(i, ".mutation")) continue;
+            if (!_eq(_s(i, ".name"), "deposit_dirty_receiver_high_bits")) continue;
+            bytes memory data = _bytes(i);
+            vm.expectRevert(LeashAccountV4.DecodeMismatch.selector);
+            h.decodeAddress(data, 36);
+            ranOne = true;
+        }
+        assertTrue(ranOne, "deposit dirty-bits mutation not found in corpus");
     }
 
     /// The full wall path rejects every malicious mutation + forbidden shape on REAL
@@ -153,6 +175,9 @@ contract LeashAccountV4DifferentialTest is Test {
             // its wall admittance is proven in the primary suite
             // (test_setApprovalForAll_false_operatorInSet_passesWall).
             if (_eq(kind, "setApprovalForAll")) continue;
+            // deposit targets a vault (not the ERC20 mock); its wall admittance is proven in
+            // the primary suite (test_flow_approveThenVaultDeposit_succeeds) + adversarial C-04.
+            if (_eq(kind, "deposit")) continue;
             bytes memory data = _rewriteRecipientsToSelf(kind, _bytes(i));
             vm.prank(session);
             (bool ok, bytes memory ret) =

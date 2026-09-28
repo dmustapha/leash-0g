@@ -41,6 +41,9 @@ const permit2 = parseAbi([
   'function permit(address owner, ((address token, uint160 amount, uint48 expiration, uint48 nonce) details, address spender, uint256 sigDeadline) permitSingle, bytes signature)',
 ]);
 const multicallAbi = parseAbi(['function multicall(bytes[] data)']);
+const vault = parseAbi([
+  'function deposit(uint256 assets, address receiver) returns (uint256 shares)',
+]);
 
 const entries = [];
 const add = (e) => entries.push(e);
@@ -61,6 +64,12 @@ add({ name: 'transferFrom_canonical', kind: 'transferFrom', mutation: false,
 add({ name: 'setApprovalForAll_false', kind: 'setApprovalForAll', mutation: false,
   data: encodeFunctionData({ abi: erc20, functionName: 'setApprovalForAll', args: [A, false] }),
   expect: { addr0: A, boolVal: 0 } });
+// deposit(uint256 assets, address receiver) — ERC-4626 curated-vault, UINT-first layout
+// (assets @ offset 4, receiver @ offset 36 — the reverse of transfer, so a wrong-offset
+// on-chain decoder would diverge here).
+add({ name: 'deposit_canonical', kind: 'deposit', mutation: false,
+  data: encodeFunctionData({ abi: vault, functionName: 'deposit', args: [777n, SELF] }),
+  expect: { addr0: SELF, amount: '777' } });
 
 // approve(max) — canonical shape but semantically forbidden on-chain (InfiniteApprovalForbidden)
 add({ name: 'approve_max_forbidden', kind: 'approve', mutation: false, forbidden: 'infinite',
@@ -98,6 +107,13 @@ add({ name: 'setApprovalForAll_true_forbidden', kind: 'setApprovalForAll', mutat
   const base = encodeFunctionData({ abi: erc20, functionName: 'transferFrom', args: [SELF, B, 42n] });
   add({ name: 'transferFrom_truncated', kind: 'transferFrom', mutation: true, data: base.slice(0, base.length - 64) });
 }
+// dirty high bits on the RECEIVER word of deposit (word 2, at bytes [36,68))
+{
+  const base = encodeFunctionData({ abi: vault, functionName: 'deposit', args: [777n, SELF] }).slice(2);
+  // receiver word starts at hex char 8 + 64 = 72; its high 12 bytes = first 24 hex chars.
+  const dirty = '0x' + base.slice(0, 72) + 'ff' + base.slice(74);
+  add({ name: 'deposit_dirty_receiver_high_bits', kind: 'deposit', mutation: true, data: dirty });
+}
 
 // ---- real-world non-structured encodings (off-chain decode; on-chain charges msg.value) ----
 add({ name: 'uniswapV3_exactInputSingle', kind: 'nonstructured', mutation: false,
@@ -122,14 +138,14 @@ add({ name: 'multicall_wrapper', kind: 'nonstructured', mutation: false,
 // Self-check: viem re-decodes every canonical structured entry (the oracle is genuinely viem).
 for (const e of entries) {
   if (e.mutation || e.kind === 'nonstructured') continue;
-  const dec = decodeFunctionData({ abi: erc20, data: e.data });
+  const dec = decodeFunctionData({ abi: e.kind === 'deposit' ? vault : erc20, data: e.data });
   // sanity: viem decodes without throwing (canonical)
   if (!dec.functionName) throw new Error('viem failed to decode ' + e.name);
 }
 
 const out = { generatedBy: 'viem ' + '(gen-corpus.mjs)', count: entries.length, selectors: {
   approve: '0x095ea7b3', increaseAllowance: '0x39509351', transfer: '0xa9059cbb',
-  transferFrom: '0x23b872dd', setApprovalForAll: '0xa22cb465' }, entries };
+  transferFrom: '0x23b872dd', setApprovalForAll: '0xa22cb465', deposit: '0x6e553f65' }, entries };
 writeFileSync(new URL('../test/corpus/corpus.json', import.meta.url), JSON.stringify(out, null, 2));
 console.log('wrote corpus:', entries.length, 'entries (' +
   entries.filter(e => e.mutation).length + ' mutations, ' +
