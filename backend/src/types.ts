@@ -126,6 +126,12 @@ export interface AgentRow {
    * to know which ABI surface the account exposes (F9 mixed-support).
    */
   accountVersion: number;
+  /**
+   * SE-6: per-agent CREATE2 salt (0x-prefixed bytes32) for deterministic v4
+   * accounts — reused on every chain the agent onboards so the account address
+   * is the same everywhere. Null for legacy / non-deterministic mints.
+   */
+  accountSalt: string | null;
   createdAt: string;
 }
 

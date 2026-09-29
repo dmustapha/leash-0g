@@ -21,6 +21,7 @@ interface DbAgentRow {
   guardian_addr: string | null;
   capability_label: string | null;
   account_version: number;
+  account_salt: string | null;
   created_at: Date;
 }
 
@@ -45,13 +46,14 @@ function mapRow(r: DbAgentRow): AgentRow {
     guardianAddr: r.guardian_addr,
     capabilityLabel: r.capability_label,
     accountVersion: r.account_version,
+    accountSalt: r.account_salt,
     createdAt: r.created_at.toISOString(),
   };
 }
 
 const COLS = `id, chain_agent_id, chain_id, owner_addr, account_addr, session_key_addr, session_key_enc,
   audit_pubkey, token_id, token_hash, name, status, gateway_rules, goal, encrypted_audit_key,
-  gateway_token_enc, guardian_addr, capability_label, account_version, created_at`;
+  gateway_token_enc, guardian_addr, capability_label, account_version, account_salt, created_at`;
 
 export async function getAgentById(pool: Pool, id: string): Promise<AgentRow | null> {
   if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
@@ -65,20 +67,32 @@ export async function getAgentByTokenId(pool: Pool, tokenId: string): Promise<Ag
 }
 
 /**
- * SE-5 (E-5): resolve an agent by its (chainId, account) — the multichain key.
- * Under SE-6 CREATE2 the SAME account address can exist on multiple chains, so
- * account_addr alone is ambiguous; the chain disambiguates. This is the isolation
- * anchor: a lookup for chain A never returns chain B's agent for the same address.
+ * SE-5/SE-6 (E-5 + the SE-6 pre-req): resolve an agent by its OWNER-scoped
+ * (chainId, account) key. Under SE-6 CREATE2 the SAME account address can exist
+ * on multiple chains — AND two DIFFERENT owners can deterministically share an
+ * address on the same chain — so the read is scoped by owner_addr as well: one
+ * owner can never resolve (or cross-read) another owner's agent through a shared
+ * address. Migration 021's UNIQUE(owner_addr, chain_id, account_addr) makes the
+ * key single-row by construction; the >1 guard below asserts that invariant
+ * instead of silently picking a row (the old ORDER BY … LIMIT 1 is gone).
  */
 export async function getAgentByAccountAndChain(
   pool: Pool,
+  ownerAddr: string,
   chainId: number,
   accountAddr: string,
 ): Promise<AgentRow | null> {
   const res = await pool.query<DbAgentRow>(
-    `SELECT ${COLS} FROM agents WHERE chain_id = $1 AND account_addr = $2 ORDER BY created_at DESC LIMIT 1`,
-    [chainId, accountAddr.toLowerCase()],
+    `SELECT ${COLS} FROM agents WHERE owner_addr = $1 AND chain_id = $2 AND account_addr = $3`,
+    [ownerAddr.toLowerCase(), chainId, accountAddr.toLowerCase()],
   );
+  if (res.rows.length > 1) {
+    // Unreachable behind agents_owner_chain_account — a hit means the DB invariant
+    // itself is broken; refuse loudly rather than arbitrarily picking a row.
+    throw new Error(
+      `integrity violation: ${res.rows.length} agents share (owner, chain ${chainId}, account ${accountAddr.toLowerCase()})`,
+    );
+  }
   return res.rows[0] ? mapRow(res.rows[0]) : null;
 }
 
@@ -104,14 +118,20 @@ export interface InsertAgentInput {
   capabilityLabel?: string | null;
   /** SE-1 (Stage E): on-chain account version (2 legacy | 4 governed-calldata). */
   accountVersion: 2 | 4;
+  /**
+   * SE-6: the per-agent CREATE2 salt (0x-prefixed bytes32, server-generated at a
+   * deterministic v4 create; reused verbatim on every chain the agent onboards so
+   * the account lands at the SAME address). Null for legacy / non-deterministic mints.
+   */
+  accountSalt?: string | null;
 }
 
 export async function insertAgent(pool: Pool, input: InsertAgentInput): Promise<string> {
   const res = await pool.query<{ id: string }>(
     `INSERT INTO agents (chain_agent_id, chain_id, owner_addr, account_addr, session_key_addr, session_key_enc,
                          audit_pubkey, token_id, token_hash, name, gateway_rules, goal, encrypted_audit_key,
-                         gateway_token_enc, guardian_addr, capability_label, account_version)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id`,
+                         gateway_token_enc, guardian_addr, capability_label, account_version, account_salt)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id`,
     [
       input.chainAgentId.toString(),
       input.chainId,
@@ -130,6 +150,7 @@ export async function insertAgent(pool: Pool, input: InsertAgentInput): Promise<
       input.guardianAddr.toLowerCase(),
       input.capabilityLabel ?? null,
       input.accountVersion,
+      input.accountSalt?.toLowerCase() ?? null,
     ],
   );
   const row = res.rows[0];

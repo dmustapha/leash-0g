@@ -56,7 +56,11 @@ export async function seedAgent(pool: Pool, opts: SeedAgentOptions = {}): Promis
      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
     [
       (opts.ownerAddr ?? '0x' + 'a1'.repeat(20)).toLowerCase(),
-      (opts.accountAddr ?? '0x' + 'b2'.repeat(20)).toLowerCase(),
+      // SE-6 pre-req: default account address is RANDOM per seed — migration 021's
+      // UNIQUE(owner_addr, chain_id, account_addr) forbids two agents of the same
+      // owner sharing an address on a chain. Tests that need a specific/shared
+      // address pass accountAddr explicitly (cross-chain / cross-owner cases).
+      (opts.accountAddr ?? '0x' + randomBytes(20).toString('hex')).toLowerCase(),
       (opts.sessionKeyAddr ?? '0x' + 'c3'.repeat(20)).toLowerCase(),
       opts.sessionKeyEnc ?? 'enc',
       opts.auditPubkey ?? '02' + 'd4'.repeat(32),
