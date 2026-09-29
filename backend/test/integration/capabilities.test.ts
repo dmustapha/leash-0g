@@ -90,7 +90,10 @@ function makeDeps(): CapabilityDeps {
 }
 
 async function seedOwnedAgent(owner = OWNER): Promise<Awaited<ReturnType<typeof getAgentById>>> {
-  const id = await seedAgent(db.pool, { ownerAddr: owner, accountAddr: SELF, name: 'MyTrader' });
+  // SE-6 pre-req: no fixed accountAddr — migration 021's UNIQUE(owner, chain,
+  // account) forbids re-seeding one address per owner; the random default is fine
+  // because classifyIntendedCall takes `SELF` directly, independent of the row.
+  const id = await seedAgent(db.pool, { ownerAddr: owner, name: 'MyTrader' });
   return getAgentById(db.pool, id);
 }
 

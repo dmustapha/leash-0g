@@ -135,3 +135,24 @@ Chain 16602. Deployer/ops `0xc211C942946011859ca634F22400d80570ED12A5`.
 
 ### C-D1 backend-orchestrated JIT E2E (always-allow) — ✅ 1/1 PASS live
 `backend/test/integration/governed-call-deployed.test.ts` (RUN_DEPLOYED_DRILL=1) — the REAL runtime (`SessionChain` vs 0G + hermetic Neon schema) drives the full loop against `0x2FDbfa…`: agent novel over-cap call → runtime L2 raise (quarantined `capability_request` + alert, no submit) → owner always-allow (on-chain loosen `proposeCallRule 300e6`→`applyCallRule` + `decideCapabilityRequest`) → next cycle runtime L1 `executeCall` **landed on-chain** tx `0x083ce663…` (allowance 250e6). Fail-safe: an intermediate 0G receipt-fetch flake was recorded failed-not-acted. Evidence: `docs/evidence/stage-d-cd1-jit-e2e.json`. NOTE: approve-once is proven as an on-chain primitive (jit-drill 5/5), not a backend retry (finding F-D2 in `07`/DEPLOY-RESULTS).
+
+## Stage E — SE-6 deterministic (CREATE2) V4 factory (2026-09-29) — SAME address on 2 chains
+The SE-6 same-address layer: `LeashAccountV4FactoryDeterministic` deployed at the **SAME address on
+both chains** via the canonical CREATE2 deployer `0x4e59b44847b379578588920cA78FbF26c0B4956C`
+(salt `keccak256("LEASH-V4-DETERMINISTIC-FACTORY-v1")`). The embedded `LeashAccountV4` creation code
+is the cfabfdb wall bytecode (codehash-equality vs the plain factory proven in Foundry). Deployer/ops
+`0xc211C942946011859ca634F22400d80570ED12A5`.
+- **LeashAccountV4FactoryDeterministic:** `0xa0249c5808E8F3b31d406d1eF6492B4508014dA0`
+  - 0G Galileo 16602 — deploy tx `0x9d9860f2c4277a2196fd4ac9f479b8b450908ea7f0996e19ddc72f6a79d592a6`
+  - Base Sepolia 84532 — deploy tx `0xd1f180555d0b5a1714221831bbe3dca19e7cacc74f86fcf005c6fa4e0fdb66fd`
+- **BR-1 config swap:** `LEASH_FACTORY_V4_ADDR=0xa0249c5808E8F3b31d406d1eF6492B4508014dA0` (staged in
+  backend/.env; set the same value in the Render env at the Stage-E deploy). The V4 create wire now
+  passes a server-generated `bytes32 salt` + predict-verifies the mint (`createAccountV4` 9-arg form).
+- **E-6 live proof (`backend/scripts/create2-same-address-drill.ts`, idempotent + flake-tolerant):**
+  the same (owner, salt) + identical construction tuple minted the account at the SAME address on BOTH
+  chains — e.g. `0x71ab54697eacf7ebbafff36d1c579a9eaf22e0df` (0G tx `0xd6284c45…`, Base tx `0x6cbe4eca…`);
+  two recorded back-to-back GREEN runs (8/8 each, `0x9c671424…` and `0xb905d772…`) in
+  `docs/evidence/stage-e-create2-drill.json`. `assertSameAddress` verified pre+post deploy (factory addr +
+  factory codehash + CREATE2 prediction + deployed account codehash), the governed-calldata wall REVERTS an
+  off-allowlist `executeCall` on Base Sepolia, and a spoofed-factory config is REFUSED
+  (`SameAddressMismatchError: factory_addr diverges`) by the production path.

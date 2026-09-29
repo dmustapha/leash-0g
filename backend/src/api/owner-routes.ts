@@ -506,6 +506,10 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       guardianAddr: deployed.guardianAddr,
       ...(input.capabilityLabel ? { capabilityLabel: input.capabilityLabel } : {}),
       accountVersion: deployed.accountVersion, // SE-1: persist the version actually minted (gate L-01)
+      // SE-6: persist the CREATE2 salt actually used (causally from the deploy
+      // result, like accountVersion) — reused verbatim when this agent onboards
+      // another chain so the account lands at the SAME address.
+      accountSalt: deployed.accountSalt,
     });
 
     // The committed agent row carries the quota/rate count from here on —
