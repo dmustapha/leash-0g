@@ -1,121 +1,105 @@
 #!/usr/bin/env bash
 # D-11 DEPLOYED JIT-RAIL DRILL — the Lane-2 grant PRIMITIVES proven on the LIVE 0G
-# deployment. Complements the D-15 adversarial drill (which proved the HAPPY governed
-# call + MALICIOUS reverts live). Here we prove, on-chain, that when a call is OUT of
-# the standing envelope the owner's two JIT decisions actually land and make the retry
-# succeed:
-#   (1) APPROVE-ONCE  — owner authorizeOnce(callHash) → the exact over-cap call succeeds
-#                       ONCE, then a replay reverts OneShotConsumed (not repeatable).
+# deployment. When a call is OUT of the standing envelope the owner's two JIT decisions land
+# and make the retry succeed:
+#   (1) APPROVE-ONCE  — owner authorizeOnce(callHash) → the exact over-cap call succeeds ONCE,
+#                       then a replay reverts (consumed — not repeatable).
 #   (2) ALWAYS-ALLOW  — owner proposeCallRule (loosen the cap) → applyCallRule → the
 #                       previously-over-cap call now succeeds as a STANDING capability.
-# The account uses timelockDelay=0 (drill) so the loosen applies immediately; on the
-# real stack the owner waits the 15-min timelock (the FE surfaces "takes effect in N min").
-# Writes machine-checkable evidence to docs/evidence/stage-d-jit-drill.json.
 #
-# NOTE (honest scope): this proves the on-chain HALF of the JIT rail (the owner-signed
-# grant txs + the retry landing). The full backend-driven E2E — an AGENT emits a novel
-# call → the runtime raises a quarantined JIT request → the owner approves from the
-# Telegram/inbox notification → the runtime retries — requires the Stage-D BACKEND to be
-# DEPLOYED, which is a Gate-② decision. It is integration-tested (governed-call-runtime
-# 5/5) and gated on deploy, exactly as Phase-5.6's D-7 deployed chain drill was.
+# SE-4: a baseline-reset preamble restores the canonical perCallCap (200e6) BEFORE the body,
+# so the "over-cap reverts" preconditions hold on EVERY run even though this drill's own
+# always-allow step loosens the cap to 400e6. Bounded RPC-flake retries; counts in evidence
+# JSON, never a commit subject. timelockDelay=0 (drill) so a loosen applies immediately; on
+# the real stack the owner waits the 15-min timelock. Writes docs/evidence/stage-d-jit-drill.json.
+#
+# NOTE (honest scope): proves the on-chain HALF of the JIT rail. The full backend-driven E2E
+# (agent novel call → runtime raises a quarantined JIT request → owner approves → runtime
+# retries) is the SE-2 one-shot-consume deployed drill (one-shot-consume-drill.ts) + its [CI]
+# suite (7/7).
 set -euo pipefail
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/drill-common.sh"
 
-RPC=$(grep -E '^ZERO_G_RPC=' ~/leash/backend/.env | cut -d= -f2- | tr -d '"')
-OPS=$(grep -E '^OPS_PRIVATE_KEY=' ~/leash/backend/.env | cut -d= -f2- | tr -d '"')
-SESSION_ADDR=$(cast wallet address --private-key "$OPS")   # session key == owner in the drill setup
+USD="$STACK_USD"; ROUTER="$STACK_ROUTER"
+APPROVE="$SEL_APPROVE"
+OVER_CAP=250000000       # over the canonical perCallCap (200e6)
+STANDING=300000000       # over the OLD cap, within the LOOSENED cap
+NEW_CAP=400000000        # loosened perCallCap
+NEW_WINDOW=1000000000000 # loosened windowCapCall
 
-# cfabfdb (post-FIX-1) redeploy on 0G 16602 — Stage-D DEPLOY (2026-09-28).
-A=0x2FDbfa0e76D4dC455C95C4e7d445595E714cDCDF        # DrillAccount (v4, timelockDelay=0, fixed bytecode)
-USD=0x4E51f90C8Cf60307E01A6abF555762e69Ef0eC2A      # TUSD-D (granted target)
-ROUTER=0x425B8638e1B851486F397715EA414d52A1Ab7a65   # granted spender
-
-APPROVE=0x095ea7b3
-OVER_CAP=250000000      # 250e6 — OVER the standing perCallCap (200e6)
-STANDING=300000000      # 300e6 — over the OLD cap, within the LOOSENED cap
-NEW_CAP=400000000       # loosened perCallCap
-NEW_WINDOW=1000000000000 # loosened windowCapCall (generous headroom over accumulated spentInWindow)
-
-pass=0; fail=0
-
-# Send a tx and echo its hash. This RPC intermittently null-responses on the immediate
-# receipt fetch even though the tx mines — retry the hash read a few times before giving up.
-send_hash() {
-  local h="" i
-  for i in 1 2 3 4 5; do
-    if h=$(cast send "$@" --private-key "$OPS" --rpc-url "$RPC" --json 2>/dev/null | python3 -c 'import sys,json;print(json.load(sys.stdin)["transactionHash"])' 2>/dev/null) && [ -n "$h" ]; then
-      echo "$h"; return 0
-    fi
-    sleep 3
-  done
-  echo "sent(hash-unavailable)"; return 0
-}
-
-echo "== Stage D deployed JIT-rail drill @ $A =="
+echo "== Stage D deployed JIT-rail drill @ $A (stack=$STACK_NAME) =="
+reset_baseline || { result_line; exit 1; }
+echo "-- drill body --"
 
 # ── (1) APPROVE-ONCE ─────────────────────────────────────────────────────────
-# The exact over-cap call is OUT of the standing envelope (reverts OverPerCallCap 0x2671b8a6).
 OVERDATA=$(cast calldata "approve(address,uint256)" "$ROUTER" "$OVER_CAP")
-if cast call "$A" "executeCall(address,uint256,bytes)" "$USD" 0 "$OVERDATA" --from "$SESSION_ADDR" --rpc-url "$RPC" >/dev/null 2>&1; then
-  echo "FAIL  approve-once precondition — over-cap call did NOT revert"; fail=$((fail+1))
-else
-  echo "pass  precondition: over-cap approve(router,250e6) is out-of-envelope (reverts)"; pass=$((pass+1))
-fi
+expect_revert "precondition: over-cap approve(router,250e6) out-of-envelope" "$OVERDATA" "0x2671b8a6" "$USD"
 
 # Owner reviews + authorizes THIS EXACT call once. callHash = keccak256(abi.encode(target,selector,data,value)).
 CALLHASH=$(cast keccak "$(cast abi-encode 'f(address,bytes4,bytes,uint256)' "$USD" "$APPROVE" "$OVERDATA" 0)")
 EXPIRY=$(( $(date +%s) + 3600 ))
-send_hash "$A" "authorizeOnce(bytes32,uint64)" "$CALLHASH" "$EXPIRY" >/dev/null
-echo "  owner authorizeOnce($CALLHASH, expiry=$EXPIRY)"
+send_confirmed "$A" "authorizeOnce(bytes32,uint64)" "$CALLHASH" "$EXPIRY" >/dev/null || _flake "authorizeOnce submit exhausted"
+note "owner authorizeOnce($CALLHASH, expiry=$EXPIRY)"
 
-# The retry now SUCCEEDS once.
-ONCE_TX=$(send_hash "$A" "executeCall(address,uint256,bytes)" "$USD" 0 "$OVERDATA")
-ALLOW1=$(cast call "$USD" "allowance(address,address)(uint256)" "$A" "$ROUTER" --rpc-url "$RPC")
-if [ "${ALLOW1%% *}" = "$OVER_CAP" ]; then echo "pass  approve-once retry landed tx=$ONCE_TX allowance=$ALLOW1"; pass=$((pass+1)); else echo "FAIL  approve-once allowance=$ALLOW1 (want $OVER_CAP)"; fail=$((fail+1)); fi
+# The retry now SUCCEEDS once (allowance moves to OVER_CAP).
+ONCE_TX=$(send_async "$A" "executeCall(address,uint256,bytes)" "$USD" 0 "$OVERDATA" || true)
+wait_status "$ONCE_TX" >/dev/null || true
+ALLOW1=$(num_read "$USD" "allowance(address,address)(uint256)" "$A" "$ROUTER")
+if [ "$ALLOW1" = "$OVER_CAP" ]; then _pass "approve-once retry landed tx=$ONCE_TX allowance=$ALLOW1"
+elif [ -z "$ALLOW1" ]; then _flake "approve-once allowance read exhausted"
+else _fail "approve-once allowance=$ALLOW1 (want $OVER_CAP)"; fi
 
-# A replay of the consumed one-shot reverts OneShotConsumed → falls through to the
-# standing envelope → OverPerCallCap (0x2671b8a6): the one-shot is NOT repeatable.
-if cast call "$A" "executeCall(address,uint256,bytes)" "$USD" 0 "$OVERDATA" --from "$SESSION_ADDR" --rpc-url "$RPC" >/dev/null 2>&1; then
-  echo "FAIL  one-shot replay SUCCEEDED — should be single-use"; fail=$((fail+1))
-else
-  echo "pass  one-shot replay is refused (consumed — not repeatable)"; pass=$((pass+1))
-fi
+# A replay of the consumed one-shot reverts (consumed → falls through to standing envelope →
+# OverPerCallCap): the one-shot is NOT repeatable.
+expect_revert "one-shot replay refused (consumed)" "$OVERDATA" "0x2671b8a6" "$USD"
 
 # ── (2) ALWAYS-ALLOW (loosen the standing rule) ──────────────────────────────
-# A standing (non-one-shot) approve at 300e6 is still over the OLD cap (200e6) → reverts.
 STANDDATA=$(cast calldata "approve(address,uint256)" "$ROUTER" "$STANDING")
-if cast call "$A" "executeCall(address,uint256,bytes)" "$USD" 0 "$STANDDATA" --from "$SESSION_ADDR" --rpc-url "$RPC" >/dev/null 2>&1; then
-  echo "FAIL  always-allow precondition — 300e6 did NOT revert at old cap"; fail=$((fail+1))
-else
-  echo "pass  precondition: standing approve(router,300e6) exceeds the old cap (reverts)"; pass=$((pass+1))
-fi
+expect_revert "precondition: standing approve(router,300e6) exceeds old cap" "$STANDDATA" "0x2671b8a6" "$USD"
 
-# Owner grants the wider envelope (loosen perCallCap 200e6→400e6, windowCap→1000e6).
-send_hash "$A" "proposeCallRule(address,bytes4,uint8,address[],uint128,uint128,bytes32)" \
-  "$USD" "$APPROVE" 0 "[$ROUTER]" "$NEW_CAP" "$NEW_WINDOW" \
-  0x0000000000000000000000000000000000000000000000000000000000000000 >/dev/null
-send_hash "$A" "applyCallRule()" >/dev/null
-echo "  owner proposeCallRule(loosen cap→400e6/window→1000e6) + applyCallRule"
+# Owner grants the wider envelope (loosen perCallCap 200e6→400e6). Reset restores 200e6 next run.
+send_confirmed "$A" "proposeCallRule(address,bytes4,uint8,address[],uint128,uint128,bytes32)" \
+  "$USD" "$APPROVE" 0 "[$ROUTER]" "$NEW_CAP" "$NEW_WINDOW" "$BASE_CODEHASH" >/dev/null || _flake "proposeCallRule submit exhausted"
+send_confirmed "$A" "applyCallRule()" >/dev/null || _flake "applyCallRule submit exhausted"
+note "owner proposeCallRule(loosen cap→400e6) + applyCallRule"
 
 # The standing retry now SUCCEEDS within the widened envelope.
-STAND_TX=$(send_hash "$A" "executeCall(address,uint256,bytes)" "$USD" 0 "$STANDDATA")
-ALLOW2=$(cast call "$USD" "allowance(address,address)(uint256)" "$A" "$ROUTER" --rpc-url "$RPC")
-if [ "${ALLOW2%% *}" = "$STANDING" ]; then echo "pass  always-allow standing retry landed tx=$STAND_TX allowance=$ALLOW2"; pass=$((pass+1)); else echo "FAIL  always-allow allowance=$ALLOW2 (want $STANDING)"; fail=$((fail+1)); fi
+STAND_TX=$(send_async "$A" "executeCall(address,uint256,bytes)" "$USD" 0 "$STANDDATA" || true)
+wait_status "$STAND_TX" >/dev/null || true
+ALLOW2=$(num_read "$USD" "allowance(address,address)(uint256)" "$A" "$ROUTER")
+if [ "$ALLOW2" = "$STANDING" ]; then _pass "always-allow standing retry landed tx=$STAND_TX allowance=$ALLOW2"
+elif [ -z "$ALLOW2" ]; then _flake "always-allow allowance read exhausted"
+else _fail "always-allow allowance=$ALLOW2 (want $STANDING)"; fi
 
-echo ""
-echo "RESULT: $pass passed, $fail failed"
-
+result_line
 mkdir -p ~/leash/docs/evidence
-cat > ~/leash/docs/evidence/stage-d-jit-drill.json <<JSON
+EVID=~/leash/docs/evidence/stage-d-jit-drill.json
+# SE-5.0 (evidence-honesty nit): a single overwritten resetProof hides the run that
+# actually restores from a loosened cap (a run starting already-canonical shows
+# before==after==200e6, never the narrated 400e6→200e6). Carry a per-run history so
+# BOTH back-to-back SE-4 runs' reset proofs are individually inspectable: read the
+# prior file's runs (or fold its single resetProof forward), append THIS run, keep
+# the last two. Run 1 records its reset; run 2 records the 400e6→200e6 restore.
+PRIOR_RUNS='[]'
+if [ -f "$EVID" ]; then
+  PRIOR_RUNS=$(jq -c '.resetRuns // (if .resetProof then [.resetProof] else [] end)' "$EVID" 2>/dev/null || echo '[]')
+fi
+RESET_RUNS=$(jq -c --arg b "$RESET_BEFORE" --arg a "$RESET_AFTER" --arg c "$BASE_PER_CALL_CAP" \
+  '. + [{approvePerCallCapBefore:$b, approvePerCallCapAfter:$a, canonical:$c}] | .[-2:]' <<<"$PRIOR_RUNS")
+cat > "$EVID" <<JSON
 {
-  "phase": "Stage D — governed calldata",
+  "phase": "Stage D — governed calldata (SE-4 idempotent re-run)",
   "kind": "deployed JIT-rail drill (D-11, on-chain grant primitives)",
-  "chainId": 16602,
+  "stack": "$STACK_NAME",
+  "chainId": $STACK_CHAIN_ID,
   "account": "$A",
+  "resetProof": { "approvePerCallCapBefore": "$RESET_BEFORE", "approvePerCallCapAfter": "$RESET_AFTER", "canonical": "$BASE_PER_CALL_CAP" },
+  "resetRuns": $RESET_RUNS,
   "approveOnce": { "callHash": "$CALLHASH", "retryTx": "$ONCE_TX", "allowanceAfter": "$ALLOW1", "replayRefused": true },
   "alwaysAllow": { "loosenedPerCallCap": "$NEW_CAP", "loosenedWindowCap": "$NEW_WINDOW", "retryTx": "$STAND_TX", "allowanceAfter": "$ALLOW2" },
-  "checks": { "passed": $pass, "failed": $fail },
-  "note": "On-chain half of the JIT rail. Full backend-runtime-driven E2E (agent novel call -> quarantined JIT request -> owner approves from notification -> runtime retry) is integration-tested (governed-call-runtime 5/5) and gated on the Stage-D deploy (Gate 2), as Phase-5.6 D-7 was."
+  "checks": { "passed": $pass, "failed": $fail, "flaked": $flake },
+  "note": "On-chain half of the JIT rail; full backend-driven E2E = the SE-2 one-shot-consume deployed drill + its [CI] 7/7."
 }
 JSON
 echo "evidence → docs/evidence/stage-d-jit-drill.json"
-[ $fail -eq 0 ]
+drill_green

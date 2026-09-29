@@ -1,10 +1,13 @@
 {
-  "phase": "Stage D — governed calldata",
+  "phase": "Stage D — governed calldata (SE-4 idempotent re-run)",
   "kind": "deployed JIT-rail drill (D-11, on-chain grant primitives)",
+  "stack": "0g-16602",
   "chainId": 16602,
   "account": "0x2FDbfa0e76D4dC455C95C4e7d445595E714cDCDF",
-  "approveOnce": { "callHash": "0xc13d658bf37a9b4ad1c6380f18e4013d5be66c43e5f63818f3a93dfed6e763fb", "retryTx": "0x6f3c5d5290d0f49526c962bd7f2b25f2b3d0fc589e593041ddd0c4366661ed4e", "allowanceAfter": "250000000 [2.5e8]", "replayRefused": true },
-  "alwaysAllow": { "loosenedPerCallCap": "400000000", "loosenedWindowCap": "1000000000000", "retryTx": "0x74a8147bb74e87718fa1b2319899a11d8b4e0e539f03aa1192e0e7963c7ac99f", "allowanceAfter": "300000000 [3e8]" },
-  "checks": { "passed": 5, "failed": 0 },
-  "note": "On-chain half of the JIT rail. Full backend-runtime-driven E2E (agent novel call -> quarantined JIT request -> owner approves from notification -> runtime retry) is integration-tested (governed-call-runtime 5/5) and gated on the Stage-D deploy (Gate 2), as Phase-5.6 D-7 was."
+  "resetProof": { "approvePerCallCapBefore": "400000000", "approvePerCallCapAfter": "200000000", "canonical": "200000000" },
+  "resetRuns": [{"approvePerCallCapBefore":"200000000","approvePerCallCapAfter":"200000000","canonical":"200000000"},{"approvePerCallCapBefore":"400000000","approvePerCallCapAfter":"200000000","canonical":"200000000"}],
+  "approveOnce": { "callHash": "0xc13d658bf37a9b4ad1c6380f18e4013d5be66c43e5f63818f3a93dfed6e763fb", "retryTx": "0x48150a1a3f9fe2696a28fbf6b76a4770196e58c7cfae24b3828c50c7be8080ef", "allowanceAfter": "250000000", "replayRefused": true },
+  "alwaysAllow": { "loosenedPerCallCap": "400000000", "loosenedWindowCap": "1000000000000", "retryTx": "0xff7bb0b4737e0bfd6c4d735d9c3d4f63c1ddda0202d8de4389dd7448603e27fa", "allowanceAfter": "300000000" },
+  "checks": { "passed": 5, "failed": 0, "flaked": 0 },
+  "note": "On-chain half of the JIT rail; full backend-driven E2E = the SE-2 one-shot-consume deployed drill + its [CI] 7/7."
 }
