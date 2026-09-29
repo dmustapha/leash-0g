@@ -262,6 +262,13 @@ export class LeashRuntimeManager implements RuntimeManager {
    * row already `consuming` (in-flight) is skipped, and a `consumed`/`failed` row is
    * excluded by the query — so a swept row can only consume the exact one time.
    * Runs on boot + on a timer (index.ts), mirroring the reservation/approval sweeps.
+   *
+   * SE-7 (carry from the SE-5 Gate-② review): this drives `consumeApprovedOneShot`,
+   * which uses the single default-chain `deps.chain`. Correct while one chain exists,
+   * but once a 2nd real chain lands, `listResumableOneShots` must return chain_id and
+   * the sweep must resolve that chain's client via the ChainRegistry — otherwise a
+   * chain-B one-shot would be re-driven against chain-A's client. Guarded today by the
+   * on-chain wall (a mismatched submit reverts, fail-safe), but fix before SE-7 ships.
    */
   async sweepResumableOneShots(): Promise<number> {
     const ttlMs = this.deps.settings.jitTtlMs ?? 600_000;

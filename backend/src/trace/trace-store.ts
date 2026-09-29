@@ -26,6 +26,11 @@ export interface AppendTraceInput {
  * Resolves only after the row is durably committed — callers that must order
  * side effects after the write (consent-before-forward) await this.
  */
+// SE-7 (carry from SE-5 Gate-② review): trace_records.chain_id is intentionally
+// left UNSET here (nullable, backfilled to 0G by migration 020) — traces are
+// agent_id-scoped so cross-chain isolation is already inherent. When the first real
+// 2nd chain lands (SE-7), thread the agent's chainId through the generic chained
+// append so chain-scoped audit reads are populated, then SET NOT NULL + index it.
 export async function appendTrace(pool: Pool, input: AppendTraceInput): Promise<TraceRecord> {
   return appendChained<TraceRecord>(pool, TRACE_CHAIN, input.agentId, (seq, prevHash) =>
     buildRecord(input, seq, prevHash),
