@@ -1,0 +1,31 @@
+{
+  "drill": "SE-1 E-2 deployed create→V4",
+  "chainId": 16602,
+  "factoryV4": "0x70673e447cbe7b11b5193bdb047677ce29eccf8c",
+  "account": "0xE08FC19c93d2d9Bb9E492Fce97483aBf6BFAeaFA",
+  "createTx": "0xfacf0f93658a71abdc1d8c152ec7f753fe4d29e82d4954f71757301978f71a73",
+  "score": "4/4",
+  "checks": [
+    {
+      "check": "production create → V4",
+      "ok": true,
+      "detail": "account=0xE08FC19c93d2d9Bb9E492Fce97483aBf6BFAeaFA version=4 createTx=0xfacf0f93658a71abdc1d8c152ec7f753fe4d29e82d4954f71757301978f71a73"
+    },
+    {
+      "check": "created account carries the V4 wall bytecode",
+      "ok": true,
+      "detail": "len=38806 known=38806"
+    },
+    {
+      "check": "off-allowlist executeCall REFUSED at the wall",
+      "ok": true,
+      "detail": "Execution reverted for an unknown reason."
+    },
+    {
+      "check": "governed executeCall ACCEPTED within caps",
+      "ok": true,
+      "detail": "allowance=100000000 happyTx=0x9ae5298e376395160598680766ade8e03619b2a41f9f9e394ece8173f36b878b"
+    }
+  ],
+  "at": "2026-09-29T19:24:52.883Z"
+}

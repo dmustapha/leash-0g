@@ -1,0 +1,25 @@
+{
+  "drill": "SE-2/SE-4 one-shot-consume [DEPLOY]",
+  "chainId": 16602,
+  "account": "0x2FDbfa0e76D4dC455C95C4e7d445595E714cDCDF",
+  "resetCanonicalCap": "200000000",
+  "raised": {
+    "requestId": "bf97f7a9-8567-4c8e-9901-788d4b43865d",
+    "novelty": [
+      "over_cap"
+    ],
+    "callHash": "0xc13d658bf37a9b4ad1c6380f18e4013d5be66c43e5f63818f3a93dfed6e763fb"
+  },
+  "approveOnce": {
+    "authorizeOnceTx": "0x14de84e755ef21b962f446fd9b35db9a5e913f93a62973f8c545956f509c8fb5"
+  },
+  "consumed": {
+    "consumeTxHash": "0x74a1ef884c9fa757aad17d1fda24d33b3c9f3b96ec010ffbc928bb4ba8fd2da7",
+    "allowance": "250000000"
+  },
+  "replayRefused": {
+    "offChain": "CAS stood down (no 2nd submit)",
+    "onChain": "Execution reverted for an unknown reason."
+  },
+  "at": "2026-09-29T19:22:09.087Z"
+}

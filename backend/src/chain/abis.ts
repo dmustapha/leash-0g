@@ -9,6 +9,20 @@ export const factoryAbi = parseAbi([
   'event AccountCreated(address indexed account, address indexed owner, address sessionKey, address guardian)',
 ]);
 
+/**
+ * Stage E (SE-1): the DEDICATED V4 factory. `createAccountV4` is ARG-IDENTICAL
+ * to the legacy `createAccount` (same 8 params, same struct fields) — only the
+ * factory address + fn/event name + struct namespace differ. A governed-calldata
+ * agent (accountVersion=4) is minted here; legacy v2/v3 stay on `factoryAbi`.
+ * Hand-derived from contracts/src/LeashAccountV4Factory.sol.
+ */
+export const factoryV4Abi = parseAbi([
+  'struct Policy { uint128 perTransferCap; uint128 windowCap; uint32 windowSeconds; uint64 expiresAt; }',
+  'struct TokenPolicy { uint128 perTransferCapToken; uint128 windowCapToken; }',
+  'function createAccountV4(address owner, address guardian, address sessionKey, Policy initialPolicy, address[] initialAllowlist, uint64 timelockDelay, address settlementToken, TokenPolicy initialTokenPolicy) returns (address account)',
+  'event AccountCreatedV4(address indexed account, address indexed owner, address sessionKey, address guardian)',
+]);
+
 /** Minimal ERC-20 metadata reads — to detect + label the settlement asset. */
 export const erc20MetaAbi = parseAbi([
   'function decimals() view returns (uint8)',

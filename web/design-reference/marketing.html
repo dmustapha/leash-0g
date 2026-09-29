@@ -1,0 +1,827 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>LEASH — Keep your agents on a leash</title>
+<script>try{if(localStorage.getItem('leash-theme')==='light')document.documentElement.setAttribute('data-theme','light')}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://api.fontshare.com/v2/css?f[]=clash-display@500,600,700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="tokens.css?v=3"/>
+<style>
+/* ===== MARKETING SURFACE (PROFILE = MARKETING) ===== */
+.wrap { max-width: 1200px; margin: 0 auto; padding: 0 var(--s-5); }
+body { position: relative; overflow-x: hidden; }
+main, nav { position: relative; z-index: 1; }
+
+/* --- glass nav --- */
+nav { position: sticky; top: 0; z-index: 30; height: 66px; display: flex; align-items: center;
+  border-bottom: 1px solid var(--border);
+  background: var(--glass-bg); backdrop-filter: blur(var(--glass-blur)) saturate(1.3);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.3); box-shadow: var(--glass-hi);
+  transition: background var(--t-base) var(--ease-out-cubic), height var(--t-base); }
+nav.scrolled { background: color-mix(in oklab, var(--bg-base) 88%, transparent); height: 58px; }
+nav .wrap { display: flex; align-items: center; justify-content: space-between; width: 100%; }
+.brand { display: flex; align-items: center; gap: 10px; font-family: var(--font-display);
+  font-weight: 600; font-size: 18px; letter-spacing: -0.01em; }
+.brand svg { overflow: visible; }
+.navlinks { display: flex; gap: var(--s-6); }
+.navlinks a { color: var(--ink-dim); text-decoration: none; font-size: var(--t-small);
+  position: relative; transition: color var(--t-fast), opacity var(--t-base); }
+.navlinks a::after { content:""; position:absolute; left:0; bottom:-6px; height:1px; width:100%;
+  background: var(--accent); transform: scaleX(0); transform-origin: left;
+  transition: transform var(--t-base) var(--ease-out-cubic); }
+.navlinks a:hover { color: var(--ink); } .navlinks a:hover::after { transform: scaleX(1); }
+.nav-right { display:flex; align-items:center; gap:14px; }
+.theme-toggle { display:grid; place-items:center; width:34px; height:34px; border-radius:var(--r-full);
+  border:1px solid var(--border-strong); background:var(--glass-bg-strong); color:var(--ink-dim); cursor:pointer;
+  transition: border-color var(--t-fast), color var(--t-fast), background var(--t-fast); }
+.theme-toggle:hover { border-color:var(--ink-24); color:var(--ink); }
+.theme-toggle svg { width:16px; height:16px; }
+
+/* --- hero --- */
+.hero { padding: var(--s-9) 0 var(--s-6); text-align: center; position: relative; }
+.motes { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 0; }
+.hero > * { position: relative; z-index: 1; }
+.hero-eyebrow { display: inline-flex; align-items: center; gap: 8px; margin-bottom: var(--s-6);
+  padding: 5px 12px 5px 10px; border-radius: var(--r-full); border: 1px solid var(--border-strong);
+  background: var(--glass-bg-strong); backdrop-filter: blur(10px); }
+.hero-eyebrow .dot { position: relative; width: 7px; height: 7px; border-radius: var(--r-full);
+  background: var(--allow); display: inline-block; }
+.hero h1 { margin: 0 auto; max-width: 15ch; }
+.hero h1 .line { display: block; }
+.hero p.sub { max-width: 54ch; margin: var(--s-6) auto var(--s-6); color: var(--ink-dim);
+  font-size: 1.18rem; line-height: 1.55; }
+.hero .cta { display: flex; gap: var(--s-3); justify-content: center; }
+
+/* --- Loop-Link: the forged hero object (draw -> alive -> taut -> snap -> re-arm) --- */
+.object-stage { display: flex; justify-content: center; margin: 0 0 var(--s-2); perspective: 900px; }
+.looplink { width: min(72vw, 440px); height: auto; overflow: visible;
+  stroke: var(--accent); stroke-width: 3.5; stroke-linecap: round;
+  filter: drop-shadow(0 0 20px var(--accent-24)) drop-shadow(0 0 3px var(--accent-16));
+  transform: rotateX(var(--rx,0deg)) rotateY(var(--ry,0deg));
+  transition: transform var(--t-slow) var(--ease-out-quart); will-change: transform; }
+.looplink .ll-link  { transition: stroke var(--t-base) var(--ease-out-cubic); }
+.looplink .ll-tether{ transition: d var(--t-slow) var(--ease-spring); }
+.looplink .ll-spark { fill: var(--accent-hi); opacity: 0; transform-box: fill-box; transform-origin: center; }
+/* interactive beat control — the caption IS the button that plays the refusal */
+.ll-beat { display: inline-flex; align-items: center; gap: 9px; margin: 0 auto var(--s-6);
+  font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-dim);
+  background: var(--glass-bg-strong); backdrop-filter: blur(10px);
+  border: 1px solid var(--border-strong); border-radius: var(--r-full); padding: 8px 16px 8px 12px;
+  cursor: pointer; transition: color var(--t-base), border-color var(--t-base), background var(--t-base), box-shadow var(--t-base); }
+.ll-beat:hover { color: var(--ink); border-color: var(--accent-24); box-shadow: 0 0 0 3px var(--accent-08); }
+.ll-beat .ll-dot { width: 6px; height: 6px; border-radius: var(--r-full); background: var(--accent);
+  box-shadow: 0 0 8px var(--accent); transition: background var(--t-base), box-shadow var(--t-base); }
+.ll-beat .ll-play { font-size: 8px; color: var(--accent-ink); transition: color var(--t-base); margin-right: -2px; }
+#hero.is-taut    .ll-beat { color: var(--deny); border-color: var(--deny-24); }
+#hero.is-taut    .ll-beat .ll-dot { background: var(--deny); box-shadow: 0 0 8px var(--deny); }
+#hero.is-taut    .ll-beat .ll-play,
+#hero.is-snapped .ll-beat .ll-play { color: currentColor; }
+#hero.is-snapped .ll-beat { color: var(--allow); border-color: var(--allow-24); }
+#hero.is-snapped .ll-beat .ll-dot { background: var(--allow); box-shadow: 0 0 8px var(--allow); }
+/* refusal tint: on "refused" the tether snaps straight AND flushes coral for the beat */
+#hero.is-taut .ll-tether { stroke: var(--deny); }
+#hero.is-taut .looplink { filter: drop-shadow(0 0 20px var(--deny-24)) drop-shadow(0 0 3px var(--deny-14)); }
+/* verdict-pop label above the object */
+.ll-verdict { position: absolute; top: 8px; left: 50%; transform: translateX(-50%) translateY(6px);
+  font-size: 10px; letter-spacing: .18em; text-transform: uppercase; font-weight: 600;
+  padding: 4px 10px; border-radius: var(--r-full); opacity: 0; pointer-events: none;
+  transition: opacity var(--t-base), transform var(--t-base); white-space: nowrap; }
+.ll-verdict.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.ll-verdict.refused { color: var(--deny); background: var(--deny-14); border: 1px solid var(--deny-24); }
+.ll-verdict.revoked { color: var(--allow); background: var(--allow-14); border: 1px solid var(--allow-24); }
+.object-stage { position: relative; }
+@media (prefers-reduced-motion: no-preference) {
+  #hero.will-draw .ll-loop  { stroke-dasharray: 70; stroke-dashoffset: 70; }
+  #hero.will-draw .ll-tether{ stroke-dasharray: 60; stroke-dashoffset: 60; }
+  #hero.will-draw .ll-link  { stroke-dasharray: 62; stroke-dashoffset: 62; }
+  #hero.is-drawing .ll-loop  { animation: llDraw .50s ease-out forwards; }
+  #hero.is-drawing .ll-tether{ animation: llDraw .60s ease-out .45s forwards; }
+  #hero.is-drawing .ll-link1 { animation: llDraw .36s ease-out 1.00s forwards; }
+  #hero.is-drawing .ll-link2 { animation: llDraw .36s ease-out 1.25s forwards; }
+  #hero.is-alive  .ll-sway   { animation: llSway 4.6s var(--ease-in-out) infinite; transform-origin: 28px 24px; }
+  #hero.is-taut   .ll-sway   { animation: none; }
+  #hero.is-taut   .ll-tether { d: path('M28 24 C 42 24, 50 24, 60 24 S 70 24, 77 24'); }
+  #hero.is-snapped .ll-sway  { animation: none; }
+  #hero.is-snapped .ll-tether{ stroke-dasharray: 20 14 60; d: path('M28 26 C 40 30, 48 31, 56 27 S 70 25, 77 24'); }
+  #hero.is-snapped .ll-link  { stroke: var(--allow); }
+  #hero.is-snapped .ll-spark { animation: llSpark .6s var(--ease-out-expo) both; }
+}
+@keyframes llDraw  { to { stroke-dashoffset: 0; } }
+@keyframes llSway  { 0%,100% { transform: rotate(0); } 50% { transform: rotate(2.4deg); } }
+@keyframes llSpark { 0% { opacity:0; transform: scale(.4); } 40% { opacity:1; transform: scale(1.5); } 100% { opacity:0; transform: scale(2.3); } }
+@media (prefers-reduced-motion: reduce) {
+  .looplink .ll-tether { d: path('M28 24 C 42 24, 46 14, 57 19 S 70 29, 77 24'); }
+  .ll-spark { opacity: 0 !important; }
+}
+
+/* --- the LIVING leash band --- */
+.leash-band { margin: var(--s-7) 0 0; position: relative; }
+.leash-band svg.band { width: 100%; height: 160px; display: block; overflow: visible; }
+.leash-label { display: flex; justify-content: space-between; max-width: 1200px; margin: 8px auto 0;
+  padding: 0 var(--s-5); font-family: var(--font-mono); font-size: 11px; color: var(--ink-faint); }
+.leash-label b { color: var(--ink-dim); font-weight: 500; }
+
+/* --- integration marquee --- */
+.marquee { overflow: hidden; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+  padding: var(--s-4) 0; margin-top: var(--s-8); -webkit-mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent); }
+.marquee-track { display: flex; gap: var(--s-8); width: max-content; align-items: center; }
+.marquee-track span { font-family: var(--font-mono); font-size: 13px; color: var(--ink-faint);
+  letter-spacing: .06em; display: inline-flex; align-items: center; gap: var(--s-8); white-space: nowrap; }
+.marquee-track b { color: var(--ink-dim); font-weight: 500; }
+.marquee-track .sep { width: 5px; height: 5px; transform: rotate(45deg); background: var(--accent-40); }
+
+/* --- section scaffolding --- */
+section { padding: var(--s-8) 0; position: relative; }
+.sec-head { margin-bottom: var(--s-7); }
+.sec-head.center { text-align: center; }
+.sec-head .eyebrow { display:block; margin-bottom: var(--s-3); }
+.sec-head h2 { margin: 0; max-width: 22ch; }
+.sec-head.center h2 { margin: 0 auto; }
+.sec-head .lede { color: var(--ink-dim); max-width: 54ch; margin-top: var(--s-4); }
+.sec-head.center .lede { margin-left: auto; margin-right: auto; }
+
+/* --- product-demonstrates-itself: glass device --- */
+.demo { display: grid; grid-template-columns: 0.85fr 1.15fr; gap: var(--s-8); align-items: center; }
+.demo .copy h2 { max-width: 14ch; }
+.demo .copy p { color: var(--ink-dim); margin: var(--s-4) 0 var(--s-5); max-width: 46ch; }
+.demo .copy ul { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--s-3); }
+.demo .copy li { display: flex; gap: 10px; align-items: flex-start; font-size: var(--t-small); color: var(--ink-dim); }
+.demo .copy li .mk { width: 7px; height: 7px; transform: rotate(45deg); background: var(--accent); margin-top: 6px; flex: none; }
+.demo .copy li b { color: var(--ink); font-weight: 550; }
+
+.device-wrap { perspective: 1400px; }
+.device { position: relative; border-radius: var(--r-2xl); padding: 12px;
+  background: linear-gradient(160deg, var(--surface-2), var(--surface-1));
+  border: 1px solid var(--ink-12);
+  box-shadow: 0 40px 120px -40px var(--accent-40), var(--glass-hi);
+  transform-style: preserve-3d; }
+.device::before { content:""; position:absolute; inset:-2px; border-radius: calc(var(--r-2xl) + 2px);
+  background: radial-gradient(60% 40% at 50% 0%, var(--accent-24), transparent 70%); z-index:-1; filter: blur(24px); }
+.device .screen { border-radius: var(--r-xl); overflow: hidden; background: var(--bg-base);
+  border: 1px solid var(--border); }
+.mc-top { display:flex; align-items:center; justify-content:space-between; padding: 10px 14px;
+  border-bottom: 1px solid var(--border); background: var(--glass-bg-strong); backdrop-filter: blur(8px); }
+.mc-top .t { font-family: var(--font-display); font-weight:500; font-size: 13px; }
+.mc-live { display:flex; align-items:center; gap:6px; font-family: var(--font-mono); font-size:10px; color: var(--allow); letter-spacing:.08em; }
+.mc-live .live-dot { width:6px; height:6px; border-radius:var(--r-full); background: var(--allow); }
+.mc-body { display: grid; grid-template-columns: 54px 1fr; }
+.mc-rail { border-right: 1px solid var(--border); padding: 12px 8px; display:flex; flex-direction:column; gap: 10px; align-items:center; }
+.mc-rail .ic { width: 30px; height:30px; border-radius: var(--r-sm); display:grid; place-items:center; color: var(--ink-faint); }
+.mc-rail .ic.on { background: var(--accent-12); color: var(--ink); box-shadow: inset 2px 0 0 var(--accent); }
+.mc-rail .ic svg { width:15px; height:15px; }
+.mc-main { padding: 14px; }
+.mc-card { border: 1px solid var(--border); border-radius: var(--r-md); padding: 12px; background: var(--surface-1); }
+.mc-card .r1 { display:flex; align-items:center; justify-content:space-between; }
+.mc-card .nm { font-family: var(--font-display); font-weight:500; font-size:13px; }
+.mc-card .ad { font-family: var(--font-mono); font-size:9.5px; color: var(--ink-faint); margin-top:1px; }
+.mc-meter svg { width:100%; height: 40px; display:block; margin: 10px 0 4px; overflow: visible; }
+.mc-meter .cap { display:flex; justify-content:space-between; font-family: var(--font-mono); font-size:10px; color: var(--ink-dim); }
+.mc-meter .cap b { color: var(--ink); font-weight:500; }
+/* live reasoning line — the agent thinks out loud before it decides */
+.mc-think { margin-top: 12px; display:flex; align-items:baseline; gap:6px; min-height: 15px;
+  font-family: var(--font-sans); font-size: 11px; line-height: 1.35; color: var(--ink-faint); }
+.mc-think .tk { color: var(--accent-ink); font-size: 9px; transform: translateY(-1px); }
+.mc-think b { font-family: var(--font-mono); font-weight: 600; font-size: 10px; color: var(--ink-dim); }
+.mc-think.think-pulse { animation: mcThink .5s var(--ease-out-cubic); }
+@media (prefers-reduced-motion: no-preference){ @keyframes mcThink { from{ opacity:.35; } to{ opacity:1; } } }
+.mc-stream { margin-top: 8px; display: grid; gap: 1px; background: var(--border); border-radius: var(--r-sm); overflow:hidden; border:1px solid var(--border); }
+.mc-row { display:grid; grid-template-columns: 52px 1fr auto; gap: 8px; align-items:center;
+  padding: 7px 10px; background: var(--surface-1); font-family: var(--font-mono); font-size: 10.5px; }
+.mc-row .py { color: var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mc-row .am { color: var(--ink); text-align:right; }
+
+/* --- how it holds: asymmetric bento --- */
+.bento { display: grid; grid-template-columns: repeat(6, 1fr); gap: var(--s-4); }
+.hcard { position: relative; background: var(--glass-bg-strong); backdrop-filter: blur(10px);
+  border: 1px solid var(--border); border-radius: var(--r-lg); padding: var(--s-6); overflow: hidden;
+  box-shadow: var(--glass-hi); }
+.hcard::before { content:""; position:absolute; inset:0; pointer-events:none; border-radius:inherit; z-index:0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
+  background-size: 120px 120px; opacity:.045; mix-blend-mode:overlay; }
+.hcard > * { position: relative; z-index: 1; }
+.hcard .idx { font-family: var(--font-display); font-weight: 700; font-size: clamp(3rem, 6vw, 5rem);
+  line-height: 1; color: var(--ink-08); position: absolute; top: 8px; right: 18px; pointer-events: none; }
+.hcard .step { font-family: var(--font-mono); font-size: 11px; color: var(--accent-ink); letter-spacing: .12em; }
+.hcard h3 { font-family: var(--font-display); font-weight: 500; font-size: 1.35rem;
+  letter-spacing: -0.01em; margin: var(--s-3) 0 var(--s-2); max-width: 16ch; }
+.hcard p { color: var(--ink-dim); font-size: var(--t-small); margin: 0; max-width: 34ch; }
+.hcard .mini { margin-top: var(--s-5); }
+.hcard .mini svg { width: 100%; height: 46px; display:block; overflow: visible; }
+.hcard.wide { grid-column: span 4; }
+.hcard.tall { grid-column: span 2; }
+.hcard.half { grid-column: span 3; }
+.hcard.third { grid-column: span 2; }
+.hcard .code { font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim);
+  background: var(--bg-base); border: 1px solid var(--border); border-radius: var(--r-sm);
+  padding: 8px 10px; margin-top: var(--s-4); display: inline-block; }
+.hcard .code b { color: var(--accent-ink); font-weight: 600; }
+
+/* --- live rail section --- */
+.rail-top { display:flex; align-items:baseline; justify-content:space-between; margin-bottom: var(--s-4); flex-wrap:wrap; gap: var(--s-3); }
+.rail-top .settled { font-family: var(--font-mono); font-size: 13px; color: var(--ink-dim); }
+.rail-top .settled b { color: var(--accent-ink); font-size: 1.3rem; }
+.rail-panel { background: var(--glass-bg-strong); backdrop-filter: blur(12px);
+  border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden; box-shadow: var(--glass-hi); }
+.rail-head, .vrow { display: grid; grid-template-columns: 96px 1fr 132px 108px 84px; align-items: center;
+  gap: var(--s-4); padding: 13px var(--s-5); font-family: var(--font-mono); font-size: var(--t-data); }
+.rail-head { color: var(--ink-faint); font-size: 10px; text-transform: uppercase; letter-spacing: .14em;
+  border-bottom: 1px solid var(--border); }
+.vrow { border-top: 1px solid var(--border); transition: background var(--t-fast); }
+.vrow:hover { background: var(--hover-fill); }
+.vrow .who { color: var(--ink); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.vrow .who small { color: var(--ink-faint); }
+.vrow .amt { text-align: right; color: var(--ink); }
+.vrow a.tx { color: var(--accent-ink); text-decoration: none; }
+.vrow a.tx:hover { text-decoration: underline; }
+
+/* --- metrics (number-flow) --- */
+.metrics { display: grid; grid-template-columns: repeat(3,1fr); gap: var(--s-6); text-align: center; }
+.metric { padding: var(--s-6) var(--s-4); border: 1px solid var(--border); border-radius: var(--r-lg);
+  background: var(--glass-bg-strong); backdrop-filter: blur(8px); box-shadow: var(--glass-hi); }
+.metric .stat { font-size: var(--t-stat); color: var(--accent-ink); display: block; line-height: 1; font-weight: 500; }
+.metric .lbl { color: var(--ink-faint); font-size: var(--t-small); margin-top: var(--s-3); display:block; }
+
+/* --- closing beat --- */
+.closer { text-align: center; padding: var(--s-8) 0 var(--s-8); border-top: 1px solid var(--border);
+  background: radial-gradient(60% 80% at 50% 40%, var(--accent-08), transparent 70%); }
+.closer svg.sever { width: min(760px, 92%); height: 130px; display: block; margin: 0 auto var(--s-6); overflow: visible; }
+.closer .whole { transition: opacity .3s var(--ease-out-cubic); }
+.closer.cut .whole { opacity: 0; }
+.closer .halves { opacity: 0; transition: opacity .2s; }
+.closer.cut .halves { opacity: 1; }
+.closer h2 { max-width: 18ch; margin: 0 auto var(--s-6); }
+
+footer { border-top: 1px solid var(--border); padding: var(--s-7) 0; margin-top: var(--s-6);
+  color: var(--ink-faint); font-size: var(--t-small); }
+footer .wrap { display: flex; justify-content: space-between; align-items: center; gap: var(--s-5); flex-wrap: wrap; }
+footer .mono { color: var(--ink-dim); }
+
+@media (max-width: 900px) {
+  .demo { grid-template-columns: 1fr; }
+  .bento { grid-template-columns: 1fr; }
+  .hcard.wide, .hcard.tall, .hcard.half, .hcard.third { grid-column: span 1; }
+  .metrics { grid-template-columns: 1fr; }
+  .rail-head, .vrow { grid-template-columns: 84px 1fr 92px; }
+  .rail-head span:nth-child(3), .rail-head span:nth-child(5), .vrow .reason, .vrow .tx { display: none; }
+}
+</style>
+</head>
+<body>
+<!-- atmosphere -->
+<div class="grain" aria-hidden="true"></div>
+<div class="brand-bloom" aria-hidden="true"></div>
+<div class="vignette" aria-hidden="true"></div>
+<div class="bg-grid" aria-hidden="true"></div>
+<div class="glow-field" aria-hidden="true">
+  <div class="glow-plane plane-amber"></div>
+  <div class="glow-plane plane-ember"></div>
+  <div class="glow-plane plane-cool"></div>
+</div>
+<svg class="twinkle" id="twinkle" aria-hidden="true" preserveAspectRatio="xMidYMid slice"></svg>
+<div class="scroll-progress" aria-hidden="true"></div>
+
+<!-- shared SVG defs -->
+<svg width="0" height="0" aria-hidden="true" style="position:absolute">
+  <defs>
+    <linearGradient id="leashGrad" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%"  stop-color="var(--accent)" stop-opacity="0"/>
+      <stop offset="45%" stop-color="var(--accent-hi)"/>
+      <stop offset="55%" stop-color="var(--accent-hi)"/>
+      <stop offset="100%" stop-color="var(--accent)" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="leashGlow" x="-20%" y="-60%" width="140%" height="220%">
+      <feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+  </defs>
+</svg>
+
+<nav id="nav"><div class="wrap">
+  <div class="brand">
+    <svg width="26" height="26" viewBox="0 0 26 26" aria-hidden="true">
+      <circle cx="8" cy="13" r="5" fill="none" stroke="var(--accent)" stroke-width="2"/>
+      <path d="M13 13 H24" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"/>
+      <path d="M24 9 v8" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"/>
+    </svg>
+    LEASH
+  </div>
+  <div class="navlinks">
+    <a href="#how">How it holds</a><a href="#demo">The console</a><a href="#proof">Live rail</a><a href="#docs">Proof</a>
+  </div>
+  <div class="nav-right">
+    <button class="theme-toggle" id="themeToggle" aria-label="Toggle light or dark theme" title="Toggle theme"></button>
+    <a href="console.html" class="btn btn-primary press magnetic"><span class="shine"></span>Open console</a>
+  </div>
+</div></nav>
+
+<main>
+  <div class="wrap">
+    <header class="hero" id="hero">
+      <div class="motes" id="motes" aria-hidden="true"></div>
+      <div class="object-stage">
+        <svg class="looplink" viewBox="0 0 120 48" width="440" height="176" focusable="false" aria-hidden="true">
+          <g class="ll-sway">
+            <circle class="ll-loop" cx="17" cy="24" r="11" fill="none"/>
+            <path class="ll-tether" d="M28 24 C 42 24, 46 14, 57 19 S 70 29, 77 24" fill="none"/>
+          </g>
+          <rect class="ll-link ll-link1" x="80" y="17" width="20" height="14" rx="7" fill="none" transform="rotate(-14 90 24)"/>
+          <rect class="ll-link ll-link2" x="96" y="17" width="20" height="14" rx="7" fill="none" transform="rotate(14 106 24)"/>
+          <circle class="ll-spark" cx="77" cy="24" r="2.6"/>
+        </svg>
+        <div class="ll-verdict mono" id="llVerdict" aria-hidden="true"></div>
+      </div>
+      <button class="ll-beat mono" id="llBeat" aria-live="polite">
+        <span class="ll-dot"></span><span class="ll-play">▶</span><span id="llState">Try to overspend</span>
+      </button>
+      <span class="hero-eyebrow eyebrow"><span class="dot ping-ring"></span>Agent spend-control · ENS + x402 + Privy</span>
+      <h1 class="h-display">
+        <span class="line reveal-swipe">Keep your <span class="recess">agents</span></span>
+        <span class="line reveal-swipe" style="animation-delay:.12s">on a <span class="amber glow-word">leash</span>.</span>
+      </h1>
+      <p class="sub reveal-up">Give an AI agent its own wallet, then bound it: a per-transfer cap it
+        cannot raise, an allowlist it cannot widen, and one on-chain write that cuts it off everywhere.</p>
+      <div class="cta reveal-up">
+        <a href="console.html" class="btn btn-primary press magnetic"><span class="shine"></span>Open the console</a>
+        <a href="#how" class="btn btn-ghost press magnetic">Read the thesis →</a>
+      </div>
+    </header>
+  </div>
+
+  <!-- SIGNATURE: the LIVING leash. sway + streaming signal pulses + seam shimmer + scroll-tauten + draw-in -->
+  <div class="leash-band">
+    <svg class="band leash-svg leash-draw" viewBox="0 0 1200 160" preserveAspectRatio="none" aria-label="A leash tethering an agent to a payee; signals stream along it and the sag shows budget headroom.">
+      <g class="leash-sway">
+        <circle class="leash-clasp" cx="52" cy="80" r="11"/>
+        <path class="leash-clasp" d="M150 62 v36 M164 62 v36" stroke-width="1.5"/>
+        <path class="leash-path" id="heroPath" d="M63 80 Q 630 128 1148 80" filter="url(#leashGlow)"/>
+        <path class="leash-shimmer shimmer-run" id="heroShimmer" d="M63 80 Q 630 128 1148 80"/>
+        <path class="leash-clasp" d="M1148 80 a9 9 0 1 0 -0.1 0" stroke-width="2"/>
+        <!-- streaming signals: 3 allow packets staggered + 1 deny that snaps at the gate -->
+        <circle class="signal-pulse run pk" cx="0" cy="0"></circle>
+        <circle class="signal-pulse run d1 pk" cx="0" cy="0"></circle>
+        <circle class="signal-pulse run d2 pk" cx="0" cy="0"></circle>
+        <circle class="signal-pulse deny run d3 pkd" cx="0" cy="0"></circle>
+        <!-- verdict pop at the gate -->
+        <text class="gate-pop mono" x="157" y="46" text-anchor="middle" fill="var(--deny)" font-size="10">DENY</text>
+      </g>
+    </svg>
+    <div class="leash-label"><span>agent · <b>0xA91f…3e</b> · research.org.leash.eth</span><span id="leashSlack">slack <b>62%</b> · cap <b>$500</b> / transfer</span></div>
+  </div>
+
+  <!-- integration marquee -->
+  <div class="wrap"><div class="marquee"><div class="marquee-track" id="marquee"></div></div></div>
+
+  <div class="wrap">
+    <!-- PRODUCT DEMONSTRATES ITSELF -->
+    <section id="demo">
+      <div class="demo">
+        <div class="copy">
+          <span class="eyebrow reveal-up">The console, live</span>
+          <h2 class="h1 reveal-up">You watch every move it makes.</h2>
+          <p class="reveal-up">This isn't a screenshot. It's the real console chrome, breathing — a fleet card
+            whose tether tautens as spend nears the cap, and a verdict stream adjudicating each transfer in real time.</p>
+          <ul>
+            <li class="reveal-up"><span class="mk"></span><span><b>The tension meter</b> is the budget — slack when there's room, taut near the cap.</span></li>
+            <li class="reveal-up"><span class="mk"></span><span><b>Every verdict</b> flashes in once, jade for allow, garnet for deny — then rests.</span></li>
+            <li class="reveal-up"><span class="mk"></span><span><b>One cut</b> revokes it on-chain, everywhere a rail resolves the record.</span></li>
+          </ul>
+        </div>
+        <div class="device-wrap">
+          <div class="device device-reveal tilt glass-grain" id="device">
+            <div class="screen">
+              <div class="mc-top">
+                <span class="t">Fleet</span>
+                <span class="mc-live"><span class="live-dot"></span>LIVE · rail settling</span>
+              </div>
+              <div class="mc-body">
+                <div class="mc-rail">
+                  <span class="ic on"><svg viewBox="0 0 16 16"><circle cx="5" cy="8" r="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 8h6" stroke="currentColor" stroke-width="1.5"/></svg></span>
+                  <span class="ic"><svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M2 7h12" stroke="currentColor" stroke-width="1.5"/></svg></span>
+                  <span class="ic"><svg viewBox="0 0 16 16"><path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="1.5"/></svg></span>
+                  <span class="ic"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 5v3l2 2" stroke="currentColor" stroke-width="1.5"/></svg></span>
+                </div>
+                <div class="mc-main">
+                  <div class="mc-card">
+                    <div class="r1"><div><div class="nm">research-agent</div><div class="ad">0xA91f…3e</div></div><span class="chip chip-allow">Active</span></div>
+                    <div class="mc-meter">
+                      <svg class="leash-svg" id="mcMeter" viewBox="0 0 300 40" preserveAspectRatio="none" aria-label="live tension meter">
+                        <circle class="leash-clasp" cx="8" cy="20" r="4"/>
+                        <path class="leash-path" id="mcPath" d="M12 20 Q 156 30 294 20"/>
+                        <path class="leash-clasp" d="M294 20 a4 4 0 1 0 -0.1 0" stroke-width="1.6"/>
+                      </svg>
+                      <div class="cap"><span>slack <b id="mcSlack">62%</b></span><span><b id="mcSpent">$188</b> / $500 today</span></div>
+                    </div>
+                    <div class="mc-think" id="mcThink"><span class="tk">◦</span><span id="mcThinkT">reasoning over the rail…</span></div>
+                    <div class="mc-stream" id="mcStream">
+                      <div class="mc-row"><span class="chip chip-allow">Allow</span><span class="py">api.exa.ai</span><span class="am">$4.20</span></div>
+                      <div class="mc-row"><span class="chip chip-deny">Deny</span><span class="py">0x9c…f1 · off-list</span><span class="am">$240.00</span></div>
+                      <div class="mc-row"><span class="chip chip-allow">Allow</span><span class="py">api.openai.com</span><span class="am">$12.80</span></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- HOW IT HOLDS — asymmetric bento -->
+    <section id="how">
+      <div class="sec-head">
+        <span class="eyebrow">How the leash holds</span>
+        <h2 class="h1">Three bounds it cannot loosen. One cut you can make.</h2>
+        <p class="lede">The policy lives in the agent's ENS record. The payment rail reads it before every settle.
+          The agent signs — it never sets.</p>
+      </div>
+      <div class="bento">
+        <div class="hcard wide reveal-up lift" data-rung="1" tabindex="0">
+          <span class="idx">01</span><span class="step">CAP</span>
+          <h3>A ceiling it can't raise</h3>
+          <p>Per-transfer, daily and weekly caps are fields in the ENS policy record. The rail reads them,
+            compares, and settles only within them.</p>
+          <div class="code">MAX_PER_TRANSFER = <b>$500</b> · MAX_DAILY = <b>$1,000</b></div>
+          <div class="mini leash-hover" data-leash="slack">
+            <svg class="leash-svg" viewBox="0 0 480 46" preserveAspectRatio="none" aria-hidden="true">
+              <circle class="leash-clasp" cx="10" cy="23" r="5"/>
+              <path class="leash-path hp" d="M16 23 Q 248 38 474 23"/>
+              <path class="leash-clasp" d="M474 23 a5 5 0 1 0 -0.1 0" stroke-width="1.8"/>
+            </svg>
+          </div>
+        </div>
+        <div class="hcard tall reveal-up lift" data-rung="2" tabindex="0">
+          <span class="idx">02</span><span class="step">ALLOWLIST</span>
+          <h3>A reach it can't widen</h3>
+          <p>Funds only move to payees the owner added. The agent has no path to extend its own allowlist.</p>
+          <div class="mini leash-hover" data-leash="taut">
+            <svg class="leash-svg taut" viewBox="0 0 220 46" preserveAspectRatio="none" aria-hidden="true">
+              <circle class="leash-clasp" cx="10" cy="23" r="5"/>
+              <path class="leash-path hp" d="M16 23 Q 114 28 214 23"/>
+              <path class="leash-clasp" d="M214 23 a5 5 0 1 0 -0.1 0" stroke-width="1.8"/>
+            </svg>
+          </div>
+        </div>
+        <div class="hcard third reveal-up lift" data-rung="3" tabindex="0">
+          <span class="idx">03</span><span class="step">REVOKE</span>
+          <h3>One write that cuts it off</h3>
+          <p>Revoke is a single on-chain write. Every rail resolving that record stops honoring the agent — at once.</p>
+          <div class="mini leash-hover" data-leash="cut">
+            <svg class="leash-svg cut" viewBox="0 0 220 46" preserveAspectRatio="none" aria-hidden="true">
+              <circle class="leash-clasp" cx="10" cy="23" r="5"/>
+              <path class="leash-path" d="M16 23 L 100 23"/>
+              <path class="leash-path" d="M118 23 L 214 23"/>
+              <path d="M104 14 l7 18 M115 14 l-7 18" stroke="var(--deny)" stroke-width="1.6" stroke-linecap="round"/>
+            </svg>
+          </div>
+        </div>
+        <div class="hcard half reveal-up lift" data-rung="2" tabindex="0">
+          <span class="step">HONEST BOUNDARY</span>
+          <h3>What the leash actually is</h3>
+          <p><b style="color:var(--ink)">Control, not custody.</b> Caps are a soft budget the rail enforces on settle;
+            the allowlist defaults so the agent can't widen its own reach; revoke is on-chain-resolved. It is not a
+            trustless vault — it's a leash you hold and can cut.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- LIVE RAIL -->
+    <section id="proof">
+      <div class="sec-head center">
+        <span class="eyebrow">Live rail</span>
+        <h2 class="h1">Every move, adjudicated.</h2>
+        <p class="lede">Allow or deny, with the reason and the on-chain receipt. This is what the rail writes as your fleet spends.</p>
+      </div>
+      <div class="rail-top reveal-up">
+        <span class="section-title" style="font-family:var(--font-mono);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-faint)">Verdict stream · live</span>
+        <span class="settled">settled today <b id="settled">$1,284</b></span>
+      </div>
+      <div class="rail-panel reveal-up">
+        <div class="rail-head"><span>Verdict</span><span>Agent → payee</span><span>Reason</span><span style="text-align:right">Amount</span><span>Tx</span></div>
+        <div id="railRows"></div>
+      </div>
+    </section>
+
+    <!-- METRICS (number-flow) -->
+    <section id="docs">
+      <div class="sec-head"><span class="eyebrow">By the numbers</span>
+        <h2 class="h1">The whole guarantee, in three figures.</h2></div>
+      <div class="metrics">
+        <div class="metric reveal-up lift"><span class="stat" data-count="500" data-pre="$">$0</span><span class="lbl">hard per-transfer cap the agent cannot raise</span></div>
+        <div class="metric reveal-up lift"><span class="stat" data-count="1">0</span><span class="lbl">on-chain write to revoke, everywhere</span></div>
+        <div class="metric reveal-up lift"><span class="stat" data-count="0">0</span><span class="lbl">ways an agent widens its own reach</span></div>
+      </div>
+    </section>
+  </div>
+
+  <!-- CLOSING BEAT — the one cut -->
+  <div class="closer sever-recoil" id="closer">
+    <svg class="sever leash-svg" viewBox="0 0 760 130" preserveAspectRatio="none" aria-hidden="true">
+      <circle class="leash-clasp" cx="14" cy="65" r="9"/>
+      <path class="leash-clasp" d="M754 65 a9 9 0 1 0 -0.1 0" stroke-width="2"/>
+      <path class="leash-path whole" d="M23 65 Q 380 101 745 65" filter="url(#leashGlow)"/>
+      <g class="halves">
+        <path class="leash-path recoil-l" style="stroke:var(--deny);stroke-dasharray:3 5" d="M23 65 Q 250 89 372 71"/>
+        <path class="leash-path recoil-r" style="stroke:var(--deny);stroke-dasharray:3 5" d="M388 71 Q 520 89 745 65"/>
+        <g class="sever-spark" style="transform-box:fill-box; transform-origin:center">
+          <path d="M372 50 l8 30 M388 50 l-8 30" stroke="var(--deny)" stroke-width="2.4" stroke-linecap="round"/>
+          <circle cx="380" cy="65" r="3.5" fill="var(--deny)"/>
+        </g>
+      </g>
+    </svg>
+    <h2 class="h-display" style="font-size:var(--t-h1)">When you're done, you <span class="amber glow-word">cut it</span>.</h2>
+    <div class="cta" style="justify-content:center">
+      <a href="console.html" class="btn btn-primary press magnetic"><span class="shine"></span>Open the console</a>
+      <a href="#how" class="btn btn-ghost press magnetic">Read the thesis →</a>
+    </div>
+  </div>
+</main>
+
+<footer><div class="wrap"><span>LEASH · keep your agents on a leash</span>
+  <span class="mono">ENS · x402 · Privy · ERC-8004</span></div></footer>
+
+<script>
+const reduceMo = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* ---- theme toggle (light / dark, persisted) ---- */
+(function(){
+  const KEY='leash-theme', root=document.documentElement, btn=document.getElementById('themeToggle');
+  const moon='<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13.5 9.3A5.5 5.5 0 1 1 6.7 2.5 4.3 4.3 0 0 0 13.5 9.3Z"/></svg>';
+  const sun ='<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="3.2"/><path d="M8 1v1.6M8 13.4V15M1 8h1.6M13.4 8H15M3 3l1.1 1.1M11.9 11.9 13 13M13 3l-1.1 1.1M4.1 11.9 3 13" stroke-linecap="round"/></svg>';
+  if(!btn) return;
+  const paint=()=>{ btn.innerHTML = root.getAttribute('data-theme')==='light' ? sun : moon; };
+  paint();
+  btn.addEventListener('click',()=>{
+    const toLight = root.getAttribute('data-theme')!=='light';
+    if(toLight){ root.setAttribute('data-theme','light'); localStorage.setItem(KEY,'light'); }
+    else { root.removeAttribute('data-theme'); localStorage.setItem(KEY,'dark'); }
+    paint();
+  });
+})();
+
+/* ---- Loop-Link hero beat: INTERACTIVE. draw -> alive -> [play] taut(refused) -> snap(revoked) -> re-arm.
+       auto-attract plays the refusal once, then hands control to the visitor via the button. ---- */
+(function(){
+  const hero = document.getElementById('hero');
+  const label = document.getElementById('llState');
+  const beat  = document.getElementById('llBeat');
+  const vpop  = document.getElementById('llVerdict');
+  if(!hero || !beat) return;
+  const set = c => { hero.className = 'hero' + (c ? ' '+c : ''); };
+  const showV = (txt, cls) => { if(!vpop) return;
+    vpop.className = 'll-verdict mono' + (cls?' '+cls:''); vpop.textContent = txt || '';
+    requestAnimationFrame(()=> vpop.classList.toggle('show', !!txt)); };
+  // phase -> what the NEXT click does; each state also defines its own look
+  const states = [
+    { cls:'is-alive',   label:'Try to overspend', verdict:null,                  vcls:'' },
+    { cls:'is-taut',    label:'Revoke the leash', verdict:'Refused · cap held',  vcls:'refused' },
+    { cls:'is-snapped', label:'Forge it again',   verdict:'Revoked · funds safe',vcls:'revoked' },
+  ];
+  let phase = 0, attract, engaged = false;
+  const apply = p => {
+    const s = states[p]; set(s.cls); label.textContent = s.label; showV(s.verdict, s.vcls); phase = p;
+  };
+  const advance = () => apply((phase + 1) % states.length);
+
+  if(reduceMo){ apply(0); }        // static; button still cycles states without motion
+  else {
+    set('will-draw');
+    requestAnimationFrame(()=>{
+      set('will-draw is-drawing');
+      setTimeout(()=>{
+        apply(0);
+        // auto-attract: play the refusal story once so the visitor sees it's alive
+        attract = setTimeout(()=>{ if(engaged) return; apply(1);
+          attract = setTimeout(()=>{ if(engaged) return; apply(2);
+            attract = setTimeout(()=>{ if(engaged) return; apply(0); }, 2600);
+          }, 2100);
+        }, 2400);
+      }, 1650);
+    });
+  }
+  beat.addEventListener('click', ()=>{ engaged = true; clearTimeout(attract); advance(); });
+
+  /* pointer-parallax — the forged object leans toward the cursor */
+  const svg = hero.querySelector('.looplink');
+  if(svg && !reduceMo){
+    hero.addEventListener('pointermove', e => {
+      const r = hero.getBoundingClientRect();
+      const nx = (e.clientX - r.left) / r.width - .5, ny = (e.clientY - r.top) / r.height - .5;
+      svg.style.setProperty('--ry', (nx * 12).toFixed(2) + 'deg');
+      svg.style.setProperty('--rx', (-ny * 9).toFixed(2) + 'deg');
+    });
+    hero.addEventListener('pointerleave', () => {
+      svg.style.setProperty('--ry','0deg'); svg.style.setProperty('--rx','0deg');
+    });
+  }
+})();
+
+/* ---- twinkle dot field (pixel viewBox so dots are actually visible) ---- */
+(function(){
+  const svg = document.getElementById('twinkle');
+  const W=1600,H=900; svg.setAttribute('viewBox',`0 0 ${W} ${H}`);
+  const cols=34, rows=20; let out='';
+  for(let r=0;r<rows;r++) for(let c=0;c<cols;c++){
+    if((r*cols+c)%2!==0) continue;
+    const jx=((c*13+r*7)%9-4), jy=((c*5+r*11)%9-4);
+    const x=(c/(cols-1))*W+jx*6, y=(r/(rows-1))*H+jy*6;
+    const rad=((c+r)%3===0)?1.6:1.0;
+    const d=(((c*7+r*13)%34)/10).toFixed(2);
+    out+=`<circle cx="${x.toFixed(0)}" cy="${y.toFixed(0)}" r="${rad}" style="--d:${d}s"/>`;
+  }
+  svg.innerHTML=out;
+})();
+
+/* ---- ambient motes in the hero ---- */
+(function(){
+  if(reduceMo) return;
+  const box=document.getElementById('motes'); let out='';
+  for(let i=0;i<16;i++){
+    const left=(i*61%100), dur=(11+ i%7), delay=(i*0.9%12);
+    out+=`<span class="mote" style="left:${left}%; --mdur:${dur}s; --d:${delay}s"></span>`;
+  }
+  box.innerHTML=out;
+})();
+
+/* ---- integration marquee (duplicated track for seamless wrap) ---- */
+(function(){
+  const items=['ENS policy records','x402 payment rail','Privy embedded wallets','ERC-8004 identity','Base','Coinbase AgentKit','USDC settlement'];
+  const one = items.map(t=>`<b>${t}</b>`).join('<span class="sep"></span>');
+  document.getElementById('marquee').innerHTML = `<span>${one}<span class="sep"></span></span><span>${one}<span class="sep"></span></span>`;
+})();
+
+/* ---- nav scroll step ---- */
+const nav=document.getElementById('nav');
+addEventListener('scroll',()=>nav.classList.toggle('scrolled',scrollY>40),{passive:true});
+
+/* ---- scroll-linked leash tauten + glow-plane parallax ---- */
+const heroPath=document.getElementById('heroPath'), heroShimmer=document.getElementById('heroShimmer');
+const pulses=[...document.querySelectorAll('.leash-band .signal-pulse')];
+function setPulsePaths(d){ pulses.forEach(p=>{ p.style.offsetPath=`path('${d}')`; p.style.webkitOffsetPath=`path('${d}')`; }); }
+function setLeash(sag){
+  const d=`M63 80 Q 630 ${sag.toFixed(1)} 1148 80`;
+  heroPath.setAttribute('d',d); heroShimmer.setAttribute('d',d);
+  const slack=Math.max(0,Math.min(1,(sag-80)/48));
+  document.getElementById('leashSlack').innerHTML=`slack <b>${Math.round(slack*100)}%</b> · cap <b>$500</b> / transfer`;
+}
+setLeash(128); setPulsePaths('M63 80 Q 630 128 1148 80');   // pulses ride a fixed catenary (perf: no per-frame reparse)
+const planes=[...document.querySelectorAll('.glow-plane')];
+let ticking=false;
+addEventListener('scroll',()=>{
+  if(ticking) return; ticking=true;
+  requestAnimationFrame(()=>{
+    const y=scrollY;
+    // tauten as you scroll through the first viewport
+    const t=Math.max(0,Math.min(1, y/700));
+    if(!reduceMo) setLeash(128 - t*22);          // 128 (slack) -> 106 (tauter, still visibly saggy)
+    planes.forEach((p,i)=>{ if(!reduceMo) p.style.translate=`0 ${(y*(0.04+i*0.03)).toFixed(0)}px`; });
+    ticking=false;
+  });
+},{passive:true});
+
+/* ---- IO reveals ---- */
+const io=new IntersectionObserver((es)=>es.forEach(e=>{ if(e.isIntersecting){ e.target.classList.add('in'); io.unobserve(e.target);} }),{threshold:.14,rootMargin:'0px 0px -8% 0px'});
+document.querySelectorAll('.reveal-up').forEach((el,i)=>{ el.style.animationDelay=(i%3*90)+'ms'; io.observe(el); });
+document.querySelectorAll('.device-reveal').forEach(el=>io.observe(el));
+
+/* ---- number-flow count-up ---- */
+function countUp(el){
+  const target=+el.dataset.count, pre=el.dataset.pre||'';
+  if(reduceMo){ el.textContent=pre+target.toLocaleString(); return; }
+  const dur=1200,t0=performance.now();
+  (function tick(now){ const p=Math.min(1,(now-t0)/dur), e=1-Math.pow(1-p,3);
+    el.textContent=pre+Math.round(target*e).toLocaleString(); if(p<1) requestAnimationFrame(tick); })(t0);
+}
+const nio=new IntersectionObserver((es)=>es.forEach(e=>{ if(e.isIntersecting){ countUp(e.target); nio.unobserve(e.target);} }),{threshold:.6});
+document.querySelectorAll('.stat[data-count]').forEach(el=>nio.observe(el));
+
+/* ---- live rail: continuous stream + running settled counter ---- */
+const railRows=document.getElementById('railRows');
+const seed=[
+  ['allow','supabase-agent','api.stripe.com','settled','$18.00','0x51a2…'],
+  ['deny','scraper-agent','0x9c…f1','OFF_ALLOWLIST','$240.00','—'],
+  ['allow','research-agent','api.exa.ai','settled','$4.20','0xb2c0…'],
+  ['deny','ops-agent','api.render.com','OVER_DAILY_CAP','$620.00','—'],
+  ['allow','research-agent','api.openai.com','settled','$12.80','0x7c9d…'],
+];
+function railRow(d){
+  const row=document.createElement('div'); row.className='vrow';
+  const chip=d[0]==='allow'?'chip-allow':'chip-deny', label=d[0]==='allow'?'Allow':'Deny';
+  row.innerHTML=`<span class="chip ${chip}">${label}</span>`
+    +`<span class="who">${d[1]} → <small>${d[2]}</small></span>`
+    +`<span class="reason faint">${d[3]}</span>`
+    +`<span class="amt">${d[4]}</span>`
+    +`<span class="tx">${d[5]==='—'?'—':`<a class="tx" href="#" aria-label="View transaction ${d[5]}">${d[5]}</a>`}</span>`;
+  return row;
+}
+seed.forEach(d=>railRows.appendChild(railRow(d)));
+let settled=1284; const settledEl=document.getElementById('settled');
+const pool=[
+  ['allow','research-agent','api.anthropic.com','settled','$9.60','0xa0f1…',9.6],
+  ['allow','ops-agent','api.supabase.com','settled','$6.40','0x33be…',6.4],
+  ['deny','ops-agent','0x77…c2','OFF_ALLOWLIST','$95.00','—',0],
+  ['allow','research-agent','api.exa.ai','settled','$3.10','0x8d2e…',3.1],
+  ['deny','scraper-agent','api.new-host','OVER_DAILY_CAP','$260.00','—',0],
+];
+if(!reduceMo){
+  const rio=new IntersectionObserver((es)=>es.forEach(e=>{ if(!e.isIntersecting) return;
+    [...railRows.children].forEach((r,i)=> setTimeout(()=>r.classList.add(seed[i][0]==='deny'?'flash-deny':'flash-allow'), i*120));
+    rio.disconnect();
+  }),{threshold:.3});
+  rio.observe(document.getElementById('proof'));
+  setInterval(()=>{
+    const d=pool[Math.floor(Math.random()*pool.length)];
+    const row=railRow(d); railRows.insertBefore(row,railRows.firstChild);
+    row.classList.add(d[0]==='allow'?'flash-allow':'flash-deny');
+    while(railRows.children.length>6) railRows.removeChild(railRows.lastChild);
+    if(d[0]==='allow'){ settled+=Math.round(d[6]); settledEl.textContent='$'+settled.toLocaleString(); }
+  },3600);
+}
+
+/* ---- device mini-console: it REASONS, then decides — live ---- */
+(function(){
+  if(reduceMo) return;
+  const mcPath=document.getElementById('mcPath'), slackEl=document.getElementById('mcSlack'), spentEl=document.getElementById('mcSpent');
+  const stream=document.getElementById('mcStream'), think=document.getElementById('mcThink'), thinkT=document.getElementById('mcThinkT');
+  // each move: the agent reasons (prose + mono data), then the verdict lands
+  const feed=[
+    {v:'allow', py:'api.anthropic.com', am:'$9.60',  n:9.6, r:'evaluating <b>api.anthropic.com</b> · <b>$9.60</b> — within per-transfer cap'},
+    {v:'deny',  py:'0x44…ab · off-list', am:'$120.00',n:0,   r:'<b>0x44…ab</b> not on the allowlist — refusing'},
+    {v:'allow', py:'api.exa.ai',        am:'$4.20',  n:4.2, r:'<b>api.exa.ai</b> on allowlist · <b>$4.20</b> under budget → signing x402'},
+    {v:'allow', py:'api.render.com',     am:'$31.00', n:31,  r:'settling <b>api.render.com</b> · <b>$31.00</b> — daily headroom OK'},
+    {v:'deny',  py:'api.new-host · over cap', am:'$260.00',n:0, r:'<b>$260.00</b> exceeds the per-transfer cap — refusing'},
+    {v:'allow', py:'api.stripe.com',     am:'$18.00', n:18,  r:'<b>api.stripe.com</b> known payee · <b>$18.00</b> — allow'},
+  ];
+  let spent=188, cap=500, i=0;
+  function tick(){
+    const d=feed[i++%feed.length];
+    // 1) reason out loud
+    thinkT.innerHTML=d.r;
+    think.classList.remove('think-pulse'); void think.offsetWidth; think.classList.add('think-pulse');
+    // 2) ~820ms later, the verdict lands in the stream
+    setTimeout(()=>{
+      const row=document.createElement('div'); row.className='mc-row';
+      const chip=d.v==='allow'?'chip-allow':'chip-deny', label=d.v==='allow'?'Allow':'Deny';
+      row.innerHTML=`<span class="chip ${chip}">${label}</span><span class="py">${d.py}</span><span class="am">${d.am}</span>`;
+      row.classList.add(d.v==='allow'?'flash-allow':'flash-deny');
+      stream.insertBefore(row,stream.firstChild);
+      while(stream.children.length>3) stream.removeChild(stream.lastChild);
+      if(d.v==='allow') spent=Math.min(cap-8,spent+d.n);
+      const slack=Math.max(0,(cap-spent)/cap), sag=20+slack*10;
+      mcPath.setAttribute('d',`M12 20 Q 156 ${sag.toFixed(1)} 294 20`);
+      slackEl.textContent=Math.round(slack*100)+'%'; spentEl.textContent='$'+Math.round(spent);
+      document.getElementById('mcMeter').classList.toggle('taut',slack<0.18);
+    },820);
+  }
+  tick(); setInterval(tick,2800);
+})();
+
+/* ---- device mouse-parallax tilt ---- */
+(function(){
+  if(reduceMo) return;
+  const dev=document.getElementById('device'); const wrap=dev.parentElement;
+  wrap.addEventListener('pointermove',e=>{
+    const b=wrap.getBoundingClientRect();
+    const rx=((e.clientY-b.top)/b.height-.5)*-6, ry=((e.clientX-b.left)/b.width-.5)*8;
+    dev.style.transform=`rotateX(${rx.toFixed(2)}deg) rotateY(${ry.toFixed(2)}deg)`;
+  });
+  wrap.addEventListener('pointerleave',()=> dev.style.transform='rotateX(0) rotateY(0)');
+})();
+
+/* ---- magnetic buttons ---- */
+if(!reduceMo) document.querySelectorAll('.magnetic').forEach(btn=>{
+  btn.addEventListener('pointermove',e=>{ const b=btn.getBoundingClientRect();
+    const mx=(e.clientX-b.left-b.width/2)*.25, my=(e.clientY-b.top-b.height/2)*.35;
+    btn.style.transform=`translate(${mx.toFixed(1)}px,${my.toFixed(1)}px)`; });
+  btn.addEventListener('pointerleave',()=> btn.style.transform='translate(0,0)');
+});
+
+/* ---- bento mini-leash reacts on hover (all three: tauten / tauten-more / sever-flash) ---- */
+document.querySelectorAll('.leash-hover').forEach(box=>{
+  const svg=box.querySelector('.leash-svg'); const hp=box.querySelector('.hp');
+  const kind=box.dataset.leash; const card=box.closest('.hcard');
+  const orig=hp?hp.getAttribute('d'):null;
+  card.addEventListener('pointerenter',()=>{
+    if(reduceMo) return;
+    if(kind==='slack' && hp){ svg.classList.add('taut'); hp.setAttribute('d', orig.replace(/Q\s*248\s*38/,'Q 248 27')); }
+    else if(kind==='taut' && hp){ hp.setAttribute('d', orig.replace(/Q\s*114\s*28/,'Q 114 24')); }
+    else if(kind==='cut'){ svg.style.filter='drop-shadow(0 0 6px var(--deny))'; }
+  });
+  card.addEventListener('pointerleave',()=>{
+    if(kind==='slack' && hp){ svg.classList.remove('taut'); hp.setAttribute('d', orig); }
+    else if(kind==='taut' && hp){ hp.setAttribute('d', orig); }
+    else if(kind==='cut'){ svg.style.filter=''; }
+  });
+});
+
+/* ---- scroll-progress bar (wire --scroll, already set by the scroll handler above) ---- */
+
+/* ---- closing beat: SEVER on scroll ---- */
+const cio=new IntersectionObserver((es)=>es.forEach(e=>{ if(e.isIntersecting){ setTimeout(()=>e.target.classList.add('cut'),350); cio.unobserve(e.target);} }),{threshold:.5});
+cio.observe(document.getElementById('closer'));
+</script>
+</body>
+</html>

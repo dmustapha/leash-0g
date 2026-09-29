@@ -1,0 +1,1296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>LEASH · Console</title>
+<script>try{if(localStorage.getItem('leash-theme')==='light')document.documentElement.setAttribute('data-theme','light')}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://api.fontshare.com/v2/css?f[]=clash-display@500,600,700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="tokens.css?v=3"/>
+<style>
+/* ===== CONSOLE SURFACE (PROFILE = PRODUCT-APP) — restrained motion (P4) ===== */
+/* Inversion: the marketing site is motion-rich; here the DATA is the show. No ambient
+   drift/grain/twinkle; the only motion is one live pulse + flash-on-new-verdict + skeleton
+   + the catenary tautening on real data (silent re-render otherwise). */
+body { display: grid; grid-template-columns: 236px 1fr; min-height: 100vh; }
+
+/* left rail */
+aside { background: var(--surface-1); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; padding: var(--s-4) var(--s-3); position: sticky; top:0; height:100vh; }
+aside .brand { display:flex; align-items:center; gap:8px; font-family:var(--font-display);
+  font-weight:600; font-size:16px; padding: 8px 10px var(--s-5); }
+.navitem { display:flex; align-items:center; gap:10px; padding:9px 10px; border-radius:var(--r-sm);
+  color:var(--ink-dim); font-size:var(--t-small); text-decoration:none; cursor:pointer;
+  transition: background var(--t-fast), color var(--t-fast); border:none; background:none;
+  width:100%; text-align:left; font-family: var(--font-sans); }
+.navitem:hover { background: var(--hover-fill); color: var(--ink); }
+.navitem[aria-current="true"] { background: var(--accent-12); color: var(--ink);
+  box-shadow: inset 2px 0 0 var(--accent); }
+.navitem svg { width:16px; height:16px; opacity:.8; flex:none; }
+.navitem .badge { margin-left:auto; font-family:var(--font-mono); font-size:10px; color:var(--ink-faint); }
+aside .spacer { flex:1; }
+.acct { border-top:1px solid var(--border); padding:var(--s-4) 10px 4px; font-size:var(--t-small); color:var(--ink-dim); }
+.acct .mono { color: var(--ink); font-size: 11px; display:block; margin-top:2px; }
+
+/* top bar (glass) */
+header.top { position: sticky; top:0; z-index:20; height:58px; display:flex; align-items:center;
+  justify-content: space-between; padding: 0 var(--s-6); border-bottom:1px solid var(--border);
+  background: var(--glass-bg-strong); backdrop-filter: blur(var(--glass-blur)); box-shadow: var(--glass-hi); }
+.top .crumb { display:flex; align-items:baseline; gap:10px; }
+.top h1 { font-family: var(--font-display); font-weight:500; font-size:1.1rem; margin:0; letter-spacing:-0.01em; }
+.top .sub { font-family:var(--font-mono); font-size:11px; color:var(--ink-faint); }
+.top .right { display:flex; align-items:center; gap:var(--s-4); }
+.kbd { font-family:var(--font-mono); font-size:11px; color:var(--ink-dim); border:1px solid var(--border-strong);
+  border-radius:6px; padding:5px 9px; background: var(--surface-1); cursor:pointer; transition: border-color var(--t-fast), color var(--t-fast); }
+.kbd:hover { border-color: var(--ink-24); color: var(--ink); }
+.theme-toggle { display:grid; place-items:center; width:32px; height:32px; border-radius:var(--r-full);
+  border:1px solid var(--border-strong); background:var(--surface-1); color:var(--ink-dim); cursor:pointer;
+  transition: border-color var(--t-fast), color var(--t-fast), background var(--t-fast); }
+.theme-toggle:hover { border-color:var(--ink-24); color:var(--ink); background:var(--hover-fill); }
+.theme-toggle svg { width:15px; height:15px; }
+.live { display:flex; align-items:center; gap:7px; font-family:var(--font-mono); font-size:11px;
+  color: var(--allow); letter-spacing:.08em; }
+.live .live-dot { width:7px; height:7px; border-radius:var(--r-full); background: var(--allow); }
+
+.main { display:flex; flex-direction: column; min-width: 0; }
+.view { padding: var(--s-6); }
+.view[hidden] { display:none; }
+.section-title { font-family:var(--font-mono); font-size:11px; text-transform:uppercase;
+  letter-spacing:.16em; color:var(--ink-faint); margin: 0 0 var(--s-4); display:flex; align-items:center; gap:10px; }
+.section-title .n { color: var(--ink-dim); }
+
+/* toolbar: filter pills + sort */
+.toolbar { display:flex; align-items:center; gap:var(--s-3); margin-bottom: var(--s-4); flex-wrap:wrap; }
+.pill { font-family:var(--font-mono); font-size:11px; color:var(--ink-dim); padding:5px 11px;
+  border:1px solid var(--border-strong); border-radius:var(--r-full); background:transparent; cursor:pointer;
+  transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast); }
+.pill:hover { color:var(--ink); border-color:var(--ink-24); }
+.pill[aria-pressed="true"] { background: var(--accent-12); color: var(--ink); border-color: var(--accent-24); }
+.toolbar .grow { flex:1; }
+
+/* FLEET summary strip */
+.fleet-summary { display:grid; grid-template-columns: repeat(4,1fr); gap: var(--s-4); margin-bottom: var(--s-5); }
+.sum { background: var(--surface-1); border:1px solid var(--border); border-radius: var(--r-lg); padding: var(--s-4) var(--s-5); position:relative; overflow:hidden; }
+.sum .k { font-family:var(--font-mono); font-size:10px; text-transform:uppercase; letter-spacing:.12em; color:var(--ink-faint); }
+.sum .v { font-family:var(--font-mono); font-size:1.7rem; color:var(--ink); margin-top:8px; line-height:1; }
+.sum .v.accent{color:var(--accent-ink);} .sum .v.deny{color:var(--deny);} .sum .v.allow{color:var(--allow);}
+.sum .spark2 { position:absolute; right:0; bottom:0; width:64px; height:30px; opacity:.5; }
+@media (max-width:900px){ .fleet-summary{ grid-template-columns: repeat(2,1fr);} }
+
+/* FLEET grid */
+.fleet { display:grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: var(--s-4); }
+.agent { background: var(--surface-1); border:1px solid var(--border); border-radius:var(--r-lg);
+  padding: var(--s-5); box-shadow: var(--shadow-none); }
+.agent.lift { transition: transform var(--t-base) var(--ease-out-cubic), border-color var(--t-base); }
+.agent .row1 { display:flex; align-items:center; justify-content:space-between; margin-bottom: var(--s-4); }
+.agent .name { font-family:var(--font-display); font-weight:500; font-size:1.05rem; letter-spacing:-0.01em; }
+.agent .addr { font-family:var(--font-mono); font-size:11px; color:var(--ink-faint); margin-top:2px; }
+.meter { margin: var(--s-2) 0 var(--s-4); }
+.meter svg { width:100%; height:56px; display:block; overflow: visible; }
+.meter .cap-label { display:flex; justify-content:space-between; font-family:var(--font-mono);
+  font-size:11px; color:var(--ink-dim); margin-top: 6px; }
+.meter .cap-label b { color: var(--ink); font-weight:500; }
+.agent .facts { display:grid; grid-template-columns: repeat(3,1fr); gap: var(--s-3);
+  border-top:1px solid var(--border); padding-top: var(--s-4); }
+.fact .k { font-family:var(--font-mono); font-size:10px; text-transform:uppercase; letter-spacing:.1em; color:var(--ink-faint); }
+.fact .v { font-family:var(--font-mono); font-size:var(--t-data); color:var(--ink); margin-top:3px; }
+.v-allow { color: var(--allow) !important; } .v-deny { color: var(--deny) !important; } .v-accent { color: var(--accent-ink) !important; }
+.agent .actions { display:flex; gap:var(--s-3); margin-top: var(--s-4); }
+
+/* dense tabular stream — gap:1px grid (blur) */
+.grid-table { background: var(--border); border:1px solid var(--border); border-radius: var(--r-lg);
+  overflow: hidden; display: grid; gap: 1px; }
+.gt-head, .gt-row { display:grid; align-items:center; gap: 0; background: var(--surface-1);
+  font-family:var(--font-mono); font-size:var(--t-data); }
+.gt-head { color:var(--ink-faint); font-size:10px; text-transform:uppercase; letter-spacing:.12em; background: var(--surface-1); }
+.gt-head button { all:unset; cursor:pointer; display:inline-flex; align-items:center; gap:5px; color:inherit; }
+.gt-head button:hover { color: var(--ink-dim); }
+.gt-head .caret { opacity:.5; }
+.gt-row { transition: background var(--t-fast); }
+.gt-row:hover { background: var(--hover-fill); }
+.gt-row > *, .gt-head > * { padding: 11px var(--s-4); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.gt-row .payee { color:var(--ink); } .gt-row .payee small { color:var(--ink-faint); }
+.gt-row .amt { text-align:right; color:var(--ink); } .num-head { text-align:right; justify-content:flex-end; }
+.gt-row .t a { color: var(--accent-ink); text-decoration:none; } .gt-row .t a:hover { text-decoration: underline; }
+.gt-row .t .none { color: var(--ink-faint); }
+
+/* verdicts layout: table + side rail (sparkline) */
+.verdicts-grid { display:grid; grid-template-columns: 1fr 300px; gap: var(--s-5); align-items:start; }
+.cols-verdict .gt-head, .cols-verdict .gt-row { grid-template-columns: 78px 1fr 148px 92px 72px; }
+.side-card { background: var(--surface-1); border:1px solid var(--border); border-radius:var(--r-lg); padding: var(--s-5); }
+.side-card h4 { font-family:var(--font-mono); font-size:10px; text-transform:uppercase; letter-spacing:.14em;
+  color:var(--ink-faint); margin:0 0 var(--s-4); }
+.spark { width:100%; height:70px; display:block; overflow:visible; margin-bottom: var(--s-4); }
+.side-stat { display:flex; justify-content:space-between; align-items:baseline; padding: 8px 0; border-top:1px solid var(--border); }
+.side-stat:first-of-type { border-top:none; }
+.side-stat .k { font-size:var(--t-small); color:var(--ink-dim); }
+.side-stat .v { font-family:var(--font-mono); font-size:1.05rem; }
+
+/* POLICIES: cap bars as leash-tension + allowlist */
+.policy { background: var(--surface-1); border:1px solid var(--border); border-radius:var(--r-lg); padding: var(--s-5); margin-bottom: var(--s-4); }
+.policy .phead { display:flex; align-items:center; justify-content:space-between; margin-bottom: var(--s-5); }
+.policy .name { font-family:var(--font-display); font-weight:500; font-size:1.05rem; }
+.policy .addr { font-family:var(--font-mono); font-size:11px; color:var(--ink-faint); }
+.caps { display:grid; grid-template-columns: repeat(3,1fr); gap: var(--s-5); }
+.cap-row .cap-k { display:flex; justify-content:space-between; font-family:var(--font-mono); font-size:11px; color:var(--ink-dim); margin-bottom: 8px; }
+.cap-row .cap-k b { color: var(--ink); }
+.tension { width:100%; height: 30px; display:block; overflow:visible; }
+.owner-note { font-family:var(--font-mono); font-size:10px; color:var(--ink-faint); display:inline-flex; align-items:center; gap:6px;
+  border:1px solid var(--border); border-radius:var(--r-sm); padding:3px 8px; }
+.owner-note svg { width:11px; height:11px; }
+.allowlist { border-top:1px solid var(--border); margin-top: var(--s-5); padding-top: var(--s-5); }
+.allowlist .al-head { display:flex; align-items:center; justify-content:space-between; margin-bottom: var(--s-3); }
+.al-title { font-family:var(--font-mono); font-size:11px; color:var(--ink-dim); text-transform:uppercase; letter-spacing:.1em; }
+.chips-wrap { display:flex; flex-wrap:wrap; gap: var(--s-2); }
+.payee-chip { display:inline-flex; align-items:center; gap:8px; font-family:var(--font-mono); font-size:11px;
+  color:var(--ink); background: var(--surface-2); border:1px solid var(--border); border-radius: var(--r-full); padding: 5px 6px 5px 12px; }
+.payee-chip button { all:unset; cursor:pointer; width:16px; height:16px; display:grid; place-items:center;
+  border-radius:var(--r-full); color:var(--ink-faint); }
+.payee-chip button:hover { color:var(--deny); background: var(--deny-14); }
+
+/* AUDIT: event log */
+.cols-audit .gt-head, .cols-audit .gt-row { grid-template-columns: 116px 128px 1fr 88px; }
+.evt-revoke { color: var(--deny); }
+.evt-icon { display:inline-flex; align-items:center; gap:7px; }
+.evt-icon .sev { width:18px; height:10px; }
+
+/* empty / error states (branded dead states) */
+.deadstate { text-align:center; padding: var(--s-9) var(--s-5); border:1px dashed var(--border-strong);
+  border-radius: var(--r-lg); color: var(--ink-faint); }
+.deadstate svg { width:64px; height:44px; margin: 0 auto var(--s-4); display:block; overflow:visible; opacity:.6; }
+.deadstate h4 { font-family:var(--font-display); font-weight:500; font-size:1.1rem; color:var(--ink-dim); margin:0 0 var(--s-2); }
+.deadstate p { font-size:var(--t-small); margin:0 auto; max-width: 40ch; }
+.deadstate.error { border-color: var(--deny-24); color: var(--deny); }
+.deadstate .btn { margin-top: var(--s-5); }
+
+/* skeleton card */
+.skel-card { background: var(--surface-1); border:1px solid var(--border); border-radius:var(--r-lg); padding: var(--s-5); }
+.skel-line { height: 12px; border-radius: 4px; margin-bottom: 10px; }
+
+/* ⌘K palette overlay — the ONLY drop shadow (overlay-only, CORE-ELEV-1) */
+.scrim { position:fixed; inset:0; background: color-mix(in oklab, var(--bg-base) 55%, transparent);
+  backdrop-filter: blur(3px); z-index:40; display:none; }
+.scrim.open { display:block; }
+.palette { position:fixed; top:13vh; left:50%; transform:translateX(-50%); width:min(580px, 92vw);
+  background: var(--surface-2); border:1px solid var(--border-strong); border-radius:var(--r-lg);
+  box-shadow: var(--shadow-overlay); z-index:41; overflow:hidden; display:none; }
+.palette input { width:100%; background:transparent; border:none; color:var(--ink); font-size:15px;
+  font-family:var(--font-sans); padding: var(--s-5); border-bottom:1px solid var(--border); }
+.palette input:focus { outline:none; }
+.palette .grp { font-family:var(--font-mono); font-size:10px; text-transform:uppercase; letter-spacing:.12em;
+  color:var(--ink-faint); padding: 10px var(--s-5) 4px; }
+.palette .opt { display:flex; align-items:center; gap:10px; padding: 11px var(--s-5); width:100%; text-align:left;
+  font-family: var(--font-sans); font-size:var(--t-small); color:var(--ink-dim); cursor:pointer; background:transparent; border:none; }
+.palette .opt[aria-selected="true"] { background: var(--accent-12); color: var(--ink); }
+.palette .opt .ic { color: var(--ink-faint); display:inline-flex; } .opt[aria-selected="true"] .ic { color: var(--accent-ink); }
+.palette .opt .kbd { margin-left:auto; }
+.palette .opt[hidden] { display:none; }
+.palette .empty { padding: var(--s-6) var(--s-5); color:var(--ink-faint); font-size:var(--t-small); text-align:center; }
+
+/* nav section labels */
+.nav-group { font-family:var(--font-mono); font-size:9px; text-transform:uppercase; letter-spacing:.18em;
+  color:var(--ink-faint); margin: var(--s-4) 10px 4px; }
+.nav-group:first-of-type { margin-top: 0; }
+.navitem .badge.alert { color: var(--accent-ink); }
+
+/* ===== shared panel scaffolding (cockpit, jobs, links, digest, inbox) ===== */
+.panel { background: var(--surface-1); border:1px solid var(--border); border-radius:var(--r-md);
+  padding: var(--s-5); margin-bottom: var(--s-4); }
+.panel > .p-title { font-family:var(--font-mono); font-size:10px; text-transform:uppercase; letter-spacing:.14em;
+  color:var(--ink-faint); margin:0 0 var(--s-4); display:flex; align-items:center; justify-content:space-between; gap:10px; }
+.panel-hi { border-color: var(--accent-24); box-shadow: inset 3px 0 0 var(--accent); }
+.badge-pill { display:inline-flex; align-items:center; gap:6px; font-family:var(--font-mono); font-size:11px;
+  color:var(--ink-dim); background: var(--surface-2); border:1px solid var(--border); border-radius:var(--r-full); padding:4px 11px; }
+.badge-pill.jade { color:var(--allow); border-color:var(--allow-24); background:var(--allow-14); }
+.badge-pill.accent { color:var(--accent-ink); border-color:var(--accent-24); background:var(--accent-12); }
+.badge-pill svg { width:11px; height:11px; }
+.mono { font-family:var(--font-mono); }
+.tnum { font-variant-numeric: tabular-nums; }
+.hash { font-family:var(--font-mono); font-size:11px; color:var(--ink-dim); }
+.hash a { color:var(--accent-ink); text-decoration:none; } .hash a:hover { text-decoration:underline; }
+.row-btns { display:flex; gap:var(--s-3); flex-wrap:wrap; }
+.btn-sm { padding:6px 12px; font-size:11px; }
+
+/* status pill */
+.spill { display:inline-flex; align-items:center; gap:7px; font-family:var(--font-mono); font-size:11px; font-weight:600;
+  padding:4px 11px; border-radius:var(--r-full); text-transform:uppercase; letter-spacing:.06em; }
+.spill::before { content:""; width:6px; height:6px; border-radius:var(--r-full); }
+.spill.running { color:var(--allow); background:var(--allow-14); border:1px solid var(--allow-24); }
+.spill.running::before { background:var(--allow); }
+.spill.paused { color:var(--accent-ink); background:var(--accent-12); border:1px solid var(--accent-24); }
+.spill.paused::before { background:var(--accent); }
+.spill.revoked { color:var(--deny); background:var(--deny-14); border:1px solid var(--deny-24); }
+.spill.revoked::before { background:var(--deny); }
+
+/* ===== COCKPIT ===== */
+.cockpit-head { display:flex; align-items:flex-start; justify-content:space-between; gap:var(--s-4);
+  flex-wrap:wrap; margin-bottom: var(--s-5); }
+.cockpit-head .who .name { font-family:var(--font-display); font-weight:600; font-size:1.35rem; letter-spacing:-0.01em; }
+.cockpit-head .who .addr { font-family:var(--font-mono); font-size:11px; color:var(--ink-faint); margin-top:3px; }
+.statusbar { display:flex; align-items:center; gap:var(--s-3); flex-wrap:wrap; }
+/* agent-switcher — hop between per-agent cockpits without returning to Fleet */
+.agent-switch { display:flex; align-items:center; gap:8px; margin-bottom:var(--s-5); flex-wrap:wrap; }
+.agent-switch .lbl { font-family:var(--font-mono); font-size:10px; text-transform:uppercase; letter-spacing:.14em; color:var(--ink-faint); margin-right:2px; }
+.agent-switch .sw { display:inline-flex; align-items:center; gap:7px; font-family:var(--font-sans); font-size:12.5px; color:var(--ink-dim); background:var(--surface-1); border:1px solid var(--border); border-radius:var(--r-full); padding:5px 13px; cursor:pointer; transition:background var(--t-fast),color var(--t-fast),border-color var(--t-fast); }
+.agent-switch .sw:hover { color:var(--ink); border-color:var(--ink-24); }
+.agent-switch .sw[aria-current="true"] { background:var(--accent-12); color:var(--ink); border-color:var(--accent-24); }
+.agent-switch .sw .d { width:6px; height:6px; border-radius:var(--r-full); flex:none; }
+.agent-switch .sw .d.active{ background:var(--allow); }
+.agent-switch .sw .d.nearcap{ background:var(--accent); }
+.agent-switch .sw .d.revoked{ background:var(--deny); }
+.cockpit-grid { display:grid; grid-template-columns: 1fr 380px; gap: var(--s-4); align-items:start; }
+@media (max-width:1100px){ .cockpit-grid{grid-template-columns:1fr;} }
+
+/* stream feed */
+.streamfeed { max-height: 340px; overflow-y:auto; display:flex; flex-direction:column; gap:1px;
+  background:var(--border); border:1px solid var(--border); border-radius:var(--r-sm); }
+.sf-row { display:grid; grid-template-columns: 58px 72px 1fr; gap:12px; align-items:baseline;
+  background:var(--surface-1); padding:8px var(--s-4); font-family:var(--font-mono); font-size:11px; }
+.sf-row .ts { color:var(--ink-faint); font-size:11px; }
+.sf-tag { font-size:9px; text-transform:uppercase; letter-spacing:.06em; font-weight:600; padding:2px 6px; border-radius:4px; text-align:center; white-space:nowrap; }
+.sf-tag.inference{ color:var(--ink-dim); background:var(--ink-06); }
+.sf-tag.action{ color:var(--accent-ink); background:var(--accent-12); }
+.sf-tag.decision{ color:var(--ink); background:var(--ink-08); }
+.sf-tag.consent{ color:var(--allow); background:var(--allow-14); }
+.sf-tag.block{ color:var(--deny); background:var(--deny-14); }
+.sf-tag.revoke{ color:var(--deny); background:var(--deny-14); }
+.sf-tag.error{ color:var(--ember); background:var(--ember-16); }
+.sf-row .msg { font-family:var(--font-sans); font-size:12.5px; color:var(--ink-dim); white-space:normal; line-height:1.45; font-weight:400; }
+.sf-row .msg b { font-family:var(--font-mono); font-size:11.5px; color:var(--ink); font-weight:600; }
+.sf-row .msg .req { color:var(--ink-faint); }
+.conn { display:inline-flex; align-items:center; gap:6px; font-family:var(--font-mono); font-size:11px; }
+.conn .dot { width:7px; height:7px; border-radius:var(--r-full); background:var(--ink-faint); }
+.conn.open { color:var(--allow); } .conn.open .dot { background:var(--allow); }
+.conn.connecting { color:var(--accent-ink); } .conn.connecting .dot { background:var(--accent); }
+
+/* JIT decision card */
+.jit .intent { font-family:var(--font-mono); font-size:12px; color:var(--ink); background:var(--surface-2);
+  border:1px solid var(--border); border-left:2px solid var(--ember); border-radius:var(--r-sm);
+  padding:10px var(--s-4); margin:var(--s-3) 0; white-space:pre-wrap; word-break:break-word; }
+.unverified { font-family:var(--font-mono); font-size:9px; letter-spacing:.1em; text-transform:uppercase;
+  color:var(--ember); border:1px solid var(--ember-24); border-radius:4px; padding:1px 6px; margin-bottom:8px; display:inline-block; }
+.reason-chip { display:inline-flex; align-items:center; font-family:var(--font-mono); font-size:10px; color:var(--accent-ink);
+  background:var(--accent-12); border:1px solid var(--accent-24); border-radius:var(--r-full); padding:3px 10px; }
+.countdown { font-family:var(--font-mono); font-size:11px; color:var(--ember); font-variant-numeric:tabular-nums; }
+
+/* limit rows w/ pending state */
+.limit-row { display:grid; grid-template-columns: 1fr; gap:8px; padding:var(--s-4) 0; border-top:1px solid var(--border); }
+.limit-row:first-of-type { border-top:none; padding-top:0; }
+.limit-row .lk { display:flex; justify-content:space-between; align-items:center; font-family:var(--font-mono); font-size:11px; color:var(--ink-dim); }
+.limit-row .lk b { color:var(--ink); }
+.limit-note { display:flex; align-items:center; justify-content:space-between; gap:10px; font-family:var(--font-mono); font-size:10px; }
+.limit-note.instant { color:var(--allow); }
+.limit-note.pending { color:var(--accent-ink); }
+
+/* generic list rows (rules, envelope, decisions) */
+.mini-list { display:flex; flex-direction:column; gap:1px; background:var(--border); border:1px solid var(--border); border-radius:var(--r-md); }
+.mini-row { display:flex; align-items:center; justify-content:space-between; gap:10px; background:var(--surface-1);
+  padding:10px var(--s-4); font-family:var(--font-sans); font-size:12.5px; line-height:1.45; color:var(--ink-dim); }
+.mini-row .lead { color:var(--ink); font-weight:500; } .mini-row .lead small { color:var(--ink-faint); font-weight:400; }
+.mini-row button.x { all:unset; cursor:pointer; color:var(--ink-faint); padding:2px 6px; border-radius:4px; }
+.mini-row button.x:hover { color:var(--deny); background:var(--deny-14); }
+.tags-wrap { display:flex; flex-wrap:wrap; gap:var(--s-2); }
+.tag { font-family:var(--font-mono); font-size:10px; color:var(--ink-dim); background:var(--surface-2);
+  border:1px solid var(--border); border-radius:var(--r-full); padding:3px 10px; }
+.tag.applied { color:var(--accent-ink); border-color:var(--accent-24); background:var(--accent-12); }
+
+/* textbox */
+.tbox { width:100%; background:var(--surface-2); border:1px solid var(--border-strong); border-radius:var(--r-md);
+  color:var(--ink); font-family:var(--font-sans); font-size:13px; padding:10px var(--s-4); resize:vertical; min-height:60px; }
+.tbox:focus { outline:none; border-color:var(--accent-24); }
+.readback { font-family:var(--font-mono); font-size:11px; color:var(--ink-dim); background:var(--surface-2);
+  border:1px dashed var(--border-strong); border-radius:var(--r-sm); padding:9px var(--s-4); margin-top:var(--s-3); }
+.readback b { color:var(--accent-ink); }
+
+/* chain / hop timeline */
+.hops { display:flex; align-items:center; gap:0; flex-wrap:wrap; }
+.hop { display:flex; align-items:center; gap:8px; }
+.hop .node { display:flex; flex-direction:column; align-items:center; gap:5px; }
+.hop .dot { width:11px; height:11px; border-radius:var(--r-full); border:2px solid var(--border-strong); background:var(--surface-2); }
+.hop.done .dot { background:var(--allow); border-color:var(--allow); }
+.hop.active .dot { background:var(--accent); border-color:var(--accent-ink); }
+.hop .lbl { font-family:var(--font-mono); font-size:10px; color:var(--ink-dim); text-align:center; white-space:nowrap; }
+.hop .lbl small { display:block; color:var(--ink-faint); font-size:9px; }
+.hop .bar { width:36px; height:2px; background:var(--border-strong); }
+.hop.done .bar { background:var(--allow); }
+
+/* ===== INBOX ===== */
+.alert { display:grid; grid-template-columns: auto 1fr auto; gap:var(--s-4); align-items:start;
+  background:var(--surface-1); border:1px solid var(--border); border-radius:var(--r-lg); padding:var(--s-4) var(--s-5); margin-bottom:var(--s-3); }
+.alert.unread { border-left:2px solid var(--accent); }
+.alert.decision.unread { border-left:2px solid var(--ember); }
+.alert .a-body .a-head { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:6px; }
+.alert .a-agent { font-family:var(--font-display); font-weight:500; font-size:.95rem; }
+.alert.unread .a-agent { color:var(--ink); } .alert.read { opacity:.72; }
+.alert .a-intent { font-family:var(--font-sans); font-size:12.5px; line-height:1.45; color:var(--ink-dim); }
+.alert .a-intent b { font-family:var(--font-mono); font-size:11.5px; font-weight:600; color:var(--ink); }
+.alert .a-meta { font-family:var(--font-mono); font-size:11px; color:var(--ink-faint); margin-top:5px; display:flex; gap:14px; flex-wrap:wrap; }
+.alert .a-actions { display:flex; flex-direction:column; gap:8px; align-items:flex-end; }
+.kind-chip { font-family:var(--font-mono); font-size:9px; text-transform:uppercase; letter-spacing:.06em; font-weight:600;
+  padding:2px 8px; border-radius:4px; color:var(--ink-dim); background:var(--ink-06); }
+.kind-chip.approval_required { color:var(--ember); background:var(--ember-16); }
+.kind-chip.limit_hit { color:var(--deny); background:var(--deny-14); }
+.kind-chip.revoked { color:var(--deny); background:var(--deny-14); }
+.kind-chip.runtime_error { color:var(--ember); background:var(--ember-16); }
+
+/* ===== JOBS / LINKS steppers ===== */
+.stepper { display:flex; align-items:center; gap:0; margin:var(--s-3) 0 26px; padding:0 44px; }
+.step { display:flex; align-items:center; gap:0; }
+.step .sc { position:relative; display:flex; flex-direction:column; align-items:center; }
+.step .sd { width:10px; height:10px; border-radius:var(--r-full); border:2px solid var(--border-strong); background:var(--surface-2); }
+.step.done .sd { background:var(--allow); border-color:var(--allow); }
+.step.active .sd { background:var(--accent); border-color:var(--accent-ink); box-shadow:0 0 0 3px var(--accent-12); }
+.step.fail .sd { background:var(--deny); border-color:var(--deny); }
+.step .sl { position:absolute; top:15px; left:50%; transform:translateX(-50%); font-family:var(--font-mono); font-size:9px; letter-spacing:.02em; color:var(--ink-dim); white-space:nowrap; }
+.step.active .sl { color:var(--accent-ink); } .step.done .sl { color:var(--ink-dim); }
+.stepper .sbar { width:78px; height:2px; flex:none; background:var(--border-strong); }
+.stepper .sbar.done { background:var(--allow); }
+ { background:var(--allow); }
+.poa { display:grid; grid-template-columns: 130px 1fr; gap:6px var(--s-4); font-family:var(--font-mono); font-size:11px;
+  border-top:1px solid var(--border); padding-top:var(--s-4); margin-top:var(--s-4); }
+.poa .pk { color:var(--ink-faint); } .poa .pv { color:var(--ink-dim); overflow:hidden; text-overflow:ellipsis; }
+.poa .pv a { color:var(--accent-ink); text-decoration:none; } .poa .pv a:hover { text-decoration:underline; }
+
+.mode-chip { font-family:var(--font-mono); font-size:10px; padding:3px 10px; border-radius:var(--r-full); cursor:pointer;
+  color:var(--ink-dim); background:var(--surface-2); border:1px solid var(--border); }
+.mode-chip.auto { color:var(--accent-ink); border-color:var(--accent-24); background:var(--accent-12); }
+.mode-chip.supervised { color:var(--allow); border-color:var(--allow-24); background:var(--allow-14); }
+
+/* digest */
+.digest-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:var(--s-4); margin-bottom:var(--s-5); }
+@media (max-width:900px){ .digest-grid{grid-template-columns:repeat(2,1fr);} }
+
+/* audit batches */
+.batch { background:var(--surface-1); border:1px solid var(--border); border-radius:var(--r-lg); margin-bottom:var(--s-3); overflow:hidden; }
+.batch-head { display:grid; grid-template-columns: 1fr auto auto auto; gap:var(--s-4); align-items:center; padding:var(--s-4) var(--s-5); cursor:pointer; }
+.batch-head:hover { background:var(--hover-fill); }
+.batch .events { border-top:1px solid var(--border); padding:var(--s-4) var(--s-5); display:none; flex-direction:column; gap:1px;
+  background:var(--border); }
+.batch.open .events { display:flex; }
+.batch .ev-row { background:var(--surface-1); padding:9px var(--s-4); font-family:var(--font-mono); font-size:11px;
+  display:grid; grid-template-columns: 70px 1fr; gap:10px; }
+.batch .ev-row .hlink { color:var(--ink-faint); font-size:10px; }
+.batch .ev-row .hlink b { color:var(--ink-dim); }
+.chain-pill { display:inline-flex; align-items:center; gap:6px; font-family:var(--font-mono); font-size:10px; padding:3px 9px; border-radius:var(--r-full); }
+.chain-pill.ok { color:var(--allow); background:var(--allow-14); border:1px solid var(--allow-24); }
+.chain-pill.broken { color:var(--deny); background:var(--deny-14); border:1px solid var(--deny-24); }
+
+/* mobile: rail collapses to a horizontal strip */
+@media (max-width: 980px){
+  body{grid-template-columns:1fr;}
+  aside{position:static; height:auto; flex-direction:row; align-items:center; gap:4px; overflow-x:auto;
+    border-right:none; border-bottom:1px solid var(--border); padding:8px var(--s-4);}
+  aside .brand{padding:0 var(--s-3) 0 0;} aside .spacer,aside .acct,aside .nav-group{display:none;}
+  .navitem{white-space:nowrap;} .navitem .badge{display:none;}
+  .navitem[aria-current="true"]{box-shadow:inset 0 -2px 0 var(--accent);}
+  .verdicts-grid{grid-template-columns:1fr;} .side-card{order:-1;}
+}
+@media (max-width: 640px){ .caps{grid-template-columns:1fr;}
+  .cols-verdict .gt-head, .cols-verdict .gt-row{grid-template-columns: 70px 1fr 84px;}
+  .cols-verdict .gt-head > :nth-child(3), .cols-verdict .gt-row > :nth-child(3),
+  .cols-verdict .gt-head > :nth-child(5), .cols-verdict .gt-row > :nth-child(5){display:none;}
+  .cols-audit .gt-head, .cols-audit .gt-row{grid-template-columns: 84px 1fr 84px;}
+  .cols-audit .gt-head > :nth-child(1), .cols-audit .gt-row > :nth-child(1){display:none;} }
+</style>
+</head>
+<body>
+
+<aside>
+  <div class="brand">
+    <svg width="22" height="22" viewBox="0 0 26 26" aria-hidden="true">
+      <circle cx="8" cy="13" r="5" fill="none" stroke="var(--accent)" stroke-width="2"/>
+      <path d="M13 13 H24 M24 9 v8" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"/></svg>
+    LEASH</div>
+  <nav aria-label="Console sections" style="display:contents">
+    <p class="nav-group">Monitor</p>
+    <button class="navitem" data-view="fleet" aria-current="true"><svg viewBox="0 0 16 16"><circle cx="5" cy="8" r="3" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 8h6" stroke="currentColor" stroke-width="1.5"/></svg>Fleet<span class="badge">3</span></button>
+    <button class="navitem" data-view="inbox"><svg viewBox="0 0 16 16"><path d="M2 4.5 8 9l6-4.5" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="2" y="3.5" width="12" height="9" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>Inbox<span class="badge" id="inboxBadge">3</span></button>
+    <button class="navitem" data-view="digest"><svg viewBox="0 0 16 16"><path d="M3 3h10M3 7h10M3 11h6" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>Digest</button>
+    <p class="nav-group">Operate</p>
+    <button class="navitem" data-view="cockpit"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.5" opacity=".5"/></svg>Cockpit</button>
+    <button class="navitem" data-view="jobs"><svg viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.5 3v-1M10.5 3v-1M2.5 6h11" stroke="currentColor" stroke-width="1.5"/></svg>Jobs</button>
+    <button class="navitem" data-view="links"><svg viewBox="0 0 16 16"><path d="M6 8a2.5 2.5 0 0 1 2.5-2.5H10M10 8a2.5 2.5 0 0 1-2.5 2.5H6" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>Links</button>
+    <p class="nav-group">Stream</p>
+    <button class="navitem" data-view="verdicts"><svg viewBox="0 0 16 16"><rect x="2" y="3" width="12" height="10" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M2 7h12" stroke="currentColor" stroke-width="1.5"/></svg>Verdicts<span class="badge">live</span></button>
+    <p class="nav-group">Trust</p>
+    <button class="navitem" data-view="policies"><svg viewBox="0 0 16 16"><path d="M8 2v12M2 8h12" stroke="currentColor" stroke-width="1.5"/></svg>Policies</button>
+    <button class="navitem" data-view="audit"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M8 5v3l2 2" stroke="currentColor" stroke-width="1.5"/></svg>Audit</button>
+  </nav>
+  <div class="spacer"></div>
+  <div class="acct">Owner<span class="mono">org.leash.eth</span></div>
+</aside>
+
+<div class="main">
+  <header class="top">
+    <div class="crumb"><h1 id="viewTitle">Fleet</h1><span class="sub" id="viewSub">3 agents on a leash</span></div>
+    <div class="right">
+      <button class="theme-toggle" id="themeToggle" aria-label="Toggle light or dark theme" title="Toggle theme"></button>
+      <button class="kbd" id="cmdk">⌘K&nbsp; Command</button>
+      <span class="live"><span class="live-dot"></span>LIVE · rail settling</span>
+    </div>
+  </header>
+
+  <!-- ============ FLEET ============ -->
+  <section class="view" data-view="fleet" aria-label="Fleet">
+    <div class="fleet-summary" id="fleetSummary"></div>
+    <p class="section-title">Agents · <span class="n">3 on a leash</span></p>
+    <div class="fleet" id="fleet"></div>
+  </section>
+
+  <!-- ============ VERDICTS ============ -->
+  <section class="view" data-view="verdicts" hidden aria-label="Verdicts">
+    <div class="toolbar" role="group" aria-label="Filter verdicts">
+      <button class="pill" data-filter="all" aria-pressed="true">All</button>
+      <button class="pill" data-filter="allow" aria-pressed="false">Allow</button>
+      <button class="pill" data-filter="deny" aria-pressed="false">Deny</button>
+      <span class="grow"></span>
+      <span class="section-title" style="margin:0">Verdict stream · <span class="n">live</span></span>
+    </div>
+    <div class="verdicts-grid">
+      <div class="grid-table cols-verdict" id="verdictTable" role="table" aria-label="Verdict stream">
+        <div class="gt-head" role="row">
+          <span role="columnheader">Verdict</span>
+          <span role="columnheader">Agent → payee</span>
+          <span role="columnheader">Reason</span>
+          <span class="num-head" role="columnheader"><button data-sort="amt">Amount <span class="caret">↕</span></button></span>
+          <span role="columnheader">Tx</span>
+        </div>
+      </div>
+      <div class="side-card">
+        <h4>Allow / deny · last 24h</h4>
+        <svg class="spark" id="spark" viewBox="0 0 280 70" preserveAspectRatio="none" aria-label="Allow rate sparkline, trending up"></svg>
+        <div class="side-stat"><span class="k">Allow rate</span><span class="v v-allow">86%</span></div>
+        <div class="side-stat"><span class="k">Denied today</span><span class="v v-deny">7</span></div>
+        <div class="side-stat"><span class="k">Settled today</span><span class="v">$1,284</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ POLICIES ============ -->
+  <section class="view" data-view="policies" hidden aria-label="Policies">
+    <p class="section-title">Per-agent policy · <span class="n">caps &amp; allowlist</span></p>
+    <div id="policies"></div>
+  </section>
+
+  <!-- ============ AUDIT ============ -->
+  <section class="view" data-view="audit" hidden aria-label="Audit log">
+    <div class="toolbar">
+      <button class="pill" data-audit="all" aria-pressed="true">All batches</button>
+      <button class="pill" data-audit="revoke" aria-pressed="false">Revocations</button>
+      <button class="pill" data-audit="policy" aria-pressed="false">Policy edits</button>
+      <span class="grow"></span>
+      <span class="section-title" style="margin:0">Hash-chained trace batches · <span class="n">0G Storage</span></span>
+    </div>
+    <div id="audit"></div>
+  </section>
+
+  <!-- ============ COCKPIT ============ -->
+  <section class="view" data-view="cockpit" hidden aria-label="Agent cockpit">
+    <div id="cockpit"></div>
+  </section>
+
+  <!-- ============ INBOX ============ -->
+  <section class="view" data-view="inbox" hidden aria-label="Inbox">
+    <div class="toolbar">
+      <span class="section-title" style="margin:0">Attention queue · <span class="n" id="inboxSub">3 unread</span></span>
+      <span class="grow"></span>
+      <button class="btn btn-ghost btn-sm press" id="markAllRead">Mark all read</button>
+    </div>
+    <div id="inbox" aria-live="polite"></div>
+  </section>
+
+  <!-- ============ DIGEST ============ -->
+  <section class="view" data-view="digest" hidden aria-label="Daily digest">
+    <div id="digest"></div>
+  </section>
+
+  <!-- ============ JOBS ============ -->
+  <section class="view" data-view="jobs" hidden aria-label="Jobs">
+    <p class="section-title">Agent commerce jobs · <span class="n">ACP lifecycle</span></p>
+    <div id="jobs"></div>
+  </section>
+
+  <!-- ============ LINKS ============ -->
+  <section class="view" data-view="links" hidden aria-label="Agent links">
+    <p class="section-title">Agent-to-agent links · <span class="n">delegation pairs</span></p>
+    <div id="links"></div>
+  </section>
+</div>
+
+<!-- ⌘K command palette -->
+<div class="scrim" id="scrim"></div>
+<div class="palette" id="palette" role="dialog" aria-label="Command palette" aria-modal="true">
+  <input id="palInput" placeholder="Cut a leash, edit a cap, jump to a view…" aria-label="Command" role="combobox" aria-expanded="true" aria-controls="opts" autocomplete="off"/>
+  <div id="opts" role="listbox" aria-label="Commands"></div>
+</div>
+
+<script>
+const reduceMo = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
+
+/* ---------- theme toggle (light / dark, persisted) ---------- */
+(function(){
+  const KEY='leash-theme', root=document.documentElement, btn=document.getElementById('themeToggle');
+  const moon='<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13.5 9.3A5.5 5.5 0 1 1 6.7 2.5 4.3 4.3 0 0 0 13.5 9.3Z"/></svg>';
+  const sun ='<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="3.2"/><path d="M8 1v1.6M8 13.4V15M1 8h1.6M13.4 8H15M3 3l1.1 1.1M11.9 11.9 13 13M13 3l-1.1 1.1M4.1 11.9 3 13" stroke-linecap="round"/></svg>';
+  if(!btn) return;
+  const paint=()=>{ btn.innerHTML = root.getAttribute('data-theme')==='light' ? sun : moon; };
+  paint();
+  btn.addEventListener('click',()=>{
+    const toLight = root.getAttribute('data-theme')!=='light';
+    if(toLight){ root.setAttribute('data-theme','light'); localStorage.setItem(KEY,'light'); }
+    else { root.removeAttribute('data-theme'); localStorage.setItem(KEY,'dark'); }
+    paint();
+  });
+})();
+
+/* ---------- data ---------- */
+const AGENTS = [
+  {name:'research-agent', addr:'0xA91f…3e', ens:'research.org.leash.eth', status:'active', spent:188, cap:500, daily:500, allow:4, last:'ALLOW'},
+  {name:'ops-agent',      addr:'0x4c2d…b8', ens:'ops.org.leash.eth',      status:'nearcap', spent:910, cap:250, daily:1000, allow:7, last:'DENY'},
+  {name:'scraper-agent',  addr:'0x7e10…af', ens:'scraper.org.leash.eth',  status:'revoked', spent:0, cap:0, daily:0, allow:0, last:'REVOKED'},
+];
+const VERDICTS = [
+  ['deny','ops-agent','api.render.com','OVER_DAILY_CAP',620.00,'—','14:41'],
+  ['allow','research-agent','api.exa.ai','settled',4.20,'0xb2c0…','14:40'],
+  ['allow','research-agent','api.openai.com','settled',12.80,'0x7c9d…','14:39'],
+  ['deny','scraper-agent','0x9c…f1','OFF_ALLOWLIST',240.00,'—','14:38'],
+  ['allow','ops-agent','api.stripe.com','settled',18.00,'0x51a2…','14:37'],
+  ['allow','research-agent','api.anthropic.com','settled',9.60,'0xa0f1…','14:36'],
+  ['allow','supabase-agent','api.supabase.com','settled',6.40,'0x33be…','14:35'],
+  ['deny','ops-agent','0x77…c2','OFF_ALLOWLIST',95.00,'—','14:34'],
+];
+const AUDIT = [
+  ['14:22:07','revoke','scraper-agent · leash cut by org.leash.eth','0x9f42…','revoke'],
+  ['13:58:41','policy','ops-agent · daily cap $800 → $1,000','0x8c11…','policy'],
+  ['13:12:09','allowlist','research-agent · +api.anthropic.com','0x2ad0…','policy'],
+  ['11:47:33','issue','supabase-agent · leash issued, cap $200/transfer','0x71fe…','policy'],
+  ['09:03:55','policy','research-agent · per-transfer $300 → $500','0x4b8a…','policy'],
+];
+
+/* ---------- catenary helper: slack 0..1 -> path d ---------- */
+function catenary(slack, w, midY, maxSag){
+  const cy = midY + slack*maxSag;
+  return `M8 ${midY} Q ${w/2} ${cy.toFixed(1)} ${w-6} ${midY}`;
+}
+
+/* ---------- FLEET (skeleton -> real) ---------- */
+const fleet = $('#fleet');
+function renderFleetSkeleton(){
+  fleet.innerHTML = Array(3).fill(0).map(()=>`
+    <div class="skel-card">
+      <div class="skel skel-line" style="width:45%"></div>
+      <div class="skel skel-line" style="width:30%;height:9px"></div>
+      <div class="skel skel-line" style="width:100%;height:44px;margin:16px 0"></div>
+      <div class="skel skel-line" style="width:80%"></div>
+    </div>`).join('');
+}
+function fleetCard(a){
+  const slack = a.status==='revoked' ? 0 : Math.max(0,(a.daily-a.spent)/a.daily);
+  const isCut = a.status==='revoked';
+  const meterState = isCut ? 'cut' : (slack<0.18?'taut':'');
+  const meter = isCut
+    ? `<svg class="leash-svg cut" viewBox="0 0 520 56" preserveAspectRatio="none" aria-label="leash cut">
+         <circle class="leash-clasp" cx="10" cy="28" r="6"/>
+         <path class="leash-path" d="M16 28 L 248 28"/><path class="leash-path" d="M272 28 L 510 28"/>
+         <path d="M252 17 l8 22 M268 17 l-8 22" stroke="var(--deny)" stroke-width="1.6" stroke-linecap="round"/></svg>`
+    : `<svg class="leash-svg ${meterState}" viewBox="0 0 520 56" preserveAspectRatio="none" aria-label="${Math.round(slack*100)}% of daily cap remaining">
+         <circle class="leash-clasp" cx="10" cy="28" r="6"/>
+         <path class="leash-path mpath" d="${catenary(slack,520,28,18)}"/>
+         <path class="leash-clasp" d="M514 28 a6 6 0 1 0 -0.1 0" stroke-width="2"/>
+         <circle class="signal-pulse run" r="3.2" cx="0" cy="0" style="offset-path:path('${catenary(slack,520,28,18)}'); -webkit-offset-path:path('${catenary(slack,520,28,18)}');"></circle></svg>`;
+  const capLabel = isCut
+    ? `<span class="v-deny">leash cut</span><span>revoked 14:22 · <a href="#" class="v-accent" style="text-decoration:none">tx 0x9f…</a></span>`
+    : `<span>slack <b class="${slack<0.18?'v-accent':''}">${Math.round(slack*100)}%</b></span><span><b>$${a.spent}</b> / $${a.daily} today</span>`;
+  const chip = a.status==='active'?'<span class="chip chip-allow">Active</span>'
+    : a.status==='nearcap'?'<span class="chip chip-pend">Near cap</span>'
+    : '<span class="chip chip-deny">Revoked</span>';
+  const lastCls = a.last==='ALLOW'?'v-allow':a.last==='DENY'||a.last==='REVOKED'?'v-deny':'';
+  const actions = isCut
+    ? `<button class="btn btn-ghost press" disabled>Edit policy</button><button class="btn btn-ghost press">Re-issue</button>`
+    : `<button class="btn btn-ghost press" data-cmd="edit" data-agent="${a.name}">Edit policy</button><button class="btn btn-danger press" data-cmd="cut" data-agent="${a.name}">Cut leash</button>`;
+  return `<div class="agent lift" tabindex="0" role="button" data-open="${a.name}" aria-label="Open cockpit for ${a.name}">
+    <div class="row1"><div><div class="name">${a.name}</div><div class="addr">${a.addr} · ENS ${a.ens}</div></div>${chip}</div>
+    <div class="meter">${meter}<div class="cap-label">${capLabel}</div></div>
+    <div class="facts">
+      <div class="fact"><div class="k">Per-transfer</div><div class="v">${isCut?'<span class="faint">—</span>':'$'+a.cap}</div></div>
+      <div class="fact"><div class="k">Allowlist</div><div class="v">${isCut?'<span class="faint">frozen</span>':a.allow+' payees'}</div></div>
+      <div class="fact"><div class="k">Last verdict</div><div class="v ${lastCls}">${a.last}</div></div>
+    </div>
+    <div class="actions">${actions}</div>
+  </div>`;
+}
+function renderFleet(){ fleet.innerHTML = AGENTS.map(fleetCard).join(''); }
+function renderSummary(){
+  const active = AGENTS.filter(a=>a.status!=='revoked').length;
+  const headroom = AGENTS.filter(a=>a.status!=='revoked').reduce((s,a)=>s+(a.daily-a.spent),0);
+  const tiles = [
+    {k:'Agents on a leash', v:`${active}<span style="color:var(--ink-faint);font-size:.6em"> / ${AGENTS.length}</span>`, cls:'', id:''},
+    {k:'Settled today', v:'$'+sumSettled.toLocaleString(), cls:'allow', id:'sumSettled', live:true},
+    {k:'Denied today', v:''+sumDenied, cls:'deny', id:'sumDenied'},
+    {k:'Daily headroom', v:'$'+headroom.toLocaleString(), cls:'accent', id:''},
+  ];
+  document.getElementById('fleetSummary').innerHTML = tiles.map(t=>
+    `<div class="sum"${t.live?' aria-live="polite"':''}><div class="k">${t.k}</div><div class="v ${t.cls}"${t.id?` id="${t.id}"`:''}>${t.v}</div></div>`).join('');
+}
+let sumSettled=1284, sumDenied=7;
+renderFleetSkeleton(); renderSummary();
+setTimeout(renderFleet, reduceMo?0:650);   // designed loading state
+
+/* live tick: ops-agent nears cap, meter tautens silently (data is the show, P4) */
+if (!reduceMo) setInterval(()=>{
+  const ops = AGENTS[1]; if (ops.status!=='nearcap') return;
+  ops.spent = Math.min(ops.daily-8, ops.spent + Math.round(Math.random()*12));
+  const card = fleet.children[1]; if(!card) return;
+  const slack = Math.max(0,(ops.daily-ops.spent)/ops.daily);
+  const path = card.querySelector('.leash-path'); const svg = card.querySelector('.leash-svg');
+  if (path){ path.setAttribute('d', catenary(slack,520,28,18)); svg.classList.toggle('taut', slack<0.18); }
+  const b = card.querySelector('.cap-label b'); if(b) b.textContent = Math.round(slack*100)+'%';
+  const spentB = card.querySelectorAll('.cap-label b')[1]; if(spentB) spentB.textContent = '$'+ops.spent;
+}, 3200);
+
+/* ambient: settled-today softly ticks up (restrained liveness on the summary — aria-live announces it) */
+if(!reduceMo) setInterval(()=>{ if($('[data-view="fleet"]').hidden) return;
+  sumSettled += Math.round(Math.random()*16); const el=document.getElementById('sumSettled');
+  if(el){ el.textContent='$'+sumSettled.toLocaleString(); }
+}, 3800);
+
+/* ---------- VERDICTS ---------- */
+const vTable = $('#verdictTable');
+let vFilter='all', vSortDesc=true;
+function verdictRow(v){
+  const chip = v[0]==='allow'?'chip-allow':'chip-deny', label=v[0]==='allow'?'Allow':'Deny';
+  const tx = v[5]==='—'?`<span class="none">—</span>`:`<a href="#" aria-label="View transaction ${v[5]}">${v[5]}</a>`;
+  return `<div class="gt-row" role="row" data-v="${v[0]}" data-amt="${v[4]}">
+    <span class="chip ${chip}" role="cell">${label}</span>
+    <span class="payee" role="cell">${v[1]} → <small>${v[2]}</small></span>
+    <span class="faint" role="cell">${v[3]}</span>
+    <span class="amt" role="cell">$${v[4].toFixed(2)}</span>
+    <span class="t" role="cell">${tx}</span></div>`;
+}
+function renderVerdicts(){
+  let rows = VERDICTS.filter(v=> vFilter==='all'||v[0]===vFilter);
+  rows = rows.slice().sort((a,b)=> vSortDesc? b[4]-a[4] : a[4]-b[4]);
+  vTable.querySelectorAll('.gt-row').forEach(r=>r.remove());
+  if (!rows.length){ vTable.insertAdjacentHTML('beforeend',
+    `<div style="grid-column:1/-1"><div class="deadstate"><svg class="leash-svg" viewBox="0 0 80 44"><circle class="leash-clasp" cx="10" cy="22" r="6"/><path class="leash-path" d="M16 22 Q 40 30 74 22"/></svg><h4>No verdicts match</h4><p>Nothing to adjudicate under this filter yet.</p></div></div>`); return; }
+  vTable.insertAdjacentHTML('beforeend', rows.map(verdictRow).join(''));
+}
+$$('[data-filter]').forEach(p=>p.addEventListener('click',()=>{
+  $$('[data-filter]').forEach(x=>x.setAttribute('aria-pressed', x===p)); vFilter=p.dataset.filter; renderVerdicts();
+}));
+$('[data-sort="amt"]').addEventListener('click',()=>{ vSortDesc=!vSortDesc;
+  $('[data-sort="amt"] .caret').textContent = vSortDesc?'↓':'↑'; renderVerdicts(); });
+renderVerdicts();
+
+/* live: a new verdict arrives, flashes in once, then rests (flash-on-new; silent otherwise) */
+if (!reduceMo) setInterval(()=>{
+  if ($('[data-view="verdicts"]').hidden) return;
+  const pool = [['allow','research-agent','api.exa.ai','settled',3.10,'0x'+Math.random().toString(16).slice(2,6)+'…','now'],
+                ['deny','ops-agent','0x'+Math.random().toString(16).slice(2,4)+'…c2','OFF_ALLOWLIST',77.00,'—','now']];
+  const v = pool[Math.floor(Math.random()*pool.length)];
+  if (vFilter!=='all' && v[0]!==vFilter) return;
+  const head = vTable.querySelector('.gt-head');
+  head.insertAdjacentHTML('afterend', verdictRow(v));
+  const row = head.nextElementSibling; row.classList.add(v[0]==='allow'?'flash-allow':'flash-deny');
+  const rows = vTable.querySelectorAll('.gt-row'); if (rows.length>10) rows[rows.length-1].remove();
+}, 5200);
+
+/* sparkline (bespoke SVG allow-rate) — draws in on load, then trends live */
+let sparkPts = [72,68,74,80,78,84,82,88,86,90,86];
+function renderSpark(animate){
+  const w=280,h=70,max=100, step=w/(sparkPts.length-1);
+  const line = sparkPts.map((p,i)=>`${(i*step).toFixed(1)},${(h-(p/max)*h).toFixed(1)}`).join(' ');
+  const area = `0,${h} ${line} ${w},${h}`;
+  const lastY=(h-(sparkPts[sparkPts.length-1]/max)*h).toFixed(1);
+  $('#spark').innerHTML = `<defs><linearGradient id="spk" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="var(--allow-24)"/><stop offset="100%" stop-color="transparent"/></linearGradient></defs>
+    <polygon points="${area}" fill="url(#spk)"/>
+    <polyline id="sparkLine" points="${line}" fill="none" stroke="var(--allow)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="${w}" cy="${lastY}" r="3" fill="var(--allow)"/>`;
+  if(animate && !reduceMo){ const pl=$('#sparkLine'); const len=pl.getTotalLength();
+    pl.style.strokeDasharray=len; pl.style.strokeDashoffset=len;
+    pl.animate([{strokeDashoffset:len},{strokeDashoffset:0}],{duration:900,easing:'cubic-bezier(.22,1,.36,1)',fill:'forwards'}); }
+}
+renderSpark(true);
+if(!reduceMo) setInterval(()=>{ if($('[data-view="verdicts"]').hidden) return;
+  sparkPts=[...sparkPts.slice(1), Math.max(60,Math.min(98, sparkPts[sparkPts.length-1]+(Math.random()*8-3)))]; renderSpark(false);
+},4200);
+
+/* ---------- POLICIES ---------- */
+function tensionBar(slack){ // horizontal leash-tension bar; slack 0..1 (1=lots of room)
+  const sag = 15 + slack*9;            // midline 15; more slack = more sag
+  return `<svg class="tension leash-svg ${slack<0.2?'taut':''}" viewBox="0 0 260 30" preserveAspectRatio="none" aria-hidden="true">
+    <circle class="leash-clasp" cx="6" cy="15" r="4"/>
+    <path class="leash-path" d="M10 15 Q 130 ${sag} 254 15"/>
+    <path class="leash-clasp" d="M254 15 a4 4 0 1 0 -0.1 0" stroke-width="1.5"/></svg>`;
+}
+function policyBlock(a){
+  if (a.status==='revoked') return `<div class="policy" style="opacity:.6">
+    <div class="phead"><div><div class="name">${a.name}</div><div class="addr">${a.ens}</div></div><span class="chip chip-deny">Revoked</span></div>
+    <div class="deadstate" style="padding:var(--s-6)"><h4>Policy frozen</h4><p>This leash was cut on-chain. Re-issue from the Fleet to set a new policy.</p></div></div>`;
+  const perT = a.cap, daily=a.daily, weekly=a.daily*5;
+  const slackT = Math.max(0, Math.min(1, 1 - a.cap/a.daily));   // one transfer vs the daily ceiling
+  const slackD = Math.max(0,(daily-a.spent)/daily);             // daily headroom
+  const slackW = Math.max(0,(weekly-a.spent)/weekly);           // weekly headroom
+  return `<div class="policy">
+    <div class="phead"><div><div class="name">${a.name}</div><div class="addr">${a.addr} · ${a.ens}</div></div>
+      <span class="owner-note"><svg viewBox="0 0 16 16"><path d="M4 7V5a4 4 0 0 1 8 0v2" fill="none" stroke="currentColor" stroke-width="1.5"/><rect x="3" y="7" width="10" height="7" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>Owner-only</span></div>
+    <div class="caps">
+      <div class="cap-row"><div class="cap-k"><span>Per-transfer</span><b>$${perT}</b></div>${tensionBar(slackT)}</div>
+      <div class="cap-row"><div class="cap-k"><span>Daily · $${a.spent} used</span><b>$${daily}</b></div>${tensionBar(slackD)}</div>
+      <div class="cap-row"><div class="cap-k"><span>Weekly</span><b>$${weekly.toLocaleString()}</b></div>${tensionBar(slackW)}</div>
+    </div>
+    <div class="allowlist">
+      <div class="al-head"><span class="al-title">Allowlist · ${a.allow} payees</span><button class="btn btn-ghost press" style="padding:6px 12px">+ Add payee</button></div>
+      <div class="chips-wrap">
+        ${['api.stripe.com','api.exa.ai','api.openai.com','api.anthropic.com','api.supabase.com','api.render.com','api.coinbase.com'].slice(0,a.allow).map(p=>
+          `<span class="payee-chip">${p}<button aria-label="Remove ${p} from allowlist">✕</button></span>`).join('')}
+      </div>
+    </div></div>`;
+}
+$('#policies').innerHTML = AGENTS.map(policyBlock).join('');
+
+/* ---------- AUDIT (hash-chained trace batches on 0G Storage) ---------- */
+const STORAGE = 'https://storagescan-galileo.0g.ai/tx/';
+const BATCHES = [
+  { merkleRoot:'0x9f42a1c0…7e3b', storageTx:'0x71c4…af09', count:4, chain:'ok', kind:'revoke', events:[
+    {ts:'14:22:07', text:'scraper-agent · leash cut by org.leash.eth', prev:'0x00…genesis', hash:'0x3a91…' },
+    {ts:'13:58:41', text:'ops-agent · daily cap $800 → $1,000', prev:'0x3a91…', hash:'0xb27e…' },
+    {ts:'13:12:09', text:'research-agent · allowlist +api.anthropic.com', prev:'0xb27e…', hash:'0x5d02…' },
+    {ts:'11:47:33', text:'supabase-agent · leash issued, cap $200/transfer', prev:'0x5d02…', hash:'0xe8c4…' },
+  ]},
+  { merkleRoot:'0x2ad0e5f1…c419', storageTx:'0x88be…12dd', count:3, chain:'ok', kind:'policy', events:[
+    {ts:'09:03:55', text:'research-agent · per-transfer $300 → $500', prev:'0xe8c4…', hash:'0x1f77…' },
+    {ts:'08:41:10', text:'ops-agent · guardian set 0xB1…9a', prev:'0x1f77…', hash:'0x9c2a…' },
+    {ts:'08:12:44', text:'research-agent · message rule +block "bridge"', prev:'0x9c2a…', hash:'0x44b8…' },
+  ]},
+  { merkleRoot:'0x4b8ad9c2…0071', storageTx:'0x33fe…7a01', count:3, chain:'broken', kind:'policy', events:[
+    {ts:'07:55:02', text:'ops-agent · budget window 24h → 12h', prev:'0x44b8…', hash:'0x77e1…' },
+    {ts:'07:30:19', text:'research-agent · approved_once → api.exa.ai $4.20', prev:'0x77e1…', hash:'0x2b09…' },
+    {ts:'07:02:47', text:'delegation research→ops accepted', prev:'0xBADf…mismatch', hash:'0x6e5c…' },
+  ]},
+];
+function batchBlock(b, i){
+  const evs = b.events.map(e=>`<div class="ev-row">
+      <span class="faint">${e.ts}</span>
+      <div><div style="color:var(--ink-dim)">${e.text}</div>
+        <div class="hlink">prev <b>${e.prev}</b> → hash <b>${e.hash}</b></div></div></div>`).join('');
+  return `<div class="batch" data-kind="${b.kind}" data-i="${i}">
+    <div class="batch-head" role="button" tabindex="0" aria-expanded="false">
+      <div><div class="hash">merkleRoot <b style="color:var(--ink)">${b.merkleRoot}</b></div>
+        <div class="hash" style="margin-top:4px">storageTx <a href="${STORAGE}${b.storageTx}" target="_blank" rel="noopener">${b.storageTx} ↗</a></div></div>
+      <span class="badge-pill">${b.count} events</span>
+      <span class="chain-pill ${b.chain}">${b.chain==='ok'?'◆ chain-ok':'◇ chain-broken'}</span>
+      <button class="btn btn-ghost btn-sm press" data-decrypt>Decrypt batch</button>
+    </div>
+    <div class="events">${evs}</div></div>`;
+}
+let aFilter='all';
+function renderAudit(){
+  const box=$('#audit');
+  const rows = BATCHES.filter(b=> aFilter==='all' || b.kind===aFilter);
+  if(!rows.length){ box.innerHTML=`<div class="deadstate"><svg class="leash-svg" viewBox="0 0 80 44"><circle class="leash-clasp" cx="10" cy="22" r="6"/><path class="leash-path" d="M16 22 Q 40 30 74 22"/></svg><h4>No batches</h4><p>Nothing recorded under this filter.</p></div>`; return; }
+  box.innerHTML = rows.map((b)=>batchBlock(b, BATCHES.indexOf(b))).join('');
+}
+$$('[data-audit]').forEach(p=>p.addEventListener('click',()=>{
+  $$('[data-audit]').forEach(x=>x.setAttribute('aria-pressed',x===p)); aFilter=p.dataset.audit; renderAudit();
+}));
+renderAudit();
+$('#audit').addEventListener('click', e=>{
+  const head=e.target.closest('.batch-head'); if(!head) return;
+  const batch=head.closest('.batch'); const open=batch.classList.toggle('open');
+  head.setAttribute('aria-expanded', open);
+  const btn=head.querySelector('[data-decrypt]'); if(btn) btn.textContent = open?'Hide events':'Decrypt batch';
+});
+$('#audit').addEventListener('keydown', e=>{
+  if((e.key==='Enter'||e.key===' ') && e.target.classList.contains('batch-head')){ e.preventDefault(); e.target.click(); }
+});
+
+/* ======================================================================
+   COCKPIT · INBOX · DIGEST · JOBS · LINKS  (seed data + renderers)
+   ====================================================================== */
+const money = n => n.toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+const pad2 = n => String(n).padStart(2,'0');
+const fmtClock = s => `${pad2(Math.floor(s/3600))}:${pad2(Math.floor(s/60)%60)}:${pad2(s%60)}`;
+const fmtMS = s => `${pad2(Math.floor(s/60))}:${pad2(s%60)}`;
+
+/* per-agent cockpit state (demo-local) */
+const COCKPITS = {
+  'research-agent':{ status:'running', session:15153, balance:12.84, guardian:'0xB1c4…9a3f',
+    presets:['defi_trader','dca'], allowlist:['api.exa.ai','api.openai.com','api.anthropic.com','api.supabase.com'],
+    rules:[{m:'value > $50', a:'require_approval'},{m:'target ∉ allowlist', a:'block'},{m:'memo ~ "bridge"', a:'block'}],
+    standing:[{t:'api.exa.ai', sel:'search()', cap:'$5.00'},{t:'api.openai.com', sel:'completions', cap:'$20.00'}],
+    decisions:[{k:'approved_once', t:'api.exa.ai · $4.20', ts:'14:40'},{k:'always_allowed', t:'api.anthropic.com', ts:'13:58'},{k:'denied', t:'0x77…c2 · $95.00', ts:'14:34'}],
+    limits:[{k:'Per-transfer cap', v:'$500', slack:.7, pending:null},
+            {k:'Budget / window', v:'$1,000', slack:.62, pending:null},
+            {k:'Window length', v:'24h', slack:.5, pending:{to:'48h', eta:172}},
+            {k:'Access expires', v:'in 12d', slack:.85, pending:null}],
+    jit:{ intent:'transfer 240.00 USDC → 0x77a3f0…c2 (memo: "cross-chain bridge to Arbitrum")', reason:'new_target', auto:161 },
+    chain:[{s:'planned', st:'done', who:'research→ops'},{s:'running', st:'active', who:'ops→scraper'},{s:'completed', st:'', who:'—'}] },
+  'ops-agent':{ status:'running', session:8442, balance:6.02, guardian:null,
+    presets:['rebalancer'], allowlist:['api.stripe.com','api.render.com','api.coinbase.com'],
+    rules:[{m:'target ∉ allowlist', a:'block'},{m:'value > daily cap', a:'block'}],
+    standing:[{t:'api.stripe.com', sel:'charges', cap:'$50.00'}],
+    decisions:[{k:'denied', t:'api.render.com · $620.00', ts:'14:41'},{k:'approved_once', t:'api.stripe.com · $18.00', ts:'14:37'}],
+    limits:[{k:'Per-transfer cap', v:'$250', slack:.2, pending:null},
+            {k:'Budget / window', v:'$1,000', slack:.09, pending:{to:'$1,500', eta:284}},
+            {k:'Window length', v:'24h', slack:.5, pending:null},
+            {k:'Access expires', v:'in 4d', slack:.35, pending:null}],
+    jit:{ intent:'transfer 620.00 USDC → api.render.com (scale render fleet ×3)', reason:'over_cap', auto:98 },
+    chain:[{s:'planned', st:'done', who:'ops→scraper'},{s:'running', st:'', who:'—'},{s:'completed', st:'', who:'—'}] },
+  'scraper-agent':{ status:'revoked', session:0, balance:0, guardian:null, presets:[], allowlist:[], rules:[], standing:[], decisions:[], limits:[], jit:null, chain:[] },
+};
+let cockpitAgent = null;
+const REASON_LABEL = {over_cap:'over_cap', new_target:'new_target', new_spender:'new_spender', bridge:'bridge', self_edit:'self_edit'};
+
+/* --- reasoning stream feed (cockpit centerpiece) --- */
+const SF_POOL = [
+  ['inference','<b>0G Compute</b> · llama-3.3-70b · reasoning over task plan <span class="req">req_8f2a1c</span>'],
+  ['decision','evaluating transfer to <b>api.exa.ai</b> · $4.20 within per-transfer cap → <b>ALLOW</b>'],
+  ['action','signed x402 payment <b>$4.20</b> → api.exa.ai <span class="req">tx 0xb2c0…</span>'],
+  ['block','novel target <b>0x77…c2</b> not on allowlist → <b>BLOCK</b>'],
+  ['consent','owner approved_once · <b>api.anthropic.com</b> $9.60'],
+  ['inference','<b>0G Compute</b> · deepseek-v3 · summarize 6 sources <span class="req">req_1d90f4</span>'],
+  ['decision','budget window 62% used · $4.20 leaves headroom → <b>ALLOW</b>'],
+  ['action','fetched 12 results from api.exa.ai · 840ms'],
+  ['block','memo matched rule "bridge" → <b>BLOCK</b> + quarantine'],
+  ['error','provider timeout 0G Compute · retrying with fallback'],
+];
+let streamTimer=null, streamRows=[], sfSeq=0;
+function sfRow(kind,msg,ts){ return `<div class="sf-row"><span class="ts">${ts}</span><span class="sf-tag ${kind}">${kind}</span><span class="msg">${msg}</span></div>`; }
+function nowClock(){ const d=new Date(); return `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}`; }
+function pushStreamEvent(){
+  const feed=$('#streamfeed'); if(!feed) return;
+  const [kind,msg]=SF_POOL[sfSeq++%SF_POOL.length];
+  feed.insertAdjacentHTML('afterbegin', sfRow(kind,msg,nowClock()));
+  const first=feed.firstElementChild; if(!reduceMo){ first.classList.add(kind==='block'||kind==='error'?'flash-deny':'flash-allow'); }
+  while(feed.children.length>30) feed.lastElementChild.remove();
+}
+function startStream(on){
+  clearInterval(streamTimer); streamTimer=null;
+  if(!on || reduceMo) return;
+  const conn=$('#conn'); if(conn){ conn.className='conn connecting'; conn.querySelector('.txt').textContent='connecting…';
+    setTimeout(()=>{ if($('#conn')){ $('#conn').className='conn open'; $('#conn .txt').textContent='open · live'; } },700); }
+  streamTimer=setInterval(pushStreamEvent, 2500);
+}
+
+/* --- session / countdown tickers (single shared 1s tick, reduced-motion safe on value not motion) --- */
+setInterval(()=>{
+  if($('[data-view="cockpit"]').hidden) return;
+  const c=COCKPITS[cockpitAgent]; if(!c) return;
+  if(c.status==='running' && c.session>0){ c.session--; const el=$('#sessionBadge'); if(el) el.textContent='session '+fmtClock(c.session); }
+  const jit=$('#jitCountdown'); if(jit && c.jit && c.jit.auto>0){ c.jit.auto--; jit.textContent='auto-deny in '+fmtMS(c.jit.auto);
+    if(c.jit.auto===0){ c.jit=null; renderJitCard(); } }
+  $$('.pending-eta').forEach(el=>{ const i=+el.dataset.i; const lim=c.limits[i];
+    if(lim&&lim.pending&&lim.pending.eta>0){ lim.pending.eta--; el.textContent=fmtMS(lim.pending.eta)+' left'; } });
+}, 1000);
+
+function limitRow(lim,i){
+  const pend = lim.pending
+    ? `<div class="limit-note pending"><span>loosen → <b style="color:var(--ink)">${lim.pending.to}</b> · timelocked <span class="pending-eta" data-i="${i}">${fmtMS(lim.pending.eta)} left</span></span><button class="btn btn-ghost btn-sm press" data-apply="${i}">Apply</button></div>`
+    : `<div class="limit-note instant">tightening applies instantly</div>`;
+  return `<div class="limit-row"><div class="lk"><span>${lim.k}</span><b>${lim.v}</b></div>${tensionBar(lim.slack)}${pend}</div>`;
+}
+function renderJitCard(){
+  const host=$('#jitHost'); if(!host) return; const c=COCKPITS[cockpitAgent];
+  if(!c.jit){ host.innerHTML=`<div class="panel"><p class="p-title">Just-in-time permission</p><div class="deadstate" style="padding:var(--s-6)"><h4>Nothing pending</h4><p>The agent is acting within its capability envelope.</p></div></div>`; return; }
+  host.innerHTML=`<div class="panel jit panel-hi">
+    <p class="p-title"><span>Agent paused — asking permission</span><span class="countdown" id="jitCountdown">auto-deny in ${fmtMS(c.jit.auto)}</span></p>
+    <span class="unverified">Unverified · quarantined intent</span>
+    <div class="intent">${c.jit.intent}</div>
+    <div style="margin:var(--s-3) 0"><span class="reason-chip">reason · ${REASON_LABEL[c.jit.reason]}</span></div>
+    <div class="row-btns"><button class="btn btn-primary btn-sm press" data-jit="once">Approve once</button>
+      <button class="btn btn-ghost btn-sm press" data-jit="always">Always allow</button>
+      <button class="btn btn-danger btn-sm press" data-jit="deny">Deny</button></div></div>`;
+}
+function hopTimeline(chain){
+  if(!chain.length) return '<div class="mini-row"><span class="faint">No active delegation</span></div>';
+  return `<div class="hops">`+chain.map((h,i)=>`<div class="hop ${h.st}"><div class="node"><div class="dot"></div><div class="lbl">${h.s}<small>${h.who}</small></div></div></div>${i<chain.length-1?'<div class="bar"></div>':''}`).join('')+`</div>`;
+}
+function cockpitSwitcher(){
+  return `<div class="agent-switch" role="tablist" aria-label="Switch agent">
+    <span class="lbl">Agent</span>
+    ${AGENTS.map(a=>`<button class="sw" role="tab" data-sw="${a.name}" aria-current="${a.name===cockpitAgent}"><span class="d ${a.status}"></span>${a.name}</button>`).join('')}
+  </div>`;
+}
+function renderCockpit(){
+  const a=AGENTS.find(x=>x.name===cockpitAgent); const c=COCKPITS[cockpitAgent];
+  const host=$('#cockpit');
+  if(!a||!c){ host.innerHTML=`<div class="deadstate"><h4>Unknown agent</h4><p>Pick an agent from the Fleet.</p></div>`; return; }
+  if(c.status==='revoked'){
+    host.innerHTML=cockpitSwitcher()+`<div class="cockpit-head"><div class="who"><div class="name">${a.name}</div><div class="addr">${a.addr} · ${a.ens}</div></div><span class="spill revoked">revoked</span></div>
+      <div class="panel"><div class="deadstate error"><svg class="leash-svg cut" viewBox="0 0 80 44"><circle class="leash-clasp" cx="10" cy="22" r="6"/><path class="leash-path" d="M16 22 L36 22"/><path class="leash-path" d="M44 22 L74 22"/><path d="M38 14 l6 16 M42 14 l-6 16" stroke="var(--deny)" stroke-width="1.6"/></svg><h4>Leash cut</h4><p>This agent was revoked on-chain. Re-issue from the Fleet to restore control.</p><a class="btn btn-ghost press" data-back-fleet>Back to Fleet</a></div></div>`;
+    return;
+  }
+  const statusSpill = `<span class="spill ${c.status}" id="statusSpill">${c.status}</span>`;
+  host.innerHTML = cockpitSwitcher() + `
+  <div class="cockpit-head">
+    <div class="who"><div class="name">${a.name}</div><div class="addr">${a.addr} · ${a.ens}</div></div>
+    <div class="statusbar">
+      ${statusSpill}
+      <span class="badge-pill mono" id="sessionBadge">session ${fmtClock(c.session)}</span>
+      <span class="badge-pill mono tnum">${money(c.balance)} 0G in account</span>
+      <span class="badge-pill jade"><svg viewBox="0 0 16 16"><path d="M3 8l3 3 7-7" fill="none" stroke="currentColor" stroke-width="2"/></svg>server-verified</span>
+    </div>
+  </div>
+
+  <div class="panel">
+    <p class="p-title">Agent controls</p>
+    <div class="row-btns">
+      <button class="btn btn-ghost btn-sm press" data-ctl="pauseresume">${c.status==='running'?'Pause agent':'Resume agent'}</button>
+      <button class="btn btn-ghost btn-sm press" data-ctl="rotate">Rotate gateway token</button>
+    </div>
+    <div id="tokenReveal"></div>
+  </div>
+
+  <div class="cockpit-grid">
+    <div>
+      <div class="panel">
+        <p class="p-title"><span>Live reasoning stream</span>
+          <span class="conn connecting" id="conn"><span class="dot"></span><span class="txt">connecting…</span></span></p>
+        <div class="streamfeed" id="streamfeed" aria-live="polite" aria-label="Agent reasoning stream"></div>
+      </div>
+      <div id="jitHost"></div>
+      <div class="panel">
+        <p class="p-title">Capability envelope · what this agent can do on its own</p>
+        <div class="tags-wrap" style="margin-bottom:var(--s-4)">${c.presets.length?c.presets.map(p=>`<span class="tag applied">preset · ${p}</span>`).join(''):'<span class="faint mono" style="font-size:11px">No presets applied</span>'}</div>
+        <div class="al-title" style="margin-bottom:8px">Standing call-rules</div>
+        <div class="mini-list">${c.standing.map(s=>`<div class="mini-row"><span class="lead">${s.t} <small>· ${s.sel}</small></span><span>${s.cap}/call</span></div>`).join('')||'<div class="mini-row"><span class="faint">None</span></div>'}</div>
+        <div class="al-title" style="margin:var(--s-4) 0 8px">Recent one-off decisions</div>
+        <div class="mini-list">${c.decisions.map(d=>`<div class="mini-row"><span class="lead">${d.t}</span><span class="${d.k==='denied'?'v-deny':d.k==='always_allowed'?'v-allow':'v-accent'}">${d.k} · ${d.ts}</span></div>`).join('')||'<div class="mini-row"><span class="faint">None yet</span></div>'}</div>
+      </div>
+    </div>
+    <div>
+      <div class="panel">
+        <p class="p-title">Limits</p>
+        ${c.limits.map(limitRow).join('')}
+      </div>
+      <div class="panel">
+        <p class="p-title"><span>Allowlist · ${c.allowlist.length} payees</span><button class="btn btn-ghost btn-sm press" data-ck-add>+ Add</button></p>
+        <div class="chips-wrap" id="ckAllow">${c.allowlist.map(p=>`<span class="payee-chip">${p}<button aria-label="Remove ${p}">✕</button></span>`).join('')}</div>
+      </div>
+      <div class="panel">
+        <p class="p-title">Guardian</p>
+        ${c.guardian?`<div class="hash" style="margin-bottom:var(--s-3)">guardian <b style="color:var(--ink)">${c.guardian}</b></div>`:'<div class="mono faint" style="font-size:11px;margin-bottom:var(--s-3)">No guardian set</div>'}
+        <div class="row-btns"><button class="btn btn-ghost btn-sm press" data-ck-guard>${c.guardian?'Remove guardian':'Set guardian'}</button></div>
+      </div>
+      <div class="panel">
+        <p class="p-title"><span>Message rules</span><button class="btn btn-ghost btn-sm press" data-ck-rule>+ Rule</button></p>
+        <div class="mini-list" id="ckRules">${c.rules.map((r,i)=>`<div class="mini-row"><span class="lead">${r.m}</span><span class="mono" style="color:var(--accent-ink)">${r.a}<button class="x" data-rmrule="${i}" aria-label="Remove rule">✕</button></span></div>`).join('')||'<div class="mini-row"><span class="faint">No rules</span></div>'}</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <p class="p-title">Direction &amp; status chat</p>
+    <label class="mono" style="font-size:11px;color:var(--ink-faint);display:block;margin-bottom:6px">Tell this agent what to do</label>
+    <textarea class="tbox" id="ckDirect" placeholder="e.g. rebalance to 60/40 ETH/USDC when gas < 12 gwei"></textarea>
+    <div class="readback" id="ckReadback" hidden></div>
+    <label class="mono" style="font-size:11px;color:var(--ink-faint);display:block;margin:var(--s-4) 0 6px">Ask what it's done</label>
+    <div class="row-btns"><input class="tbox" id="ckAsk" style="min-height:auto;flex:1" placeholder="what did you spend on api.exa.ai today?"/><button class="btn btn-ghost btn-sm press" data-ck-ask>Ask</button></div>
+    <div class="readback" id="ckAnswer" hidden></div>
+  </div>
+
+  <div class="panel">
+    <p class="p-title">Delegation chain</p>
+    ${hopTimeline(c.chain)}
+  </div>
+
+  <div class="panel" style="border-color:var(--deny-24)">
+    <p class="p-title" style="color:var(--deny)">Danger zone</p>
+    <button class="btn btn-danger press" data-ck-cut>Cut leash · sever now</button>
+  </div>`;
+  renderJitCard();
+  streamRows=[]; $('#streamfeed').innerHTML='';
+  for(let i=0;i<6;i++){ const [k,m]=SF_POOL[i%SF_POOL.length]; $('#streamfeed').insertAdjacentHTML('beforeend', sfRow(k,m,nowClock())); }
+}
+
+/* cockpit interactions (delegated) */
+$('#cockpit').addEventListener('click', e=>{
+  const sw=e.target.closest('[data-sw]'); if(sw){ if(sw.dataset.sw!==cockpitAgent) setView('cockpit',true,sw.dataset.sw); return; }
+  const c=COCKPITS[cockpitAgent];
+  const back=e.target.closest('[data-back-fleet]'); if(back){ setView('fleet',true); return; }
+  const ctl=e.target.closest('[data-ctl]');
+  if(ctl){
+    if(ctl.dataset.ctl==='pauseresume'){ c.status = c.status==='running'?'paused':'running';
+      $('#statusSpill').className='spill '+c.status; $('#statusSpill').textContent=c.status;
+      ctl.textContent = c.status==='running'?'Pause agent':'Resume agent'; }
+    if(ctl.dataset.ctl==='rotate'){ const tok='lsh_'+Math.random().toString(36).slice(2,10)+Math.random().toString(36).slice(2,10);
+      $('#tokenReveal').innerHTML=`<div class="readback" style="display:flex;align-items:center;justify-content:space-between;gap:10px"><span class="mono" style="color:var(--ink)">${tok}</span><button class="btn btn-ghost btn-sm press" data-copytok="${tok}">Copy</button></div><div class="mono faint" style="font-size:10px;margin-top:6px">One-time token · shown once, store it now.</div>`; }
+    return;
+  }
+  const copy=e.target.closest('[data-copytok]'); if(copy){ navigator.clipboard&&navigator.clipboard.writeText(copy.dataset.copytok); copy.textContent='Copied ✓'; return; }
+  const jit=e.target.closest('[data-jit]'); if(jit){ c.jit=null; renderJitCard(); return; }
+  const apply=e.target.closest('[data-apply]'); if(apply){ const i=+apply.dataset.apply; const lim=c.limits[i];
+    if(lim.pending){ lim.v=lim.pending.to; lim.pending=null; renderCockpit(); } return; }
+  const rmChip=e.target.closest('#ckAllow .payee-chip button'); if(rmChip){ const ch=rmChip.closest('.payee-chip');
+    ch.style.transition='opacity .18s,transform .18s'; ch.style.opacity='0'; ch.style.transform='scale(.85)'; setTimeout(()=>ch.remove(),160);
+    c.allowlist=c.allowlist.filter(p=>p!==ch.textContent.replace('✕','').trim()); return; }
+  const addP=e.target.closest('[data-ck-add]'); if(addP){ const p='api.new-payee.com'; c.allowlist.push(p);
+    const wrap=$('#ckAllow'); const s=document.createElement('span'); s.className='payee-chip'; s.style.opacity='0';
+    s.innerHTML=`${p}<button aria-label="Remove ${p}">✕</button>`; wrap.appendChild(s);
+    requestAnimationFrame(()=>{ s.style.transition='opacity .2s'; s.style.opacity='1'; }); return; }
+  const guard=e.target.closest('[data-ck-guard]'); if(guard){ c.guardian = c.guardian?null:'0xB1c4…9a3f'; renderCockpit(); return; }
+  const addR=e.target.closest('[data-ck-rule]'); if(addR){ c.rules.push({m:'value > $100', a:'require_approval'}); renderCockpit(); return; }
+  const rmR=e.target.closest('[data-rmrule]'); if(rmR){ c.rules.splice(+rmR.dataset.rmrule,1); renderCockpit(); return; }
+  const ask=e.target.closest('[data-ck-ask]'); if(ask){ const ans=$('#ckAnswer'); ans.hidden=false;
+    ans.innerHTML=`<b>Agent:</b> Spent <b>$4.20</b> on api.exa.ai across 1 approved call today. 62% of the daily window remains.`; return; }
+  const cut=e.target.closest('[data-ck-cut]'); if(cut){ const ag=AGENTS.find(x=>x.name===cockpitAgent);
+    c.status='revoked'; if(ag){ ag.status='revoked'; ag.last='REVOKED'; ag.spent=0; ag.allow=0; renderFleet(); renderSummary(); }
+    renderCockpit(); return; }
+});
+$('#cockpit').addEventListener('input', e=>{
+  if(e.target.id==='ckDirect'){ const rb=$('#ckReadback'); const v=e.target.value.trim();
+    if(v){ rb.hidden=false; rb.innerHTML=`<b>Draft directive →</b> ${v} <span class="faint">· will apply within the capability envelope; anything outside it pauses for approval.</span>`; }
+    else rb.hidden=true; }
+});
+
+/* ---------- INBOX ---------- */
+let ALERTS = [
+  {id:1, cls:'decision', kind:'approval_required', agent:'research-agent', intent:'transfer 240.00 USDC → 0x77a3f0…c2 (memo: bridge to Arbitrum)', amt:240.00, to:'0x77…c2', auto:161, read:false},
+  {id:2, cls:'decision', kind:'approval_required', agent:'ops-agent', intent:'scale render fleet ×3 · charge api.render.com', amt:620.00, to:'api.render.com', auto:98, read:false},
+  {id:3, cls:'info', kind:'limit_hit', agent:'ops-agent', intent:'daily budget window 91% consumed', amt:910.00, to:'—', auto:0, read:false},
+  {id:4, cls:'info', kind:'revoked', agent:'scraper-agent', intent:'leash cut by org.leash.eth', amt:0, to:'—', auto:0, read:true},
+  {id:5, cls:'info', kind:'runtime_error', agent:'research-agent', intent:'0G Compute provider timeout · fell back to secondary', amt:0, to:'—', auto:0, read:true},
+  {id:6, cls:'info', kind:'throttle', agent:'ops-agent', intent:'rate-limit hit on api.stripe.com · backing off 30s', amt:0, to:'—', auto:0, read:true},
+];
+function unreadCount(){ return ALERTS.filter(a=>!a.read).length; }
+function syncInboxBadge(){ const n=unreadCount(); const b=$('#inboxBadge');
+  if(b){ b.textContent=n; b.classList.toggle('alert', n>0); } const sub=$('#inboxSub'); if(sub) sub.textContent=n+' unread'; }
+function alertCard(a){
+  const dec=a.cls==='decision';
+  const actions = dec ? `<div class="a-actions"><button class="btn btn-primary btn-sm press" data-al-ok="${a.id}">Approve</button><button class="btn btn-danger btn-sm press" data-al-no="${a.id}">Deny</button></div>`
+    : `<div class="a-actions"><button class="btn btn-ghost btn-sm press" data-al-read="${a.id}">${a.read?'Read':'Mark read'}</button></div>`;
+  return `<div class="alert ${dec?'decision':''} ${a.read?'read':'unread'}" data-id="${a.id}">
+    <span class="kind-chip ${a.kind}">${a.kind.replace(/_/g,' ')}</span>
+    <div class="a-body"><div class="a-head"><span class="a-agent">${a.agent}</span>${dec?'<span class="unverified">Untrusted intent</span>':''}</div>
+      <div class="a-intent">${a.intent}</div>
+      <div class="a-meta">${a.amt?`<span class="tnum">$${money(a.amt)}</span>`:''}${a.to!=='—'?`<span class="mono">→ ${a.to}</span>`:''}${dec&&a.auto?`<span class="countdown" data-al-cd="${a.id}">auto-deny in ${fmtMS(a.auto)}</span>`:''}</div></div>
+    ${actions}</div>`;
+}
+function renderInbox(){
+  const box=$('#inbox');
+  if(!ALERTS.length){ box.innerHTML=`<div class="deadstate"><svg class="leash-svg" viewBox="0 0 80 44"><circle class="leash-clasp" cx="10" cy="22" r="6"/><path class="leash-path" d="M16 22 Q 40 30 74 22"/></svg><h4>All caught up</h4><p>No alerts need your attention. Agents are running within policy.</p></div>`; syncInboxBadge(); return; }
+  box.innerHTML = ALERTS.map(alertCard).join(''); syncInboxBadge();
+}
+$('#inbox').addEventListener('click', e=>{
+  const ok=e.target.closest('[data-al-ok]'), no=e.target.closest('[data-al-no]'), rd=e.target.closest('[data-al-read]');
+  const id = +(ok?.dataset.alOk || no?.dataset.alNo || rd?.dataset.alRead || 0); if(!id) return;
+  const card=$(`.alert[data-id="${id}"]`);
+  if(ok||no){ card.classList.add(ok?'flash-allow':'flash-deny'); const a=ALERTS.find(x=>x.id===id); if(a) a.read=true;
+    setTimeout(()=>{ ALERTS=ALERTS.filter(x=>x.id!==id); renderInbox(); }, reduceMo?0:520); }
+  if(rd){ const a=ALERTS.find(x=>x.id===id); if(a) a.read=true; renderInbox(); }
+});
+$('#markAllRead').addEventListener('click', ()=>{ ALERTS.forEach(a=>a.read=true); renderInbox(); });
+setInterval(()=>{ if($('[data-view="inbox"]').hidden) return;
+  ALERTS.forEach(a=>{ if(a.cls==='decision'&&a.auto>0){ a.auto--; const el=$(`[data-al-cd="${a.id}"]`); if(el) el.textContent='auto-deny in '+fmtMS(a.auto); } });
+}, 1000);
+
+/* ---------- DIGEST ---------- */
+function renderDigest(){
+  const tiles=[['Settled today','$1,284','allow'],['Denied today','7','deny'],['Approvals handled','12','accent'],['Agents active','2 / 3','']];
+  const notable=[
+    ['ops-agent','denied $620 to api.render.com — over daily cap','deny'],
+    ['research-agent','settled $4.20 to api.exa.ai — within envelope','allow'],
+    ['scraper-agent','leash cut by org.leash.eth at 14:22','deny'],
+    ['research-agent','approved_once api.anthropic.com $9.60','accent'],
+  ];
+  $('#digest').innerHTML=`
+    <div class="digest-grid">${tiles.map(t=>`<div class="sum"><div class="k">${t[0]}</div><div class="v ${t[2]}">${t[1]}</div></div>`).join('')}</div>
+    <div class="panel">
+      <p class="p-title"><span>Notable activity · last 24h</span><span class="badge-pill mono">digest hour · 09:00 UTC</span></p>
+      <div class="mini-list">${notable.map(n=>`<div class="mini-row"><span class="lead">${n[0]} <small>· ${n[1]}</small></span><span class="chip chip-${n[2]==='deny'?'deny':n[2]==='allow'?'allow':'pend'}">${n[2]==='deny'?'Deny':n[2]==='allow'?'Allow':'Consent'}</span></div>`).join('')}</div>
+      <div class="row-btns" style="margin-top:var(--s-4)"><button class="btn btn-ghost btn-sm press" data-digest-caught>Mark caught up</button></div>
+    </div>`;
+}
+$('#digest').addEventListener('click', e=>{ if(e.target.closest('[data-digest-caught]')){
+  $('#digest').querySelector('.mini-list').innerHTML='<div class="mini-row"><span class="faint">Caught up — nothing else to review.</span></div>'; } });
+
+/* ---------- JOBS (ACP lifecycle) ---------- */
+const JOB_STEPS=['originated','delivered','evaluating','verdict','awaiting_approval','settled'];
+const JOBS=[
+  {id:'job_7f21', title:'research-agent → data-provider · market report', stage:'awaiting_approval', verdict:'accept', fee:24.00, token:'USDC',
+    poa:{jobSpecHash:'0x9f42…7e3b', requesterSig:'0x1a90…', deliverableRoot:'0xb27e…c4', providerSig:'0x5d02…', evaluatorSig:'0xe8c4…', settlementTx:'0x71c4…af09'}},
+  {id:'job_4c2d', title:'ops-agent → render-provider · GPU batch', stage:'settled', verdict:'accept', fee:88.00, token:'USDC',
+    poa:{jobSpecHash:'0x2ad0…c419', requesterSig:'0x88be…', deliverableRoot:'0x33fe…7a', providerSig:'0x1f77…', evaluatorSig:'0x9c2a…', settlementTx:'0x4b8a…0071'}},
+  {id:'job_a17f', title:'research-agent → eval-agent · summary QA', stage:'rejected', verdict:'reject', fee:6.00, token:'USDC',
+    poa:{jobSpecHash:'0x6e5c…', requesterSig:'0x44b8…', deliverableRoot:'0x77e1…', providerSig:'0x2b09…', evaluatorSig:'0xBADf…', settlementTx:'—'}},
+];
+function stepper(stage){
+  const term = stage==='rejected'||stage==='denied'||stage==='failed';
+  const idx = term ? JOB_STEPS.indexOf('verdict') : JOB_STEPS.indexOf(stage);
+  return `<div class="stepper">`+JOB_STEPS.map((s,i)=>{
+    let st = i<idx?'done' : i===idx?(term?'fail':'active') : '';
+    const lbl = (term && s==='settled') ? stage : s;
+    return `<div class="step ${st}"><div class="sc"><div class="sd"></div><div class="sl">${lbl.replace(/_/g,' ')}</div></div></div>${i<JOB_STEPS.length-1?'<div class="sbar '+(i<idx?'done':'')+'"></div>':''}`;
+  }).join('')+`</div>`;
+}
+function poaBlock(j){
+  const link=h=>h==='—'?'<span class="faint">—</span>':`<a href="${h}" target="_blank" rel="noopener">${h} ↗</a>`;
+  const p=j.poa;
+  return `<div class="poa">
+    <span class="pk">jobSpecHash</span><span class="pv mono">${p.jobSpecHash}</span>
+    <span class="pk">requesterSig</span><span class="pv mono">${p.requesterSig}</span>
+    <span class="pk">deliverableRoot</span><span class="pv mono">${p.deliverableRoot}</span>
+    <span class="pk">providerSig</span><span class="pv mono">${p.providerSig}</span>
+    <span class="pk">verdict</span><span class="pv"><span class="chip chip-${j.verdict==='accept'?'allow':'deny'}">${j.verdict}</span></span>
+    <span class="pk">evaluatorSig</span><span class="pv mono">${p.evaluatorSig}</span>
+    <span class="pk">settlementTx</span><span class="pv">${link(p.settlementTx)}</span></div>`;
+}
+function jobBlock(j){
+  const awaiting = j.stage==='awaiting_approval';
+  return `<div class="panel" data-job="${j.id}">
+    <p class="p-title"><span>${j.title}</span><span class="badge-pill mono tnum">${money(j.fee)} ${j.token}</span></p>
+    ${stepper(j.stage)}
+    ${poaBlock(j)}
+    ${awaiting?`<div class="row-btns" style="margin-top:var(--s-4)"><button class="btn btn-primary btn-sm press" data-job-ok="${j.id}">Approve settlement</button><button class="btn btn-danger btn-sm press" data-job-no="${j.id}">Deny</button></div>`:''}</div>`;
+}
+function renderJobs(){ $('#jobs').innerHTML = JOBS.map(jobBlock).join(''); }
+$('#jobs').addEventListener('click', e=>{
+  const ok=e.target.closest('[data-job-ok]'), no=e.target.closest('[data-job-no]');
+  if(!ok&&!no) return; const id=(ok||no).dataset.jobOk||(ok||no).dataset.jobNo;
+  const j=JOBS.find(x=>x.id===id); if(!j) return; j.stage = ok?'settled':'denied'; renderJobs();
+});
+
+/* ---------- LINKS (agent-to-agent) ---------- */
+const LINK_STEPS=['pending_approval','accepted','completed'];
+let LINKS=[
+  {id:'lk1', a:'research-agent', b:'ops-agent', mode:'supervised', status:'active', count:14, stage:'completed', fail:false},
+  {id:'lk2', a:'ops-agent', b:'scraper-agent', mode:'auto', status:'paused', count:3, stage:'accepted', fail:false},
+  {id:'lk3', a:'research-agent', b:'data-provider', mode:'auto', status:'active', count:41, stage:'failed', fail:true},
+];
+function linkStepper(stage,fail){
+  const idx = fail ? LINK_STEPS.indexOf('accepted')+1 : LINK_STEPS.indexOf(stage);
+  return `<div class="stepper">`+LINK_STEPS.map((s,i)=>{
+    let st=i<idx?'done':i===idx?'active':''; if(fail&&i===LINK_STEPS.length-1){ st='fail'; }
+    const lbl = (fail&&s==='completed')?'failed':s;
+    return `<div class="step ${st}"><div class="sc"><div class="sd"></div><div class="sl">${lbl.replace(/_/g,' ')}</div></div></div>${i<LINK_STEPS.length-1?'<div class="sbar '+(i<idx?'done':'')+'"></div>':''}`;
+  }).join('')+`</div>`;
+}
+function linkBlock(l){
+  return `<div class="panel" data-link="${l.id}">
+    <p class="p-title"><span style="color:var(--ink);font-size:.95rem;text-transform:none;letter-spacing:0;font-family:var(--font-display);font-weight:500">${l.a} ↔ ${l.b}</span>
+      <span style="display:flex;gap:8px;align-items:center"><span class="mode-chip ${l.mode}" data-link-mode="${l.id}">${l.mode}</span><span class="spill ${l.status==='active'?'running':'paused'}">${l.status}</span></span></p>
+    <div class="hash">${l.count} delegations</div>
+    ${linkStepper(l.stage,l.fail)}
+    <div class="row-btns"><button class="btn btn-danger btn-sm press" data-link-rev="${l.id}">Revoke pair</button></div></div>`;
+}
+function renderLinks(){ if(!LINKS.length){ $('#links').innerHTML=`<div class="deadstate"><h4>No links</h4><p>No agent-to-agent delegation pairs are active.</p></div>`; return; } $('#links').innerHTML = LINKS.map(linkBlock).join(''); }
+$('#links').addEventListener('click', e=>{
+  const md=e.target.closest('[data-link-mode]'); if(md){ const l=LINKS.find(x=>x.id===md.dataset.linkMode);
+    l.mode = l.mode==='auto'?'supervised':'auto'; renderLinks(); return; }
+  const rv=e.target.closest('[data-link-rev]'); if(rv){ LINKS=LINKS.filter(x=>x.id!==rv.dataset.linkRev); renderLinks(); }
+});
+
+/* ---------- view switching (URL-persisted ?view= &agent=) ---------- */
+const TITLES = {fleet:['Fleet','3 agents on a leash'], verdicts:['Verdicts','live rail'],
+  policies:['Policies','caps & allowlist'], audit:['Audit','hash-chained trace batches'],
+  cockpit:['Cockpit','per-agent control surface'], inbox:['Inbox','attention queue'],
+  digest:['Digest','daily rollup'], jobs:['Jobs','agent commerce lifecycle'], links:['Links','delegation pairs']};
+function setView(v, push, agent){
+  if(!TITLES[v]) v='fleet';
+  if(v==='cockpit'){ cockpitAgent = agent || cockpitAgent || AGENTS.find(a=>a.status!=='revoked').name; }
+  $$('.view').forEach(s=> s.hidden = s.dataset.view!==v);
+  $$('.navitem').forEach(n=> n.setAttribute('aria-current', n.dataset.view===v));
+  const sub = v==='cockpit' ? cockpitAgent : TITLES[v][1];
+  $('#viewTitle').textContent = TITLES[v][0]; $('#viewSub').textContent = sub;
+  document.title = 'LEASH · '+TITLES[v][0];
+  if(v==='cockpit') renderCockpit();
+  if(v==='inbox') renderInbox();
+  if(v==='digest') renderDigest();
+  if(v==='jobs') renderJobs();
+  if(v==='links') renderLinks();
+  if (push){ const u=new URL(location); u.searchParams.set('view',v);
+    if(v==='cockpit') u.searchParams.set('agent',cockpitAgent); else u.searchParams.delete('agent');
+    history.pushState({v,agent:cockpitAgent},'',u); }
+  startStream(v==='cockpit');
+}
+$$('.navitem').forEach(n=> n.addEventListener('click',()=> setView(n.dataset.view,true)));
+addEventListener('popstate', e=>{ const u=new URL(location);
+  setView((e.state&&e.state.v)|| u.searchParams.get('view') || 'fleet', false, u.searchParams.get('agent')); });
+{ const u=new URL(location); setView(u.searchParams.get('view')||'fleet', false, u.searchParams.get('agent')); }
+
+/* ---------- ⌘K palette (real keyboard listbox, filterable) ---------- */
+const scrim=$('#scrim'), pal=$('#palette'), palInput=$('#palInput'), optsBox=$('#opts');
+const COMMANDS = [
+  {g:'Go to', t:'Fleet', k:'', act:()=>setView('fleet',true), ic:'●'},
+  {g:'Go to', t:'Inbox', k:'', act:()=>setView('inbox',true), ic:'✉'},
+  {g:'Go to', t:'Digest', k:'', act:()=>setView('digest',true), ic:'☰'},
+  {g:'Go to', t:'Cockpit · research-agent', k:'', act:()=>setView('cockpit',true,'research-agent'), ic:'◎'},
+  {g:'Go to', t:'Jobs', k:'', act:()=>setView('jobs',true), ic:'▦'},
+  {g:'Go to', t:'Links', k:'', act:()=>setView('links',true), ic:'∞'},
+  {g:'Go to', t:'Verdicts', k:'', act:()=>setView('verdicts',true), ic:'▤'},
+  {g:'Go to', t:'Policies', k:'', act:()=>setView('policies',true), ic:'+'},
+  {g:'Go to', t:'Audit batches', k:'', act:()=>setView('audit',true), ic:'◷'},
+  {g:'Action', t:'Open cockpit · ops-agent', k:'↵', act:()=>setView('cockpit',true,'ops-agent'), ic:'◎'},
+  {g:'Action', t:'Cut leash · ops-agent', k:'', act:()=>{setView('fleet',true);}, ic:'✕'},
+  {g:'Action', t:'Edit daily cap · research-agent', k:'', act:()=>setView('policies',true), ic:'≣'},
+  {g:'Action', t:'Add payee to allowlist', k:'', act:()=>setView('policies',true), ic:'+'},
+];
+let sel=0, filtered=COMMANDS.slice();
+function renderOpts(){
+  const q = palInput.value.trim().toLowerCase();
+  filtered = COMMANDS.filter(c=> !q || c.t.toLowerCase().includes(q));
+  if(!filtered.length){ optsBox.innerHTML = `<div class="empty">No commands match “${palInput.value}”.</div>`; return; }
+  let lastG=''; let html='';
+  filtered.forEach((c,i)=>{
+    if(c.g!==lastG){ html+=`<div class="grp">${c.g}</div>`; lastG=c.g; }
+    html+=`<button class="opt" role="option" id="opt${i}" aria-selected="${i===sel}"><span class="ic">${c.ic}</span><span>${c.t}</span>${c.k?`<span class="kbd">${c.k}</span>`:''}</button>`;
+  });
+  optsBox.innerHTML = html;
+  optsBox.querySelectorAll('.opt').forEach((o,i)=>{ o.onmousemove=()=>{sel=i;paint();}; o.onclick=()=>{filtered[i].act();closePal();}; });
+}
+function paint(){ optsBox.querySelectorAll('.opt').forEach((o,i)=>o.setAttribute('aria-selected',i===sel));
+  const cur=optsBox.querySelector(`#opt${sel}`); if(cur){ palInput.setAttribute('aria-activedescendant','opt'+sel); cur.scrollIntoView({block:'nearest'}); } }
+function bgInert(on){ document.querySelector('aside').inert=on; document.querySelector('.main').inert=on; }
+function openPal(){ scrim.classList.add('open'); pal.style.display='block'; palInput.value=''; sel=0; renderOpts(); bgInert(true); palInput.focus(); }
+function closePal(){ scrim.classList.remove('open'); pal.style.display='none'; bgInert(false); }
+$('#cmdk').onclick=openPal; scrim.onclick=closePal;
+palInput.addEventListener('input',()=>{ sel=0; renderOpts(); });
+addEventListener('keydown',e=>{
+  if((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==='k'){ e.preventDefault(); openPal(); return; }
+  if(pal.style.display!=='block') return;
+  if(e.key==='Escape'){ closePal(); $('#cmdk').focus(); }
+  if(e.key==='ArrowDown'){ e.preventDefault(); sel=(sel+1)%filtered.length; paint(); }
+  if(e.key==='ArrowUp'){ e.preventDefault(); sel=(sel-1+filtered.length)%filtered.length; paint(); }
+  if(e.key==='Enter'){ e.preventDefault(); if(filtered[sel]){ filtered[sel].act(); closePal(); } }
+});
+
+/* fleet action buttons: edit -> policies; cut -> revoke; card body -> cockpit (stopPropagation guards buttons) */
+fleet.addEventListener('click', e=>{
+  const b=e.target.closest('[data-cmd]');
+  if(b){ e.stopPropagation();
+    if(b.dataset.cmd==='edit'){ setView('policies',true); return; }
+    if(b.dataset.cmd==='cut'){
+      const a=AGENTS.find(x=>x.name===b.dataset.agent); if(!a) return;
+      a.status='revoked'; a.last='REVOKED'; a.spent=0; a.allow=0;
+      renderFleet(); renderSummary();
+      $('#policies').innerHTML = AGENTS.map(policyBlock).join('');
+    }
+    return;
+  }
+  const card=e.target.closest('[data-open]');
+  if(card) setView('cockpit', true, card.dataset.open);
+});
+fleet.addEventListener('keydown', e=>{
+  if((e.key==='Enter'||e.key===' ') && e.target.matches('[data-open]')){ e.preventDefault(); setView('cockpit',true,e.target.dataset.open); }
+});
+
+/* allowlist: remove a payee (flash then splice) + add payee (demo-local) */
+$('#policies').addEventListener('click', e=>{
+  const rm=e.target.closest('.payee-chip button');
+  if(rm){ const chip=rm.closest('.payee-chip'); chip.style.transition='opacity .18s, transform .18s';
+    chip.style.opacity='0'; chip.style.transform='scale(.85)'; setTimeout(()=>chip.remove(),160); return; }
+  const add=e.target.closest('.al-head .btn');
+  if(add){ const wrap=add.closest('.allowlist').querySelector('.chips-wrap');
+    const c=document.createElement('span'); c.className='payee-chip'; c.style.opacity='0';
+    c.innerHTML='api.new-payee.com<button aria-label="Remove api.new-payee.com from allowlist">✕</button>';
+    wrap.appendChild(c); requestAnimationFrame(()=>{ c.style.transition='opacity .2s'; c.style.opacity='1'; }); }
+});
+</script>
+</body>
+</html>

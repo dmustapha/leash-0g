@@ -77,6 +77,15 @@ export interface RuntimeChain {
    * rules are returned; the account is the source of truth (live-chain-read).
    */
   readCallGrantState(candidates: GrantStateCandidates): Promise<GrantState>;
+  /**
+   * SE-2: live-read the on-chain one-shot authorization ETA for a callHash
+   * (`oneShotAuthEta[callHash]`; 0 = none/consumed/expired-and-cleared). The
+   * one-shot-consume path re-checks this at submit time (P3C-6 no-doomed-submit):
+   * a revoked/expired/already-consumed one-shot returns 0 → stand down, never a
+   * doomed submit. Optional so coordination-free test fakes need not implement it
+   * (the on-chain wall is the ultimate guard regardless); prod SessionChain does.
+   */
+  readOneShotAuth?(accountAddr: string, callHash: string): Promise<bigint>;
 }
 
 export class SessionChain implements RuntimeChain {
@@ -220,6 +229,16 @@ export class SessionChain implements RuntimeChain {
     // recipients to self (call-builder refuses allowlist-mode), so an empty set
     // is correct + fail-safe (an allowlist-mode recipient classifies novel → JIT).
     return { rules, budgets, allowlist: new Set<string>() };
+  }
+
+  async readOneShotAuth(accountAddr: string, callHash: string): Promise<bigint> {
+    const eta = (await this.publicClient.readContract({
+      address: accountAddr as Hex,
+      abi: leashAccountV4Abi,
+      functionName: 'oneShotAuthEta',
+      args: [callHash as Hex],
+    }));
+    return BigInt(eta);
   }
 
   async executeCall(input: {

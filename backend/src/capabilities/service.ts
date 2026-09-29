@@ -142,6 +142,12 @@ export async function raiseCapabilityRequest(
     decoded,
     novelty,
     callHash,
+    // SE-2: persist the exact refused bytes so a later approve-once can auto-retry
+    // + consume the on-chain one-shot. These are server-authored (buildGovernedCall,
+    // never model text) and bound by callHash — the owner authorizes THAT hash.
+    callTarget: d.target,
+    callValue: d.value.toString(),
+    callData: d.data,
   });
   // Repair-forward (W2, code-review 2026-09-28): a reused row that already has
   // its approval bound is a true no-op. But a reused row with NO approval bound
