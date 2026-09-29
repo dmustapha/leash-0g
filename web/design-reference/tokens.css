@@ -1,0 +1,500 @@
+/* ============================================================================
+   LEASH — DESIGN TOKENS  (Stage-3 REBUILD — chit-grade richness layer)
+   Warm-editorial-dark. 6 base roles · single amber accent · alpha-over-role.
+   Authored in OKLCH (perceptual — CORE-COLOR-3). This file IS the Tailwind v4
+   @theme output; src/globals.css mirrors it 1:1.
+
+   REBUILD adds (kept the parity floor verbatim, extended it as motion grew):
+     · atmosphere    — film grain (feTurbulence), drifting glow planes, twinkle
+     · glass         — frosted nav/card/modal (backdrop-blur + inset top-highlight)
+     · living leash  — resting sway, signal pulse on offset-path, seam shimmer,
+                       scroll/hover tauten, draw-in, sever recoil
+     · micro-interaction primitives — lift+glow, press, shine, sibling-dim
+     · number-flow, scroll-progress plumbing
+   Every new decorative animation is gated behind no-preference AND killed under
+   reduce (two-sided CORE-MOTION-1, still hard-verbatim at the foot of the file).
+   ============================================================================ */
+:root {
+  /* --- BASE ROLES (6) — Signal Grid: neutral near-black, electric-lime sig -- */
+  --bg-base:      #0a0a0b;                  /* neutral near-black world      */
+  --surface-1:    #141416;                  /* bg-step ladder (elevation A)  */
+  --surface-2:    #1c1c1f;
+  --surface-3:    #232327;
+
+  --ink:          #f4f4ef;                  /* text-primary (cool off-white) */
+  --ink-dim:      #a2a29c;                  /* text-secondary                */
+  --ink-faint:    #8b8b84;                  /* text-muted                    */
+
+  --accent:       #c6f24d;                  /* the leash — electric-lime sig */
+  --accent-hi:    #d6ff6a;
+  --accent-ink:   var(--accent);            /* accent-as-TEXT — same as fill in dark; deepens in light */
+  --ember:        #7bd85a;                  /* lime-green bloom (glow-plane only, NOT a text/ui role) */
+
+  /* semantic signal family (counts as ONE base role; verdict-only, never chrome) */
+  --allow:        #4fd08a;                  /* jade  — ALLOW / settled       */
+  --deny:         #ff5d6c;                  /* coral — DENY / REVOKED        */
+  /* PENDING/IDLE reuses --accent (no new hue) */
+
+  /* --- ALPHA-OVER-ROLE LADDERS (recipe 1) ------------------------------- */
+  --ink-04:  color-mix(in oklab, var(--ink) 4%,  transparent);
+  --ink-06:  color-mix(in oklab, var(--ink) 6%,  transparent);
+  --ink-08:  color-mix(in oklab, var(--ink) 8%,  transparent);
+  --ink-10:  color-mix(in oklab, var(--ink) 10%, transparent);
+  --ink-12:  color-mix(in oklab, var(--ink) 12%, transparent);
+  --ink-16:  color-mix(in oklab, var(--ink) 16%, transparent);
+  --ink-24:  color-mix(in oklab, var(--ink) 24%, transparent);
+  --ink-40:  color-mix(in oklab, var(--ink) 40%, transparent);
+  --accent-08: color-mix(in oklab, var(--accent) 8%,  transparent);
+  --accent-12: color-mix(in oklab, var(--accent) 12%, transparent);
+  --accent-16: color-mix(in oklab, var(--accent) 16%, transparent);
+  --accent-24: color-mix(in oklab, var(--accent) 24%, transparent);
+  --accent-40: color-mix(in oklab, var(--accent) 40%, transparent);
+  --accent-64: color-mix(in oklab, var(--accent) 64%, transparent);
+  --ember-16:  color-mix(in oklab, var(--ember) 16%, transparent);
+  --ember-24:  color-mix(in oklab, var(--ember) 24%, transparent);
+  --allow-14:  color-mix(in oklab, var(--allow) 14%, transparent);
+  --allow-24:  color-mix(in oklab, var(--allow) 24%, transparent);
+  --allow-40:  color-mix(in oklab, var(--allow) 40%, transparent);
+  --deny-14:   color-mix(in oklab, var(--deny)  14%, transparent);
+  --deny-24:   color-mix(in oklab, var(--deny)  24%, transparent);
+  --deny-40:   color-mix(in oklab, var(--deny)  40%, transparent);
+
+  /* semantic aliases (primitive -> semantic — CORE-TOKENS-1) */
+  --border:        var(--ink-08);
+  --border-strong: var(--ink-16);
+  --hover-fill:    var(--ink-06);
+  --focus-ring:    var(--accent);
+
+  /* --- GLASS (recipe: linear frosted nav + arkham modal) ---------------- */
+  /* frosted translucent surface = bg-base @ alpha + backdrop-blur + inset top-highlight + hairline */
+  --glass-blur:      20px;
+  --glass-bg:        color-mix(in oklab, var(--bg-base) 55%, transparent);
+  --glass-bg-strong: color-mix(in oklab, var(--surface-1) 72%, transparent);
+  --glass-hi:        inset 0 1px 0 var(--ink-10);        /* top rim highlight (figma bevel)   */
+  --glass-edge:      1px solid var(--ink-10);
+
+  /* --- SPACING (4px base grid — CORE-TOKENS-2) -------------------------- */
+  --s-1: 4px;  --s-2: 8px;  --s-3: 12px; --s-4: 16px; --s-5: 24px;
+  --s-6: 32px; --s-7: 48px; --s-8: 64px; --s-9: 96px; --s-10: 128px;
+
+  /* --- RADII ------------------------------------------------------------ */
+  --r-sm: 6px; --r-md: 10px; --r-lg: 16px; --r-xl: 22px; --r-2xl: 28px; --r-full: 999px;
+
+  /* --- TYPE (fluid modular scale — CORE-TYPE-1) ------------------------- */
+  --font-display: "Clash Display", ui-sans-serif, system-ui, sans-serif;
+  --font-sans:    "Manrope", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono:    "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* ink-on-lime — buttons/chips sitting on the electric accent */
+  --on-accent:    #0a0a0b;
+
+  --t-display: clamp(3rem, 1.6rem + 6vw, 6.5rem);       /* bigger hero — size carries hierarchy */
+  --t-h1:      clamp(2rem, 1.30rem + 2.8vw, 3.4rem);
+  --t-h2:      clamp(1.4rem, 1.05rem + 1.4vw, 2rem);
+  --t-body:    1rem;
+  --t-small:   0.8125rem;
+  --t-eyebrow: 0.6875rem;
+  --t-stat:    clamp(2.4rem, 1.4rem + 3.4vw, 4.2rem);   /* number-flow metrics as hero object   */
+  --t-data:    0.8125rem;
+
+  --tr-display: -0.034em; --tr-h1: -0.024em; --tr-h2: -0.016em;
+  --tr-body: 0; --tr-eyebrow: 0.24em;
+
+  /* --- ELEVATION (doctrine A: bg-step + hairline; drops overlay-only) --- */
+  --shadow-none: none;
+  --shadow-overlay: 0 24px 60px -18px rgba(0,0,0,0.66),
+                    0 4px 14px  rgba(0,0,0,0.5);
+  --glow-accent: 0 0 0 1px var(--accent-40),
+                 0 18px 70px -20px var(--accent-24);
+  --glow-accent-hi: 0 0 0 1px var(--accent-64),
+                    0 22px 90px -18px var(--accent-40);
+
+  /* --- MOTION (named easing set — recipe 15, extended) ------------------ */
+  --ease-out-cubic: cubic-bezier(.33, 1, .68, 1);
+  --ease-out-expo:  cubic-bezier(.16, 1, .30, 1);
+  --ease-out-quart: cubic-bezier(.22, 1, .36, 1);   /* chit/jupiter reveal ease  */
+  --ease-in-out:    cubic-bezier(.65, 0, .35, 1);
+  --ease-in-out-quad: cubic-bezier(.455,.03,.515,.955);
+  --ease-spring:    cubic-bezier(.34, 1.36, .64, 1);
+  --ease-spring-soft: cubic-bezier(.34, 1.18, .64, 1);
+  --t-fast: .12s; --t-base: .24s; --t-mid: .4s; --t-slow: .6s; --t-draw: 1.6s;
+
+  /* scroll-progress plumbing (set by JS 0..1) */
+  --scroll: 0;
+}
+
+/* ============================================================================
+   LIGHT THEME — same Signal Grid identity, inverted world.
+   Only the 6 base roles + accent/verdict hues are remapped; every alpha-over-role
+   ladder (borders, hovers, hairlines, chip fills) auto-adapts because they are
+   color-mix(...) over --ink / --accent, which flip here. Bright neons are a
+   dark-mode trait, so accent + verdicts DEEPEN just enough to read on white while
+   staying unmistakably lime / jade / coral.
+   ============================================================================ */
+:root[data-theme="light"] {
+  --bg-base:      #eceae4;                  /* warm paper world             */
+  --surface-1:    #f5f4ef;                  /* elevation ladder (lighter up) */
+  --surface-2:    #fbfaf6;
+  --surface-3:    #ffffff;
+
+  --ink:          #1a1a17;                  /* near-black text on paper      */
+  --ink-dim:      #56564f;
+  --ink-faint:    #86867c;
+
+  --accent:       #aad400;                  /* vivid lime FILL (buttons/strokes/glow) */
+  --accent-hi:    #bce800;
+  --accent-ink:   #5c7500;                  /* deep lime for accent TEXT (eyebrow/links) */
+  --ember:        #c3e05a;
+  --allow:        #1f9d5b;                  /* deeper jade — reads on white  */
+  --deny:         #e23a4c;                  /* deeper coral                  */
+
+  --on-accent:    #16210a;                  /* dark ink on the lime fill     */
+
+  /* elevation: on paper, depth reads as soft shadow, not glow */
+  --shadow-overlay: 0 24px 60px -18px rgba(40,40,30,0.20), 0 4px 14px rgba(40,40,30,0.12);
+  --glow-accent:    0 0 0 1px var(--accent-40), 0 12px 40px -16px color-mix(in oklab, var(--accent) 40%, transparent);
+  --glass-bg:        color-mix(in oklab, #ffffff 62%, transparent);
+  --glass-bg-strong: color-mix(in oklab, #ffffff 78%, transparent);
+  color-scheme: light;
+}
+
+/* light-theme atmosphere — the marketing world's grain/glow/vignette are tuned for
+   a dark canvas (screen blend, dark vignette). On paper they must invert to multiply
+   + a soft light vignette so the colored light reads without dirtying the page. */
+:root[data-theme="light"] .grain { opacity: .05; mix-blend-mode: multiply; }
+:root[data-theme="light"] .glow-plane { mix-blend-mode: multiply; opacity: .55; }
+:root[data-theme="light"] .brand-bloom { mix-blend-mode: multiply; }
+:root[data-theme="light"] .vignette {
+  background: radial-gradient(130% 100% at 50% 28%, transparent 58%, color-mix(in oklab, var(--ink) 8%, transparent) 100%); }
+:root[data-theme="light"] .twinkle circle { opacity: .10; }
+
+/* ==== RESET / BASE ========================================================= */
+*, *::before, *::after { box-sizing: border-box; }
+html { -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; scroll-behavior: smooth; }
+body {
+  margin: 0; background: var(--bg-base); color: var(--ink);
+  font-family: var(--font-sans); font-size: var(--t-body); line-height: 1.6;
+  letter-spacing: var(--tr-body);
+}
+::selection { background: var(--accent-24); color: var(--ink); }
+
+/* mono-as-instrument (recipe 4): every numeric/eyebrow/readout/code */
+.mono, .eyebrow, .stat, .data, code, [data-numeric] {
+  font-family: var(--font-mono); font-variant-numeric: tabular-nums lining-nums;
+}
+.eyebrow {
+  font-size: var(--t-eyebrow); text-transform: uppercase;
+  letter-spacing: var(--tr-eyebrow); color: var(--accent-ink); font-weight: 500;
+}
+
+/* ==== SHARED PRIMITIVES ==================================================== */
+.h-display { font-family: var(--font-display); font-weight: 500;
+  font-size: var(--t-display); letter-spacing: var(--tr-display); line-height: 0.96; }
+.h1 { font-family: var(--font-display); font-weight: 500;
+  font-size: var(--t-h1); letter-spacing: var(--tr-h1); line-height: 1.05; }
+.h2 { font-family: var(--font-display); font-weight: 500;
+  font-size: var(--t-h2); letter-spacing: var(--tr-h2); line-height: 1.15; }
+.dim  { color: var(--ink-dim); }
+.faint{ color: var(--ink-faint); }
+/* two-tone headline: the loaded word RECESSES to grey (chit/morrow/ramp) */
+.recess { color: var(--ink-faint); }
+.amber  { color: var(--accent-ink); }
+
+/* buttons — full state layer (CORE-STATE-1) + shine + press */
+.btn {
+  font-family: var(--font-sans); font-size: var(--t-small); font-weight: 550;
+  padding: 11px 20px; border-radius: var(--r-md); border: 1px solid transparent;
+  cursor: pointer; position: relative; overflow: hidden;
+  transition: background var(--t-fast) var(--ease-out-cubic),
+    border-color var(--t-fast) var(--ease-out-cubic),
+    transform var(--t-fast) var(--ease-out-cubic),
+    box-shadow var(--t-base) var(--ease-out-cubic), color var(--t-fast);
+  display: inline-flex; align-items: center; gap: 8px; text-decoration: none;
+}
+.btn-primary { background: var(--accent); color: var(--on-accent); font-weight: 650; }
+.btn-primary:hover  { background: var(--accent-hi); box-shadow: var(--glow-accent); }
+.btn-primary:active { transform: translateY(1px); }
+.btn-ghost { background: transparent; color: var(--ink); border-color: var(--border-strong); }
+.btn-ghost:hover  { background: var(--hover-fill); border-color: var(--ink-24); }
+.btn-ghost:active { transform: translateY(1px); }
+.btn:disabled { opacity: .4; cursor: not-allowed; }
+.btn-danger { background: transparent; color: var(--deny); border-color: var(--deny-24); }
+.btn-danger:hover { background: var(--deny-14); }
+/* button shine sweep (jupiter _shine) — only when motion allowed, on hover */
+.btn .shine { position:absolute; inset:0; pointer-events:none;
+  background: linear-gradient(100deg, transparent 30%, var(--ink-24) 50%, transparent 70%);
+  transform: translateX(-160%); }
+
+/* the ONE keyboard-only focus ring — 2px, >=3:1 (CORE-STATE-1 / WCAG 2.2) */
+:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-radius: 4px; }
+:focus:not(:focus-visible) { outline: none; }
+
+/* verdict chips — color + shape encode meaning (recipe 16) */
+.chip { font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+  letter-spacing: .04em; padding: 3px 9px; border-radius: var(--r-sm);
+  display: inline-flex; align-items: center; gap: 6px; text-transform: uppercase; white-space: nowrap; }
+.chip::before { content: ""; width: 6px; height: 6px; flex: none; }
+.chip-allow { color: var(--allow); background: var(--allow-14); border: 1px solid var(--allow-24); }
+.chip-allow::before { border-radius: var(--r-full); background: var(--allow); }      /* dot */
+.chip-deny  { color: var(--deny);  background: var(--deny-14);  border: 1px solid var(--deny-24); }
+.chip-deny::before  { background: var(--deny); }                                     /* square */
+.chip-pend  { color: var(--accent-ink); background: var(--accent-12); border: 1px solid var(--accent-24); }
+.chip-pend::before  { border-radius: var(--r-full); background: transparent; border: 1.5px solid var(--accent); } /* ring */
+
+/* glass surface primitive (nav / cards / device / modal) */
+.glass {
+  background: var(--glass-bg-strong);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.2);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.2);
+  border: var(--glass-edge);
+  box-shadow: var(--glass-hi);
+}
+/* layered glass depth — inner film grain so frosted panels read as real glass, not flat */
+.glass-grain { position: relative; }
+.glass-grain::before { content:""; position:absolute; inset:0; pointer-events:none; border-radius:inherit; z-index:0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
+  background-size: 120px 120px; opacity: .05; mix-blend-mode: overlay; }
+.glass-grain > * { position: relative; z-index: 1; }
+
+/* scroll-progress bar (wires the --scroll token) */
+.scroll-progress { position: fixed; top: 0; left: 0; height: 2px; z-index: 40; pointer-events: none;
+  width: 100%; transform: scaleX(var(--scroll)); transform-origin: left;
+  background: linear-gradient(90deg, var(--accent), var(--accent-hi)); opacity: .8; }
+
+/* ==== ATMOSPHERE (marketing only — MKT-1/M3) ============================== */
+/* film grain — feTurbulence baked into an inline SVG data-URI (linear technique) */
+.grain { position: fixed; inset: 0; z-index: 0; pointer-events: none; opacity: .16;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 160px 160px; }
+/* signature directional bloom — the leash-brand lime light source, top-right (matches live site) */
+.brand-bloom { position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    radial-gradient(1100px 620px at 88% -10%, var(--accent-16), transparent 58%),
+    radial-gradient(760px 520px at 6% 8%, var(--accent-08), transparent 60%);
+  mix-blend-mode: screen; }
+/* edge vignette — pulls focus to center, gives the flat canvas real depth */
+.vignette { position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background: radial-gradient(130% 100% at 50% 30%, transparent 52%, rgba(0,0,0,0.55) 100%); }
+/* blueprint grid — 3.5% paper (chit 72px) */
+.bg-grid { position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background-image:
+    linear-gradient(var(--ink-04) 1px, transparent 1px),
+    linear-gradient(90deg, var(--ink-04) 1px, transparent 1px);
+  background-size: 72px 72px;
+  mask-image: linear-gradient(180deg, #000 0%, color-mix(in oklab,#000 55%,transparent) 55%, color-mix(in oklab,#000 35%,transparent) 100%);
+  -webkit-mask-image: linear-gradient(180deg, #000 0%, color-mix(in oklab,#000 55%,transparent) 55%, color-mix(in oklab,#000 35%,transparent) 100%); }
+/* drifting COLORED glow planes — 3 layers, different hue/speed, screen blend (ramp) */
+.glow-field { position: fixed; inset: -20%; z-index: 0; pointer-events: none; overflow: hidden; }
+.glow-plane { position: absolute; border-radius: 50%; filter: blur(60px); mix-blend-mode: screen; will-change: transform, opacity; }
+.plane-amber { top: -14%; left: 46%; width: 60vw; height: 60vw; transform: translateX(-50%);
+  background: radial-gradient(closest-side, var(--accent-24) 0%, transparent 70%); }
+.plane-ember { top: 24%; left: 8%; width: 46vw; height: 46vw;
+  background: radial-gradient(closest-side, var(--ember-24) 0%, transparent 72%); }
+.plane-cool  { top: 52%; left: 78%; width: 42vw; height: 42vw; transform: translateX(-50%);
+  background: radial-gradient(closest-side, color-mix(in oklab, var(--allow) 14%, transparent) 0%, transparent 72%); }
+/* twinkling dot field — SVG dots injected in HTML; each gets --d delay (linear 75-dot) */
+.twinkle { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
+.twinkle circle { fill: var(--ink); opacity: .16; }
+
+/* ==== SIGNATURE: THE LEASH LINE (CORE-COHERENCE-1) ======================== */
+.leash-svg .leash-path {
+  fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round;
+  transition: d var(--t-slow) var(--ease-out-cubic), stroke var(--t-base) var(--ease-out-cubic); }
+.leash-svg .leash-clasp { fill: none; stroke: var(--accent); stroke-width: 2; }
+.leash-svg.taut  .leash-path { stroke: var(--accent-hi); }
+.leash-svg.cut   .leash-path { stroke: var(--deny); stroke-dasharray: 3 5; }
+/* gradient seam shimmer overlay path (rides the same d, animated dash) */
+.leash-svg .leash-shimmer { fill: none; stroke: url(#leashGrad); stroke-width: 2.4;
+  stroke-linecap: round; opacity: .9; }
+/* the signal pulse dot that rides the catenary via offset-path (Dami's living leash) */
+.signal-pulse { fill: var(--allow); r: 4;
+  filter: drop-shadow(0 0 5px var(--allow)); }
+.signal-pulse.deny { fill: var(--deny); filter: drop-shadow(0 0 5px var(--deny)); }
+
+/* ==== MICRO-INTERACTION PRIMITIVES ======================================== */
+.lift { transition: transform var(--t-base) var(--ease-out-cubic),
+  box-shadow var(--t-base) var(--ease-out-cubic), border-color var(--t-base); }
+.press:active { transform: translateY(1px); }
+
+/* ==== MOTION (all decorative motion behind no-preference) ================= */
+@media (prefers-reduced-motion: no-preference) {
+  /* signature draw-in */
+  .leash-draw .leash-path, .leash-draw .leash-shimmer { stroke-dasharray: 1600; stroke-dashoffset: 1600;
+    animation: leashDraw var(--t-draw) var(--ease-out-expo) forwards; }
+  @keyframes leashDraw { to { stroke-dashoffset: 0; } }
+  /* resting sway — the whole leash breathes vertically (control-Y feel) */
+  .leash-sway { animation: leashSway 7s var(--ease-in-out) infinite; transform-origin: center; }
+  @keyframes leashSway { 0%,100%{ transform: translateY(0) } 50%{ transform: translateY(4px) } }
+  /* seam shimmer sweep along the stroke */
+  .leash-shimmer.shimmer-run { stroke-dasharray: 90 1600; animation: seamShimmer 3.4s linear infinite; }
+  @keyframes seamShimmer { from { stroke-dashoffset: 1690; } to { stroke-dashoffset: 0; } }
+  /* signal pulse rides offset-path (path set inline per-svg) */
+  .signal-pulse.run { animation: signalRide 3.6s var(--ease-in-out) infinite; }
+  @keyframes signalRide {
+    0%   { offset-distance: 0%;   opacity: 0; }
+    8%   { opacity: 1; }
+    50%  { offset-distance: 100%; opacity: 1; }
+    58%  { opacity: 0; }
+    100% { offset-distance: 100%; opacity: 0; } }
+  /* DENY beat: pulse travels only to the gate then snaps back garnet */
+  .signal-pulse.deny.run { animation: signalDeny 3.6s var(--ease-in-out) infinite; }
+  @keyframes signalDeny {
+    0%   { offset-distance: 0%;  opacity: 0; }
+    8%   { opacity: 1; }
+    34%  { offset-distance: 12%; opacity: 1; }
+    40%  { offset-distance: 12%; opacity: 1; transform: scale(1.5); }
+    46%  { offset-distance: 0%;  opacity: 0; transform: scale(1); }
+    100% { offset-distance: 0%;  opacity: 0; } }
+
+  /* mask-swipe headline reveal (recipe 11) */
+  .reveal-swipe { opacity: 0;
+    mask: linear-gradient(to right, #000 25%, #000000e6 50%, #0000) 150% 0 / 400% no-repeat;
+    -webkit-mask: linear-gradient(to right, #000 25%, #000000e6 50%, #0000) 150% 0 / 400% no-repeat;
+    animation: maskReveal 1s var(--ease-out-expo) forwards; }
+  @keyframes maskReveal { to { opacity: 1; mask-position: 0 0; -webkit-mask-position: 0 0;
+      mask-size: 400%; -webkit-mask-size: 400%; } }
+
+  /* IO stagger reveal — fade + rise + deblur (recipe 10 / morrow fadeInUp) */
+  .reveal-up { opacity: 0; transform: translateY(24px) scale(.985); filter: blur(5px); }
+  .reveal-up.in { animation: fadeUp .85s var(--ease-out-quart) both; }
+  @keyframes fadeUp { to { opacity: 1; transform: none; filter: blur(0); } }
+  /* figma translateY ladder — distance encodes proximity (data-rung 1..4) */
+  .reveal-up[data-rung="1"]{ transform: translateY(8px)  scale(.99); }
+  .reveal-up[data-rung="2"]{ transform: translateY(14px) scale(.988); }
+  .reveal-up[data-rung="3"]{ transform: translateY(20px) scale(.986); }
+  .reveal-up[data-rung="4"]{ transform: translateY(28px) scale(.984); }
+
+  /* drifting glow planes at different speeds (screen blend) */
+  .plane-amber { animation: driftA 15s var(--ease-in-out) infinite alternate; }
+  .plane-ember { animation: driftB 19s var(--ease-in-out) infinite alternate; }
+  .plane-cool  { animation: driftC 23s var(--ease-in-out) infinite alternate; }
+  @keyframes driftA { from{ transform: translateX(-50%) translate3d(-3%,-2%,0) scale(1);   opacity:.7 }
+                      to  { transform: translateX(-50%) translate3d(4%,3%,0)   scale(1.14); opacity:.95 } }
+  @keyframes driftB { from{ transform: translate3d(0,0,0) scale(1);      opacity:.5 }
+                      to  { transform: translate3d(8%,-4%,0) scale(1.2);  opacity:.8 } }
+  @keyframes driftC { from{ transform: translateX(-50%) translate3d(0,0,0) scale(1);     opacity:.4 }
+                      to  { transform: translateX(-50%) translate3d(-6%,4%,0) scale(1.16);opacity:.7 } }
+
+  /* twinkling dots — discrete steps, per-dot delay via --d (linear) */
+  .twinkle circle { animation: twinkle 3.4s steps(1) infinite; animation-delay: var(--d, 0s); }
+  @keyframes twinkle { 0%,100%{ opacity:.14 } 20%{ opacity:.7 } 40%{ opacity:.2 } 60%{ opacity:.55 } 80%{ opacity:.12 } }
+
+  /* live status pulse (single dot) + expanding ping ring (chit/morrow) */
+  .live-dot { animation: livePulse 2s var(--ease-in-out) infinite; }
+  @keyframes livePulse { 0%,100%{ opacity:1; transform:scale(1);} 50%{opacity:.35; transform:scale(.7);} }
+  .ping-ring::after { content:""; position:absolute; inset:0; border-radius:var(--r-full);
+    box-shadow: 0 0 0 0 var(--accent-40); animation: pingRing 2.4s var(--ease-out-cubic) infinite; }
+  @keyframes pingRing { 0%{ box-shadow:0 0 0 0 var(--accent-40) } 70%,100%{ box-shadow:0 0 0 9px transparent } }
+
+  /* verdict flash — new row only, jade/garnet bg-fade (recipe 13, flash) */
+  .flash-allow { animation: flashAllow 1.5s var(--ease-out-cubic); }
+  .flash-deny  { animation: flashDeny  1.5s var(--ease-out-cubic); }
+  @keyframes flashAllow { from { background: var(--allow-14);} to { background: transparent;} }
+  @keyframes flashDeny  { from { background: var(--deny-14); } to { background: transparent;} }
+
+  /* card lift + glow on hover (gated behind no-preference — ramp WallOfLove) */
+  .lift:hover { transform: translateY(-5px); box-shadow: 0 22px 60px -30px var(--accent-40); border-color: var(--accent-24); }
+  /* button shine sweep on hover */
+  .btn:hover .shine { transform: translateX(160%); transition: transform .7s var(--ease-out-quart); }
+  /* nav sibling-dim: hovering the group fades non-hovered links (ramp) */
+  .navlinks:hover a:not(:hover) { opacity: .45; }
+
+  /* device-frame reveal + its own console breathing */
+  .device-reveal { opacity: 0; transform: perspective(1400px) rotateX(9deg) translateY(40px) scale(.96); }
+  .device-reveal.in { animation: deviceIn 1.1s var(--ease-out-quart) both; }
+  @keyframes deviceIn { to { opacity:1; transform: perspective(1400px) rotateX(0) translateY(0) scale(1); } }
+
+  /* closing beat: leash SEVERS on scroll — recoil + spark */
+  .sever-recoil.cut .recoil-l { animation: recoilL .5s var(--ease-spring) both; }
+  .sever-recoil.cut .recoil-r { animation: recoilR .5s var(--ease-spring) both; }
+  @keyframes recoilL { 0%{ transform: translateX(0) } 100%{ transform: translateX(-14px) } }
+  @keyframes recoilR { 0%{ transform: translateX(0) } 100%{ transform: translateX(14px) } }
+  .sever-spark { opacity: 0; }
+  .sever-recoil.cut .sever-spark { animation: spark .6s var(--ease-out-expo) both; }
+  @keyframes spark { 0%{ opacity:0; transform:scale(.4) } 40%{ opacity:1; transform:scale(1.3) } 100%{ opacity:0; transform:scale(2) } }
+
+  /* number-flow rolling digit (JS-driven; this just eases the transform) */
+  .nflow .col { transition: transform .9s var(--ease-out-quart); }
+
+  /* console skeleton shimmer (kamino _shimmer) */
+  .skel { background: linear-gradient(100deg, var(--surface-2) 30%, var(--surface-3) 50%, var(--surface-2) 70%);
+    background-size: 220% 100%; animation: skel 1.3s linear infinite; }
+  @keyframes skel { from { background-position: 120% 0 } to { background-position: -120% 0 } }
+
+  /* ---- RICHNESS LAYER 2 (density push — chit/linear amount of motion) ---- */
+
+  /* the accent word breathes a warm glow (blur/ramp text-glow, gentle) */
+  .glow-word { animation: glowWord 3.6s var(--ease-in-out) infinite; }
+  @keyframes glowWord {
+    0%,100%{ text-shadow: 0 0 20px var(--accent-24); }
+    50%    { text-shadow: 0 0 40px var(--accent-40), 0 0 12px var(--accent-24); } }
+
+  /* a continuous diagonal sheen sweeps the whole display headline (linear shimmerSweep) */
+  .sheen { position: relative; }
+  .sheen::after { content:""; position:absolute; inset:0; pointer-events:none;
+    background: linear-gradient(105deg, transparent 42%, var(--ink-16) 50%, transparent 58%);
+    background-size: 260% 100%; mix-blend-mode: screen;
+    animation: sheenSweep 6.5s var(--ease-in-out) infinite; }
+  @keyframes sheenSweep { 0%{ background-position: 180% 0 } 55%,100%{ background-position: -80% 0 } }
+
+  /* ambient amber motes rising through the hero (chit particle feel) */
+  .mote { position:absolute; bottom:0; width:3px; height:3px; border-radius:50%;
+    background: var(--accent); filter: blur(.5px); opacity:0; will-change: transform, opacity;
+    animation: moteRise var(--mdur, 15s) linear infinite; animation-delay: var(--d,0s); }
+  @keyframes moteRise {
+    0%  { transform: translateY(30px) scale(.5); opacity:0; }
+    12% { opacity:.55; }
+    88% { opacity:.4; }
+    100%{ transform: translateY(-320px) scale(1); opacity:0; } }
+
+  /* infinite marquee (chit/linear/hyperliquid duplicated track) */
+  .marquee-track { animation: marqueeX 34s linear infinite; }
+  @keyframes marqueeX { from{ transform: translateX(0) } to{ transform: translateX(-50%) } }
+
+  /* second signal pulse family — staggerable via animation-delay inline */
+  .signal-pulse.run.d1 { animation-delay: 1.2s; }
+  .signal-pulse.run.d2 { animation-delay: 2.4s; }
+  .signal-pulse.run.d3 { animation-delay: 3.0s; }
+
+  /* verdict-pop label at the gate when a pulse settles (screen life) */
+  .gate-pop { animation: gatePop 3.6s var(--ease-in-out) infinite; opacity: 0; }
+  @keyframes gatePop { 0%,44%{ opacity:0; transform: translateY(0) scale(.8) }
+    50%{ opacity:1; transform: translateY(-2px) scale(1) } 66%,100%{ opacity:0; transform: translateY(-6px) scale(.9) } }
+
+  /* magnetic CTA — JS sets --mx/--my; transition eases the return */
+  .magnetic { transition: transform var(--t-base) var(--ease-spring-soft); }
+
+  /* device mouse-parallax tilt — JS sets --rx/--ry */
+  .tilt { transition: transform var(--t-slow) var(--ease-out-quart); }
+}
+
+/* ==== REDUCED-MOTION (HARD parity CORE-MOTION-1 — two-sided) ============== */
+@media (prefers-reduced-motion: reduce) {
+  .leash-draw .leash-path, .leash-draw .leash-shimmer { stroke-dashoffset: 0 !important; animation: none !important; }
+  .leash-sway { animation: none !important; }
+  .leash-shimmer.shimmer-run { animation: none !important; stroke-dasharray: none !important; opacity: .5 !important; }
+  .signal-pulse, .signal-pulse.run, .signal-pulse.deny.run { animation: none !important; opacity: 0 !important; }
+  .reveal-swipe { opacity: 1 !important; mask: none !important; -webkit-mask: none !important; animation: none !important; }
+  .reveal-up, .reveal-up.in { opacity: 1 !important; transform: none !important; filter: none !important; animation: none !important; }
+  .glow-plane { animation: none !important; }        /* hold, don't drift */
+  .twinkle circle { animation: none !important; opacity: .16 !important; }
+  .live-dot   { animation: none !important; opacity: 1 !important; }
+  .ping-ring::after { animation: none !important; box-shadow: none !important; }
+  .flash-allow, .flash-deny { animation: none !important; }
+  .lift:hover { transform: none !important; }
+  .btn:hover .shine { transform: translateX(-160%) !important; }
+  .navlinks:hover a:not(:hover) { opacity: 1 !important; }
+  .device-reveal, .device-reveal.in { opacity: 1 !important; transform: none !important; animation: none !important; }
+  .sever-recoil.cut .recoil-l, .sever-recoil.cut .recoil-r, .sever-recoil.cut .sever-spark { animation: none !important; }
+  .nflow .col { transition: none !important; }
+  .skel { animation: none !important; }
+  .glow-word { animation: none !important; text-shadow: none !important; }
+  .sheen::after { animation: none !important; content: none !important; }
+  .mote { animation: none !important; opacity: 0 !important; }
+  .marquee-track { animation: none !important; }
+  .gate-pop { animation: none !important; opacity: 0 !important; }
+  .magnetic, .tilt { transform: none !important; }
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}
