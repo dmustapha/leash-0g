@@ -56,7 +56,9 @@ describe('SE-5 cross-chain read-model isolation (E-5)', () => {
     expect(a?.chainId).toBe(CHAIN_A);
     expect(b?.id).toBe(agentB);
     expect(b?.chainId).toBe(CHAIN_B);
-    // an unregistered chain for that address resolves to nothing (default-deny at the read layer too)
+    // a chain with no agent for that address resolves to nothing (no cross-chain bleed).
+    // (Registry-level default-deny for an UNREGISTERED chain is UnregisteredChainError —
+    // enforced separately in chain-registry.test.ts; this read layer just returns no row.)
     expect(await getAgentByAccountAndChain(db.pool, 999, SHARED_ACCOUNT)).toBeNull();
   });
 
