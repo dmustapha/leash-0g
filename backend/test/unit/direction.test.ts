@@ -32,7 +32,7 @@ describe('elevateDirection', () => {
 
   it('R-2: moneyPower is server-computed, NOT trusted from the model', async () => {
     // Model tries to claim a spender cannot move money — ignored; server derives it.
-    const q = fakeQueue({ understanding: 'x', moneyPower: 'cannot-move-money', confidence: 'high' } as unknown);
+    const q = fakeQueue({ understanding: 'x', moneyPower: 'cannot-move-money', confidence: 'high' });
     const d = await elevateDirection({ queue: q, model: 'm' }, req(TREASURY, 'do stuff'));
     expect(d.moneyPower).toBe('can-move-money');
     const dp = await elevateDirection({ queue: q, model: 'm' }, req(PROVIDER, 'do stuff'));

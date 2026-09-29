@@ -253,17 +253,17 @@ describe('proposeNextHop — BC-2 + idempotent CAS + Gap-2 (D-2)', () => {
 
 describe('Option-C model-driven selection (S25) + BC-2', () => {
   function gatewayReturning(targetId: unknown): typeof fetch {
-    return (async () =>
+    return async () =>
       new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({ targetId }) } }] }), {
         status: 200,
         headers: { 'content-type': 'application/json' },
-      })) as unknown as typeof fetch;
+      });
   }
 
   it('a one-member hop never calls the model (deterministic fixed hop)', async () => {
     const spy = vi.fn();
     const only = await selectHopTargetViaGateway(
-      { gatewayUrl: 'http://gw', gatewayToken: 't', model: 'm', fetchFn: spy as unknown as typeof fetch },
+      { gatewayUrl: 'http://gw', gatewayToken: 't', model: 'm', fetchFn: spy },
       { eligibleTargetIds: ['only-id'], directedIntent: 'x', upstreamOutput: null },
     );
     expect(only).toBe('only-id');

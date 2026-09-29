@@ -25,6 +25,13 @@ export interface ChainOps {
     sessionKeyAddr: string;
     auditPubKey: string;
     name: string;
+    /**
+     * SE-1 (Stage E, SD-E7): which account bytecode to mint — 4 = governed-
+     * calldata V4 (the product-standard account; selects `createAccountV4` on
+     * the V4 factory), 2 = legacy v2/v3 (selects `createAccount` on the legacy
+     * factory). Arg-identical wire; only the factory + fn/event name differ.
+     */
+    accountVersion: 2 | 4;
     policy: { perTransferCap: bigint; windowCap: bigint; windowSeconds: number; expiresAt: number };
     allowlist: string[];
     timelockDelay: number;
@@ -35,7 +42,7 @@ export interface ChainOps {
      */
     settlementToken?: string;
     tokenPolicy?: { perTransferCapToken: bigint; windowCapToken: bigint };
-  }): Promise<{ accountAddr: string; chainAgentId: bigint; createTx: string; registerTx: string; guardianAddr: string }>;
+  }): Promise<{ accountAddr: string; chainAgentId: bigint; createTx: string; registerTx: string; guardianAddr: string; accountVersion: 2 | 4 }>;
   /**
    * `accountGuardianAddr` = the guardian recorded for this account at create
    * (null = legacy ops-key guardian, S7). Rejects (throws) on a reverted tx —
@@ -61,6 +68,13 @@ export interface RuntimeManager {
    * cycle in flight) loses nothing.
    */
   nudge(agentId: string): void;
+  /**
+   * SE-2 (SD-E2): after the owner approves-once (and signs `authorizeOnce`
+   * client-side), auto-retry the originally-refused call to consume the on-chain
+   * one-shot exactly once. Fire-and-forget — the on-chain submit never blocks the
+   * HTTP response; freshness re-check + fail-safe live in the runtime path.
+   */
+  consumeApprovedOneShot(agentId: string, requestId: string): Promise<void>;
 }
 
 export interface Settings {
@@ -186,8 +200,8 @@ function buildApp(deps: AppDeps, surfaces: Surfaces): Express {
     res.status(404).json({ error: { message: 'not found' } });
   });
 
-  // generic errors to clients; detail stays server-side (M-01)
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars -- express detects error handlers by arity: all 4 params required
+  // generic errors to clients; detail stays server-side (M-01).
+  // _req/_next: express detects error handlers by arity — all 4 params required.
   app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
     if (isBodyTooLarge(err)) {
       res.status(413).json({ error: { message: 'payload too large' } });

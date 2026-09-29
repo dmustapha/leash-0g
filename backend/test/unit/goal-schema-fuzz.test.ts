@@ -69,13 +69,13 @@ describe('STRESS: patch shape abuse', () => {
     expect(applyGoalPatch(PROVIDER, { serviceSpec: '📈 forecasts\nwith detail 中文' }).ok).toBe(true);
   });
   it('every money-authority field is rejected across roles', () => {
-    expect(applyGoalPatch(REQUESTER, { feeToken: '0x' + 'aa'.repeat(20) } as never).ok).toBe(false);
-    expect(applyGoalPatch(REQUESTER, { feeRecipient: '0x' + 'aa'.repeat(20) } as never).ok).toBe(false);
-    expect(applyGoalPatch(REQUESTER, { feeCapPerJobWei: '9' } as never).ok).toBe(false);
-    expect(applyGoalPatch(REQUESTER, { jobSpecSource: 'evil' } as never).ok).toBe(false);
-    expect(applyGoalPatch(REQUESTER, { evaluatorAgentId: 'x' } as never).ok).toBe(false);
-    expect(applyGoalPatch(TREASURY, { beneficiary: '0x' + 'aa'.repeat(20) } as never).ok).toBe(false);
-    expect(applyGoalPatch(TREASURY, { model: 'evil-model' } as never).ok).toBe(false); // model not descriptive
+    expect(applyGoalPatch(REQUESTER, { feeToken: '0x' + 'aa'.repeat(20) }).ok).toBe(false);
+    expect(applyGoalPatch(REQUESTER, { feeRecipient: '0x' + 'aa'.repeat(20) }).ok).toBe(false);
+    expect(applyGoalPatch(REQUESTER, { feeCapPerJobWei: '9' }).ok).toBe(false);
+    expect(applyGoalPatch(REQUESTER, { jobSpecSource: 'evil' }).ok).toBe(false);
+    expect(applyGoalPatch(REQUESTER, { evaluatorAgentId: 'x' }).ok).toBe(false);
+    expect(applyGoalPatch(TREASURY, { beneficiary: '0x' + 'aa'.repeat(20) }).ok).toBe(false);
+    expect(applyGoalPatch(TREASURY, { model: 'evil-model' }).ok).toBe(false); // model not descriptive
   });
 });
 
@@ -116,7 +116,7 @@ describe('STRESS: revalidateEffectiveGoal (apply boundary) rejects tampered goal
     expect(revalidateEffectiveGoal(TREASURY, { ...TREASURY, targetBalanceWei: '9999' }).ok).toBe(true);
   });
   it('rejects an effective goal that smuggles an extra key (strict union)', () => {
-    expect(revalidateEffectiveGoal(TREASURY, { ...TREASURY, evil: 1 } as never).ok).toBe(false);
+    expect(revalidateEffectiveGoal(TREASURY, { ...TREASURY, evil: 1 }).ok).toBe(false);
   });
 });
 
@@ -126,7 +126,7 @@ describe('STRESS: validateAcceptancePatch', () => {
     expect(validateAcceptancePatch(Array(65).fill({ kind: 'required', path: 'x' })).ok).toBe(false); // max 64
     expect(validateAcceptancePatch([{ kind: 'sql', path: 'x' }]).ok).toBe(false);
     expect(validateAcceptancePatch([{ kind: 'required' }]).ok).toBe(false); // missing path
-    expect(validateAcceptancePatch('DROP TABLE' as never).ok).toBe(false);
+    expect(validateAcceptancePatch('DROP TABLE').ok).toBe(false);
     expect(validateAcceptancePatch(null).ok).toBe(false);
   });
   it('accepts a valid max-size ruleset', () => {

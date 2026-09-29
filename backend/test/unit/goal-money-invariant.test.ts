@@ -16,7 +16,7 @@ const REQUESTER: AgentGoal = {
   feeToken: '0x' + '11'.repeat(20),
   feeRecipient: '0x' + '22'.repeat(20),
   feeCapPerJobWei: '1000',
-} as AgentGoal;
+};
 
 describe('revalidateEffectiveGoal — C1 money-authority invariant', () => {
   it('accepts an unchanged goal', () => {
