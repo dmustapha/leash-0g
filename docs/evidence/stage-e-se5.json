@@ -1,0 +1,41 @@
+{
+  "phase": "Stage E — SE-5 (multichain backbone: ChainRegistry + (chainId,account) read-model + isolation)",
+  "substrate": "~/leash @ stage-d-governed-calldata (working tree; SE-1..SE-5 uncommitted-to-main, committed on branch)",
+  "commits": [
+    "883a241 SE-5.0 M-01 transport-vs-revert",
+    "51f0dd6 SE-5.0 L-01 crash-durable sweep",
+    "7ae28a8 SE-5.0 S4-5 no-resend deployAndRegister",
+    "e7f47fe SE-5.0 jit resetRuns per-run evidence",
+    "323b81a SE-5.0 eslint baseline clean",
+    "72e3995 SE-5 ChainRegistry + chain-config",
+    "f5a85dc SE-5 (chainId,account) read-model + isolation",
+    "docs SE-5 gate carries (SE-7 markers)"
+  ],
+  "preamble_SE_5_0": {
+    "M-01": { "test": "one-shot-consume.test.ts", "count": "8/8", "tier": "[CI] real Neon", "note": "transport-throw re-claimable + consumes on recovery; decoded revert terminal" },
+    "L-01": { "test": "one-shot-sweep.test.ts", "count": "1/1", "tier": "[CI] real Neon", "note": "crash drops trigger; sweep re-drives consume-exactly-once; 2nd sweep no-op" },
+    "S4-5": { "test": "create-v4-selection.test.ts", "count": "4/4", "tier": "[CI] unit", "note": "receipt-drop re-polled same hash, createAccountV4 sent exactly once" },
+    "jit-resetProof": { "drill": "jit-drill.sh", "tier": "[DEPLOY] 0G 16602", "runs": [
+      { "run": 1, "resetProof": "200e6->200e6", "checks": "5/5/0" },
+      { "run": 2, "resetProof": "400e6->200e6", "checks": "5/5/0" }
+    ], "note": "resetRuns history persisted; both back-to-back runs individually inspectable in stage-d-jit-drill.json" },
+    "eslint": { "result": "exit 0", "tsc": "exit 0", "unit": "343/343", "note": "config fix (non-type-checked scripts/mjs block, ^_ ignore, test-only relaxations) + 27 auto-fixes; no behavior change" }
+  },
+  "SE_5": {
+    "registry": { "test": "chain-registry.test.ts", "count": "6/6", "tier": "[CI] unit", "note": "N-chain resolution + caching + default-deny (UnregisteredChainError) + duplicate/empty + testnet-only" },
+    "isolation": { "test": "chain-isolation.test.ts", "count": "2/2", "tier": "[CI] real Neon", "note": "E-5: same account address across chains 16602+84532; request under chain A invisible under chain B; (chainId,account) resolution + default-deny read" },
+    "regression": { "suites": "capabilities + governed-call-runtime + runtime + one-shot-consume + one-shot-sweep + create-v4-selection + chain-registry", "count": "27/27 broad + 23/23 capability", "tier": "[CI] real Neon", "note": "no regression from migration 020 read-model re-key" }
+  },
+  "gates": {
+    "code-reviewer": "APPROVE (no BLOCKERS; 3 non-blocking WARNINGs → SE-7 carries)",
+    "security-auditor": "APPROVE (no CRITICAL/HIGH; isolation subquery-derived chain_id, default-deny unconditional, consume-exactly-once triple-guarded)",
+    "tsc": "exit 0",
+    "eslint": "exit 0"
+  },
+  "carries_to_SE_7": [
+    "same-chain same-address owner-scoping: listRequestsByChainAndAccount + getAgentByAccountAndChain not owner-scoped; no UNIQUE(chain_id,account_addr) (test-only reads today; add partial-unique-on-active or thread ownerAddr when per-chain routes land — cannot add unique index now: tests seed multiple active agents sharing the default account on 16602)",
+    "sweepResumableOneShots drives the single default-chain client — must resolve per-chain via ChainRegistry once a 2nd real chain exists (marked in code)",
+    "trace_records.chain_id left nullable/unindexed until the generic chained-append is chain-threaded (marked in code); traces agent_id-scoped so isolation inherent"
+  ],
+  "deploy": "merge-to-main deferred to Stage-E close per LEASH convention"
+}
