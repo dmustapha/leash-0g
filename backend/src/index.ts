@@ -117,6 +117,7 @@ async function main(): Promise<void> {
     opsPrivateKey: cfg.OPS_PRIVATE_KEY,
     guardianPrivateKey: cfg.GUARDIAN_PRIVATE_KEY,
     factoryAddr: cfg.LEASH_FACTORY_ADDR,
+    ...(cfg.LEASH_FACTORY_V4_ADDR ? { factoryV4Addr: cfg.LEASH_FACTORY_V4_ADDR } : {}),
     registryAddr: cfg.AGENT_REGISTRY_ADDR,
   });
 
@@ -148,6 +149,19 @@ async function main(): Promise<void> {
       jitTtlMs: cfg.JIT_TTL_MS,
     },
   });
+
+  // L-01 (SE-5.0): crash-durability for the fire-and-forget one-shot retry.
+  // consumeApprovedOneShot is an in-memory trigger; a restart mid-retry would
+  // strand an owner-authorized approve-once. Boot sweep + timer (cadence = the
+  // one-shot TTL) re-drive resumable one-shots. Idempotent via the CAS claim.
+  const resumedOnBoot = await runtime.sweepResumableOneShots();
+  if (resumedOnBoot > 0) console.error(`re-drove ${resumedOnBoot} resumable one-shot consume(s) on boot`);
+  const oneShotSweepTimer = setInterval(() => {
+    void runtime.sweepResumableOneShots().catch((err: unknown) =>
+      console.error('one-shot consume sweep tick failed', err),
+    );
+  }, cfg.JIT_TTL_MS);
+  oneShotSweepTimer.unref();
 
   // Coordination layer (spec §3b): links/delegations lifecycle + channel
   // throttles + expiry sweeper. The nudge is delivery-latency only.

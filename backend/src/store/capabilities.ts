@@ -175,6 +175,8 @@ export async function listAppliedPresets(pool: Pool, agentId: string): Promise<s
 
 export type RequestStatus = 'pending' | 'approved_once' | 'always_allowed' | 'denied' | 'expired';
 
+export type ConsumeStatus = 'consuming' | 'consumed' | 'aborted' | 'failed';
+
 export interface RequestRow {
   id: string;
   agentId: string;
@@ -187,6 +189,13 @@ export interface RequestRow {
   txHash: string | null;
   createdAt: string;
   decidedAt: string | null;
+  /** SE-2: the exact refused bytes (server-authored, bound by callHash) for the auto-retry. */
+  callTarget: string | null;
+  callValue: string | null;
+  callData: string | null;
+  /** SE-2: the one-shot consumption sub-state (audit trail; on-chain stays authority). */
+  consumeStatus: ConsumeStatus | null;
+  consumeTxHash: string | null;
 }
 
 interface DbRequestRow {
@@ -201,6 +210,11 @@ interface DbRequestRow {
   tx_hash: string | null;
   created_at: Date;
   decided_at: Date | null;
+  call_target: string | null;
+  call_value: string | null;
+  call_data: string | null;
+  consume_status: ConsumeStatus | null;
+  consume_tx_hash: string | null;
 }
 
 function mapRequest(r: DbRequestRow): RequestRow {
@@ -216,6 +230,11 @@ function mapRequest(r: DbRequestRow): RequestRow {
     txHash: r.tx_hash,
     createdAt: r.created_at.toISOString(),
     decidedAt: r.decided_at ? r.decided_at.toISOString() : null,
+    callTarget: r.call_target,
+    callValue: r.call_value,
+    callData: r.call_data,
+    consumeStatus: r.consume_status,
+    consumeTxHash: r.consume_tx_hash,
   };
 }
 
@@ -225,6 +244,10 @@ export interface InsertRequestInput {
   decoded: Json;
   novelty: Novelty[];
   callHash: string;
+  /** SE-2: the exact refused call bytes to auto-retry after an approve-once (bound by callHash). */
+  callTarget: string;
+  callValue: string;
+  callData: string;
 }
 
 /**
@@ -237,11 +260,20 @@ export async function insertCapabilityRequest(
   input: InsertRequestInput,
 ): Promise<{ row: RequestRow; created: boolean }> {
   const res = await pool.query<DbRequestRow>(
-    `INSERT INTO capability_requests (agent_id, owner_addr, decoded, novelty, call_hash)
-     VALUES ($1,$2,$3,$4,$5)
+    `INSERT INTO capability_requests (agent_id, owner_addr, decoded, novelty, call_hash, call_target, call_value, call_data)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
      ON CONFLICT (agent_id, call_hash) WHERE status = 'pending' DO NOTHING
      RETURNING *`,
-    [input.agentId, input.ownerAddr.toLowerCase(), JSON.stringify(input.decoded), JSON.stringify(input.novelty), input.callHash],
+    [
+      input.agentId,
+      input.ownerAddr.toLowerCase(),
+      JSON.stringify(input.decoded),
+      JSON.stringify(input.novelty),
+      input.callHash,
+      input.callTarget.toLowerCase(),
+      input.callValue,
+      input.callData,
+    ],
   );
   if (res.rows[0]) return { row: mapRequest(res.rows[0]), created: true };
   const existing = await pool.query<DbRequestRow>(
@@ -280,6 +312,75 @@ export async function setRequestDecision(
     [id, status, txHash ?? null],
   );
   return res.rows[0] ? mapRequest(res.rows[0]) : null;
+}
+
+/**
+ * SE-2: atomically CLAIM a request for one-shot consumption (pending → consuming).
+ * Only an approved_once request that hasn't been consumed/claimed proceeds — the
+ * CAS is the off-chain replay guard: a second attempt (or a concurrent retry)
+ * gets null (already consuming/consumed/failed) and stands down. An `aborted`
+ * request (a prior attempt hit a stale grant) is re-claimable so a later valid
+ * trigger can retry; a `failed` one is terminal (fail-safe: no auto-retry loop).
+ */
+export async function claimOneShotConsumption(pool: Pool, id: string): Promise<RequestRow | null> {
+  if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
+  const res = await pool.query<DbRequestRow>(
+    `UPDATE capability_requests SET consume_status = 'consuming'
+       WHERE id = $1 AND status = 'approved_once'
+         AND (consume_status IS NULL OR consume_status = 'aborted')
+     RETURNING *`,
+    [id],
+  );
+  return res.rows[0] ? mapRequest(res.rows[0]) : null;
+}
+
+/**
+ * SE-2: finalize a claimed consumption. `consumed` stamps consumed_at + the
+ * landing tx (the audit trail); `aborted`/`failed` clear the claim per the
+ * lifecycle above. Only a `consuming` row transitions (idempotent).
+ */
+export async function finalizeOneShotConsumption(
+  pool: Pool,
+  id: string,
+  status: Exclude<ConsumeStatus, 'consuming'>,
+  txHash?: string,
+): Promise<RequestRow | null> {
+  const res = await pool.query<DbRequestRow>(
+    `UPDATE capability_requests
+        SET consume_status = $2,
+            consume_tx_hash = $3,
+            consumed_at = CASE WHEN $2 = 'consumed' THEN now() ELSE consumed_at END
+      WHERE id = $1 AND consume_status = 'consuming'
+      RETURNING *`,
+    [id, status, txHash ?? null],
+  );
+  return res.rows[0] ? mapRequest(res.rows[0]) : null;
+}
+
+/**
+ * L-01 (SE-5.0): crash-durability for the fire-and-forget one-shot retry. The
+ * owner-route trigger drives consumeApprovedOneShot in-memory; a backend restart
+ * mid-retry drops it (request stays `approved_once`, consume_status NULL|aborted).
+ * This lists the resumable ones — an approved_once whose consumption never landed,
+ * still within the one-shot TTL — so a periodic sweep can re-drive them. A row
+ * already `consuming`/`consumed`/`failed` is excluded (in-flight or terminal); the
+ * TTL bound skips one-shots too stale to still be authorized on-chain. The CAS in
+ * claimOneShotConsumption makes re-driving idempotent against the live trigger.
+ */
+export async function listResumableOneShots(
+  pool: Pool,
+  ttlMs: number,
+): Promise<Array<{ id: string; agentId: string }>> {
+  const res = await pool.query<{ id: string; agent_id: string }>(
+    `SELECT id, agent_id FROM capability_requests
+       WHERE status = 'approved_once'
+         AND (consume_status IS NULL OR consume_status = 'aborted')
+         AND decided_at IS NOT NULL
+         AND decided_at > now() - ($1::bigint * interval '1 millisecond')
+       ORDER BY decided_at ASC`,
+    [Math.max(0, Math.floor(ttlMs))],
+  );
+  return res.rows.map((r) => ({ id: r.id, agentId: r.agent_id }));
 }
 
 /** Recent JIT decisions for an agent (display in the CapabilityEnvelope). */
