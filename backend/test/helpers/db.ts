@@ -45,13 +45,15 @@ export interface SeedAgentOptions {
   goal?: Record<string, unknown>;
   name?: string;
   gatewayTokenEnc?: string;
+  /** SE-5: the chain this agent lives on — defaults to 0G Galileo (16602). */
+  chainId?: number;
 }
 
 export async function seedAgent(pool: Pool, opts: SeedAgentOptions = {}): Promise<string> {
   const res = await pool.query<{ id: string }>(
     `INSERT INTO agents (owner_addr, account_addr, session_key_addr, session_key_enc, audit_pubkey,
-                         token_id, token_hash, name, status, gateway_rules, goal, gateway_token_enc)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12) RETURNING id`,
+                         token_id, token_hash, name, status, gateway_rules, goal, gateway_token_enc, chain_id)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING id`,
     [
       (opts.ownerAddr ?? '0x' + 'a1'.repeat(20)).toLowerCase(),
       (opts.accountAddr ?? '0x' + 'b2'.repeat(20)).toLowerCase(),
@@ -65,6 +67,7 @@ export async function seedAgent(pool: Pool, opts: SeedAgentOptions = {}): Promis
       JSON.stringify(opts.gatewayRules ?? []),
       JSON.stringify(opts.goal ?? {}),
       opts.gatewayTokenEnc ?? null,
+      opts.chainId ?? 16602,
     ],
   );
   const row = res.rows[0];

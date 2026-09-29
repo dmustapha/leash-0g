@@ -211,6 +211,13 @@ const createAgentSchema = z.object({
   tokenConfig: tokenConfigSchema.optional(),
   /** Phase-5 (D-B9): optional freeform capability label (elevation-suggested, owner-edited). Inert. */
   capabilityLabel: z.string().max(120).optional(),
+  /**
+   * SE-1 (Stage E, SD-E7): on-chain account version. Default 4 — new agents are
+   * governed-calldata V4 accounts (the product-standard; V4 is a strict superset
+   * of the v3 settlement path). `2` pins the legacy factory (E-1 regression).
+   * Coerced from JSON number; only 2 | 4 accepted.
+   */
+  accountVersion: z.union([z.literal(2), z.literal(4)]).default(4),
 }).superRefine((v, issues) => {
   const role = v.goal.type ?? 'treasury';
   if (role === 'treasury' && v.allowlist.length < 1) {
@@ -456,6 +463,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       sessionKeyAddr,
       auditPubKey: input.auditPubKey,
       name: input.name,
+      accountVersion: input.accountVersion, // SE-1: 4 (default) → V4 factory; 2 → legacy
       policy: {
         perTransferCap: BigInt(input.policy.perTransferCapWei),
         windowCap: BigInt(input.policy.windowCapWei),
@@ -480,6 +488,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     const token = generateGatewayToken();
     const agentId = await insertAgent(deps.pool, {
       chainAgentId: deployed.chainAgentId,
+      chainId: deps.settings.defaultChainId,
       ownerAddr,
       accountAddr: deployed.accountAddr,
       sessionKeyAddr,
@@ -496,6 +505,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       gatewayTokenEnc: encryptSecret(token.token, deps.settings.keyEncryptionSecret),
       guardianAddr: deployed.guardianAddr,
       ...(input.capabilityLabel ? { capabilityLabel: input.capabilityLabel } : {}),
+      accountVersion: deployed.accountVersion, // SE-1: persist the version actually minted (gate L-01)
     });
 
     // The committed agent row carries the quota/rate count from here on —
@@ -772,6 +782,12 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       if (!outcome.ok) {
         res.status(outcome.reason === 'already_decided' ? 409 : 400).json({ error: { message: outcome.reason } });
         return;
+      }
+      // SE-2 (SD-E2): approve_once → the runtime auto-retries + consumes the
+      // on-chain one-shot exactly once. Fire-and-forget (never blocks the HTTP
+      // response; freshness re-check + fail-safe live in the runtime path).
+      if (parsedCap.data.decision === 'approve_once') {
+        void deps.runtime.consumeApprovedOneShot(agent.id, request.id);
       }
       res.json({ ok: true, request: { id: request.id, status: outcome.status } });
       return;
