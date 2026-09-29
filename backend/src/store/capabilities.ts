@@ -389,13 +389,17 @@ export async function listResumableOneShots(
 }
 
 /**
- * SE-5 (E-5): read the JIT request grant state for a specific (chainId, account),
- * scoped so a read on chain A can NEVER surface chain B's requests — even when
- * both chains host the same account address (SE-6 CREATE2). The chain_id filter
- * on capability_requests + the account join make the isolation local + explicit.
+ * SE-5/SE-6 (E-5 + the SE-6 pre-req): read the JIT request grant state for an
+ * OWNER-scoped (chainId, account) key. Scoped so a read on chain A can NEVER
+ * surface chain B's requests — and, under CREATE2 same-address, so one owner can
+ * NEVER surface another owner's requests through a shared account address (two
+ * owners can deterministically hold the same address; owner_addr partitions
+ * them). The chain_id filter + the owner-checked agent join keep the isolation
+ * local + explicit.
  */
 export async function listRequestsByChainAndAccount(
   pool: Pool,
+  ownerAddr: string,
   chainId: number,
   accountAddr: string,
   limit = 50,
@@ -403,9 +407,9 @@ export async function listRequestsByChainAndAccount(
   const res = await pool.query<DbRequestRow>(
     `SELECT cr.* FROM capability_requests cr
        JOIN agents a ON a.id = cr.agent_id
-      WHERE cr.chain_id = $1 AND a.account_addr = $2
-      ORDER BY cr.created_at DESC LIMIT $3`,
-    [chainId, accountAddr.toLowerCase(), Math.min(Math.max(limit, 1), 200)],
+      WHERE a.owner_addr = $1 AND cr.chain_id = $2 AND a.account_addr = $3
+      ORDER BY cr.created_at DESC LIMIT $4`,
+    [ownerAddr.toLowerCase(), chainId, accountAddr.toLowerCase(), Math.min(Math.max(limit, 1), 200)],
   );
   return res.rows.map(mapRequest);
 }

@@ -50,8 +50,8 @@ afterAll(async () => {
 
 describe('SE-5 cross-chain read-model isolation (E-5)', () => {
   it('resolves the agent by (chainId, account) — the same address disambiguates by chain', async () => {
-    const a = await getAgentByAccountAndChain(db.pool, CHAIN_A, SHARED_ACCOUNT);
-    const b = await getAgentByAccountAndChain(db.pool, CHAIN_B, SHARED_ACCOUNT);
+    const a = await getAgentByAccountAndChain(db.pool, OWNER, CHAIN_A, SHARED_ACCOUNT);
+    const b = await getAgentByAccountAndChain(db.pool, OWNER, CHAIN_B, SHARED_ACCOUNT);
     expect(a?.id).toBe(agentA);
     expect(a?.chainId).toBe(CHAIN_A);
     expect(b?.id).toBe(agentB);
@@ -59,7 +59,7 @@ describe('SE-5 cross-chain read-model isolation (E-5)', () => {
     // a chain with no agent for that address resolves to nothing (no cross-chain bleed).
     // (Registry-level default-deny for an UNREGISTERED chain is UnregisteredChainError —
     // enforced separately in chain-registry.test.ts; this read layer just returns no row.)
-    expect(await getAgentByAccountAndChain(db.pool, 999, SHARED_ACCOUNT)).toBeNull();
+    expect(await getAgentByAccountAndChain(db.pool, OWNER, 999, SHARED_ACCOUNT)).toBeNull();
   });
 
   it('a request written under chain A derives chain A and is invisible under chain B', async () => {
@@ -92,8 +92,8 @@ describe('SE-5 cross-chain read-model isolation (E-5)', () => {
 
     // (chainId, account) reads are isolated — each chain sees ONLY its own request,
     // despite the shared account address.
-    const onA = await listRequestsByChainAndAccount(db.pool, CHAIN_A, SHARED_ACCOUNT);
-    const onB = await listRequestsByChainAndAccount(db.pool, CHAIN_B, SHARED_ACCOUNT);
+    const onA = await listRequestsByChainAndAccount(db.pool, OWNER, CHAIN_A, SHARED_ACCOUNT);
+    const onB = await listRequestsByChainAndAccount(db.pool, OWNER, CHAIN_B, SHARED_ACCOUNT);
     expect(onA.map((r) => r.id)).toEqual([reqA.id]);
     expect(onB.map((r) => r.id)).toEqual([reqB.id]);
     expect(onA.every((r) => r.chainId === CHAIN_A)).toBe(true);
