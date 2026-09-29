@@ -6,6 +6,7 @@ import type { SseHub } from '../sse/hub.js';
 import type { ApprovalBroker, ApprovalDecision } from '../approvals/broker.js';
 import { getAgentById } from '../store/agents.js';
 import { expireApproval } from '../store/approvals.js';
+import { listResumableOneShots } from '../store/capabilities.js';
 import { awaitApprovalDecision, decidedInDb } from '../approvals/rendezvous.js';
 import { decryptSecret } from '../crypto/keycrypt.js';
 import { appendTrace } from '../trace/trace-store.js';
@@ -28,10 +29,15 @@ import {
 import type { Json } from '../crypto/canonical.js';
 import type { RuntimeChain } from './session-chain.js';
 import { buildTreasuryGraph, type TreasuryGraph } from './treasury-graph.js';
+import { consumeOneShot } from './one-shot-consume.js';
 import type { CapabilityDeps } from '../capabilities/service.js';
 import { buildJobGraph, type JobGraph } from '../jobs/graph.js';
 import type { StorageUploader } from '../audit/batcher.js';
 import type { InboundDelegationInput } from './prompt.js';
+
+/** SE-2: bounded backoff so a slightly-late authorizeOnce still gets consumed. */
+const ONE_SHOT_CONSUME_MAX_ATTEMPTS = 6;
+const ONE_SHOT_CONSUME_RETRY_MS = 2_000;
 
 export interface RuntimeSettings {
   keyEncryptionSecret: string;
@@ -209,6 +215,61 @@ export class LeashRuntimeManager implements RuntimeManager {
   /** Deliver an owner decision to a paused run (same rendezvous the API uses). */
   resume(approvalId: string, decision: ApprovalDecision): boolean {
     return this.deps.broker.notify(approvalId, decision);
+  }
+
+  /**
+   * SE-2 (SD-E2): after the owner picks approve_once (and client-side signs
+   * `authorizeOnce(callHash)`), auto-retry the originally-refused call and consume
+   * the on-chain one-shot exactly once. Fire-and-forget from the owner route (the
+   * on-chain submit must not block the HTTP response); errors are traced by
+   * consumeOneShot / recordFailure, never thrown to the caller. The agent must be
+   * active (its scoped session key is the only signing material that can retry).
+   */
+  async consumeApprovedOneShot(agentId: string, requestId: string): Promise<void> {
+    try {
+      const agent = await getAgentById(this.deps.pool, agentId);
+      if (!agent || agent.status !== 'active') return; // not actable — stand down silently
+      const ctx = {
+        agentId: agent.id,
+        accountAddr: agent.accountAddr,
+        sessionPrivateKey: decryptSecret(agent.sessionKeyEnc, this.deps.settings.keyEncryptionSecret),
+      };
+      const deps = { pool: this.deps.pool, hub: this.deps.hub, chain: this.deps.chain };
+      // The decision carries the authorizeOnce txHash, but a client may report it
+      // optimistically before it mines — the first consume then sees the one-shot
+      // not-yet-live and stands down `retryable` (the request stays re-claimable).
+      // Bounded backoff catches that confirmation latency; a genuinely-gone
+      // one-shot just exhausts the retries (the on-chain wall guards regardless).
+      for (let attempt = 0; attempt < ONE_SHOT_CONSUME_MAX_ATTEMPTS; attempt++) {
+        const outcome = await consumeOneShot(deps, ctx, requestId);
+        if (outcome.type !== 'stood_down' || !outcome.retryable) return;
+        if (attempt < ONE_SHOT_CONSUME_MAX_ATTEMPTS - 1) {
+          await new Promise((r) => setTimeout(r, ONE_SHOT_CONSUME_RETRY_MS).unref?.());
+        }
+      }
+    } catch (err) {
+      await this.recordFailure(agentId, err);
+    }
+  }
+
+  /**
+   * L-01 (SE-5.0): crash-durability for the fire-and-forget one-shot retry.
+   * `consumeApprovedOneShot` is an in-memory trigger — a backend restart mid-retry
+   * drops the consume (request stays `approved_once`, consume_status NULL|aborted).
+   * This periodic sweep re-drives every resumable one-shot still within the one-
+   * shot TTL, so a crash never silently strands an owner-authorized approve-once.
+   * Idempotent against the live trigger: the CAS in claimOneShotConsumption means a
+   * row already `consuming` (in-flight) is skipped, and a `consumed`/`failed` row is
+   * excluded by the query — so a swept row can only consume the exact one time.
+   * Runs on boot + on a timer (index.ts), mirroring the reservation/approval sweeps.
+   */
+  async sweepResumableOneShots(): Promise<number> {
+    const ttlMs = this.deps.settings.jitTtlMs ?? 600_000;
+    const resumable = await listResumableOneShots(this.deps.pool, ttlMs);
+    for (const { id, agentId } of resumable) {
+      await this.consumeApprovedOneShot(agentId, id);
+    }
+    return resumable.length;
   }
 
   /**
