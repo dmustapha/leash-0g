@@ -42,7 +42,14 @@ export interface ChainOps {
      */
     settlementToken?: string;
     tokenPolicy?: { perTransferCapToken: bigint; windowCapToken: bigint };
-  }): Promise<{ accountAddr: string; chainAgentId: bigint; createTx: string; registerTx: string; guardianAddr: string; accountVersion: 2 | 4 }>;
+    /**
+     * SE-6: the per-agent CREATE2 salt (0x-prefixed bytes32) for a deterministic
+     * V4 mint. Omitted ⇒ the ops layer generates a fresh random salt (a
+     * first-chain create); supplied ⇒ reuse (onboarding the SAME agent onto
+     * another chain at the SAME address). Ignored for legacy v2 mints.
+     */
+    accountSalt?: string;
+  }): Promise<{ accountAddr: string; chainAgentId: bigint; createTx: string; registerTx: string; guardianAddr: string; accountVersion: 2 | 4; accountSalt: string | null }>;
   /**
    * `accountGuardianAddr` = the guardian recorded for this account at create
    * (null = legacy ops-key guardian, S7). Rejects (throws) on a reverted tx —

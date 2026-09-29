@@ -23,6 +23,26 @@ export const factoryV4Abi = parseAbi([
   'event AccountCreatedV4(address indexed account, address indexed owner, address sessionKey, address guardian)',
 ]);
 
+/**
+ * Stage E (SE-6): the DETERMINISTIC (CREATE2) V4 factory — the SAME 8 construction
+ * params as `factoryV4Abi` plus a trailing `bytes32 salt`. The account address is
+ * a pure function of (factory addr, owner, salt, construction args): with the
+ * factory at the same address on every chain (canonical CREATE2 deployer) and an
+ * identical tuple, the same (owner, salt) lands the account at the SAME address
+ * everywhere (E-6). `predictAccountV4` is the cross-chain verification hook
+ * consumed by `ChainRegistry.assertSameAddress`. This is the factory
+ * `LEASH_FACTORY_V4_ADDR` points at from SE-6 on (BR-1 one-address swap).
+ * Hand-derived from contracts/src/LeashAccountV4FactoryDeterministic.sol.
+ */
+export const factoryV4DeterministicAbi = parseAbi([
+  'struct Policy { uint128 perTransferCap; uint128 windowCap; uint32 windowSeconds; uint64 expiresAt; }',
+  'struct TokenPolicy { uint128 perTransferCapToken; uint128 windowCapToken; }',
+  'function createAccountV4(address owner, address guardian, address sessionKey, Policy initialPolicy, address[] initialAllowlist, uint64 timelockDelay, address settlementToken, TokenPolicy initialTokenPolicy, bytes32 salt) returns (address account)',
+  'function predictAccountV4(address owner, address guardian, address sessionKey, Policy initialPolicy, address[] initialAllowlist, uint64 timelockDelay, address settlementToken, TokenPolicy initialTokenPolicy, bytes32 salt) view returns (address)',
+  'event AccountCreatedV4(address indexed account, address indexed owner, address sessionKey, address guardian, bytes32 salt)',
+  'error AccountAlreadyDeployed(address account)',
+]);
+
 /** Minimal ERC-20 metadata reads — to detect + label the settlement asset. */
 export const erc20MetaAbi = parseAbi([
   'function decimals() view returns (uint8)',

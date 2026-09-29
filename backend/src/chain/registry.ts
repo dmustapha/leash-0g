@@ -13,10 +13,10 @@ import type { ChainOps } from '../server.js';
  * (E-11 chain-spoof guard), so no code path can silently act on a chain the owner
  * never configured.
  *
- * Scope note (SE-5): `protocolAllowlist` / `bridgeAllowlist` / `assertSameAddress`
- * are carried on the type for forward-compatibility (SE-6 CREATE2, SE-7 real
- * protocols, SE-8 bridging) but are NOT consumed here — SE-5 builds only the
- * resolution backbone + `(chainId, account)` read-model keying.
+ * Scope note: `protocolAllowlist` / `bridgeAllowlist` are carried on the type for
+ * forward-compatibility (SE-7 real protocols, SE-8 bridging) but are NOT consumed
+ * yet. SE-6 defined `assertSameAddress` — the cross-chain CREATE2 same-address
+ * verification that must PASS before any funds are routed cross-chain (spec §8).
  */
 export interface ChainConfig {
   chainId: number;
@@ -54,6 +54,37 @@ export interface ChainTestClients {
   publicClient: PublicClient;
   opsWallet: WalletClient;
   guardianWallet: WalletClient;
+}
+
+/**
+ * SE-6 (E-6): a cross-chain same-address verification FAILED — funds must NOT be
+ * routed cross-chain for this agent. Carries which chain diverged and on what
+ * (factory address / factory bytecode / predicted address / deployed account
+ * bytecode) so the refusal is legible + actionable.
+ */
+export class SameAddressMismatchError extends Error {
+  constructor(
+    public readonly chainId: number,
+    public readonly field: 'factory_addr' | 'factory_codehash' | 'predicted_address' | 'account_codehash' | 'factory_missing',
+    public readonly expected: string,
+    public readonly actual: string,
+  ) {
+    super(
+      `same-address verification REFUSED at chain ${chainId}: ${field} diverges (expected ${expected}, got ${actual}) — do not route funds cross-chain`,
+    );
+    this.name = 'SameAddressMismatchError';
+  }
+}
+
+/** The construction tuple assertSameAddress predicts with (must be chain-invariant). */
+export interface SameAddressCreateInput {
+  ownerAddr: string;
+  sessionKeyAddr: string;
+  policy: { perTransferCap: bigint; windowCap: bigint; windowSeconds: number; expiresAt: number };
+  allowlist: string[];
+  timelockDelay: number;
+  settlementToken?: string;
+  tokenPolicy?: { perTransferCapToken: bigint; windowCapToken: bigint };
 }
 
 /** Default-deny: resolving an unconfigured chain is a hard error (E-11). */
@@ -132,6 +163,119 @@ export class ChainRegistry {
     });
     this.opsCache.set(chainId, ops);
     return ops;
+  }
+
+  /**
+   * SE-6 (E-6): verify that the SAME (owner, salt) + the SAME construction tuple
+   * lands the account at the SAME address on every requested chain — and REFUSE
+   * (throw) on ANY divergence, BEFORE funds are ever routed cross-chain (spec §8
+   * CREATE2 address-spoof). Checks, per chain (all against the FIRST chain as the
+   * reference):
+   *   1. a deterministic V4 factory is configured, at the SAME address —
+   *      CREATE2 derivation includes the factory address, so a different factory
+   *      can never produce the same account;
+   *   2. the factory BYTECODE is identical (codehash) — a different-bytecode
+   *      contract squatting the factory address is a spoof;
+   *   3. the eth_called CREATE2 prediction is identical — catches ANY tuple/salt
+   *      divergence (constructor args are part of the initcode);
+   *   4. where the account is already deployed, its BYTECODE is identical across
+   *      the deployed chains — a wrong-bytecode account at the right address is
+   *      a spoof (funds would land outside the wall).
+   * Returns the verified same-address. Unregistered chains default-deny (E-11).
+   */
+  async assertSameAddress(input: {
+    ownerAddr: string;
+    /** The per-agent CREATE2 salt (0x bytes32, from agents.account_salt). */
+    accountSalt: string;
+    create: SameAddressCreateInput;
+    chainIds: readonly number[];
+  }): Promise<string> {
+    if (input.chainIds.length < 2) {
+      throw new Error('assertSameAddress requires at least 2 chains (cross-chain verification)');
+    }
+    // PASS 1 — factory identity FIRST (address + bytecode), so a misconfigured /
+    // spoofed factory is refused with a TYPED error BEFORE any eth_call is made
+    // against it (a predict against a non-factory contract would surface as a raw
+    // RPC revert instead of a legible refusal).
+    const factories: Array<{ chainId: number; factoryAddr: string; factoryCodehash: string | null }> = [];
+    for (const chainId of input.chainIds) {
+      const cfg = this.getChainConfig(chainId); // default-deny (E-11)
+      const ops = this.getChainOps(chainId);
+      const factoryAddr = cfg.factoryV4Addr?.toLowerCase();
+      if (!factoryAddr) {
+        throw new SameAddressMismatchError(chainId, 'factory_missing', 'a configured V4 factory', 'none');
+      }
+      factories.push({ chainId, factoryAddr, factoryCodehash: await ops.getCodeHash(factoryAddr) });
+    }
+    const refFactory = factories[0];
+    if (!refFactory) throw new Error('assertSameAddress: unreachable — no chains resolved');
+    if (refFactory.factoryCodehash === null) {
+      // No factory bytecode on the reference chain — nothing is verifiable.
+      throw new SameAddressMismatchError(refFactory.chainId, 'factory_codehash', 'deployed factory bytecode', 'no code');
+    }
+    for (const f of factories.slice(1)) {
+      if (f.factoryAddr !== refFactory.factoryAddr) {
+        throw new SameAddressMismatchError(f.chainId, 'factory_addr', refFactory.factoryAddr, f.factoryAddr);
+      }
+      if (f.factoryCodehash !== refFactory.factoryCodehash) {
+        throw new SameAddressMismatchError(f.chainId, 'factory_codehash', refFactory.factoryCodehash, f.factoryCodehash ?? 'no code');
+      }
+    }
+    // PASS 2 — CREATE2 predictions + deployed-account bytecode.
+    const perChain: Array<{ chainId: number; predicted: string; accountCodehash: string | null }> = [];
+    for (const chainId of input.chainIds) {
+      const ops = this.getChainOps(chainId);
+      let predicted: string;
+      try {
+        predicted = (
+          await ops.predictAccountV4({
+            ownerAddr: input.ownerAddr,
+            sessionKeyAddr: input.create.sessionKeyAddr,
+            policy: input.create.policy,
+            allowlist: input.create.allowlist,
+            timelockDelay: input.create.timelockDelay,
+            ...(input.create.settlementToken !== undefined ? { settlementToken: input.create.settlementToken } : {}),
+            ...(input.create.tokenPolicy !== undefined ? { tokenPolicy: input.create.tokenPolicy } : {}),
+            accountSalt: input.accountSalt,
+          })
+        ).toLowerCase();
+      } catch (err) {
+        // A reverting predict means the configured contract is NOT a deterministic
+        // V4 factory (even though its bytecode matched across chains) — a spoof or
+        // a misconfig either way: refuse with the typed error, never a raw throw.
+        throw new SameAddressMismatchError(
+          chainId,
+          'predicted_address',
+          'a CREATE2 prediction',
+          `predict reverted (${err instanceof Error ? err.message.slice(0, 80) : String(err).slice(0, 80)})`,
+        );
+      }
+      perChain.push({ chainId, predicted, accountCodehash: await ops.getCodeHash(predicted) });
+    }
+    const ref = perChain[0];
+    if (!ref) throw new Error('assertSameAddress: unreachable — no chains resolved');
+    for (const c of perChain.slice(1)) {
+      if (c.predicted !== ref.predicted) {
+        throw new SameAddressMismatchError(c.chainId, 'predicted_address', ref.predicted, c.predicted);
+      }
+    }
+    // Account-bytecode identity across the chains where it IS deployed. (A chain
+    // where it is not yet deployed is fine — that is the pre-onboarding state.)
+    const deployed = perChain.filter((c) => c.accountCodehash !== null);
+    const refDeployed = deployed[0];
+    if (refDeployed) {
+      for (const c of deployed.slice(1)) {
+        if (c.accountCodehash !== refDeployed.accountCodehash) {
+          throw new SameAddressMismatchError(
+            c.chainId,
+            'account_codehash',
+            refDeployed.accountCodehash as string,
+            c.accountCodehash as string,
+          );
+        }
+      }
+    }
+    return ref.predicted;
   }
 
   /** Resolve (and cache) the runtime session-key chain for a chain, or default-deny. */

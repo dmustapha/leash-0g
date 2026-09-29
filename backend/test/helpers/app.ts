@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import type { Pool } from 'pg';
 import type { Express } from 'express';
 import {
@@ -48,23 +49,32 @@ export class FakeChainOps implements ChainOps {
   public revokeErrorFor = new Set<string>();
   private nextAgentId = 100n;
 
-  async deployAndRegister(input: { sessionKeyAddr: string; accountVersion?: 2 | 4 }): Promise<{
+  async deployAndRegister(input: { sessionKeyAddr: string; accountVersion?: 2 | 4; accountSalt?: string }): Promise<{
     accountAddr: string;
     chainAgentId: bigint;
     createTx: string;
     registerTx: string;
     guardianAddr: string;
     accountVersion: 2 | 4;
+    accountSalt: string | null;
   }> {
     const accountVersion = input.accountVersion ?? 4;
     this.createdVersions.push(accountVersion);
+    // SE-6 pre-req: minted addresses must be GLOBALLY unique across FakeChainOps
+    // instances — a per-instance counter re-mints the same address when a test
+    // file rebuilds the app against one schema, violating migration 021's
+    // UNIQUE(owner_addr, chain_id, account_addr) (exactly what a real factory
+    // never does: every real mint is a fresh contract address).
+    const uniquePrefix = randomBytes(15).toString('hex'); // 30 hex chars
     return {
-      accountAddr: `0x${(this.nextAgentId + 1000n).toString(16).padStart(40, '0')}`,
+      accountAddr: `0x${uniquePrefix}${(this.nextAgentId + 1000n).toString(16).padStart(10, '0')}`,
       chainAgentId: this.nextAgentId++,
       createTx: '0x' + '11'.repeat(32),
       registerTx: '0x' + '22'.repeat(32),
       guardianAddr: FAKE_GUARDIAN_ADDR,
       accountVersion,
+      // SE-6 mirror of the ops layer: a V4 mint carries its CREATE2 salt.
+      accountSalt: accountVersion === 4 ? (input.accountSalt ?? '0x' + 'a5'.repeat(32)) : null,
     };
   }
 

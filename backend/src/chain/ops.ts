@@ -4,6 +4,7 @@ import {
   defineChain,
   http,
   parseEventLogs,
+  keccak256,
   type Chain,
   type PublicClient,
   type WalletClient,
@@ -11,8 +12,9 @@ import {
   type Hex,
 } from 'viem';
 import { waitReceipt } from './wait-receipt.js';
+import { randomBytes } from 'node:crypto';
 import { privateKeyToAccount } from 'viem/accounts';
-import { factoryAbi, factoryV4Abi, registryAbi, leashAccountAbi } from './abis.js';
+import { factoryAbi, factoryV4DeterministicAbi, registryAbi, leashAccountAbi } from './abis.js';
 import type { ChainOps } from '../server.js';
 import type { PolicyView } from '../types.js';
 
@@ -107,39 +109,59 @@ export class LeashChainOps implements ChainOps {
 
   async deployAndRegister(input: Parameters<ChainOps['deployAndRegister']>[0]): ReturnType<ChainOps['deployAndRegister']> {
     return this.serializeOps(async () => {
-      // SE-1 (SD-E7): select factory address + fn/event by account version. The
-      // wire is arg-identical (same 8 construction params) — only the target
-      // factory, the function name, and the event name differ.
+      // SE-1 (SD-E7): select factory address + fn/event by account version.
+      // SE-6: the V4 factory is the DETERMINISTIC (CREATE2) one — the wire gains
+      // a trailing bytes32 salt (server-generated, never caller/model text) and a
+      // predict-verify step: the minted address must equal the CREATE2 prediction
+      // (spec §8 CREATE2 address-spoof — a wrong-bytecode/wrong-tuple mint can
+      // never bind). Legacy v2 stays on the plain `createAccount` wire.
       const isV4 = input.accountVersion === 4;
       const v4Addr = this.opts.factoryV4Addr;
       if (isV4 && !v4Addr) {
         throw new Error('accountVersion=4 requested but no V4 factory configured (LEASH_FACTORY_V4_ADDR)');
       }
       const createAddr = (isV4 ? (v4Addr as string) : this.opts.factoryAddr) as Hex;
+      // The per-agent CREATE2 salt: reused verbatim on every chain this agent
+      // onboards so the account lands at the SAME address (E-6). Fresh random
+      // 32 bytes when the caller supplies none (a first-chain create).
+      const accountSalt = (
+        isV4 ? (input.accountSalt ?? `0x${randomBytes(32).toString('hex')}`) : null
+      ) as Hex | null;
+      const constructionArgs = [
+        input.ownerAddr as Hex,
+        this.guardianAccount.address, // C-1: NEW accounts get the dedicated guardian key
+        input.sessionKeyAddr as Hex,
+        {
+          perTransferCap: input.policy.perTransferCap,
+          windowCap: input.policy.windowCap,
+          windowSeconds: input.policy.windowSeconds,
+          expiresAt: BigInt(input.policy.expiresAt),
+        },
+        input.allowlist as Hex[],
+        BigInt(input.timelockDelay),
+        (input.settlementToken ?? '0x0000000000000000000000000000000000000000') as Hex,
+        {
+          perTransferCapToken: input.tokenPolicy?.perTransferCapToken ?? 0n,
+          windowCapToken: input.tokenPolicy?.windowCapToken ?? 0n,
+        },
+      ] as const;
+      // Predict BEFORE the mint — the deterministic address the event must match.
+      const predicted =
+        isV4 && accountSalt
+          ? ((await this.publicClient.readContract({
+              address: createAddr,
+              abi: factoryV4DeterministicAbi,
+              functionName: 'predictAccountV4',
+              args: [...constructionArgs, accountSalt],
+            })) as string)
+          : null;
       const createHash = await this.opsWallet.writeContract({
         chain: this.opsWallet.chain,
         account: this.opsAccount,
         address: createAddr,
-        abi: isV4 ? factoryV4Abi : factoryAbi,
+        abi: isV4 ? factoryV4DeterministicAbi : factoryAbi,
         functionName: isV4 ? 'createAccountV4' : 'createAccount',
-        args: [
-          input.ownerAddr as Hex,
-          this.guardianAccount.address, // C-1: NEW accounts get the dedicated guardian key
-          input.sessionKeyAddr as Hex,
-          {
-            perTransferCap: input.policy.perTransferCap,
-            windowCap: input.policy.windowCap,
-            windowSeconds: input.policy.windowSeconds,
-            expiresAt: BigInt(input.policy.expiresAt),
-          },
-          input.allowlist as Hex[],
-          BigInt(input.timelockDelay),
-          (input.settlementToken ?? '0x0000000000000000000000000000000000000000') as Hex,
-          {
-            perTransferCapToken: input.tokenPolicy?.perTransferCapToken ?? 0n,
-            windowCapToken: input.tokenPolicy?.windowCapToken ?? 0n,
-          },
-        ],
+        args: isV4 && accountSalt ? [...constructionArgs, accountSalt] : [...constructionArgs],
       });
       const createReceipt = await waitReceipt(this.publicClient, createHash);
       // Bind the event from the factory we actually called (address-filtered) so
@@ -148,7 +170,7 @@ export class LeashChainOps implements ChainOps {
         (l) => l.address.toLowerCase() === createAddr.toLowerCase(),
       );
       const created = isV4
-        ? parseEventLogs({ abi: factoryV4Abi, logs: createLogs, eventName: 'AccountCreatedV4' })[0]
+        ? parseEventLogs({ abi: factoryV4DeterministicAbi, logs: createLogs, eventName: 'AccountCreatedV4' })[0]
         : parseEventLogs({ abi: factoryAbi, logs: createLogs, eventName: 'AccountCreated' })[0];
       if (!created) {
         throw new Error(
@@ -156,6 +178,13 @@ export class LeashChainOps implements ChainOps {
         );
       }
       const accountAddr = created.args.account;
+      if (predicted && accountAddr.toLowerCase() !== predicted.toLowerCase()) {
+        // Deterministic-deploy integrity: the mint landed off-prediction — refuse
+        // to bind rather than record an unverifiable account (address-spoof guard).
+        throw new Error(
+          `deterministic V4 mint mismatch: event account ${accountAddr} != CREATE2 prediction ${predicted}`,
+        );
+      }
 
       const auditPubKeyHex = (
         input.auditPubKey.startsWith('0x') ? input.auditPubKey : `0x${input.auditPubKey}`
@@ -182,8 +211,66 @@ export class LeashChainOps implements ChainOps {
         // valid AccountCreated(V4) event, so the DB record is causally tied to
         // the on-chain mint, not a re-assertion of the request (gate L-01).
         accountVersion: isV4 ? 4 : 2,
+        // SE-6: the CREATE2 salt actually used (null for legacy mints) — persisted
+        // so onboarding the agent to another chain reuses it (same address).
+        accountSalt,
       };
     });
+  }
+
+  /** SE-6: the configured deterministic V4 factory address (null = not configured). */
+  get factoryV4Address(): string | null {
+    return this.opts.factoryV4Addr ?? null;
+  }
+
+  /**
+   * SE-6: eth_call the deterministic factory's CREATE2 prediction for a
+   * construction tuple — the per-chain half of `assertSameAddress`. Uses the
+   * SAME guardian key this lane would mint with, so the prediction matches what
+   * `deployAndRegister` would actually deploy on this chain.
+   */
+  async predictAccountV4(
+    input: Omit<Parameters<ChainOps['deployAndRegister']>[0], 'accountVersion' | 'auditPubKey' | 'name'> & {
+      accountSalt: string;
+    },
+  ): Promise<string> {
+    const v4Addr = this.opts.factoryV4Addr;
+    if (!v4Addr) throw new Error('predictAccountV4: no V4 factory configured on this chain');
+    return (await this.publicClient.readContract({
+      address: v4Addr as Hex,
+      abi: factoryV4DeterministicAbi,
+      functionName: 'predictAccountV4',
+      args: [
+        input.ownerAddr as Hex,
+        this.guardianAccount.address,
+        input.sessionKeyAddr as Hex,
+        {
+          perTransferCap: input.policy.perTransferCap,
+          windowCap: input.policy.windowCap,
+          windowSeconds: input.policy.windowSeconds,
+          expiresAt: BigInt(input.policy.expiresAt),
+        },
+        input.allowlist as Hex[],
+        BigInt(input.timelockDelay),
+        (input.settlementToken ?? '0x0000000000000000000000000000000000000000') as Hex,
+        {
+          perTransferCapToken: input.tokenPolicy?.perTransferCapToken ?? 0n,
+          windowCapToken: input.tokenPolicy?.windowCapToken ?? 0n,
+        },
+        input.accountSalt as Hex,
+      ],
+    }));
+  }
+
+  /**
+   * SE-6: keccak256 of the deployed bytecode at `addr` (null = no code). Used by
+   * `assertSameAddress` to prove factory/account BYTECODE identity across chains —
+   * a colliding address with different bytecode is a spoof, refused.
+   */
+  async getCodeHash(addr: string): Promise<string | null> {
+    const code = await this.publicClient.getCode({ address: addr as Hex });
+    if (!code || code === '0x') return null;
+    return keccak256(code);
   }
 
   /**
