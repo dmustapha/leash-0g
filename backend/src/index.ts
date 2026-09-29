@@ -2,7 +2,8 @@ import 'dotenv/config';
 import { createPublicClient, http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
-import { loadConfig } from './config.js';
+import { loadConfig, buildChainConfigs } from './config.js';
+import { ChainRegistry } from './chain/registry.js';
 import { createPool } from './db/pool.js';
 import { migrate } from './db/migrate.js';
 import { createOwnerApp, createGatewayApp } from './server.js';
@@ -10,12 +11,11 @@ import { ComputeQueue } from './gateway/compute-queue.js';
 import { SseHub } from './sse/hub.js';
 import { ApprovalBroker } from './approvals/broker.js';
 import { createPrivyVerifier } from './api/privy.js';
-import { LeashChainOps, zeroGChain } from './chain/ops.js';
+import { zeroGChain } from './chain/ops.js';
 import { RevokeWatcher } from './chain/revoke-watcher.js';
 import { viemRevokedLogSource } from './chain/log-source.js';
 import { AuditBatcher, StreamBatcher, ownerStreamSource } from './audit/batcher.js';
 import { ZeroGStorage } from './audit/storage.js';
-import { SessionChain } from './runtime/session-chain.js';
 import { LeashRuntimeManager } from './runtime/manager.js';
 import { backfillLegacyGuardian } from './store/agents.js';
 import { sweepStaleReservations } from './store/reservations.js';
@@ -111,15 +111,18 @@ async function main(): Promise<void> {
   const sweptDelegations = await runBootSweep(pool, hub, alerts);
   if (sweptDelegations.length > 0) console.error(`swept ${sweptDelegations.length} orphaned delegation(s)`);
   const queue = new ComputeQueue({ baseUrl: cfg.COMPUTE_BASE_URL, apiKey: cfg.ZERO_G_COMPUTE_API_KEY });
-  const chain = new LeashChainOps({
-    rpcUrl: cfg.ZERO_G_RPC,
-    chainId: cfg.ZERO_G_CHAIN_ID,
+  // SE-5 (E-5): the multichain backbone — one registry resolves ops/session clients
+  // per chainId (default-deny for unregistered chains). The default chain drives the
+  // existing single-chain runtime; onboarding another testnet is a config-only entry
+  // in buildChainConfigs (no code fork here). Per-chain runtime threading lands with
+  // the first real second chain (SE-7).
+  const chainConfigs = buildChainConfigs(cfg);
+  const chainRegistry = new ChainRegistry(chainConfigs, {
     opsPrivateKey: cfg.OPS_PRIVATE_KEY,
     guardianPrivateKey: cfg.GUARDIAN_PRIVATE_KEY,
-    factoryAddr: cfg.LEASH_FACTORY_ADDR,
-    ...(cfg.LEASH_FACTORY_V4_ADDR ? { factoryV4Addr: cfg.LEASH_FACTORY_V4_ADDR } : {}),
-    registryAddr: cfg.AGENT_REGISTRY_ADDR,
   });
+  const defaultChainId = cfg.ZERO_G_CHAIN_ID;
+  const chain = chainRegistry.getChainOps(defaultChainId);
 
   // 0G Storage Log Layer wrapper — the audit batcher's sink AND the Phase-4
   // job graph's deliverable/PoA sink (built here so the runtime can thread it).
@@ -135,7 +138,7 @@ async function main(): Promise<void> {
     broker,
     alerts,
     uploader,
-    chain: new SessionChain({ rpcUrl: cfg.ZERO_G_RPC, chainId: cfg.ZERO_G_CHAIN_ID }),
+    chain: chainRegistry.getSessionChain(defaultChainId),
     checkpointer,
     settings: {
       keyEncryptionSecret: cfg.KEY_ENCRYPTION_SECRET,

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { ChainConfig } from './chain/registry.js';
 
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
@@ -22,6 +23,12 @@ const envSchema = z.object({
   KEY_ENCRYPTION_SECRET: z.string().regex(/^[0-9a-fA-F]{64}$/),
   AGENT_REGISTRY_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
   LEASH_FACTORY_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
+  // SE-1 (Stage E): the dedicated V4 (governed-calldata) factory. Governed
+  // agents (accountVersion=4, the create default) are minted here. Optional so
+  // legacy-only setups still boot; a V4 create with this unset fails loudly
+  // rather than silently minting a legacy account. BR-1: swapping in the SE-6
+  // deterministic CREATE2 factory is a change to this address alone.
+  LEASH_FACTORY_V4_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
   PORT: z.coerce.number().int().positive().default(8080),
   HOST: z.string().min(1).default('127.0.0.1'), // M-01 dev bind; Render sets 0.0.0.0
   // M-01: the gateway listens on its OWN server, always bound to 127.0.0.1 —
@@ -129,4 +136,32 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new Error(`Invalid environment configuration: ${missing}`);
   }
   return parsed.data;
+}
+
+/**
+ * SE-5 (E-5): the chain-config table. Replaces the single `ZERO_G_CHAIN_ID` with
+ * an array the `ChainRegistry` resolves by `chainId`. Today it holds the one 0G
+ * Galileo entry derived from the existing env — onboarding another testnet (SE-7
+ * Base Sepolia, SE-9 Arbitrum, …) is a CONFIG-ONLY change: append an entry here,
+ * no code fork (the registry + drills are chain-agnostic). 0G enforces a 2-gwei
+ * gas floor (observed live, 2026-09); other chains carry their own.
+ */
+export function buildChainConfigs(cfg: Config): ChainConfig[] {
+  return [
+    {
+      chainId: cfg.ZERO_G_CHAIN_ID,
+      name: '0G Galileo Testnet',
+      rpcUrl: cfg.ZERO_G_RPC,
+      factoryAddr: cfg.LEASH_FACTORY_ADDR,
+      factoryV4Addr: cfg.LEASH_FACTORY_V4_ADDR,
+      registryAddr: cfg.AGENT_REGISTRY_ADDR,
+      accountVersion: 4, // SD-E7: governed calldata is the create default
+      canonical: {
+        router: cfg.CAP_ROUTER_ADDR,
+        vault: cfg.CAP_VAULT_ADDR,
+        settlementToken: cfg.CAP_SETTLEMENT_TOKEN_ADDR,
+      },
+      gasFloorWei: 2_000_000_000n, // 2 gwei — 0G node minimum
+    },
+  ];
 }
