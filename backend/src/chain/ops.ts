@@ -12,7 +12,7 @@ import {
 } from 'viem';
 import { waitReceipt } from './wait-receipt.js';
 import { privateKeyToAccount } from 'viem/accounts';
-import { factoryAbi, registryAbi, leashAccountAbi } from './abis.js';
+import { factoryAbi, factoryV4Abi, registryAbi, leashAccountAbi } from './abis.js';
 import type { ChainOps } from '../server.js';
 import type { PolicyView } from '../types.js';
 
@@ -23,6 +23,13 @@ export interface LeashChainOptions {
   /** C-1: dedicated revoke-only guardian key — its own signer + nonce space. */
   guardianPrivateKey: string;
   factoryAddr: string;
+  /**
+   * SE-1 (Stage E): the dedicated V4 (governed-calldata) factory. Selected for
+   * accountVersion=4 creates. Forward-compatible with SE-6 (BR-1): swapping in a
+   * deterministic CREATE2 factory is a config change to this address alone.
+   * Optional so legacy-only setups (v2 accounts) still boot.
+   */
+  factoryV4Addr?: string;
   registryAddr: string;
   /** Test seam: inject fake clients instead of dialing an RPC. */
   clients?: {
@@ -100,12 +107,21 @@ export class LeashChainOps implements ChainOps {
 
   async deployAndRegister(input: Parameters<ChainOps['deployAndRegister']>[0]): ReturnType<ChainOps['deployAndRegister']> {
     return this.serializeOps(async () => {
+      // SE-1 (SD-E7): select factory address + fn/event by account version. The
+      // wire is arg-identical (same 8 construction params) — only the target
+      // factory, the function name, and the event name differ.
+      const isV4 = input.accountVersion === 4;
+      const v4Addr = this.opts.factoryV4Addr;
+      if (isV4 && !v4Addr) {
+        throw new Error('accountVersion=4 requested but no V4 factory configured (LEASH_FACTORY_V4_ADDR)');
+      }
+      const createAddr = (isV4 ? (v4Addr as string) : this.opts.factoryAddr) as Hex;
       const createHash = await this.opsWallet.writeContract({
         chain: this.opsWallet.chain,
         account: this.opsAccount,
-        address: this.opts.factoryAddr as Hex,
-        abi: factoryAbi,
-        functionName: 'createAccount',
+        address: createAddr,
+        abi: isV4 ? factoryV4Abi : factoryAbi,
+        functionName: isV4 ? 'createAccountV4' : 'createAccount',
         args: [
           input.ownerAddr as Hex,
           this.guardianAccount.address, // C-1: NEW accounts get the dedicated guardian key
@@ -126,8 +142,19 @@ export class LeashChainOps implements ChainOps {
         ],
       });
       const createReceipt = await waitReceipt(this.publicClient, createHash);
-      const created = parseEventLogs({ abi: factoryAbi, logs: createReceipt.logs, eventName: 'AccountCreated' })[0];
-      if (!created) throw new Error('factory createAccount emitted no AccountCreated event');
+      // Bind the event from the factory we actually called (address-filtered) so
+      // a co-emitted same-shape event in the tx can never bind the wrong address.
+      const createLogs = createReceipt.logs.filter(
+        (l) => l.address.toLowerCase() === createAddr.toLowerCase(),
+      );
+      const created = isV4
+        ? parseEventLogs({ abi: factoryV4Abi, logs: createLogs, eventName: 'AccountCreatedV4' })[0]
+        : parseEventLogs({ abi: factoryAbi, logs: createLogs, eventName: 'AccountCreated' })[0];
+      if (!created) {
+        throw new Error(
+          `factory ${isV4 ? 'createAccountV4' : 'createAccount'} emitted no ${isV4 ? 'AccountCreatedV4' : 'AccountCreated'} event`,
+        );
+      }
       const accountAddr = created.args.account;
 
       const auditPubKeyHex = (
@@ -151,6 +178,10 @@ export class LeashChainOps implements ChainOps {
         createTx: createHash,
         registerTx: registerHash,
         guardianAddr: this.guardianAccount.address,
+        // The version actually minted — derived from the branch that produced a
+        // valid AccountCreated(V4) event, so the DB record is causally tied to
+        // the on-chain mint, not a re-assertion of the request (gate L-01).
+        accountVersion: isV4 ? 4 : 2,
       };
     });
   }
@@ -262,7 +293,7 @@ export async function readPolicyView(
       address,
       abi: leashAccountAbi,
       functionName: 'settlementToken',
-    })) as string;
+    }));
   } catch {
     return base; // legacy v2 account — no token surface
   }

@@ -581,7 +581,7 @@ export function buildJobGraph(deps: JobGraphDeps, ctx: JobAgentContext, checkpoi
       deps.hub.emit(ctx.agentId, 'trace', traceEvent(rec));
       // Phase-5.5 working memory (S23): a salient, QUARANTINED-UNTRUSTED finding
       // for the conversational-status query. Bounded rolling window; read-only.
-      await appendMemory(deps.pool, { agentId: ctx.agentId, kind: o.type, content: detail as Json });
+      await appendMemory(deps.pool, { agentId: ctx.agentId, kind: o.type, content: detail });
     }
     await postInboundOutcome(state);
     return {};

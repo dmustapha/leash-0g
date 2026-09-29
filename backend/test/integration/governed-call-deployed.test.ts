@@ -19,6 +19,7 @@ import { upsertGrant, listRecentRequests, getCapabilityRequest } from '../../src
 import { getAgentById } from '../../src/store/agents.js';
 import { decideCapabilityRequest, type CapabilityDeps } from '../../src/capabilities/service.js';
 import type { CallRule } from '../../src/governed-call/index.js';
+import { confirmReceipt } from '../../scripts/drill-common.js';
 
 /**
  * C-D1 — Stage-D DEPLOY: the BACKEND-ORCHESTRATED JIT rail proven on the LIVE 0G stack.
@@ -88,15 +89,16 @@ const wallet = createWalletClient({ chain: zeroGChain(RPC, 16602), transport: ht
 
 async function allowance(): Promise<bigint> {
   return publicClient.readContract({
-    address: USD as Hex,
+    address: USD,
     abi: [{ type: 'function', name: 'allowance', stateMutability: 'view', inputs: [{ type: 'address' }, { type: 'address' }], outputs: [{ type: 'uint256' }] }],
     functionName: 'allowance',
     args: [ACCOUNT as Hex, ROUTER as Hex],
-  }) as Promise<bigint>;
+  });
 }
+// SE-4: bounded RPC-flake tolerance — a transient receipt drop/timeout retries; a genuine revert rethrows.
 async function send(functionName: string, args: readonly unknown[]): Promise<Hex> {
   const hash = await wallet.writeContract({ chain: wallet.chain, account: OPS, address: ACCOUNT as Hex, abi: leashAccountV4Abi, functionName, args } as never);
-  await publicClient.waitForTransactionReceipt({ hash });
+  await confirmReceipt(publicClient, hash); // re-polls the same hash; tolerates 0G receipt drops, no double-submit
   return hash;
 }
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

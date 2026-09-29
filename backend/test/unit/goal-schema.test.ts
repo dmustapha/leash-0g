@@ -3,7 +3,7 @@ import { applyGoalPatch, validateAcceptancePatch, applyRecipient, goalSchema } f
 import type { AgentGoal } from '../../src/types.js';
 
 const TREASURY: AgentGoal = { type: 'treasury', beneficiary: '0x' + '11'.repeat(20), targetBalanceWei: '1000', topUpWei: '500' };
-const LEGACY_TREASURY: AgentGoal = { beneficiary: '0x' + '11'.repeat(20), targetBalanceWei: '1000', topUpWei: '500' } as AgentGoal;
+const LEGACY_TREASURY: AgentGoal = { beneficiary: '0x' + '11'.repeat(20), targetBalanceWei: '1000', topUpWei: '500' };
 const PROVIDER: AgentGoal = { type: 'provider', serviceSpec: 'summaries' };
 const REQUESTER: AgentGoal = {
   type: 'requester',
@@ -43,35 +43,35 @@ describe('applyGoalPatch — R-1 adversarial (reject out-of-union / role change 
     expect(r.ok).toBe(false);
   });
   it('REJECTS a prompt-injected money-authority field (feeRecipient)', () => {
-    const r = applyGoalPatch(REQUESTER, { feeRecipient: '0x' + 'de'.repeat(20) } as never);
+    const r = applyGoalPatch(REQUESTER, { feeRecipient: '0x' + 'de'.repeat(20) });
     expect(r.ok).toBe(false);
   });
   it('REJECTS arming a treasury beneficiary address via patch (never-guess-money)', () => {
-    const r = applyGoalPatch(TREASURY, { beneficiary: '0x' + 'de'.repeat(20) } as never);
+    const r = applyGoalPatch(TREASURY, { beneficiary: '0x' + 'de'.repeat(20) });
     expect(r.ok).toBe(false);
   });
   it('REJECTS a settlement-token change via patch', () => {
-    const r = applyGoalPatch(REQUESTER, { feeToken: '0x' + 'ad'.repeat(20) } as never);
+    const r = applyGoalPatch(REQUESTER, { feeToken: '0x' + 'ad'.repeat(20) });
     expect(r.ok).toBe(false);
   });
   it('REJECTS a cap-loosen via goalPatch (feeCapPerJobWei)', () => {
-    const r = applyGoalPatch(REQUESTER, { feeCapPerJobWei: '999999999' } as never);
+    const r = applyGoalPatch(REQUESTER, { feeCapPerJobWei: '999999999' });
     expect(r.ok).toBe(false);
   });
   it('REJECTS a delegation binding change (providerAgentId)', () => {
-    const r = applyGoalPatch(REQUESTER, { providerAgentId: 'evil' } as never);
+    const r = applyGoalPatch(REQUESTER, { providerAgentId: 'evil' });
     expect(r.ok).toBe(false);
   });
   it('REJECTS a completely unknown per-vertical field', () => {
-    const r = applyGoalPatch(TREASURY, { rugPull: true } as never);
+    const r = applyGoalPatch(TREASURY, { rugPull: true });
     expect(r.ok).toBe(false);
   });
   it('REJECTS a malformed wei value in a descriptive field', () => {
-    const r = applyGoalPatch(TREASURY, { targetBalanceWei: 'not-wei' } as never);
+    const r = applyGoalPatch(TREASURY, { targetBalanceWei: 'not-wei' });
     expect(r.ok).toBe(false);
   });
   it('executor has no descriptive surface — any patch is rejected', () => {
-    const r = applyGoalPatch({ type: 'executor' }, { serviceSpec: 'x' } as never);
+    const r = applyGoalPatch({ type: 'executor' }, { serviceSpec: 'x' });
     expect(r.ok).toBe(false);
   });
 });

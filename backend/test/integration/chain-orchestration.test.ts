@@ -76,6 +76,7 @@ async function draftFor(agentId: string): Promise<string> {
 
 /** A coordinator whose terminal callback drives onHopSettled (composition-root shape). */
 function wiredCoordinator(): { coordinator: DelegationCoordinator; deps: () => ChainDeps } {
+  // eslint-disable-next-line prefer-const -- forward-referenced by the `deps` closure below, so it must be declared before assignment (const impossible here)
   let coordinator!: DelegationCoordinator;
   const deps = (): ChainDeps => ({ pool: db.pool, hub: t.hub, coordinator, config: DEFAULT_CHAIN_CONFIG });
   coordinator = new DelegationCoordinator({
