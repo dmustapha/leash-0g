@@ -271,6 +271,7 @@ async function main(): Promise<void> {
         ...(cfg.CAP_SETTLEMENT_TOKEN_ADDR ? { settlement_token: cfg.CAP_SETTLEMENT_TOKEN_ADDR.toLowerCase() } : {}),
       },
       jitTtlMs: cfg.JIT_TTL_MS,
+      defaultChainId,
     },
   };
   // M-01 split surfaces: the public server carries owner API + SSE + healthz

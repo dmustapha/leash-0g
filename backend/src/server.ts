@@ -107,6 +107,8 @@ export interface Settings {
   capabilityCatalog: TargetCatalog;
   /** Stage D: how long a JIT (L2) capability card stays actionable (ms). */
   jitTtlMs: number;
+  /** SE-5 (Stage E): the chain new agents are created on (the (chainId, account) anchor). */
+  defaultChainId: number;
 }
 
 export interface AppDeps {

@@ -23,6 +23,7 @@ const JOB_AWAIT = randomUUID();
 async function makeAgent(name: string, goal: AgentGoal): Promise<string> {
   return insertAgent(db.pool, {
     chainAgentId: BigInt(Math.floor(Math.random() * 1e9)),
+    chainId: 16602,
     ownerAddr: OWNER,
     accountAddr: '0x' + Math.floor(Math.random() * 1e9).toString(16).padStart(40, '0'),
     sessionKeyAddr: '0x' + Math.floor(Math.random() * 1e9).toString(16).padStart(40, '0'),
@@ -30,6 +31,7 @@ async function makeAgent(name: string, goal: AgentGoal): Promise<string> {
     auditPubkey: 'ab'.repeat(33),
     tokenId: `tok-${name}-${Math.random()}`,
     tokenHash: 'hash',
+    accountVersion: 4,
     name,
     gatewayRules: [],
     goal,

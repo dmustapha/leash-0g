@@ -37,6 +37,8 @@ export const FAKE_GUARDIAN_ADDR = '0x' + 'ab'.repeat(20);
 
 export class FakeChainOps implements ChainOps {
   public revoked: string[] = [];
+  /** SE-1: account versions passed per create — funnel version-selection assertions. */
+  public createdVersions: number[] = [];
   /** Guardian addr passed per revoke call — lane-selection assertions (C-1). */
   public revokeGuardians: Array<string | null> = [];
   public funded: Array<{ addr: string; amountWei: bigint }> = [];
@@ -46,20 +48,23 @@ export class FakeChainOps implements ChainOps {
   public revokeErrorFor = new Set<string>();
   private nextAgentId = 100n;
 
-  async deployAndRegister(input: { sessionKeyAddr: string }): Promise<{
+  async deployAndRegister(input: { sessionKeyAddr: string; accountVersion?: 2 | 4 }): Promise<{
     accountAddr: string;
     chainAgentId: bigint;
     createTx: string;
     registerTx: string;
     guardianAddr: string;
+    accountVersion: 2 | 4;
   }> {
-    void input;
+    const accountVersion = input.accountVersion ?? 4;
+    this.createdVersions.push(accountVersion);
     return {
       accountAddr: `0x${(this.nextAgentId + 1000n).toString(16).padStart(40, '0')}`,
       chainAgentId: this.nextAgentId++,
       createTx: '0x' + '11'.repeat(32),
       registerTx: '0x' + '22'.repeat(32),
       guardianAddr: FAKE_GUARDIAN_ADDR,
+      accountVersion,
     };
   }
 
@@ -132,6 +137,12 @@ export class FakeRuntime implements RuntimeManager {
   nudge(agentId: string): void {
     this.nudges.push(agentId);
   }
+
+  /** SE-2: records the requestIds a one-shot consume was triggered for. */
+  public oneShotConsumes: Array<{ agentId: string; requestId: string }> = [];
+  async consumeApprovedOneShot(agentId: string, requestId: string): Promise<void> {
+    this.oneShotConsumes.push({ agentId, requestId });
+  }
 }
 
 export interface TestApp {
@@ -179,6 +190,7 @@ export function testSettings(overrides: Partial<AppDeps['settings']> = {}): AppD
       settlement_token: '0x' + 'c0'.repeat(20),
     },
     jitTtlMs: 600_000,
+    defaultChainId: 16602,
     ...overrides,
   };
 }

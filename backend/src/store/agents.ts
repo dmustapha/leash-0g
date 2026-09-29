@@ -4,6 +4,7 @@ import type { AgentRow, AgentStatus, GatewayRule, AgentGoal } from '../types.js'
 interface DbAgentRow {
   id: string;
   chain_agent_id: string | null;
+  chain_id: string;
   owner_addr: string;
   account_addr: string;
   session_key_addr: string;
@@ -19,6 +20,7 @@ interface DbAgentRow {
   gateway_token_enc: string | null;
   guardian_addr: string | null;
   capability_label: string | null;
+  account_version: number;
   created_at: Date;
 }
 
@@ -26,6 +28,7 @@ function mapRow(r: DbAgentRow): AgentRow {
   return {
     id: r.id,
     chainAgentId: r.chain_agent_id,
+    chainId: Number(r.chain_id),
     ownerAddr: r.owner_addr,
     accountAddr: r.account_addr,
     sessionKeyAddr: r.session_key_addr,
@@ -41,13 +44,14 @@ function mapRow(r: DbAgentRow): AgentRow {
     gatewayTokenEnc: r.gateway_token_enc,
     guardianAddr: r.guardian_addr,
     capabilityLabel: r.capability_label,
+    accountVersion: r.account_version,
     createdAt: r.created_at.toISOString(),
   };
 }
 
-const COLS = `id, chain_agent_id, owner_addr, account_addr, session_key_addr, session_key_enc,
+const COLS = `id, chain_agent_id, chain_id, owner_addr, account_addr, session_key_addr, session_key_enc,
   audit_pubkey, token_id, token_hash, name, status, gateway_rules, goal, encrypted_audit_key,
-  gateway_token_enc, guardian_addr, capability_label, created_at`;
+  gateway_token_enc, guardian_addr, capability_label, account_version, created_at`;
 
 export async function getAgentById(pool: Pool, id: string): Promise<AgentRow | null> {
   if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
@@ -60,8 +64,28 @@ export async function getAgentByTokenId(pool: Pool, tokenId: string): Promise<Ag
   return res.rows[0] ? mapRow(res.rows[0]) : null;
 }
 
+/**
+ * SE-5 (E-5): resolve an agent by its (chainId, account) — the multichain key.
+ * Under SE-6 CREATE2 the SAME account address can exist on multiple chains, so
+ * account_addr alone is ambiguous; the chain disambiguates. This is the isolation
+ * anchor: a lookup for chain A never returns chain B's agent for the same address.
+ */
+export async function getAgentByAccountAndChain(
+  pool: Pool,
+  chainId: number,
+  accountAddr: string,
+): Promise<AgentRow | null> {
+  const res = await pool.query<DbAgentRow>(
+    `SELECT ${COLS} FROM agents WHERE chain_id = $1 AND account_addr = $2 ORDER BY created_at DESC LIMIT 1`,
+    [chainId, accountAddr.toLowerCase()],
+  );
+  return res.rows[0] ? mapRow(res.rows[0]) : null;
+}
+
 export interface InsertAgentInput {
   chainAgentId: bigint;
+  /** SE-5: the chain this agent's account lives on — the (chainId, account) anchor. */
+  chainId: number;
   ownerAddr: string;
   accountAddr: string;
   sessionKeyAddr: string;
@@ -78,16 +102,19 @@ export interface InsertAgentInput {
   guardianAddr: string;
   /** Phase-5 (D-B9): optional freeform capability label; null when unset. */
   capabilityLabel?: string | null;
+  /** SE-1 (Stage E): on-chain account version (2 legacy | 4 governed-calldata). */
+  accountVersion: 2 | 4;
 }
 
 export async function insertAgent(pool: Pool, input: InsertAgentInput): Promise<string> {
   const res = await pool.query<{ id: string }>(
-    `INSERT INTO agents (chain_agent_id, owner_addr, account_addr, session_key_addr, session_key_enc,
+    `INSERT INTO agents (chain_agent_id, chain_id, owner_addr, account_addr, session_key_addr, session_key_enc,
                          audit_pubkey, token_id, token_hash, name, gateway_rules, goal, encrypted_audit_key,
-                         gateway_token_enc, guardian_addr, capability_label)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15) RETURNING id`,
+                         gateway_token_enc, guardian_addr, capability_label, account_version)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING id`,
     [
       input.chainAgentId.toString(),
+      input.chainId,
       input.ownerAddr.toLowerCase(),
       input.accountAddr.toLowerCase(),
       input.sessionKeyAddr.toLowerCase(),
@@ -102,6 +129,7 @@ export async function insertAgent(pool: Pool, input: InsertAgentInput): Promise<
       input.gatewayTokenEnc ?? null,
       input.guardianAddr.toLowerCase(),
       input.capabilityLabel ?? null,
+      input.accountVersion,
     ],
   );
   const row = res.rows[0];

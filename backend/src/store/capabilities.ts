@@ -84,9 +84,9 @@ export async function upsertGrant(pool: Pool, input: UpsertGrantInput): Promise<
   const { rule } = input;
   const res = await pool.query<DbGrantRow>(
     `INSERT INTO capability_grants
-       (agent_id, owner_addr, target, selector, recipient_mode, spender_set,
+       (agent_id, chain_id, owner_addr, target, selector, recipient_mode, spender_set,
         per_call_cap, window_cap_call, codehash, source, status, tx_hash)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+     VALUES ($1, (SELECT chain_id FROM agents WHERE id = $1), $2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
      ON CONFLICT (agent_id, target, selector) DO UPDATE SET
        recipient_mode = EXCLUDED.recipient_mode,
        spender_set    = EXCLUDED.spender_set,
@@ -156,7 +156,8 @@ export async function recordPresetApplied(
   presetKey: string,
 ): Promise<void> {
   await pool.query(
-    `INSERT INTO capability_presets (agent_id, owner_addr, preset_key) VALUES ($1,$2,$3)`,
+    `INSERT INTO capability_presets (agent_id, chain_id, owner_addr, preset_key)
+     VALUES ($1, (SELECT chain_id FROM agents WHERE id = $1), $2, $3)`,
     [agentId, ownerAddr.toLowerCase(), presetKey],
   );
 }
@@ -180,6 +181,8 @@ export type ConsumeStatus = 'consuming' | 'consumed' | 'aborted' | 'failed';
 export interface RequestRow {
   id: string;
   agentId: string;
+  /** SE-5: the chain this request's account lives on (derived from the agent). */
+  chainId: number;
   ownerAddr: string;
   decoded: Json;
   novelty: Novelty[];
@@ -201,6 +204,7 @@ export interface RequestRow {
 interface DbRequestRow {
   id: string;
   agent_id: string;
+  chain_id: string;
   owner_addr: string;
   decoded: Json;
   novelty: Novelty[];
@@ -221,6 +225,7 @@ function mapRequest(r: DbRequestRow): RequestRow {
   return {
     id: r.id,
     agentId: r.agent_id,
+    chainId: Number(r.chain_id),
     ownerAddr: r.owner_addr,
     decoded: r.decoded,
     novelty: r.novelty,
@@ -260,8 +265,8 @@ export async function insertCapabilityRequest(
   input: InsertRequestInput,
 ): Promise<{ row: RequestRow; created: boolean }> {
   const res = await pool.query<DbRequestRow>(
-    `INSERT INTO capability_requests (agent_id, owner_addr, decoded, novelty, call_hash, call_target, call_value, call_data)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+    `INSERT INTO capability_requests (agent_id, chain_id, owner_addr, decoded, novelty, call_hash, call_target, call_value, call_data)
+     VALUES ($1, (SELECT chain_id FROM agents WHERE id = $1), $2,$3,$4,$5,$6,$7,$8)
      ON CONFLICT (agent_id, call_hash) WHERE status = 'pending' DO NOTHING
      RETURNING *`,
     [
@@ -381,6 +386,28 @@ export async function listResumableOneShots(
     [Math.max(0, Math.floor(ttlMs))],
   );
   return res.rows.map((r) => ({ id: r.id, agentId: r.agent_id }));
+}
+
+/**
+ * SE-5 (E-5): read the JIT request grant state for a specific (chainId, account),
+ * scoped so a read on chain A can NEVER surface chain B's requests — even when
+ * both chains host the same account address (SE-6 CREATE2). The chain_id filter
+ * on capability_requests + the account join make the isolation local + explicit.
+ */
+export async function listRequestsByChainAndAccount(
+  pool: Pool,
+  chainId: number,
+  accountAddr: string,
+  limit = 50,
+): Promise<RequestRow[]> {
+  const res = await pool.query<DbRequestRow>(
+    `SELECT cr.* FROM capability_requests cr
+       JOIN agents a ON a.id = cr.agent_id
+      WHERE cr.chain_id = $1 AND a.account_addr = $2
+      ORDER BY cr.created_at DESC LIMIT $3`,
+    [chainId, accountAddr.toLowerCase(), Math.min(Math.max(limit, 1), 200)],
+  );
+  return res.rows.map(mapRequest);
 }
 
 /** Recent JIT decisions for an agent (display in the CapabilityEnvelope). */

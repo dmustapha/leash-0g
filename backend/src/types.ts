@@ -99,6 +99,8 @@ export interface GatewayRule {
 export interface AgentRow {
   id: string;
   chainAgentId: string | null;
+  /** SE-5: the chain this agent's account lives on — the (chainId, account) anchor. */
+  chainId: number;
   ownerAddr: string;
   accountAddr: string;
   sessionKeyAddr: string;
@@ -118,6 +120,12 @@ export interface AgentRow {
   guardianAddr: string | null;
   /** Phase-5 (D-B9): freeform "what it's for" label (elevation-suggested, owner-edited). Inert — no taxonomy/discovery. */
   capabilityLabel: string | null;
+  /**
+   * SE-1 (Stage E): on-chain account bytecode version — 4 = governed-calldata V4
+   * (the create default), 2 = legacy v2/v3. The runtime/read-model branch on this
+   * to know which ABI surface the account exposes (F9 mixed-support).
+   */
+  accountVersion: number;
   createdAt: string;
 }
 
