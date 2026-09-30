@@ -206,6 +206,7 @@ async function main(): Promise<void> {
   const digest = new DigestService({
     pool,
     chain,
+    resolveChain: (chainId: number) => chainRegistry.getChainOps(chainId),
     settings: { digestDefaultHourUtc: cfg.DIGEST_DEFAULT_HOUR_UTC },
   });
 

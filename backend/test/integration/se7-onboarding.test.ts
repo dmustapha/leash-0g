@@ -46,7 +46,7 @@ class FakeOnboardOps {
   public mints: Array<Record<string, unknown>> = [];
   public adoptNext = false;
   async predictAccountV4(input: Record<string, unknown>): Promise<string> {
-    return fakePredict({ ...input, guardianAddr: (input['guardianAddr'] as string | undefined) ?? this.guardianAddress });
+    return fakePredict({ ...input, guardianAddr: input['guardianAddr'] ?? this.guardianAddress });
   }
   public funded: Array<{ addr: string; amountWei: bigint }> = [];
   async fundSessionKey(addr: string, amountWei: bigint): Promise<{ txHash: string }> {

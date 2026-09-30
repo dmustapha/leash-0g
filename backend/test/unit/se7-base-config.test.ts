@@ -73,15 +73,16 @@ describe('SE-7 Base Sepolia chain config (config-only onboarding)', () => {
     }
   });
 
-  it('a malformed allowlist entry is dropped, never half-parsed', () => {
-    const chains = buildChainConfigs(
-      cfgWith({
-        BASE_SEPOLIA_RPC: 'http://base.leash-test.local',
-        AGENT_REGISTRY_BASE_ADDR: '0x' + 'ee'.repeat(20),
-        BASE_PROTOCOL_ALLOWLIST: 'not-an-address,0x' + '15'.repeat(20),
-      }),
-    );
-    expect(chains.find((c) => c.chainId === 84532)?.protocolAllowlist).toEqual(['0x' + '15'.repeat(20)]);
+  it('a malformed allowlist entry FAILS startup (sec L-03: never silently dropped)', () => {
+    expect(() =>
+      buildChainConfigs(
+        cfgWith({
+          BASE_SEPOLIA_RPC: 'http://base.leash-test.local',
+          AGENT_REGISTRY_BASE_ADDR: '0x' + 'ee'.repeat(20),
+          BASE_PROTOCOL_ALLOWLIST: 'not-an-address,0x' + '15'.repeat(20),
+        }),
+      ),
+    ).toThrow(/not an address/);
   });
 
   it('a legacy (v2) create on a chain WITHOUT a legacy factory throws loudly', async () => {
