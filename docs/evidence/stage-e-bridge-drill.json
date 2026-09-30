@@ -10,7 +10,7 @@
       "chainId": 11155111
     }
   ],
-  "factoryAddr": "0xb5294B428a98567B1219e89A1A1e020174320B7a",
+  "factoryAddr": "0x9581fe7BeaA62ba0a4e2C089EdA89cD67D937368",
   "bridge": "0x4200000000000000000000000000000000000010",
   "runs": [
     {
@@ -186,6 +186,192 @@
           "check": "gate-off-allowlist REFUSED",
           "ok": true,
           "detail": "refused: bridge routing REFUSED (bridge_not_allowlisted): bridge 0xb5294b428a98567b1219e89a1a1e020174320b7a is not in c"
+        },
+        {
+          "check": "gate-mutated-tuple REFUSED",
+          "ok": true,
+          "detail": "refused: bridge routing REFUSED (same_address_refused): same-address verification REFUSED at chain 84532: expected_account diverg"
+        },
+        {
+          "check": "gate-unregistered-destination REFUSED",
+          "ok": true,
+          "detail": "refused: bridge routing REFUSED (destination_unregistered): destination chain 11155111 is not registered (default-deny)"
+        }
+      ]
+    },
+    {
+      "when": "2026-09-30T17:37:37.354Z",
+      "accountSalt": "0x7c9de40590ba85189cd104f065838145778fc971333fe76cc9bbbb1c00bd56ea",
+      "account": "0x903d939992F1C8a0822FEa7Af92D2F27e28c7243",
+      "mintTxs": {
+        "base-sepolia": "0xe9d5e680b82df96c0a10bdec2ee8f5893e95f26e2822298cbea58a154a4d63fc",
+        "ethereum-sepolia": "0x56472247b38a43dfa869740c76dac0261b4f0e732de1f6c7b303a3eed3c1537c"
+      },
+      "happyTx": "0x10a390dd39213cd1702befbed2a63c979c9ed22c7bed174a934492ae740d94fb",
+      "counts": {
+        "pass": 15,
+        "fail": 0,
+        "flake": 0
+      },
+      "green": true,
+      "results": [
+        {
+          "check": "factory@base-sepolia",
+          "ok": true,
+          "detail": "already deployed at 0x9581fe7BeaA62ba0a4e2C089EdA89cD67D937368 (idempotent skip)"
+        },
+        {
+          "check": "factory@ethereum-sepolia",
+          "ok": true,
+          "detail": "already deployed at 0x9581fe7BeaA62ba0a4e2C089EdA89cD67D937368 (idempotent skip)"
+        },
+        {
+          "check": "mint@base-sepolia",
+          "ok": true,
+          "detail": "account 0x903d939992F1C8a0822FEa7Af92D2F27e28c7243 has code (tx 0xe9d5e680b82df96c0a10bdec2ee8f5893e95f26e2822298cbea58a154a4d63fc)"
+        },
+        {
+          "check": "mint@ethereum-sepolia",
+          "ok": true,
+          "detail": "account 0x903d939992F1C8a0822FEa7Af92D2F27e28c7243 has code (tx 0x56472247b38a43dfa869740c76dac0261b4f0e732de1f6c7b303a3eed3c1537c)"
+        },
+        {
+          "check": "grants@base",
+          "ok": true,
+          "detail": "native budget + bridgeETHTo rule granted (perCallCap 200000000000000)"
+        },
+        {
+          "check": "pre-routing-gate PASS",
+          "ok": true,
+          "detail": "same-address 0x903d939992f1c8a0822fea7af92d2f27e28c7243 verified on destination 11155111"
+        },
+        {
+          "check": "bridge-happy LANDS",
+          "ok": true,
+          "detail": "bridgeETHTo(self, 100000000000000) status 1 (tx 0x10a390dd39213cd1702befbed2a63c979c9ed22c7bed174a934492ae740d94fb) — real L2StandardBridge withdrawal initiated"
+        },
+        {
+          "check": "bridge-over-cap REVERTS",
+          "ok": true,
+          "detail": "REVERTED OverPerCallCap (selector-anchored): 0x2671b8a6000000000000000000000000000000000000000000000000000110d9316ec0000000000000000000"
+        },
+        {
+          "check": "bridge-redirect REVERTS",
+          "ok": true,
+          "detail": "REVERTED RecipientNotSelf (selector-anchored): 0x239e7696000000000000000000000000bebebebebebebebebebebebebebebebebebebebe"
+        },
+        {
+          "check": "bridge-extraData REVERTS",
+          "ok": true,
+          "detail": "REVERTED DecodeMismatch (selector-anchored): 0xee0f83ce"
+        },
+        {
+          "check": "off-allowlist-bridge REVERTS",
+          "ok": true,
+          "detail": "REVERTED TargetNotAllowlisted (selector-anchored): 0x042a9b0d0000000000000000000000009581fe7beaa62ba0a4e2c089eda89cd67d937368"
+        },
+        {
+          "check": "real-redirect-tx status 0",
+          "ok": true,
+          "detail": "redirect tx 0xdc731010bf7bc1f17a30f150fa6917c083752b5b49dd945549fee8bed29aa7f9 → reverted"
+        },
+        {
+          "check": "gate-off-allowlist REFUSED",
+          "ok": true,
+          "detail": "refused: bridge routing REFUSED (bridge_not_allowlisted): bridge 0x9581fe7beaa62ba0a4e2c089eda89cd67d937368 is not in c"
+        },
+        {
+          "check": "gate-mutated-tuple REFUSED",
+          "ok": true,
+          "detail": "refused: bridge routing REFUSED (same_address_refused): same-address verification REFUSED at chain 84532: expected_account diverg"
+        },
+        {
+          "check": "gate-unregistered-destination REFUSED",
+          "ok": true,
+          "detail": "refused: bridge routing REFUSED (destination_unregistered): destination chain 11155111 is not registered (default-deny)"
+        }
+      ]
+    },
+    {
+      "when": "2026-09-30T17:38:45.015Z",
+      "accountSalt": "0x067f63aed230e2713fe5075bc9609e3674198b1ffe8918c89db7f78aa3496d2e",
+      "account": "0x26700e133Cd8Eb18b857dA90F4B26a25FF2EeDf9",
+      "mintTxs": {
+        "base-sepolia": "0x59aa7695e3995d4ed426267e7fe9f8b012c6f6e3b32c350717efcdb5228bc73a",
+        "ethereum-sepolia": "0x3d7ad6f6ec3a61ddce19c4f18be22e80893925447186463636cabe64928ec1d5"
+      },
+      "happyTx": "0xefaac2aed01df23cba4ada3ed1e7dc25a2b5513a038d897bdf6289b4ebafaf36",
+      "counts": {
+        "pass": 15,
+        "fail": 0,
+        "flake": 0
+      },
+      "green": true,
+      "results": [
+        {
+          "check": "factory@base-sepolia",
+          "ok": true,
+          "detail": "already deployed at 0x9581fe7BeaA62ba0a4e2C089EdA89cD67D937368 (idempotent skip)"
+        },
+        {
+          "check": "factory@ethereum-sepolia",
+          "ok": true,
+          "detail": "already deployed at 0x9581fe7BeaA62ba0a4e2C089EdA89cD67D937368 (idempotent skip)"
+        },
+        {
+          "check": "mint@base-sepolia",
+          "ok": true,
+          "detail": "account 0x26700e133Cd8Eb18b857dA90F4B26a25FF2EeDf9 has code (tx 0x59aa7695e3995d4ed426267e7fe9f8b012c6f6e3b32c350717efcdb5228bc73a)"
+        },
+        {
+          "check": "mint@ethereum-sepolia",
+          "ok": true,
+          "detail": "account 0x26700e133Cd8Eb18b857dA90F4B26a25FF2EeDf9 has code (tx 0x3d7ad6f6ec3a61ddce19c4f18be22e80893925447186463636cabe64928ec1d5)"
+        },
+        {
+          "check": "grants@base",
+          "ok": true,
+          "detail": "native budget + bridgeETHTo rule granted (perCallCap 200000000000000)"
+        },
+        {
+          "check": "pre-routing-gate PASS",
+          "ok": true,
+          "detail": "same-address 0x26700e133cd8eb18b857da90f4b26a25ff2eedf9 verified on destination 11155111"
+        },
+        {
+          "check": "bridge-happy LANDS",
+          "ok": true,
+          "detail": "bridgeETHTo(self, 100000000000000) status 1 (tx 0xefaac2aed01df23cba4ada3ed1e7dc25a2b5513a038d897bdf6289b4ebafaf36) — real L2StandardBridge withdrawal initiated"
+        },
+        {
+          "check": "bridge-over-cap REVERTS",
+          "ok": true,
+          "detail": "REVERTED OverPerCallCap (selector-anchored): 0x2671b8a6000000000000000000000000000000000000000000000000000110d9316ec0000000000000000000"
+        },
+        {
+          "check": "bridge-redirect REVERTS",
+          "ok": true,
+          "detail": "REVERTED RecipientNotSelf (selector-anchored): 0x239e7696000000000000000000000000bebebebebebebebebebebebebebebebebebebebe"
+        },
+        {
+          "check": "bridge-extraData REVERTS",
+          "ok": true,
+          "detail": "REVERTED DecodeMismatch (selector-anchored): 0xee0f83ce"
+        },
+        {
+          "check": "off-allowlist-bridge REVERTS",
+          "ok": true,
+          "detail": "REVERTED TargetNotAllowlisted (selector-anchored): 0x042a9b0d0000000000000000000000009581fe7beaa62ba0a4e2c089eda89cd67d937368"
+        },
+        {
+          "check": "real-redirect-tx status 0",
+          "ok": true,
+          "detail": "redirect tx 0x3c5b634f86a2b4541b5954c8708a2af99af1c8d3b5ec372f16208f11b3b3ad66 → reverted"
+        },
+        {
+          "check": "gate-off-allowlist REFUSED",
+          "ok": true,
+          "detail": "refused: bridge routing REFUSED (bridge_not_allowlisted): bridge 0x9581fe7beaa62ba0a4e2c089eda89cd67d937368 is not in c"
         },
         {
           "check": "gate-mutated-tuple REFUSED",
