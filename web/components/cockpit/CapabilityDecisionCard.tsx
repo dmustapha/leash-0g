@@ -12,18 +12,22 @@
 import { useState } from 'react';
 import type { CallRule, CapabilityRequestRow, Hex } from '@/lib/types';
 import { shortAddr } from '@/lib/format';
-import { noveltyReason } from '@/lib/capabilities';
+import { describeBridgeRequest, noveltyReason } from '@/lib/capabilities';
 import { Disclosure } from '@/components/ui/Disclosure';
 
 type Busy = 'once' | 'always' | 'deny' | null;
 
 export function CapabilityDecisionCard({
   request,
+  accountAddr,
   onApproveOnce,
   onAlwaysAllow,
   onDeny,
 }: {
   request: CapabilityRequestRow;
+  /** The agent's own account address (same CREATE2 address on every chain) —
+   *  lets bridge copy say "to your same-address account" when the recipient matches. */
+  accountAddr?: string;
   /** Owner signs authorizeOnce(callHash, expiry) then records the decision. */
   onApproveOnce: (callHash: Hex) => Promise<void>;
   /** Owner signs proposeCallRule(rule) then records always_allow with that rule. */
@@ -82,8 +86,13 @@ export function CapabilityDecisionCard({
         Your agent paused to ask before doing something new. This is what it says it wants to do —
         we show it word-for-word but we can&apos;t vouch for it, so it&apos;s marked UNVERIFIED.
       </p>
-      {/* Quarantined agent-authored text — PLAIN TEXT only, never markup. */}
-      <p data-testid="jit-intent" style={{ margin: 0, fontSize: '0.95rem' }}>{d.humanReadable}</p>
+      {/* SE-8: governed BRIDGE calls decode to human terms from the SERVER-verified bytes
+          (callValue/callData, bound by callHash) — still UNVERIFIED until on-chain. Every
+          other selector (and any non-canonical bridge bytes) falls back to the server's
+          humanReadable exactly as before. PLAIN TEXT only, never markup. */}
+      <p data-testid="jit-intent" style={{ margin: 0, fontSize: '0.95rem' }}>
+        {describeBridgeRequest(request, accountAddr) ?? d.humanReadable}
+      </p>
 
       {reasons.length > 0 ? (
         <p style={{ margin: 0, fontSize: '0.86rem' }}>

@@ -528,6 +528,7 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
         >
           <CapabilityDecisionCard
             request={r}
+            accountAddr={detail?.addresses.account}
             onApproveOnce={(callHash) => jitApproveOnce(r.approvalId as string, callHash)}
             onAlwaysAllow={(rule) => jitAlwaysAllow(r.approvalId as string, rule)}
             onDeny={() => jitDeny(r.approvalId as string)}

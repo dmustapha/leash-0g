@@ -2,7 +2,8 @@
 // Stage-D plain-language layer (00 §2c): the surface a normie reads. Jargon (selectors,
 // addresses, codehash) stays behind Disclosure in the components; this maps the on-chain
 // vocabulary to sentences a judge instantly gets.
-import type { Novelty, PresetKey } from './types';
+import type { CapabilityRequestRow, Novelty, PresetKey } from './types';
+import { shortAddr } from './format';
 
 /** The 6 D-9 presets, plain-language name + one-line "what it lets the agent do". */
 export const PRESET_CATALOG: { key: PresetKey; name: string; blurb: string }[] = [
@@ -28,6 +29,77 @@ export const NOVELTY_COPY: Record<Novelty, string> = {
 
 export function noveltyReason(n: Novelty): string {
   return NOVELTY_COPY[n] ?? 'something outside its standing permissions';
+}
+
+// ── SE-8: governed BRIDGE calls → human terms (FE-surface-parity §3c) ─────────
+// The two structured OP-stack bridge selectors the wall hard-decodes (BR-2).
+// We decode the SERVER-authored bytes (callValue/callData, bound by callHash) —
+// never agent text — mirroring the backend decoder's strict word slicing. Any
+// deviation from the canonical shape returns null and the card falls back to
+// the server's humanReadable (unknown-selector behavior unchanged).
+
+/** bridgeETHTo(address to, uint32 minGasLimit, bytes extraData) */
+export const SELECTOR_BRIDGE_ETH_TO = '0xe11013dd';
+/** bridgeERC20To(address localToken, address remoteToken, address to, uint256 amount, uint32 minGasLimit, bytes extraData) */
+export const SELECTOR_BRIDGE_ERC20_TO = '0x540abf73';
+
+/** Canonical address word: upper 96 bits MUST be zero (mirrors the wall). */
+function wordToAddress(word: string): string | null {
+  if (!/^[0-9a-f]{64}$/.test(word) || !/^0{24}/.test(word)) return null;
+  return '0x' + word.slice(24);
+}
+
+function words(data: string, n: number): string[] | null {
+  const hex = data.toLowerCase();
+  if (!hex.startsWith('0x') || hex.length !== 10 + n * 64) return null;
+  const out: string[] = [];
+  for (let i = 0; i < n; i++) out.push(hex.slice(10 + i * 64, 10 + (i + 1) * 64));
+  return out;
+}
+
+/** "to your same-address account" when the recipient is the agent's own account. */
+function recipientPhrase(to: string, accountAddr?: string): string {
+  return accountAddr && to.toLowerCase() === accountAddr.toLowerCase()
+    ? 'to your same-address account'
+    : `to ${shortAddr(to)}`;
+}
+
+/**
+ * Human copy for a governed BRIDGE request, decoded from the server-verified
+ * bytes. Returns null for non-bridge selectors or non-canonical calldata —
+ * the caller falls back to decoded.humanReadable exactly as before.
+ */
+export function describeBridgeRequest(
+  request: Pick<CapabilityRequestRow, 'decoded' | 'callValue' | 'callData'>,
+  accountAddr?: string,
+): string | null {
+  const selector = request.decoded.selector.toLowerCase();
+  const data = request.callData;
+  const bridge = shortAddr(request.decoded.target);
+  if (!data) return null;
+
+  if (selector === SELECTOR_BRIDGE_ETH_TO) {
+    // to, minGasLimit, extraData head offset, extraData length (forced empty).
+    const w = words(data, 4);
+    if (!w) return null;
+    const to = wordToAddress(w[0]!);
+    if (!to) return null;
+    const value = request.callValue ?? request.decoded.value;
+    return `bridge ${value} base-units via bridge ${bridge} ${recipientPhrase(to, accountAddr)} on the destination chain`;
+  }
+
+  if (selector === SELECTOR_BRIDGE_ERC20_TO) {
+    // localToken, remoteToken, to, amount, minGasLimit, offset, length.
+    const w = words(data, 7);
+    if (!w) return null;
+    const localToken = wordToAddress(w[0]!);
+    const to = wordToAddress(w[2]!);
+    if (!localToken || !to) return null;
+    const amount = BigInt('0x' + w[3]!).toString();
+    return `bridge ${amount} base-units of token ${shortAddr(localToken)} via bridge ${bridge} ${recipientPhrase(to, accountAddr)} on the destination chain`;
+  }
+
+  return null;
 }
 
 /** Plain-language name for a recipient mode. */
