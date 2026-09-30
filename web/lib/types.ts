@@ -596,6 +596,60 @@ export type JobStatus =
   | 'denied'
   | 'failed';
 
+// ── Stage E / SE-7 (spec §7.C): multichain networks ──
+// NOTE: /api/networks is the BLOCKCHAIN network table. /api/chains (Chain above) is the
+// agent-chaining delegation graph — a different concept entirely.
+
+/** A registered blockchain network (GET /api/networks). */
+export type NetworkChain = { chainId: number; name: string };
+
+/** One per-chain presence row for an agent — SAME accountAddr on every chain. */
+export type AgentNetworkRow = {
+  chainId: number;
+  accountAddr: Address;
+  role: 'home' | 'onboarded';
+  createTx?: string;
+  registerTx?: string;
+  adopted?: boolean;
+  createdAt?: string;
+};
+
+/** GET /api/agents/:id/networks response. */
+export type AgentNetworksView = {
+  accountAddr: Address;
+  onboardable: boolean;
+  homeChainId: number;
+  chains: AgentNetworkRow[];
+};
+
+/** POST /api/agents/:id/networks success body (201, or 200 when alreadyOnboarded). */
+export type OnboardNetworkResult = {
+  chainId: number;
+  accountAddr: Address;
+  createTx?: string;
+  registerTx?: string;
+  adopted?: boolean;
+  alreadyOnboarded?: boolean;
+};
+
+/** Typed refusal reasons on the onboard POST (409) plus the 503 outage code. */
+export type OnboardRefusalReason =
+  | 'not_v4'
+  | 'no_persisted_tuple'
+  | 'home_chain'
+  | 'already_onboarded'
+  | 'guardian_mismatch'
+  | 'tuple_prediction_mismatch'
+  | 'mint_address_mismatch'
+  | 'unregistered_chain'
+  | 'multichain_unavailable';
+
+/** GET /api/networks/:chainId/accounts/:accountAddr — owner-scoped per-chain account view. */
+export type NetworkAccountView = {
+  agent: { id: string; name: string; status: string; accountAddr: Address; chainId: number };
+  requests: Json[];
+};
+
 /** The multi-party signed Proof-of-Agreement (F7) — hashes/roots/sigs only. */
 export type PoaRecord = {
   jobId: string;

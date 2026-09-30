@@ -41,6 +41,10 @@ import type {
   CapabilityRuleAction,
   PresetKey,
   ResolvedPreset,
+  AgentNetworksView,
+  NetworkAccountView,
+  NetworkChain,
+  OnboardNetworkResult,
 } from './types';
 
 export type TokenGetter = () => Promise<string | null>;
@@ -48,7 +52,7 @@ export type TokenGetter = () => Promise<string | null>;
 /** Machine-readable error body (Phase-2 spec §4): top-level string `error` code plus
  *  code-specific extras (retryAfter, limit, max, ownerRevokeFallback). */
 type ErrorBody = {
-  error?: { message?: string } | string;
+  error?: { message?: string; reason?: string } | string;
   message?: string;
   retryAfter?: number;
   limit?: number;
@@ -73,6 +77,10 @@ export class ApiError extends Error {
     this.name = 'ApiError';
     if (body) {
       if (typeof body.error === 'string') this.code = body.error;
+      // SE-7 onboard refusals ship { error: { message, reason } } — the reason is the code.
+      if (typeof body.error === 'object' && typeof body.error.reason === 'string') {
+        this.code = body.error.reason;
+      }
       if (typeof body.retryAfter === 'number') this.retryAfter = body.retryAfter;
       if (typeof body.limit === 'number') this.limit = body.limit;
       if (typeof body.max === 'number') this.max = body.max;
@@ -310,6 +318,27 @@ export function makeApi(getToken: TokenGetter) {
         'POST',
         `/api/approvals/${approvalId}`,
         body,
+      ),
+
+    // — Stage E / SE-7 (spec §7.C): multichain networks —
+    // NOTE: distinct from listChains above — /api/networks is the BLOCKCHAIN network table;
+    // /api/chains is the agent-chaining (delegation graph) surface.
+    listNetworks: () => request<{ chains: NetworkChain[] }>(getToken, 'GET', '/api/networks'),
+    // The agent's per-chain presence: home chain + onboarded chains, one address everywhere.
+    getAgentNetworks: (agentId: string) =>
+      request<AgentNetworksView>(getToken, 'GET', `/api/agents/${agentId}/networks`),
+    // Onboard the agent's account onto another registered network (byte-exact tuple replay).
+    // 409 refusals carry a typed reason in ApiError.code (see OnboardRefusalReason).
+    onboardNetwork: (agentId: string, chainId: number) =>
+      request<OnboardNetworkResult>(getToken, 'POST', `/api/agents/${agentId}/networks`, {
+        chainId,
+      }),
+    // Owner-scoped view of one account on one chain.
+    getNetworkAccount: (chainId: number, accountAddr: string) =>
+      request<NetworkAccountView>(
+        getToken,
+        'GET',
+        `/api/networks/${chainId}/accounts/${accountAddr}`,
       ),
   };
 }
