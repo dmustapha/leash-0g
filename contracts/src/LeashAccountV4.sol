@@ -504,8 +504,10 @@ contract LeashAccountV4 is ReentrancyGuard {
             // entry says nothing about who controls that address on the
             // DESTINATION chain (a contract there may be a different party);
             // only the same-CREATE2-address account is a verifiable far-chain
-            // recipient. Non-self far-chain payouts go through the owner
-            // one-shot lane (exact owner-reviewed bytes), never a standing rule.
+            // recipient. There is NO standing non-self bridge lane; the backend
+            // one-shot consume path refuses non-self bridge recipients too
+            // (SE-8 rail) — an owner who truly needs a non-self far-chain payout
+            // bridges to self first, then pays out on the destination chain.
             if (to != address(this)) revert RecipientNotSelf(to);
             // the bridged amount is msg.value — charged against the NATIVE budget.
             return (value, address(0), false);

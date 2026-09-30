@@ -40,6 +40,14 @@ export interface OneShotConsumeDeps {
    * `ChainRegistry` (`assertBridgeRoutable`).
    */
   bridgeGuard?: ((bridgeTarget: string) => Promise<unknown>) | undefined;
+  /**
+   * E-13 sec M-01: the chain's bridge allowlist (lowercased). The rail must key
+   * on the TARGET too — an allowlisted bridge exposes non-canonical selectors
+   * (`withdrawTo`, `bridgeETH`, legacy `deposit*` aliases) that would otherwise
+   * route cross-chain value with no recipient-self check. A one-shot to a
+   * bridge-allowlisted target with a non-canonical selector is REFUSED outright.
+   */
+  bridgeTargets?: Set<string> | undefined;
 }
 
 export interface OneShotConsumeCtx {
@@ -94,6 +102,12 @@ export async function consumeOneShot(
   //     account ITSELF, and the pre-routing gate (assertSameAddress on home +
   //     destination via assertBridgeRoutable) must pass. Fail-closed on both.
   const oneShotSelector = data.slice(0, 10).toLowerCase();
+  const targetIsBridge = deps.bridgeTargets?.has(target.toLowerCase()) ?? false;
+  // E-13 sec M-01: key on the TARGET as well as the canonical selectors — a
+  // non-canonical selector against an allowlisted bridge is never rail-exempt.
+  if (targetIsBridge && !BRIDGE_SELECTORS.has(oneShotSelector)) {
+    return standDown('bridge one-shot refused: non-canonical bridge selector (no structured decoder — SE-8 rail)');
+  }
   if (BRIDGE_SELECTORS.has(oneShotSelector)) {
     const decoded = decodeCall(target, value, data);
     const recipients = decoded.args.recipients.map((r) => r.toLowerCase());

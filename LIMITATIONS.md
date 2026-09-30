@@ -29,6 +29,16 @@ LEASH is a work-in-progress research project. This is an honest scope boundary: 
   owner-reviewed one-shot, and even then the runtime refuses a bridge one-shot whose
   decoded recipient is not the account (destination-chain address aliasing is not
   verifiable for arbitrary recipients).
+- **The bridge pre-routing gate trusts the configured destination RPC** (E-13 sec
+  L-02, accepted within the operator-config trust boundary): `assertSameAddress`
+  reads factory/account codehashes + CREATE2 predictions over the destination
+  chain's configured RPC. A fat-fingered or hostile `*_RPC` pointing at a different
+  live chain is a config-integrity risk, not a session-key exploit; an `eth_chainId`
+  cross-check against the configured id is a recommended SE-9 hardening.
+- **`remoteToken` on an ERC-20 bridge is not owner-pinned** (E-13 sec L-01): a wrong
+  `remoteToken` can strand the near-side funds until message replay/refund — agent
+  griefing / operational delay, not theft. A `localToken→remoteToken` config pairing
+  is a candidate SE-9 hardening.
 - **The multichain runtime requires the chain registry to be wired** (`resolveChain` +
   `chainRegistry`); a deploy that omits it falls back to the single default chain and
   allows no bridging (fail-closed).

@@ -284,7 +284,15 @@ export class LeashRuntimeManager implements RuntimeManager {
         hub: this.deps.hub,
         chain,
         ...(registry
-          ? { bridgeGuard: (bridgeTarget: string) => assertBridgeRoutable(registry, agent, bridgeTarget) }
+          ? {
+              bridgeGuard: (bridgeTarget: string) => assertBridgeRoutable(registry, agent, bridgeTarget),
+              // E-13 sec M-01: the rail keys on bridge-allowlisted TARGETS too.
+              bridgeTargets: new Set(
+                (registry.has(agent.chainId) ? (registry.getChainConfig(agent.chainId).bridgeAllowlist ?? []) : []).map(
+                  (a) => a.toLowerCase(),
+                ),
+              ),
+            }
           : {}),
       };
       // The decision carries the authorizeOnce txHash, but a client may report it
