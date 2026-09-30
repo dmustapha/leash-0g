@@ -1,0 +1,124 @@
+{
+  "phase": "Stage E \u2014 SE-7 Base Sepolia real protocols (E-7)",
+  "kind": "deployed real-protocol drill (idempotent, SE-4) \u2014 2 back-to-back GREEN runs",
+  "stack": "base-sepolia-84532",
+  "chainId": 84532,
+  "account": "0x9E3c89C67e5afFaf2340982D8D6820e2e31FF924",
+  "accountSalt": "0x5345372d626173652d7265616c2d70726f746f636f6c2d6472696c6c2d763100",
+  "factoryV4": "0xa0249c5808E8F3b31d406d1eF6492B4508014dA0",
+  "realProtocols": {
+    "weth": "0x4200000000000000000000000000000000000006",
+    "uniswapSwapRouter02": "0x94cC0AaC535CCDB3C01d6787D6413C739ae12bc4",
+    "aaveStataWETH_erc4626": "0xde7820fFb73059608928cb9e29F6EB1369Ad1342",
+    "permit2": "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+    "usdc": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+    "aavePool_neverAllowlisted": "0x8bAB6d1b75f19e9eD9fCe8b9BD338844fF79aE27"
+  },
+  "green": true,
+  "runs": [
+    {
+      "phase": "Stage E \u2014 SE-7 Base Sepolia real protocols (E-7)",
+      "kind": "deployed real-protocol drill (idempotent, SE-4)",
+      "stack": "base-sepolia-84532",
+      "chainId": 84532,
+      "account": "0x9E3c89C67e5afFaf2340982D8D6820e2e31FF924",
+      "accountSalt": "0x5345372d626173652d7265616c2d70726f746f636f6c2d6472696c6c2d763100",
+      "factoryV4": "0xa0249c5808E8F3b31d406d1eF6492B4508014dA0",
+      "mintTx": "pre-existing",
+      "realProtocols": {
+        "weth": "0x4200000000000000000000000000000000000006",
+        "uniswapSwapRouter02": "0x94cC0AaC535CCDB3C01d6787D6413C739ae12bc4",
+        "aaveStataWETH_erc4626": "0xde7820fFb73059608928cb9e29F6EB1369Ad1342",
+        "permit2": "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+        "usdc": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+        "aavePool_neverAllowlisted": "0x8bAB6d1b75f19e9eD9fCe8b9BD338844fF79aE27"
+      },
+      "resetProof": {
+        "approvePerCallCapBefore": "2000000000000000",
+        "approvePerCallCapAfter": "2000000000000000",
+        "canonical": "2000000000000000"
+      },
+      "happy": {
+        "wethWrapTx": "0xfa4bf1d04e97840a33bca75e6207f6d165d8e564e9fe1ff48ebe46ef6c66ac04",
+        "permit2ApproveTx": "0x6c373c2f5dfcaa51eade6cf9a6573b8d340a390d35386a36257b2f0a9e90cfac",
+        "routerApproveTx": "0x0f3f89e56f5346abec64038f996af0e3c5ffb20bf9d2d8c8e429b11bb56fcdef",
+        "uniswapMulticallSwapTx": "0xcab39d979b36ff5f2b73542113abf174420b8494010de7bfcd4f7ab2c00de178",
+        "usdcBefore": "0",
+        "usdcAfter": "20398",
+        "aaveDepositTx": "0xcf5a8a7d354fca7442d63a4ac4ee42bd39243ac886e880eb63b828315d7403ac",
+        "stataSharesBefore": "0",
+        "stataSharesAfter": "338953131051722"
+      },
+      "maliciousRealTx": {
+        "approveMaxTx": "0x93ba0f9ea45e7538f76632c460b1be9f0746c1deaab8acf2e9a9d82778c24ba2",
+        "allowanceAfter": "1900000000000000"
+      },
+      "checks": {
+        "passed": 11,
+        "failed": 0,
+        "flaked": 0
+      },
+      "vectors": [
+        "InfiniteApprovalForbidden",
+        "SpenderNotAllowlisted",
+        "OverPerCallCap(approve)",
+        "TargetNotAllowlisted(real Aave Pool)",
+        "RecipientNotSelf(real 4626 deposit)",
+        "OverPerCallCap(deposit)",
+        "approve(max) real-tx revert"
+      ]
+    },
+    {
+      "phase": "Stage E \u2014 SE-7 Base Sepolia real protocols (E-7)",
+      "kind": "deployed real-protocol drill (idempotent, SE-4)",
+      "stack": "base-sepolia-84532",
+      "chainId": 84532,
+      "account": "0x9E3c89C67e5afFaf2340982D8D6820e2e31FF924",
+      "accountSalt": "0x5345372d626173652d7265616c2d70726f746f636f6c2d6472696c6c2d763100",
+      "factoryV4": "0xa0249c5808E8F3b31d406d1eF6492B4508014dA0",
+      "mintTx": "pre-existing",
+      "realProtocols": {
+        "weth": "0x4200000000000000000000000000000000000006",
+        "uniswapSwapRouter02": "0x94cC0AaC535CCDB3C01d6787D6413C739ae12bc4",
+        "aaveStataWETH_erc4626": "0xde7820fFb73059608928cb9e29F6EB1369Ad1342",
+        "permit2": "0x000000000022D473030F116dDEE9F6B43aC78BA3",
+        "usdc": "0x036CbD53842c5426634e7929541eC2318f3dCF7e",
+        "aavePool_neverAllowlisted": "0x8bAB6d1b75f19e9eD9fCe8b9BD338844fF79aE27"
+      },
+      "resetProof": {
+        "approvePerCallCapBefore": "2000000000000000",
+        "approvePerCallCapAfter": "2000000000000000",
+        "canonical": "2000000000000000"
+      },
+      "happy": {
+        "wethWrapTx": "0xbe123ed1fc320840367517441235384b8b6715968a105b168313d217e60db199",
+        "permit2ApproveTx": "0x55ff90489a8851d11862aae474329ee0b0e2085d25f5d212b22b496443f8343d",
+        "routerApproveTx": "0x77a097f864a27ecdb95c2117097c67d5d6bf1e074bb5ba22319f71e8c2f88925",
+        "uniswapMulticallSwapTx": "0xf9acb839ad3887f9da8be39b486195f6eadc6bf9666636ed56763977f87ed198",
+        "usdcBefore": "20398",
+        "usdcAfter": "40795",
+        "aaveDepositTx": "0xe99a4ecfe2dda7b5b040f5ad011434e05cd88a79616b88a3247e3afe742a86f6",
+        "stataSharesBefore": "338953131051722",
+        "stataSharesAfter": "677906211225723"
+      },
+      "maliciousRealTx": {
+        "approveMaxTx": "0xf05b97ec9c42e19fac827bc3fc5a52ec3f2028f13b6c02211ab893c960dcbecf",
+        "allowanceAfter": "1900000000000000"
+      },
+      "checks": {
+        "passed": 11,
+        "failed": 0,
+        "flaked": 0
+      },
+      "vectors": [
+        "InfiniteApprovalForbidden",
+        "SpenderNotAllowlisted",
+        "OverPerCallCap(approve)",
+        "TargetNotAllowlisted(real Aave Pool)",
+        "RecipientNotSelf(real 4626 deposit)",
+        "OverPerCallCap(deposit)",
+        "approve(max) real-tx revert"
+      ]
+    }
+  ]
+}

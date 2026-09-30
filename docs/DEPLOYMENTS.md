@@ -156,3 +156,29 @@ is the cfabfdb wall bytecode (codehash-equality vs the plain factory proven in F
   factory codehash + CREATE2 prediction + deployed account codehash), the governed-calldata wall REVERTS an
   off-allowlist `executeCall` on Base Sepolia, and a spoofed-factory config is REFUSED
   (`SameAddressMismatchError: factory_addr diverges`) by the production path.
+
+## Stage E — SE-7 Base Sepolia real-protocol stack (2026-09-30)
+Base Sepolia (84532) becomes the first REAL second chain: per-chain AgentRegistry deployed + the
+governed-calldata wall drilled against REAL deployed protocols (nothing mocked). Ops/deployer
+`0xc211C942946011859ca634F22400d80570ED12A5`.
+- **AgentRegistry (Base Sepolia, per-chain shape — SE-7 decision):** `0x820f23B9cBee06942f995B4970F599b31E6E4857`
+  — deploy tx `0x865373f705ad10886c47324f4d76a3d066ced0a240f39a1cdbe1ff3e62af7339`. Same contract
+  bytecode as the 0G registry (`0xA74d573F…`); registered per chain at onboard/create.
+- **Backend config (config-only chain append, SE-5 promise honored):** `BASE_SEPOLIA_RPC` +
+  `AGENT_REGISTRY_BASE_ADDR` staged in backend/.env (set the same in the Render env at the Stage-E
+  deploy) + `BASE_CAP_*` real-protocol catalog + `BASE_PROTOCOL_ALLOWLIST`.
+- **REAL protocol targets (verified live, code-bearing, 2026-09-30):**
+  - WETH `0x4200000000000000000000000000000000000006` (drill charge token / wrap target)
+  - Uniswap SwapRouter02 `0x94cC0AaC535CCDB3C01d6787D6413C739ae12bc4` (+ WETH/USDC V3 pools with live
+    liquidity at fees 500/3000; QuoterV2 `0xC5290058841028F1614F3A6F0F5816cAd0df5E27`)
+  - Permit2 `0x000000000022D473030F116dDEE9F6B43aC78BA3`
+  - Aave v3 Pool `0x8bAB6d1b75f19e9eD9fCe8b9BD338844fF79aE27` (deliberately NEVER allowlisted — the
+    TargetNotAllowlisted probe) · stataWETH ERC-4626 `0xde7820fFb73059608928cb9e29F6EB1369Ad1342`
+    (the structured deposit(uint256,address) target — a wall-governed deposit is a REAL Aave supply)
+  - USDC (Circle) `0x036CbD53842c5426634e7929541eC2318f3dCF7e` (swap output)
+- **E-7 drill:** `contracts/script/base-real-protocol-drill.sh` (stack
+  `contracts/script/stacks/base-sepolia-84532.sh`) — deterministic CREATE2 drill account (fixed salt),
+  idempotent + flake-tolerant. Evidence: `docs/evidence/stage-e-base-real-protocol-drill.json`.
+- **E-8 drill:** `backend/scripts/deployed-winddown-drill.mjs` (live Render stack) — wind-down
+  mid-chain terminates the chain + cancels the in-flight hop; stale approve cannot resurrect.
+  Evidence: `docs/evidence/stage-e-winddown-drill.json`.
