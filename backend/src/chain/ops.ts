@@ -24,7 +24,11 @@ export interface LeashChainOptions {
   opsPrivateKey: string;
   /** C-1: dedicated revoke-only guardian key — its own signer + nonce space. */
   guardianPrivateKey: string;
-  factoryAddr: string;
+  /**
+   * Legacy v2 factory. SE-7: optional — a V4-only chain (Base Sepolia) has
+   * none; a legacy create there throws loudly instead of minting anywhere.
+   */
+  factoryAddr?: string;
   /**
    * SE-1 (Stage E): the dedicated V4 (governed-calldata) factory. Selected for
    * accountVersion=4 creates. Forward-compatible with SE-6 (BR-1): swapping in a
@@ -120,7 +124,11 @@ export class LeashChainOps implements ChainOps {
       if (isV4 && !v4Addr) {
         throw new Error('accountVersion=4 requested but no V4 factory configured (LEASH_FACTORY_V4_ADDR)');
       }
-      const createAddr = (isV4 ? (v4Addr as string) : this.opts.factoryAddr) as Hex;
+      if (!isV4 && !this.opts.factoryAddr) {
+        // SE-7: V4-only chains (Base) carry no legacy factory — refuse loudly.
+        throw new Error(`legacy (v${input.accountVersion}) create requested but chain ${this.opts.chainId} has no legacy factory configured`);
+      }
+      const createAddr = (isV4 ? (v4Addr as string) : (this.opts.factoryAddr as string)) as Hex;
       // The per-agent CREATE2 salt: reused verbatim on every chain this agent
       // onboards so the account lands at the SAME address (E-6). Fresh random
       // 32 bytes when the caller supplies none (a first-chain create).

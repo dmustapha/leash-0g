@@ -24,8 +24,13 @@ export interface ChainConfig {
   rpcUrl: string;
   /** V4 (governed-calldata) factory — selected for accountVersion=4 creates (SE-1). */
   factoryV4Addr?: string | undefined;
-  /** Legacy v2 factory (kept so mixed-version setups still create legacy accounts). */
-  factoryAddr: string;
+  /**
+   * Legacy v2 factory (kept so mixed-version setups still create legacy
+   * accounts). SE-7: OPTIONAL — a second chain onboarded V4-only (Base) has no
+   * legacy factory; a legacy create there fails loudly (default-deny), never
+   * silently mints through the wrong factory.
+   */
+  factoryAddr?: string | undefined;
   registryAddr: string;
   /** Default account version minted on this chain (SD-E7: 4 = governed calldata). */
   accountVersion: number;
@@ -176,7 +181,7 @@ export class ChainRegistry {
       chainId: c.chainId,
       opsPrivateKey: this.signing.opsPrivateKey,
       guardianPrivateKey: this.signing.guardianPrivateKey,
-      factoryAddr: c.factoryAddr,
+      ...(c.factoryAddr ? { factoryAddr: c.factoryAddr } : {}),
       ...(c.factoryV4Addr ? { factoryV4Addr: c.factoryV4Addr } : {}),
       registryAddr: c.registryAddr,
       ...(clients ? { clients } : {}),
