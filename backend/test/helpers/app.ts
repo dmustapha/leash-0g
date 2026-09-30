@@ -49,7 +49,12 @@ export class FakeChainOps implements ChainOps {
   public revokeErrorFor = new Set<string>();
   private nextAgentId = 100n;
 
-  async deployAndRegister(input: { sessionKeyAddr: string; accountVersion?: 2 | 4; accountSalt?: string }): Promise<{
+  async deployAndRegister(input: {
+    ownerAddr?: string;
+    sessionKeyAddr: string;
+    accountVersion?: 2 | 4;
+    accountSalt?: string;
+  }): Promise<{
     accountAddr: string;
     chainAgentId: bigint;
     createTx: string;
@@ -57,6 +62,8 @@ export class FakeChainOps implements ChainOps {
     guardianAddr: string;
     accountVersion: 2 | 4;
     accountSalt: string | null;
+    accountCreateTuple: import('../../src/server.js').AccountCreateTuple | null;
+    adopted: boolean;
   }> {
     const accountVersion = input.accountVersion ?? 4;
     this.createdVersions.push(accountVersion);
@@ -73,8 +80,23 @@ export class FakeChainOps implements ChainOps {
       registerTx: '0x' + '22'.repeat(32),
       guardianAddr: FAKE_GUARDIAN_ADDR,
       accountVersion,
-      // SE-6 mirror of the ops layer: a V4 mint carries its CREATE2 salt.
+      // SE-6 mirror of the ops layer: a V4 mint carries its CREATE2 salt + the
+      // exact canonical construction tuple it was minted with.
       accountSalt: accountVersion === 4 ? (input.accountSalt ?? '0x' + 'a5'.repeat(32)) : null,
+      accountCreateTuple:
+        accountVersion === 4
+          ? {
+              ownerAddr: (input.ownerAddr ?? '0x' + 'a1'.repeat(20)).toLowerCase(),
+              guardianAddr: FAKE_GUARDIAN_ADDR.toLowerCase(),
+              sessionKeyAddr: input.sessionKeyAddr.toLowerCase(),
+              policy: { perTransferCap: '1', windowCap: '2', windowSeconds: 3600, expiresAt: 2 ** 31 - 1 },
+              allowlist: [],
+              timelockDelay: 900,
+              settlementToken: '0x' + '00'.repeat(20),
+              tokenPolicy: { perTransferCapToken: '0', windowCapToken: '0' },
+            }
+          : null,
+      adopted: false,
     };
   }
 

@@ -30,6 +30,10 @@ interface ChainFakeSpec {
   predicted?: Hex;
   factoryCode?: Hex | null;
   accountCode?: Hex | null;
+  /** The configured contract is not a deterministic factory — predict reverts. */
+  predictThrows?: Error;
+  /** Captures the guardian arg each predict eth_call received (M-01 assertions). */
+  capturedGuardians?: string[];
 }
 
 function fakeChainClients(spec: ChainFakeSpec = {}): ChainTestClients {
@@ -37,8 +41,12 @@ function fakeChainClients(spec: ChainFakeSpec = {}): ChainTestClients {
   const factoryCode = spec.factoryCode === undefined ? FACTORY_CODE : spec.factoryCode;
   const accountCode = spec.accountCode === undefined ? null : spec.accountCode;
   const publicClient = {
-    async readContract({ functionName }: { functionName: string }) {
-      if (functionName === 'predictAccountV4') return predicted;
+    async readContract({ functionName, args }: { functionName: string; args: readonly unknown[] }) {
+      if (spec.predictThrows) throw spec.predictThrows;
+      if (functionName === 'predictAccountV4') {
+        spec.capturedGuardians?.push(String(args[1]));
+        return predicted;
+      }
       throw new Error(`unexpected readContract ${functionName}`);
     },
     async getCode({ address }: { address: Hex }) {
@@ -77,12 +85,15 @@ function registry(
   );
 }
 
+const GUARDIAN = '0x' + 'ee'.repeat(20);
 const input = {
   ownerAddr: OWNER,
   accountSalt: SALT,
   create: {
     ownerAddr: OWNER,
     sessionKeyAddr: SESSION,
+    // M-01: the CREATE-TIME guardian (persisted), never the lane's live key.
+    guardianAddr: GUARDIAN,
     policy: { perTransferCap: 1n, windowCap: 2n, windowSeconds: 3600, expiresAt: 0 },
     allowlist: [] as string[],
     timelockDelay: 900,
@@ -140,19 +151,38 @@ describe('SE-6 ChainRegistry.assertSameAddress (E-6)', () => {
     // Both chains point at a contract with IDENTICAL bytecode that REVERTS on
     // predictAccountV4 (a non-factory) — factory addr + codehash checks pass,
     // the predict wrap must still produce a SameAddressMismatchError.
-    const reverting: ChainFakeSpec = {};
+    const reverting: ChainFakeSpec = { predictThrows: new Error('The contract function "predictAccountV4" reverted.') };
     const r = registry({ 16602: reverting, 84532: reverting });
-    // monkey-patch the fakes' readContract to revert like a non-factory
-    for (const id of [16602, 84532]) {
-      const clients = (r as unknown as { testClients: Map<number, ChainTestClients> }).testClients.get(id);
-      if (clients) {
-        (clients.publicClient as unknown as { readContract: () => Promise<never> }).readContract = async () => {
-          throw new Error('The contract function "predictAccountV4" reverted.');
-        };
-      }
-    }
     await expect(r.assertSameAddress(input)).rejects.toThrow(SameAddressMismatchError);
     await expect(r.assertSameAddress(input)).rejects.toThrow(/predict reverted/);
+  });
+
+  it('M-01: predictions use the CREATE-TIME guardian from the input, never the lane key', async () => {
+    const capturedGuardians: string[] = [];
+    const r = registry({ 16602: { capturedGuardians }, 84532: { capturedGuardians } });
+    await r.assertSameAddress(input);
+    expect(capturedGuardians.map((g) => g.toLowerCase())).toEqual([GUARDIAN, GUARDIAN]);
+  });
+
+  it('M-01: REFUSES when the verified prediction is not the PERSISTED account address', async () => {
+    // Consistent tuple drift: every chain predicts the same (wrong) address —
+    // predictions agree with each other but not with agents.account_addr.
+    const r = registry({ 16602: {}, 84532: {} });
+    const persisted = '0x' + 'bd'.repeat(20);
+    await expect(r.assertSameAddress({ ...input, expectedAccountAddr: persisted })).rejects.toThrow(/expected_account/);
+    // Matching persisted address verifies.
+    await expect(
+      r.assertSameAddress({ ...input, expectedAccountAddr: PREDICTED }),
+    ).resolves.toBe(PREDICTED.toLowerCase());
+  });
+
+  it('M-01/L-02: REFUSES "verified but deployed nowhere" when a home chain is named', async () => {
+    const rUndeployed = registry({ 16602: {}, 84532: {} });
+    await expect(rUndeployed.assertSameAddress({ ...input, homeChainId: 16602 })).rejects.toThrow(/home_chain_undeployed/);
+    const rDeployed = registry({ 16602: { accountCode: ACCOUNT_CODE }, 84532: {} });
+    await expect(rDeployed.assertSameAddress({ ...input, homeChainId: 16602 })).resolves.toBe(PREDICTED.toLowerCase());
+    // a home chain that is not among the verified chainIds is a refusal too
+    await expect(rDeployed.assertSameAddress({ ...input, homeChainId: 421614 })).rejects.toThrow(SameAddressMismatchError);
   });
 
   it('default-denies an unregistered chain (E-11) and requires ≥2 chains', async () => {

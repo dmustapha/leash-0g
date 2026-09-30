@@ -39,7 +39,7 @@ interface Captured {
   args?: readonly unknown[];
 }
 
-function fakeClients(receiptFlakes = 0, predictReturns: Hex = NEW_ACCOUNT): {
+function fakeClients(receiptFlakes = 0, predictReturns: Hex = NEW_ACCOUNT, codeAtPrediction: Hex | undefined = undefined): {
   publicClient: PublicClient;
   opsWallet: WalletClient;
   guardianWallet: WalletClient;
@@ -90,6 +90,11 @@ function fakeClients(receiptFlakes = 0, predictReturns: Hex = NEW_ACCOUNT): {
       calls.push({ address: 'read', functionName });
       if (functionName === 'predictAccountV4') return predictReturns;
       throw new Error(`unexpected readContract ${functionName}`);
+    },
+    // SE-6 (M-02): the adopt-existing pre-check — code at the prediction means
+    // the byte-exact deterministic deploy already happened (adopt, don't mint).
+    async getCode({ address }: { address: string }) {
+      return address.toLowerCase() === predictReturns.toLowerCase() ? codeAtPrediction : undefined;
     },
   } as unknown as PublicClient;
 
@@ -195,6 +200,36 @@ describe('SE-1/SE-6 create→version-selected factory (E-1)', () => {
     );
     // and it never reached register (no half-bound agent).
     expect(clients.calls.some((c) => c.functionName === 'register')).toBe(false);
+  });
+
+  it('M-02 adopt-existing: code already at the prediction → no mint, register still runs', async () => {
+    // A griefer pre-deployed the byte-exact (owner, salt) slot: CREATE2 means the
+    // code there IS the owner's exact account — adopt it instead of stranding the
+    // onboard on AccountAlreadyDeployed.
+    const clients = fakeClients(0, NEW_ACCOUNT, ('0x6001' + 'aa'.repeat(6)) as Hex);
+    const result = await ops(clients).deployAndRegister({ ...baseInput, accountVersion: 4, accountSalt: SALT });
+    expect(clients.calls.some((c) => c.functionName === 'createAccountV4')).toBe(false); // no mint
+    expect(clients.calls.some((c) => c.functionName === 'register')).toBe(true); // registration still runs
+    expect(result.accountAddr.toLowerCase()).toBe(NEW_ACCOUNT.toLowerCase());
+    expect(result.adopted).toBe(true);
+    expect(result.createTx).toBe('0x' + '0'.repeat(64)); // no mint tx — sentinel
+    expect(result.accountSalt).toBe(SALT);
+  });
+
+  it('W2: a v4 mint returns the exact serializable construction tuple for persistence', async () => {
+    const clients = fakeClients();
+    const result = await ops(clients).deployAndRegister({ ...baseInput, accountVersion: 4 });
+    expect(result.accountCreateTuple).toMatchObject({
+      ownerAddr: OWNER.toLowerCase(),
+      guardianAddr: GUARDIAN_ADDR.toLowerCase(),
+      sessionKeyAddr: SESSION.toLowerCase(),
+      policy: { perTransferCap: '1', windowCap: '2', windowSeconds: 3600, expiresAt: 0 },
+      allowlist: [],
+      timelockDelay: 900,
+    });
+    const clients2 = fakeClients();
+    const legacy = await ops(clients2).deployAndRegister({ ...baseInput, accountVersion: 2 });
+    expect(legacy.accountCreateTuple).toBeNull();
   });
 
   it('accountVersion=2 → legacy createAccount on the legacy factory, no salt (regression)', async () => {

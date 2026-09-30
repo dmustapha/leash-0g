@@ -132,6 +132,12 @@ export interface AgentRow {
    * is the same everywhere. Null for legacy / non-deterministic mints.
    */
   accountSalt: string | null;
+  /**
+   * SE-6: the exact canonical v4 construction tuple (serializable) the mint
+   * used — replayed verbatim to onboard the agent onto another chain at the
+   * SAME CREATE2 address. Null for legacy / pre-SE-6 mints.
+   */
+  accountCreateTuple: Record<string, unknown> | null;
   createdAt: string;
 }
 

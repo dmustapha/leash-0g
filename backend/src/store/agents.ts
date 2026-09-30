@@ -22,6 +22,7 @@ interface DbAgentRow {
   capability_label: string | null;
   account_version: number;
   account_salt: string | null;
+  account_create_tuple: Record<string, unknown> | null;
   created_at: Date;
 }
 
@@ -47,13 +48,14 @@ function mapRow(r: DbAgentRow): AgentRow {
     capabilityLabel: r.capability_label,
     accountVersion: r.account_version,
     accountSalt: r.account_salt,
+    accountCreateTuple: r.account_create_tuple,
     createdAt: r.created_at.toISOString(),
   };
 }
 
 const COLS = `id, chain_agent_id, chain_id, owner_addr, account_addr, session_key_addr, session_key_enc,
   audit_pubkey, token_id, token_hash, name, status, gateway_rules, goal, encrypted_audit_key,
-  gateway_token_enc, guardian_addr, capability_label, account_version, account_salt, created_at`;
+  gateway_token_enc, guardian_addr, capability_label, account_version, account_salt, account_create_tuple, created_at`;
 
 export async function getAgentById(pool: Pool, id: string): Promise<AgentRow | null> {
   if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
@@ -124,14 +126,20 @@ export interface InsertAgentInput {
    * the account lands at the SAME address). Null for legacy / non-deterministic mints.
    */
   accountSalt?: string | null;
+  /**
+   * SE-6 (W2): the EXACT canonical construction tuple the v4 mint used —
+   * replayed verbatim at a later chain onboard (it is baked into the CREATE2
+   * initcode; a reconstructed tuple would predict a different address).
+   */
+  accountCreateTuple?: Record<string, unknown> | null;
 }
 
 export async function insertAgent(pool: Pool, input: InsertAgentInput): Promise<string> {
   const res = await pool.query<{ id: string }>(
     `INSERT INTO agents (chain_agent_id, chain_id, owner_addr, account_addr, session_key_addr, session_key_enc,
                          audit_pubkey, token_id, token_hash, name, gateway_rules, goal, encrypted_audit_key,
-                         gateway_token_enc, guardian_addr, capability_label, account_version, account_salt)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18) RETURNING id`,
+                         gateway_token_enc, guardian_addr, capability_label, account_version, account_salt, account_create_tuple)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING id`,
     [
       input.chainAgentId.toString(),
       input.chainId,
@@ -151,6 +159,7 @@ export async function insertAgent(pool: Pool, input: InsertAgentInput): Promise<
       input.capabilityLabel ?? null,
       input.accountVersion,
       input.accountSalt?.toLowerCase() ?? null,
+      input.accountCreateTuple ? JSON.stringify(input.accountCreateTuple) : null,
     ],
   );
   const row = res.rows[0];
