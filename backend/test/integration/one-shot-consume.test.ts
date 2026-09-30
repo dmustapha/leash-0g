@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
+import { randomBytes } from 'node:crypto';
 import { encodeFunctionData, encodeErrorResult } from 'viem';
 import { createTestDb, seedAgent, type TestDb } from '../helpers/db.js';
 import { TEST_KEK } from '../helpers/app.js';
@@ -102,7 +103,10 @@ async function seedRuntimeAgent(): Promise<string> {
   const gen = generateGatewayToken();
   return seedAgent(db.pool, {
     ownerAddr: OWNER,
-    accountAddr: ACCOUNT,
+    // SE-6 pre-req: unique DB account per seed (UNIQUE(owner, chain, account));
+    // the consume path's chain surface is the FakeChain, which does not key by
+    // this address, so ctx() keeping the shared ACCOUNT is unaffected.
+    accountAddr: `0x${randomBytes(20).toString('hex')}`,
     tokenId: gen.tokenId,
     tokenHash: await hashTokenSecret(gen.secret),
     sessionKeyEnc: encryptSecret(SESSION_PK, TEST_KEK),

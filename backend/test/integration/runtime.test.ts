@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
+import { randomBytes } from 'node:crypto';
 import type { Server } from 'node:http';
 import request from 'supertest';
 import nock from 'nock';
@@ -141,9 +142,15 @@ afterAll(async () => {
 
 async function seedRuntimeAgent(): Promise<string> {
   const gen = generateGatewayToken();
+  // SE-6 pre-req: each seeded agent needs a UNIQUE account address — migration
+  // 021's UNIQUE(owner_addr, chain_id, account_addr) forbids re-seeding the same
+  // (owner, account) per chain. The fake chain's balance is registered per
+  // generated address so the treasury logic sees the same funded account.
+  const account = `0x${randomBytes(20).toString('hex')}`;
+  fakeChain.balances.set(account, 10n ** 18n);
   return seedAgent(db.pool, {
     ownerAddr: OWNER,
-    accountAddr: ACCOUNT,
+    accountAddr: account,
     tokenId: gen.tokenId,
     tokenHash: await hashTokenSecret(gen.secret),
     sessionKeyEnc: encryptSecret(SESSION_PK, TEST_KEK),

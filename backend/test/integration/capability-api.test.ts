@@ -56,7 +56,9 @@ function capDeps(): CapabilityDeps {
 }
 
 async function seedOwned(owner = OWNER): Promise<NonNullable<Awaited<ReturnType<typeof getAgentById>>>> {
-  const id = await seedAgent(db.pool, { ownerAddr: owner, accountAddr: SELF, name: 'MyTrader' });
+  // SE-6 pre-req: no fixed accountAddr — UNIQUE(owner, chain, account) forbids
+  // re-seeding one address per owner; classifyIntendedCall takes SELF directly.
+  const id = await seedAgent(db.pool, { ownerAddr: owner, name: 'MyTrader' });
   const a = await getAgentById(db.pool, id);
   if (!a) throw new Error('agent');
   return a;

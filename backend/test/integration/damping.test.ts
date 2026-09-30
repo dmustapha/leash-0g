@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
+import { randomBytes } from 'node:crypto';
 import type { Server } from 'node:http';
 import nock from 'nock';
 import { encodeErrorResult } from 'viem';
@@ -147,9 +148,13 @@ afterAll(async () => {
 
 async function seedRuntimeAgent(): Promise<string> {
   const gen = generateGatewayToken();
+  // SE-6 pre-req: UNIQUE(owner_addr, chain_id, account_addr) — a fresh account
+  // address per seeded agent (funded in the fake chain), like a real factory.
+  const account = `0x${randomBytes(20).toString('hex')}`;
+  fakeChain.balances.set(account, 10n ** 18n);
   return seedAgent(db.pool, {
     ownerAddr: OWNER,
-    accountAddr: ACCOUNT,
+    accountAddr: account,
     tokenId: gen.tokenId,
     tokenHash: await hashTokenSecret(gen.secret),
     sessionKeyEnc: encryptSecret(SESSION_PK, TEST_KEK),

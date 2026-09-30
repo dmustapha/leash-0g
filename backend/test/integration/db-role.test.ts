@@ -49,8 +49,8 @@ describe('C-6 trace hardening (migration 007 + restricted role + startup sweep)'
     // Normal app queries WORK as the role (the whole suite's operations in miniature).
     const agentRes = await rolePool.query(
       `INSERT INTO agents (owner_addr, account_addr, session_key_addr, session_key_enc, audit_pubkey,
-                           token_id, token_hash, name, gateway_rules, goal)
-       VALUES ('0xaa','0xbb','0xcc','enc','02dd','tok-role','hash','role-test','[]','{}') RETURNING id`,
+                           token_id, token_hash, name, gateway_rules, goal, chain_id)
+       VALUES ('0xaa','0xbb','0xcc','enc','02dd','tok-role','hash','role-test','[]','{}', 16602) RETURNING id`,
     );
     const agentId = agentRes.rows[0].id as string;
     await appendTrace(rolePool, { agentId, kind: 'decision', detail: { summary: 'as-role append' } });
