@@ -51,6 +51,17 @@ export async function appendChainedInTx<T extends ChainedRow>(
   const body = build(prevSeq + 1, prevHash);
   const hash = computeRecordHash(prevHash, body);
   const record = { ...body, hash } as T;
+  if (spec.table === 'trace_records') {
+    // SE-7 (SE-5 Gate-② carry #3): trace rows carry the agent's chain_id,
+    // SUBQUERY-DERIVED from the agents row (never caller text — the same
+    // derivation posture as the capability read-model, migration 020).
+    await client.query(
+      `INSERT INTO trace_records (agent_id, seq, prev_hash, hash, ts, kind, record, chain_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,(SELECT chain_id FROM agents WHERE id = $1::uuid))`,
+      [scopeValue, record.seq, record.prevHash, record.hash, record.ts, record.kind, JSON.stringify(record)],
+    );
+    return record;
+  }
   await client.query(
     `INSERT INTO ${spec.table} (${spec.scopeColumn}, seq, prev_hash, hash, ts, kind, record)
      VALUES ($1,$2,$3,$4,$5,$6,$7)`,

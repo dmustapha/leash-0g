@@ -61,6 +61,14 @@ export interface RuntimeManagerDeps {
   hub: SseHub;
   broker: ApprovalBroker;
   chain: RuntimeChain;
+  /**
+   * SE-7 (SE-5 Gate-② carry #2): resolve the RUNTIME chain client for an
+   * agent's chainId (ChainRegistry.getSessionChain in production). Optional —
+   * absent (single-chain test setups) falls back to `chain`. Consumed by the
+   * one-shot consume/sweep so a chain-B one-shot is never re-driven against
+   * chain-A's client.
+   */
+  resolveChain?: ((chainId: number) => RuntimeChain) | undefined;
   checkpointer: BaseCheckpointSaver;
   /** Phase-3 alert engine (optional in coordination-free test setups). */
   alerts?: AlertService | undefined;
@@ -234,7 +242,10 @@ export class LeashRuntimeManager implements RuntimeManager {
         accountAddr: agent.accountAddr,
         sessionPrivateKey: decryptSecret(agent.sessionKeyEnc, this.deps.settings.keyEncryptionSecret),
       };
-      const deps = { pool: this.deps.pool, hub: this.deps.hub, chain: this.deps.chain };
+      // SE-7 (carry #2): the consume submits on the AGENT'S chain — resolved
+      // per chainId via the registry when wired, defaulting to the single chain.
+      const chain = this.deps.resolveChain?.(agent.chainId) ?? this.deps.chain;
+      const deps = { pool: this.deps.pool, hub: this.deps.hub, chain };
       // The decision carries the authorizeOnce txHash, but a client may report it
       // optimistically before it mines — the first consume then sees the one-shot
       // not-yet-live and stands down `retryable` (the request stays re-claimable).
@@ -263,12 +274,10 @@ export class LeashRuntimeManager implements RuntimeManager {
    * excluded by the query — so a swept row can only consume the exact one time.
    * Runs on boot + on a timer (index.ts), mirroring the reservation/approval sweeps.
    *
-   * SE-7 (carry from the SE-5 Gate-② review): this drives `consumeApprovedOneShot`,
-   * which uses the single default-chain `deps.chain`. Correct while one chain exists,
-   * but once a 2nd real chain lands, `listResumableOneShots` must return chain_id and
-   * the sweep must resolve that chain's client via the ChainRegistry — otherwise a
-   * chain-B one-shot would be re-driven against chain-A's client. Guarded today by the
-   * on-chain wall (a mismatched submit reverts, fail-safe), but fix before SE-7 ships.
+   * SE-7 (carry #2, RESOLVED): the sweep re-drives through `consumeApprovedOneShot`,
+   * which now resolves the AGENT'S chain client via `deps.resolveChain(agent.chainId)`
+   * (ChainRegistry.getSessionChain in production) — a chain-B one-shot can no longer
+   * be re-driven against chain-A's client.
    */
   async sweepResumableOneShots(): Promise<number> {
     const ttlMs = this.deps.settings.jitTtlMs ?? 600_000;

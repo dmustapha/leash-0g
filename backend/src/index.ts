@@ -139,6 +139,10 @@ async function main(): Promise<void> {
     alerts,
     uploader,
     chain: chainRegistry.getSessionChain(defaultChainId),
+    // SE-7 (carry #2): per-chain runtime client resolution — a one-shot on a
+    // non-home chain submits through THAT chain's client (default-deny beyond
+    // the registry).
+    resolveChain: (chainId: number) => chainRegistry.getSessionChain(chainId),
     checkpointer,
     settings: {
       keyEncryptionSecret: cfg.KEY_ENCRYPTION_SECRET,
