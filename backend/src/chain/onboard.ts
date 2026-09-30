@@ -70,7 +70,12 @@ export interface OnboardChainOps extends ChainOps {
   }): Promise<string>;
 }
 
-function parseTuple(agent: AgentRow): PersistedCreateTuple {
+/**
+ * Validate + parse the persisted create tuple. Exported for the SE-8 bridge
+ * pre-routing gate (`runtime/bridge-gate.ts`), which replays the same byte-exact
+ * tuple into `assertSameAddress` before any cross-chain funds route.
+ */
+export function parsePersistedTuple(agent: AgentRow): PersistedCreateTuple {
   const t = agent.accountCreateTuple as unknown as PersistedCreateTuple | null;
   if (
     !t ||
@@ -110,7 +115,7 @@ export async function onboardAgentToChain(
     // Idempotent: the presence row already exists — return it, mint nothing.
     return { deployment: existing, adopted: existing.adopted, alreadyOnboarded: true };
   }
-  const tuple = parseTuple(agent);
+  const tuple = parsePersistedTuple(agent);
   // Default-deny for unregistered chains happens inside getChainOps (E-11).
   const ops = deps.getChainOps(targetChainId);
   // The mint lane's guardian key must BE the create-time guardian — the tuple

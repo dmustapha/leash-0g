@@ -86,6 +86,12 @@ export interface OwnerChainRegistry {
   has(chainId: number): boolean;
   listChains(): Array<{ chainId: number; name: string }>;
   getChainOps(chainId: number): OnboardChainOps;
+  /** SE-8 (carry #2): the grant surface reads the chain's protocol/bridge allowlists. */
+  getChainConfig(chainId: number): {
+    protocolAllowlist?: readonly string[] | undefined;
+    bridgeAllowlist?: readonly string[] | undefined;
+    canonical?: { router?: string | undefined; vault?: string | undefined; settlementToken?: string | undefined } | undefined;
+  };
 }
 
 export interface OwnerApiDeps {
@@ -666,6 +672,42 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       throw new Error(`agent home chain ${a.chainId} requires the multichain registry (not configured)`);
     }
     return deps.chainRegistry.getChainOps(a.chainId);
+  }
+
+  /**
+   * SE-8 (SE-7 gate carry #2): when the agent's chain carries an owner-configured
+   * `protocolAllowlist`, the grant SURFACE refuses rule/preset targets outside
+   * `protocolAllowlist ∪ bridgeAllowlist ∪ canonical` — the config field is
+   * consumed, never a dormant spend-gate lookalike. (The on-chain V4 allowlist
+   * the owner signs remains the actual spend wall.) Chains with no configured
+   * list (0G mocks today) are unrestricted, as before.
+   */
+  function targetGrantable(agent: { chainId: number }, target: string): boolean {
+    if (!deps.chainRegistry) {
+      // No registry wired (single-chain test setups): only the default chain is
+      // reachable at all, and it has no configured list — unrestricted, as before.
+      return agent.chainId === deps.settings.defaultChainId;
+    }
+    let cfg;
+    try {
+      cfg = deps.chainRegistry.getChainConfig(agent.chainId);
+    } catch {
+      return false; // unregistered chain: default-deny
+    }
+    const protocols = cfg.protocolAllowlist ?? [];
+    if (protocols.length === 0) return true; // no configured list on this chain
+    const allowed = new Set<string>(
+      [
+        ...protocols,
+        ...(cfg.bridgeAllowlist ?? []),
+        cfg.canonical?.router,
+        cfg.canonical?.vault,
+        cfg.canonical?.settlementToken,
+      ]
+        .filter((a): a is string => typeof a === 'string')
+        .map((a) => a.toLowerCase()),
+    );
+    return allowed.has(target.toLowerCase());
   }
 
   const balanceCache = new Map<string, { value: bigint; at: number }>();
@@ -1758,6 +1800,13 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       res.status(422).json({ error: { message: resolved.reason } });
       return;
     }
+    const offList = resolved.preset.rules.find((r) => !targetGrantable(agent, r.target));
+    if (offList) {
+      res.status(422).json({
+        error: { message: `preset target ${offList.target} is outside this chain's protocol allowlist` },
+      });
+      return;
+    }
     if (parsed.data.txHash) await recordPresetGrants(deps.pool, agent, resolved.preset, parsed.data.txHash);
     res.json({ ok: true, preset: resolved.preset, recorded: Boolean(parsed.data.txHash) });
   }));
@@ -1779,6 +1828,12 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       return;
     }
     const rule = toCallRule(parsed.data.rule);
+    if (parsed.data.action !== 'remove' && !targetGrantable(agent, rule.target)) {
+      res.status(422).json({
+        error: { message: `rule target ${rule.target} is outside this chain's protocol allowlist` },
+      });
+      return;
+    }
     if (parsed.data.action === 'remove') {
       await setGrantStatus(deps.pool, agent.id, rule.target, rule.selector, 'removed');
       res.json({ ok: true, action: 'remove' });

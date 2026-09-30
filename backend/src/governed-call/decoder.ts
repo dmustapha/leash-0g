@@ -47,7 +47,9 @@ export function decodeCall(target: string, value: bigint, data: string): Decoded
   }
 
   // Every registered signature is fully STATIC — exact length is 4 + 32*nParams.
-  const expected = 4 + 32 * spec.paramTypes.length;
+  // SE-8 bridge shapes carry a trailing dynamic `bytes extraData` FORCED EMPTY:
+  // exactly 2 extra words (canonical head offset + zero length).
+  const expected = 4 + 32 * (spec.paramTypes.length + (spec.trailingEmptyBytes ? 2 : 0));
   if (bytes !== expected) {
     return base(targetLc, value, hex, spec.signature, `${spec.verb} on ${shortAddr(targetLc)} (bad length)`, {
       structured: spec.structured,
@@ -57,8 +59,9 @@ export function decodeCall(target: string, value: bigint, data: string): Decoded
     }, 'DecodeMismatch');
   }
 
+  const nWords = spec.paramTypes.length + (spec.trailingEmptyBytes ? 2 : 0);
   const words: string[] = [];
-  for (let i = 0; i < spec.paramTypes.length; i++) {
+  for (let i = 0; i < nWords; i++) {
     words.push(hex.slice(10 + i * 64, 10 + (i + 1) * 64)); // 64 hex chars = 32 bytes
   }
 
@@ -69,6 +72,25 @@ export function decodeCall(target: string, value: bigint, data: string): Decoded
     recipients: [],
   };
   let reject: DecodedCall['reject'];
+
+  // SE-8 bridge canonicality (mirrors the on-chain bridge decoders exactly):
+  // the extraData head offset must be canonical and its length must be ZERO;
+  // a payable bridge leg charges msg.value; a nonpayable one refuses any value.
+  if (spec.trailingEmptyBytes) {
+    const offWord = words[spec.paramTypes.length];
+    const lenWord = words[spec.paramTypes.length + 1];
+    const canonicalOffset = BigInt(32 * (spec.paramTypes.length + 1));
+    if (
+      offWord === undefined ||
+      lenWord === undefined ||
+      BigInt('0x' + offWord) !== canonicalOffset ||
+      BigInt('0x' + lenWord) !== 0n
+    ) {
+      reject = 'DecodeMismatch';
+    }
+  }
+  if (spec.forbidValue && value !== 0n) reject = 'DecodeMismatch';
+  if (spec.valueIsAmount) args.amount = value;
 
   for (let i = 0; i < spec.paramTypes.length; i++) {
     const type = spec.paramTypes[i];
@@ -84,6 +106,13 @@ export function decodeCall(target: string, value: bigint, data: string): Decoded
       if (role === 'spender') args.spender = addr;
       else if (role === 'recipient') args.recipients.push(addr);
       else if (role === 'from') args.from = addr;
+    } else if (type === 'uint32') {
+      // strict canonical: bits above uint32 must be zero (contract mirrors).
+      const raw = BigInt('0x' + word);
+      if (raw >> 32n !== 0n) {
+        reject = 'DecodeMismatch';
+        break;
+      }
     } else if (type === 'bool') {
       const raw = BigInt('0x' + word);
       if (raw > 1n) {

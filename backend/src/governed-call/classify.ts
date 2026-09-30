@@ -1,5 +1,5 @@
 import type { Classification, DecodedCall, GrantState, Novelty } from './types.js';
-import { SELF_EDIT_SELECTORS } from './selectors.js';
+import { BRIDGE_SELECTORS, SELF_EDIT_SELECTORS } from './selectors.js';
 
 const ZERO = '0x0000000000000000000000000000000000000000';
 
@@ -33,6 +33,23 @@ export function classify(decoded: DecodedCall, grant: GrantState, self: string):
   // someone else's funds is never legitimate and is never JIT-grantable.
   if (decoded.args.from !== undefined && decoded.args.from.toLowerCase() !== selfLc) {
     return { lane: 'forbidden', reason: 'from_not_self' };
+  }
+
+  // SE-8 (BR-2, carry #2 — the bridge allowlist is ENFORCED here, never dormant):
+  // a structured bridge selector may ONLY target a bridge in the chain's
+  // owner-configured bridge allowlist; and a call to a bridge-allowlisted target
+  // with any OTHER selector is default-DENIED (no structured decoder for that
+  // bridge selector = not governable — never falls through to the non-structured
+  // msg.value lane where an ERC-20 bridge amount would ride uncharged).
+  const selectorLc = decoded.selector.toLowerCase();
+  const isBridgeSelector = BRIDGE_SELECTORS.has(selectorLc);
+  const bridgeTargets = grant.bridgeTargets ?? new Set<string>();
+  const targetIsBridge = bridgeTargets.has(decoded.target.toLowerCase());
+  if (isBridgeSelector && !targetIsBridge) {
+    return { lane: 'forbidden', reason: 'bridge_not_allowlisted' };
+  }
+  if (targetIsBridge && !isBridgeSelector) {
+    return { lane: 'forbidden', reason: 'bridge_undecodable' };
   }
 
   const key = ruleKey(decoded.target, decoded.selector);

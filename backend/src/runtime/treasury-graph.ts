@@ -19,7 +19,7 @@ import { formatG, shortAddr, inMinutes, sanitizeAgentIntent } from '../util/form
 import type { DecodedLeashError } from '../types.js';
 import type { RuntimeChain } from './session-chain.js';
 import { loadGrantState } from './grant-state.js';
-import { buildGovernedCall, SELECTORS } from '../governed-call/index.js';
+import { buildGovernedCall, BRIDGE_SELECTORS, SELECTORS } from '../governed-call/index.js';
 import { classifyIntendedCall } from '../gateway/call-gate.js';
 import { raiseCapabilityRequest, type CapabilityDeps } from '../capabilities/service.js';
 import { listGrants } from '../store/capabilities.js';
@@ -102,6 +102,20 @@ export interface TreasuryGraphDeps {
    * / alert-free test setups — a novel call then simply stands down, traced.
    */
   capabilities?: CapabilityDeps | undefined;
+  /**
+   * SE-8 — the governed-bridging lane. `targets` = the chain's bridge allowlist
+   * (classify enforcement, carry #2); `assertRoutable` = the HARD pre-routing
+   * same-address gate (carry #1: `ChainRegistry.assertSameAddress` on home +
+   * destination, bound to the persisted account). Absent = no bridging possible
+   * on this runtime (fail-closed: a bridge call classifies forbidden without
+   * `targets`, and even an L1 one stands down without the gate).
+   */
+  bridge?:
+    | {
+        targets: Set<string>;
+        assertRoutable: (bridgeTarget: string) => Promise<{ destinationChainId: number; verifiedAddr: string }>;
+      }
+    | undefined;
   gatewayUrl: string;
   defaultModel: string;
   /**
@@ -526,7 +540,7 @@ export function buildTreasuryGraph(
     if (state.policy.expiresAt <= Math.floor(Date.now() / 1000)) {
       return standDownResult('session expired since sense — not submitting a doomed governed call');
     }
-    const grant = await loadGrantState(deps.pool, deps.chain, ctx.agentId, self);
+    const grant = await loadGrantState(deps.pool, deps.chain, ctx.agentId, self, deps.bridge?.targets);
     const built = buildGovernedCall(
       { target: decision.target ?? '', selector: decision.selector ?? '', amountWei: decision.amountWei },
       grant,
@@ -539,6 +553,33 @@ export function buildTreasuryGraph(
     }
     const gate = classifyIntendedCall(built.target, built.value, built.data, grant, self);
     if (gate.classification.lane === 'l1') {
+      // SE-8 (carry #1): a BRIDGE call routes funds cross-chain — the HARD
+      // pre-routing gate must PASS first: same-CREATE2-address verification on
+      // home + destination, bound to the persisted account (assertSameAddress's
+      // first production caller). Refusal/absence = stand down, traced — never
+      // a bridge submit whose far leg is unverified (fail-closed).
+      if (BRIDGE_SELECTORS.has(built.data.slice(0, 10).toLowerCase())) {
+        if (!deps.bridge) {
+          return standDownResult('bridge call refused: no bridge lane configured (pre-routing gate unavailable)');
+        }
+        try {
+          const routed = await deps.bridge.assertRoutable(built.target);
+          return {
+            decision,
+            route: 'call',
+            callTarget: built.target,
+            callData: built.data,
+            callValue: built.value.toString(),
+            reasoning:
+              state.reasoning +
+              ` [bridge pre-routing gate PASSED: same-address ${routed.verifiedAddr} verified on destination chain ${routed.destinationChainId}]`,
+          };
+        } catch (err) {
+          return standDownResult(
+            `bridge call refused by the pre-routing gate: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+      }
       return {
         decision,
         route: 'call',

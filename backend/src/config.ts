@@ -140,6 +140,15 @@ const envSchema = z.object({
   // Comma-separated allowlisted REAL protocol contracts on Base Sepolia
   // (Uniswap router / Permit2 / Aave stata vault / WETH / USDC).
   BASE_PROTOCOL_ALLOWLIST: z.string().optional(),
+  /**
+   * SE-8: allowlisted bridges on Base Sepolia, `bridgeAddr:destinationChainId`
+   * comma-list (e.g. the OP-stack L2StandardBridge → Ethereum Sepolia:
+   * `0x4200000000000000000000000000000000000010:11155111`). Fail-loud parse.
+   */
+  BASE_BRIDGE_ALLOWLIST: z.string().optional(),
+  /** SE-8: bridge DESTINATION chain (same-address verification substrate). */
+  ETHEREUM_SEPOLIA_RPC: z.string().url().optional(),
+  AGENT_REGISTRY_SEPOLIA_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
 });
 
 export type Config = z.infer<typeof envSchema>;
@@ -162,6 +171,34 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
  * no code fork (the registry + drills are chain-agnostic). 0G enforces a 2-gwei
  * gas floor (observed live, 2026-09); other chains carry their own.
  */
+/**
+ * SE-8: `bridgeAddr:destinationChainId` comma-list → the consumed bridge policy
+ * (`bridgeAllowlist` + `bridgeDestinations`). Fail-loud (L-03 posture): a typo'd
+ * bridge address or chain id fails STARTUP, never a silent drop that would turn a
+ * legitimate governed bridge into a runtime refusal (or worse, mask the gate).
+ */
+function parseBridgeAllowlist(raw: string): {
+  bridgeAllowlist: string[];
+  bridgeDestinations: Record<string, number>;
+} {
+  const bridgeAllowlist: string[] = [];
+  const bridgeDestinations: Record<string, number> = {};
+  for (const entry of raw.split(',')) {
+    const [addrRaw, destRaw, ...rest] = entry.trim().split(':');
+    const addr = (addrRaw ?? '').trim().toLowerCase();
+    if (!/^0x[0-9a-f]{40}$/.test(addr) || rest.length > 0) {
+      throw new Error(`BRIDGE_ALLOWLIST entry is not "address:destChainId": "${entry.trim()}"`);
+    }
+    const dest = Number((destRaw ?? '').trim());
+    if (!Number.isInteger(dest) || dest <= 0) {
+      throw new Error(`BRIDGE_ALLOWLIST destination chain id invalid in: "${entry.trim()}"`);
+    }
+    bridgeAllowlist.push(addr);
+    bridgeDestinations[addr] = dest;
+  }
+  return { bridgeAllowlist, bridgeDestinations };
+}
+
 export function buildChainConfigs(cfg: Config): ChainConfig[] {
   const chains: ChainConfig[] = [
     {
@@ -211,6 +248,22 @@ export function buildChainConfigs(cfg: Config): ChainConfig[] {
             }),
           }
         : {}),
+      ...(cfg.BASE_BRIDGE_ALLOWLIST ? parseBridgeAllowlist(cfg.BASE_BRIDGE_ALLOWLIST) : {}),
+    });
+  }
+  // SE-8: Ethereum Sepolia (11155111) — the OP-stack bridge DESTINATION chain.
+  // Appended only when BOTH env vars are set (default-deny otherwise, E-11); the
+  // pre-routing same-address verification resolves it to confirm the far-chain
+  // account before any bridge call routes.
+  if (cfg.ETHEREUM_SEPOLIA_RPC && cfg.AGENT_REGISTRY_SEPOLIA_ADDR) {
+    chains.push({
+      chainId: 11155111,
+      name: 'Ethereum Sepolia',
+      rpcUrl: cfg.ETHEREUM_SEPOLIA_RPC,
+      factoryV4Addr: cfg.LEASH_FACTORY_V4_ADDR,
+      registryAddr: cfg.AGENT_REGISTRY_SEPOLIA_ADDR,
+      accountVersion: 4,
+      gasFloorWei: 0n,
     });
   }
   return chains;

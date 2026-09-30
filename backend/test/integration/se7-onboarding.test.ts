@@ -134,6 +134,7 @@ beforeAll(async () => {
   app = buildTestApp(db.pool, {
     chainRegistry: {
       has: (chainId: number) => chainId === HOME_CHAIN || chainId === BASE_CHAIN,
+      getChainConfig: () => ({}), // SE-8: no protocol allowlist in this fixture (unrestricted)
       listChains: () => [
         { chainId: HOME_CHAIN, name: '0G Galileo Testnet' },
         { chainId: BASE_CHAIN, name: 'Base Sepolia' },

@@ -28,6 +28,8 @@ import {
 } from '../coordination/chain.js';
 import type { Json } from '../crypto/canonical.js';
 import type { RuntimeChain } from './session-chain.js';
+import type { ChainRegistry } from '../chain/registry.js';
+import { assertBridgeRoutable } from './bridge-gate.js';
 import { buildTreasuryGraph, type TreasuryGraph } from './treasury-graph.js';
 import { consumeOneShot } from './one-shot-consume.js';
 import type { CapabilityDeps } from '../capabilities/service.js';
@@ -69,6 +71,13 @@ export interface RuntimeManagerDeps {
    * chain-A's client.
    */
   resolveChain?: ((chainId: number) => RuntimeChain) | undefined;
+  /**
+   * SE-8: the full ChainRegistry — the treasury graph's bridge lane needs the
+   * agent chain's `bridgeAllowlist`/`bridgeDestinations` (classify enforcement,
+   * carry #2) and `assertSameAddress` (the HARD pre-routing gate, carry #1).
+   * Optional: absent (single-chain test setups) = no bridge lane (fail-closed).
+   */
+  chainRegistry?: ChainRegistry | undefined;
   checkpointer: BaseCheckpointSaver;
   /** Phase-3 alert engine (optional in coordination-free test setups). */
   alerts?: AlertService | undefined;
@@ -139,6 +148,25 @@ export class LeashRuntimeManager implements RuntimeManager {
     };
   }
 
+  /**
+   * SE-8: the treasury graph's bridge-lane deps for one agent — the chain's
+   * bridge allowlist (classify enforcement) + the HARD pre-routing gate
+   * (`assertBridgeRoutable` → `ChainRegistry.assertSameAddress`, carry #1).
+   * Undefined when no registry is wired or the agent's chain allows no bridges.
+   */
+  private bridgeDeps(agent: AgentRow): { bridge: NonNullable<import('./treasury-graph.js').TreasuryGraphDeps['bridge']> } | undefined {
+    const registry = this.deps.chainRegistry;
+    if (!registry || !registry.has(agent.chainId)) return undefined;
+    const allow = registry.getChainConfig(agent.chainId).bridgeAllowlist ?? [];
+    if (allow.length === 0) return undefined;
+    return {
+      bridge: {
+        targets: new Set(allow.map((a) => a.toLowerCase())),
+        assertRoutable: (bridgeTarget: string) => assertBridgeRoutable(registry, agent, bridgeTarget),
+      },
+    };
+  }
+
   /** A job role cannot run without the 0G Storage uploader (deliverable/PoA sink). */
   private requireUploader(): StorageUploader {
     if (!this.deps.uploader) throw new Error('job role requires a StorageUploader (uploader dep missing)');
@@ -198,6 +226,10 @@ export class LeashRuntimeManager implements RuntimeManager {
             // it); a coordination-free/alert-free test setup then stands down on
             // novelty instead.
             ...(this.capabilityDeps() ? { capabilities: this.capabilityDeps() } : {}),
+            // SE-8: the governed-bridging lane — only when the registry knows the
+            // agent's chain AND that chain has an owner-configured bridge allowlist.
+            // Absent = fail-closed (a bridge call classifies forbidden / stands down).
+            ...(this.bridgeDeps(agent) ?? {}),
             ...(this.deps.settings.fetchFn ? { fetchFn: this.deps.settings.fetchFn } : {}),
           },
           ctx,
