@@ -1,0 +1,42 @@
+{
+  "phase": "Stage E \u2014 SE-7 (E-8): SE-3 wind-down-mid-chain live spot-check",
+  "kind": "deployed wind-down-mid-chain spot-check (fresh throwaway state per run \u2014 idempotent by construction)",
+  "api": "https://leash-0g-backend.onrender.com",
+  "green": true,
+  "runs": [
+    {
+      "phase": "Stage E \u2014 SE-7 (E-8): SE-3 wind-down-mid-chain live spot-check",
+      "api": "https://leash-0g-backend.onrender.com",
+      "ts": "2026-09-30T02:59:08.125Z",
+      "owner": "0xBDB786ec073b65d33328d4710C677DBEb3dEA3ba",
+      "upstream": "5b640c1c-748b-4051-9b3c-46be49071fca",
+      "downstream": "c13a8880-8c6f-49e6-8d18-cdbe59fa4eaa",
+      "chainId": "b3f3b07f-1b1d-4fe7-8020-017b4ba2b916",
+      "approvalId": "a0b6b99b-42ff-4821-a203-4c15f2ad3c0f",
+      "checks": {
+        "chainTerminated": true,
+        "inFlightHopCancelled": true,
+        "staleApproveDidNotResurrect": true,
+        "restartDidNotResume": true
+      },
+      "staleApproveHttpStatus": 200
+    },
+    {
+      "phase": "Stage E \u2014 SE-7 (E-8): SE-3 wind-down-mid-chain live spot-check",
+      "api": "https://leash-0g-backend.onrender.com",
+      "ts": "2026-09-30T03:02:38.858Z",
+      "owner": "0x63e26D4796c82e2a4Bab5ff679BED67059D45842",
+      "upstream": "a650b0fa-68a5-4fab-956a-54b8811baa62",
+      "downstream": "df5cf97c-8103-4dec-a8a9-7614edf86130",
+      "chainId": "8bd62f35-5253-4a01-9840-af8eeff694a1",
+      "approvalId": "5164a425-8728-47d0-b910-717eacac2a52",
+      "checks": {
+        "chainTerminated": true,
+        "inFlightHopCancelled": true,
+        "staleApproveDidNotResurrect": true,
+        "restartDidNotResume": true
+      },
+      "staleApproveHttpStatus": 200
+    }
+  ]
+}
