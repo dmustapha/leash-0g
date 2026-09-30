@@ -573,6 +573,10 @@ export type CapabilityRequestRow = {
   callHash: Hex;
   status: RequestStatus;
   approvalId: string | null;
+  /** SE-2: the exact refused bytes (server-authored, bound by callHash) — the
+   *  SERVER-verified decode source for structured selectors (e.g. SE-8 bridges). */
+  callValue?: string | null;
+  callData?: string | null;
 };
 
 /** GET /api/agents/:id/capabilities response. */
