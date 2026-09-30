@@ -48,6 +48,11 @@ class FakeOnboardOps {
   async predictAccountV4(input: Record<string, unknown>): Promise<string> {
     return fakePredict({ ...input, guardianAddr: (input['guardianAddr'] as string | undefined) ?? this.guardianAddress });
   }
+  public funded: Array<{ addr: string; amountWei: bigint }> = [];
+  async fundSessionKey(addr: string, amountWei: bigint): Promise<{ txHash: string }> {
+    this.funded.push({ addr, amountWei });
+    return { txHash: '0x' + '55'.repeat(32) };
+  }
   async deployAndRegister(input: Record<string, unknown>): Promise<Record<string, unknown>> {
     this.mints.push(input);
     const predicted = fakePredict({
@@ -282,6 +287,40 @@ describe('SE-7 second-chain onboarding (persisted-tuple replay)', () => {
     expect(post.status).toBe(403);
     const get = await request(app.ownerApp).get(`/api/agents/${agentId}/networks`).set('Authorization', ownerAuth(OTHER_OWNER));
     expect(get.status).toBe(403);
+  });
+
+  it('create-time chain choice (spec §7.C): POST /api/agents with chainId mints on THAT chain', async () => {
+    const auditKey = '02' + 'd4'.repeat(32);
+    const body = {
+      name: 'base-native agent',
+      auditPubKey: auditKey,
+      policy: { perTransferCapWei: '10000000000000000', windowCapWei: '30000000000000000', windowSeconds: 3600, expiresAt: Math.floor(Date.now() / 1000) + 86_400 },
+      allowlist: ['0x' + '9c'.repeat(20)],
+      goal: { beneficiary: '0x' + '9c'.repeat(20), targetBalanceWei: '50000000000000000', topUpWei: '5000000000000000' },
+      chainId: BASE_CHAIN,
+    };
+    const res = await request(app.ownerApp).post('/api/agents').set('Authorization', ownerAuth(OWNER)).send(body);
+    expect(res.status).toBe(201);
+    expect(baseOps.mints).toHaveLength(1); // minted through BASE's ops lane
+    expect(baseOps.funded).toHaveLength(1); // gas dust funded on the SAME chain
+    const row = await db.pool.query<{ chain_id: string }>(`SELECT chain_id FROM agents WHERE id = $1`, [res.body.agentId]);
+    expect(Number(row.rows[0]?.chain_id)).toBe(BASE_CHAIN);
+  });
+
+  it('create-time chain choice: an unregistered chainId is refused (default-deny)', async () => {
+    const res = await request(app.ownerApp)
+      .post('/api/agents')
+      .set('Authorization', ownerAuth(OWNER))
+      .send({
+        name: 'x',
+        auditPubKey: '02' + 'd4'.repeat(32),
+        policy: { perTransferCapWei: '1', windowCapWei: '2', windowSeconds: 3600, expiresAt: Math.floor(Date.now() / 1000) + 86_400 },
+        allowlist: ['0x' + '9c'.repeat(20)],
+        goal: { beneficiary: '0x' + '9c'.repeat(20), targetBalanceWei: '5', topUpWei: '1' },
+        chainId: 421614,
+      });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe('unregistered_chain');
   });
 
   it('L-04: the per-chain account view scopes by the AUTHENTICATED owner, home + onboarded chains', async () => {

@@ -236,6 +236,12 @@ const createAgentSchema = z.object({
    * Coerced from JSON number; only 2 | 4 accepted.
    */
   accountVersion: z.union([z.literal(2), z.literal(4)]).default(4),
+  /**
+   * SE-7 (spec §7.C "chain choice collected at create"): which registered
+   * chain the agent's account is minted on. Default = the home 0G chain.
+   * Validated against the ChainRegistry at the route (default-deny, E-11).
+   */
+  chainId: z.number().int().positive().optional(),
 }).superRefine((v, issues) => {
   const role = v.goal.type ?? 'treasury';
   if (role === 'treasury' && v.allowlist.length < 1) {
@@ -476,7 +482,19 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     // ops key, so the on-chain registry owner is ops; the Privy wallet stored
     // in Postgres (owner_addr) is the authority for the owner API, and the
     // same address is the LeashAccount's contract owner.
-    const deployed = await deps.chain.deployAndRegister({
+    // SE-7: create-time chain choice — resolve the target chain's ops lane via
+    // the registry (default-deny for unregistered chains); absent/default keeps
+    // the existing single-chain wire byte-identical.
+    const createChainId = input.chainId ?? deps.settings.defaultChainId;
+    let createChain = deps.chain;
+    if (createChainId !== deps.settings.defaultChainId) {
+      if (!deps.chainRegistry || !deps.chainRegistry.has(createChainId)) {
+        res.status(409).json({ error: 'unregistered_chain', chainId: createChainId });
+        return;
+      }
+      createChain = deps.chainRegistry.getChainOps(createChainId);
+    }
+    const deployed = await createChain.deployAndRegister({
       ownerAddr,
       sessionKeyAddr,
       auditPubKey: input.auditPubKey,
@@ -506,7 +524,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     const token = generateGatewayToken();
     const agentId = await insertAgent(deps.pool, {
       chainAgentId: deployed.chainAgentId,
-      chainId: deps.settings.defaultChainId,
+      chainId: createChainId,
       ownerAddr,
       accountAddr: deployed.accountAddr,
       sessionKeyAddr,
@@ -537,8 +555,9 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     // an idempotent safety net for the failure paths).
     await releaseReservation(deps.pool, reserved.reservationId);
 
-    // Gas dust so the session key can pay execute() gas; funds stay behind the account.
-    await deps.chain.fundSessionKey(sessionKeyAddr, deps.settings.sessionGasDustWei);
+    // Gas dust so the session key can pay execute() gas; funds stay behind the
+    // account. Funded on the CHAIN the account was minted on (SE-7).
+    await createChain.fundSessionKey(sessionKeyAddr, deps.settings.sessionGasDustWei);
 
     // Shape = FE CreateAgentResponse (web/lib/types.ts).
     res.status(201).json({
