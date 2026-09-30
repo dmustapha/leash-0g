@@ -103,8 +103,11 @@ export function buildGovernedCall(
     if (type === 'address' && role === 'recipient') {
       // Recipient pins to self (the account is the receiver of its own swaps/
       // deposits/transfers). `allowlist` mode is not auto-resolvable (which of N
-      // payees?) without model text → not determined.
-      if (rule.recipientMode !== 'self') return { ok: false, reason: 'not_authority_determined' };
+      // payees?) without model text → not determined. E-12 M-02: a BRIDGE
+      // recipient is self UNCONDITIONALLY (the wall ignores rule mode there).
+      if (spec.bridge !== true && rule.recipientMode !== 'self') {
+        return { ok: false, reason: 'not_authority_determined' };
+      }
       words.push({ type, value: selfLc as Hex });
       continue;
     }

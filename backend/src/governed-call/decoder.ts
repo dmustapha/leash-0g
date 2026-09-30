@@ -72,6 +72,7 @@ export function decodeCall(target: string, value: bigint, data: string): Decoded
     recipients: [],
   };
   let reject: DecodedCall['reject'];
+  const decodedAddrs: (string | null)[] = [];
 
   // SE-8 bridge canonicality (mirrors the on-chain bridge decoders exactly):
   // the extraData head offset must be canonical and its length must be ZERO;
@@ -99,6 +100,7 @@ export function decodeCall(target: string, value: bigint, data: string): Decoded
     if (type === undefined || role === undefined || word === undefined) continue;
     if (type === 'address') {
       const addr = decodeCanonicalAddress(word);
+      decodedAddrs[i] = addr;
       if (addr === null) {
         reject = 'DecodeMismatch';
         break;
@@ -134,6 +136,12 @@ export function decodeCall(target: string, value: bigint, data: string): Decoded
     }
   }
 
+  // E-12 M-01: the ERC-20 bridge leg debits the LOCAL TOKEN's budget (arg 0),
+  // mirroring the on-chain charge — never the unit-blind bridge key.
+  if (spec.spendTokenFromArg !== undefined) {
+    const tok = decodedAddrs[spec.spendTokenFromArg];
+    if (tok) args.spendToken = tok;
+  }
   return base(targetLc, value, hex, spec.signature, humanReadable(spec, targetLc, args), args, reject);
 }
 

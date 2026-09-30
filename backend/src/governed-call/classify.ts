@@ -79,10 +79,13 @@ export function classify(decoded: DecodedCall, grant: GrantState, self: string):
   }
 
   // recipient novelty: an unsatisfied recipient pin → ask to add it (never a silent redirect).
+  // E-12 M-02 mirror: a BRIDGE recipient must be SELF regardless of rule mode — the
+  // on-chain wall pins it unconditionally, so a mode-1 bridge redirect must never
+  // classify in-envelope (it would be a doomed submit).
   for (const r of decoded.args.recipients) {
     const rl = r.toLowerCase();
     const satisfied =
-      rule.recipientMode === 'self' ? rl === selfLc : grant.allowlist.has(rl);
+      isBridgeSelector || rule.recipientMode === 'self' ? rl === selfLc : grant.allowlist.has(rl);
     if (!satisfied) novelty.push('new_recipient');
   }
 

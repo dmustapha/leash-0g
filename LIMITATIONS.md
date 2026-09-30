@@ -18,6 +18,21 @@ LEASH is a work-in-progress research project. This is an honest scope boundary: 
 - **Reasoning quality depends on the 0G Compute models available.** Provider and evaluator use distinct models; output quality tracks those models.
 - **Job definition is owner-driven.** Agents execute owner-seeded job specs; autonomous need-detection (an agent inventing its own jobs) is not built.
 
+## Multichain / bridging (Stage E)
+
+- **Revocation does not propagate cross-chain.** Revoking an agent acts on its home-chain
+  account; a same-address account on another chain keeps its own local revocation state
+  (its caps/allowlist/expiry still bound it). Wind down per chain until cross-chain
+  revocation fan-out ships.
+- **A governed bridge's standing recipient is always the account itself** (the same
+  CREATE2 address on the destination chain). Non-self far-chain payouts require an
+  owner-reviewed one-shot, and even then the runtime refuses a bridge one-shot whose
+  decoded recipient is not the account (destination-chain address aliasing is not
+  verifiable for arbitrary recipients).
+- **The multichain runtime requires the chain registry to be wired** (`resolveChain` +
+  `chainRegistry`); a deploy that omits it falls back to the single default chain and
+  allows no bridging (fail-closed).
+
 ## Infrastructure
 
 - **State lives in a managed Postgres (Neon).** The backend is stateless and re-derivable from chain + storage, but the projection/read model is a conventional database, not itself on-chain.

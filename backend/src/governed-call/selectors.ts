@@ -43,6 +43,11 @@ export interface SelectorSpec {
   forbidValue?: true;
   /** SE-8: this selector is a structured BRIDGE-family decoder (BR-2). */
   bridge?: true;
+  /**
+   * E-12 M-01: the budget-debited token is a DECODED ARG (the bridge leg charges
+   * the localToken's budget — unit-correct), overriding `spendToken` semantics.
+   */
+  spendTokenFromArg?: number;
 }
 
 /** Build a spec keyed by its computed 4-byte selector. */
@@ -117,7 +122,8 @@ export const SELECTORS: ReadonlyMap<string, SelectorSpec> = new Map<string, Sele
     roles: ['ignore', 'ignore', 'recipient', 'amount', 'ignore'],
     structured: true,
     amountIndex: 3,
-    spendToken: 'target',
+    spendToken: 'target', // overridden by spendTokenFromArg (M-01: the localToken's budget)
+    spendTokenFromArg: 0,
     verb: 'bridge',
     trailingEmptyBytes: true,
     forbidValue: true,

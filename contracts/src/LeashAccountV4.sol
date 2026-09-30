@@ -499,7 +499,14 @@ contract LeashAccountV4 is ReentrancyGuard {
             if (minGas >> 32 != 0) revert DecodeMismatch();
             if (_decodeUint(data, 68) != 0x60) revert DecodeMismatch(); // extraData head offset
             if (_decodeUint(data, 100) != 0) revert DecodeMismatch(); // extraData length == 0
-            _checkRecipient(to, rule.recipientMode);
+            // E-12 M-02: bridge recipients are pinned to SELF unconditionally —
+            // recipientMode is IGNORED for bridge legs. A home-chain allowlist
+            // entry says nothing about who controls that address on the
+            // DESTINATION chain (a contract there may be a different party);
+            // only the same-CREATE2-address account is a verifiable far-chain
+            // recipient. Non-self far-chain payouts go through the owner
+            // one-shot lane (exact owner-reviewed bytes), never a standing rule.
+            if (to != address(this)) revert RecipientNotSelf(to);
             // the bridged amount is msg.value — charged against the NATIVE budget.
             return (value, address(0), false);
         }
@@ -508,7 +515,7 @@ contract LeashAccountV4 is ReentrancyGuard {
             //               uint256 amount, uint32 minGasLimit, bytes extraData)
             if (data.length != 4 + 224) revert DecodeMismatch();
             if (value != 0) revert DecodeMismatch(); // nonpayable: value may never ride uncharged
-            _decodeAddress(data, 4); // localToken — canonical check only
+            address localToken = _decodeAddress(data, 4);
             _decodeAddress(data, 36); // remoteToken — canonical check only
             address to = _decodeAddress(data, 68);
             uint256 amount = _decodeUint(data, 100);
@@ -516,11 +523,17 @@ contract LeashAccountV4 is ReentrancyGuard {
             if (minGas >> 32 != 0) revert DecodeMismatch();
             if (_decodeUint(data, 164) != 0xc0) revert DecodeMismatch(); // extraData head offset
             if (_decodeUint(data, 196) != 0) revert DecodeMismatch(); // extraData length == 0
-            _checkRecipient(to, rule.recipientMode);
-            // charge `amount` against the per-call cap + the cumulative budget keyed
-            // by the BRIDGE address (legible per-bridge cap, deposit-decoder pattern;
-            // the token pull is separately bounded by the governed approve envelope).
-            return (amount, target, false);
+            // E-12 M-02: recipient pinned to SELF unconditionally (see bridgeETHTo).
+            if (to != address(this)) revert RecipientNotSelf(to);
+            // E-12 M-01: charge `amount` against the LOCAL TOKEN's budget — a
+            // bridge-keyed budget is unit-blind when one bridge serves tokens of
+            // different decimals (a "1000 USDC" cap would meaninglessly bound a
+            // WETH leg). Token-keyed = the cap is denominated in the asset that
+            // actually moves. NOTE the conservative additive accounting: the
+            // enabling `approve(bridge, amount)` leg debits the SAME token
+            // budget, so a bridged unit consumes ~2 units of token budget —
+            // fail-closed narrowing, never a widening.
+            return (amount, localToken, false);
         }
         // Non-structured allowlisted selector: bound msg.value against the native
         // budget; the off-chain gate supplies rich arg legibility + recursive unwrap.
