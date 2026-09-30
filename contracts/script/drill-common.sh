@@ -126,11 +126,39 @@ _read_rule_cap() { # $1 target  $2 selector -> echoes perCallCap ("" on flake)
   cast call "$A" "callRules(bytes32)(bool,uint8,uint128,uint128)" "$rk" --rpc-url "$RPC" 2>/dev/null | sed -n '3p' | awk '{print $1}'
 }
 
+# Apply a pending timelocked proposal, retrying past a TimelockNotElapsed
+# (0x812107fd) revert: with timelockDelay=0 the eta == the propose block's
+# timestamp, and a fast chain (Base's 2s blocks) can simulate the apply against a
+# block whose timestamp still equals the eta (`block.timestamp < eta` is false at
+# equality, but gas-estimation against the borderline block intermittently
+# reverts) — a later block advances the timestamp past it. Bounded; a NON-timelock
+# revert propagates immediately (never masked).
+_apply_when_elapsed() { # $1 = apply fn signature
+  local i out n0 n1 j h
+  n0=$(cast nonce "$SESSION_ADDR" --rpc-url "$RPC" 2>/dev/null)
+  for i in $(seq 1 "$FLAKE_RETRIES"); do
+    if out=$(cast send "$A" "$1" --private-key "$KEY" --rpc-url "$RPC" --legacy --gas-price "$STACK_GAS_PRICE" --async 2>&1); then
+      h=$(echo "$out" | grep -oE '0x[0-9a-fA-F]{64}' | head -1)
+      # Confirm via nonce advancement before returning, so the next serialized
+      # send never races this tx's nonce (mirrors send_confirmed).
+      for j in $(seq 1 "$((FLAKE_RETRIES * 4))"); do
+        n1=$(cast nonce "$SESSION_ADDR" --rpc-url "$RPC" 2>/dev/null)
+        if [ -n "$n1" ] && [ -n "$n0" ] && [ "$n1" -gt "$n0" ] 2>/dev/null; then break; fi
+        sleep "$FLAKE_SLEEP"
+      done
+      echo "$h"; return 0
+    fi
+    echo "$out" | grep -q '812107fd' || { _is_flake "$out" || { echo "APPLYREVERT:${out//$KEY/<redacted>}" >&2; return 1; }; }
+    sleep "$FLAKE_SLEEP"
+  done
+  return 1
+}
+
 # $1 target $2 selector $3 recipientMode $4 spenders-array(e.g. "[0x..]" or "[]")
 _regrant() {
   send_confirmed "$A" "proposeCallRule(address,bytes4,uint8,address[],uint128,uint128,bytes32)" \
     "$1" "$2" "$3" "$4" "$BASE_PER_CALL_CAP" "$BASE_WINDOW_CAP" "$BASE_CODEHASH" >/dev/null || return 1
-  send_confirmed "$A" "applyCallRule()" >/dev/null || return 1
+  _apply_when_elapsed "applyCallRule()" >/dev/null || return 1
 }
 
 # RESET_BEFORE / RESET_AFTER capture the approve-rule perCallCap so evidence can prove the
