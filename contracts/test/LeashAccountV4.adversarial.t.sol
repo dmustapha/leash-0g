@@ -225,7 +225,7 @@ contract LeashAccountV4AdversarialTest is Test {
     function test_E9_bridgeErc20Redirect_reverts(address to) public {
         vm.assume(to != address(acct));
         MockBridge bridge = new MockBridge();
-        _budget(address(bridge), 500e6);
+        _budget(address(usd), 500e6); // M-01: token-keyed bridge budget
         _grant(address(bridge), SEL_BRIDGE_ERC20_TO, 0, new address[](0), 200e6, 400e6);
         vm.prank(session);
         vm.expectRevert();

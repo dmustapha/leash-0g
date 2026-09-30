@@ -406,9 +406,10 @@ contract LeashAccountV4Test is Test {
         _grantRule(address(bridge), SEL_BRIDGE_ETH_TO, 0, new address[](0), perCall, nativeBudget);
     }
 
-    function _grantErc20Bridge(uint128 perCall, uint128 bridgeBudget) internal {
-        _grantBudget(address(bridge), bridgeBudget);
-        _grantRule(address(bridge), SEL_BRIDGE_ERC20_TO, 0, new address[](0), perCall, bridgeBudget);
+    function _grantErc20Bridge(uint128 perCall, uint128 tokenBudget) internal {
+        // E-12 M-01: the ERC-20 bridge leg charges the LOCAL TOKEN's budget (unit-correct).
+        _grantBudget(address(usd), tokenBudget);
+        _grantRule(address(bridge), SEL_BRIDGE_ERC20_TO, 0, new address[](0), perCall, tokenBudget);
     }
 
     function test_bridgeEthTo_self_inCap_lands() public {
@@ -480,17 +481,19 @@ contract LeashAccountV4Test is Test {
         acct.executeCall(address(bridge), 0.5 ether, data);
     }
 
-    function test_bridgeErc20To_self_inCap_lands_andChargesBridgeBudget() public {
+    function test_bridgeErc20To_self_inCap_lands_andChargesTokenBudget() public {
         _grantBudget(address(usd), 500e6);
         _grantRule(address(usd), SEL_APPROVE, 0, _spenders(address(bridge)), 200e6, 1_000e6);
-        _grantErc20Bridge(200e6, 400e6);
+        _grantRule(address(bridge), SEL_BRIDGE_ERC20_TO, 0, new address[](0), 200e6, 400e6);
         vm.startPrank(session);
         acct.executeCall(address(usd), 0, _approveData(address(bridge), 100e6));
         acct.executeCall(address(bridge), 0, _bridgeErc20Data(address(usd), address(acct), 100e6));
         vm.stopPrank();
         assertEq(bridge.erc20Bridged(address(acct)), 100e6);
-        (,, uint128 spent,) = acct.spendBudget(address(bridge));
-        assertEq(spent, 100e6);
+        // E-12 M-01: the bridge leg debits the TOKEN budget (unit-correct), additive
+        // with the enabling approve leg: 100e6 (approve) + 100e6 (bridge) = 200e6.
+        (,, uint128 spent,) = acct.spendBudget(address(usd));
+        assertEq(spent, 200e6);
     }
 
     function test_bridgeErc20To_redirect_reverts_recipientNotSelf() public {
@@ -508,13 +511,16 @@ contract LeashAccountV4Test is Test {
     }
 
     function test_bridgeErc20To_overCumulativeBudget_reverts() public {
+        // token budget 500e6: approve 200e6 (spent 200e6) + bridge 200e6 (spent 400e6);
+        // a second bridge 200e6 attempts 600e6 > 500e6 → OverCumulativeSpend (CEI:
+        // the budget refuses BEFORE the external call, regardless of allowance state).
         _grantBudget(address(usd), 500e6);
         _grantRule(address(usd), SEL_APPROVE, 0, _spenders(address(bridge)), 200e6, 1_000e6);
-        _grantErc20Bridge(200e6, 300e6);
+        _grantRule(address(bridge), SEL_BRIDGE_ERC20_TO, 0, new address[](0), 200e6, 1_000e6);
         vm.startPrank(session);
         acct.executeCall(address(usd), 0, _approveData(address(bridge), 200e6));
         acct.executeCall(address(bridge), 0, _bridgeErc20Data(address(usd), address(acct), 200e6));
-        vm.expectRevert(abi.encodeWithSelector(LeashAccountV4.OverCumulativeSpend.selector, 400e6, uint128(300e6)));
+        vm.expectRevert(abi.encodeWithSelector(LeashAccountV4.OverCumulativeSpend.selector, 600e6, uint128(500e6)));
         acct.executeCall(address(bridge), 0, _bridgeErc20Data(address(usd), address(acct), 200e6));
         vm.stopPrank();
     }
@@ -555,16 +561,18 @@ contract LeashAccountV4Test is Test {
         acct.executeCall(address(bridge), 0, data);
     }
 
-    function test_bridgeEthTo_allowlistMode_permitsAllowlistedRecipient() public {
-        // recipientMode=1: an owner may deliberately allow a non-self allowlisted recipient
+    function test_bridgeEthTo_allowlistMode_stillPinsSelf() public {
+        // E-12 M-02: recipientMode is IGNORED for bridge legs — even under mode 1 a
+        // home-chain-allowlisted recipient is NOT a verifiable far-chain recipient
+        // (destination-chain address aliasing). Self stays the only standing target.
         _grantBudget(address(0), 2 ether);
         _grantRule(address(bridge), SEL_BRIDGE_ETH_TO, 1, new address[](0), 1 ether, 2 ether);
         vm.prank(session);
+        vm.expectRevert(abi.encodeWithSelector(LeashAccountV4.RecipientNotSelf.selector, dest));
         acct.executeCall(address(bridge), 0.25 ether, _bridgeEthData(dest));
-        assertEq(bridge.ethBridged(dest), 0.25 ether);
         vm.prank(session);
-        vm.expectRevert(abi.encodeWithSelector(LeashAccountV4.NotAllowlisted.selector, rando));
-        acct.executeCall(address(bridge), 0.25 ether, _bridgeEthData(rando));
+        acct.executeCall(address(bridge), 0.25 ether, _bridgeEthData(address(acct)));
+        assertEq(bridge.ethBridged(address(acct)), 0.25 ether);
     }
 
     // ================= D-6: grant timelock (loosen-timelocked / tighten-instant) =================

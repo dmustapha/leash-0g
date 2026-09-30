@@ -266,4 +266,72 @@ describe('SE-2 runtime one-shot-consume (E-3)', () => {
     expect(after?.consumeStatus).toBe('consumed');
     expect(chain.calls.length).toBe(1);
   });
+
+  // ── SE-8 (E-12 red-team fix): the bridge one-shot rail ──────────────────────
+  const BRIDGE = '0x4200000000000000000000000000000000000010';
+  const BRIDGE_ABI = [
+    { type: 'function', name: 'bridgeETHTo', stateMutability: 'payable',
+      inputs: [{ type: 'address' }, { type: 'uint32' }, { type: 'bytes' }], outputs: [] },
+  ] as const;
+  async function seedBridgeOnce(agentId: string, to: string): Promise<string> {
+    const data = encodeFunctionData({ abi: BRIDGE_ABI, functionName: 'bridgeETHTo', args: [to as `0x${string}`, 200000, '0x'] });
+    const { row } = await insertCapabilityRequest(db.pool, {
+      agentId,
+      ownerAddr: OWNER,
+      decoded: { label: 'UNVERIFIED', target: BRIDGE, selector: '0xe11013dd' },
+      novelty: ['new_target'],
+      callHash: computeCallHash(BRIDGE, 100n, data),
+      callTarget: BRIDGE,
+      callValue: '100',
+      callData: data,
+    });
+    const decided = await setRequestDecision(db.pool, row.id, 'approved_once', '0x' + 'a1'.repeat(32));
+    if (!decided) throw new Error('failed to seed bridge approved_once');
+    return row.id;
+  }
+
+  it('SE-8: a bridge one-shot with a NON-SELF recipient is refused (rail re-imposed off-chain)', async () => {
+    const id = await seedRuntimeAgent();
+    const reqId = await seedBridgeOnce(id, '0x' + 'be'.repeat(20));
+    const outcome = await consumeOneShot({ pool: db.pool, hub, chain, bridgeGuard: async () => undefined }, ctx(id), reqId);
+    expect(outcome.type).toBe('stood_down');
+    if (outcome.type === 'stood_down') expect(outcome.reason).toContain('same-address account');
+    expect(chain.calls).toHaveLength(0);
+    const req = await getCapabilityRequest(db.pool, reqId);
+    expect(req?.consumeStatus).toBe('aborted');
+  });
+
+  it('SE-8: a self-recipient bridge one-shot with NO gate configured refuses (fail-closed)', async () => {
+    const id = await seedRuntimeAgent();
+    const reqId = await seedBridgeOnce(id, ACCOUNT);
+    const outcome = await consumeOneShot({ pool: db.pool, hub, chain }, ctx(id), reqId);
+    expect(outcome.type).toBe('stood_down');
+    if (outcome.type === 'stood_down') expect(outcome.reason).toContain('no bridge pre-routing gate');
+    expect(chain.calls).toHaveLength(0);
+  });
+
+  it('SE-8: a self-recipient bridge one-shot passes the gate and consumes; a refusing gate stands down', async () => {
+    const id = await seedRuntimeAgent();
+    const reqId = await seedBridgeOnce(id, ACCOUNT);
+    let gateCalls = 0;
+    const outcome = await consumeOneShot(
+      { pool: db.pool, hub, chain, bridgeGuard: async (t) => { gateCalls++; expect(t.toLowerCase()).toBe(BRIDGE); } },
+      ctx(id),
+      reqId,
+    );
+    expect(outcome.type).toBe('consumed');
+    expect(gateCalls).toBe(1);
+    expect(chain.calls).toHaveLength(1);
+
+    const id2 = await seedRuntimeAgent();
+    const reqId2 = await seedBridgeOnce(id2, ACCOUNT);
+    const refused = await consumeOneShot(
+      { pool: db.pool, hub, chain, bridgeGuard: async () => { throw new Error('same-address verification REFUSED'); } },
+      ctx(id2),
+      reqId2,
+    );
+    expect(refused.type).toBe('stood_down');
+    if (refused.type === 'stood_down') expect(refused.reason).toContain('pre-routing gate');
+  });
 });
+

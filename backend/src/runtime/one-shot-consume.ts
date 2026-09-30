@@ -2,7 +2,7 @@ import type { Pool } from 'pg';
 import type { SseHub } from '../sse/hub.js';
 import type { DecodedLeashError } from '../types.js';
 import type { Json } from '../crypto/canonical.js';
-import { computeCallHash } from '../governed-call/index.js';
+import { computeCallHash, decodeCall, BRIDGE_SELECTORS } from '../governed-call/index.js';
 import { claimOneShotConsumption, finalizeOneShotConsumption } from '../store/capabilities.js';
 import { decodeLeashError } from '../chain/errors.js';
 import { appendTrace } from '../trace/trace-store.js';
@@ -32,6 +32,14 @@ export interface OneShotConsumeDeps {
   pool: Pool;
   hub: SseHub;
   chain: RuntimeChain;
+  /**
+   * SE-8 (E-12 red-team fix): the bridge pre-routing gate for a BRIDGE one-shot.
+   * The one-shot lane bypasses `_checkStructuredArgs` on-chain (owner-signed
+   * exact bytes), so the same-address rail is re-imposed HERE before submit.
+   * Absent = bridge one-shots REFUSE (fail-closed) — wired by the manager from
+   * `ChainRegistry` (`assertBridgeRoutable`).
+   */
+  bridgeGuard?: ((bridgeTarget: string) => Promise<unknown>) | undefined;
 }
 
 export interface OneShotConsumeCtx {
@@ -78,6 +86,30 @@ export async function consumeOneShot(
   // 3. Integrity: the stored bytes must reproduce the authorized callHash (D-7).
   if (computeCallHash(target, value, data).toLowerCase() !== req.callHash.toLowerCase()) {
     return standDown('call bytes do not reproduce the authorized one-shot hash');
+  }
+
+  // 3b. SE-8 (E-12): a BRIDGE one-shot bypasses the on-chain structured decoder
+  //     (the wall trusts the owner-signed exact bytes), so the cross-chain
+  //     same-address rail is enforced here: the decoded recipient must be the
+  //     account ITSELF, and the pre-routing gate (assertSameAddress on home +
+  //     destination via assertBridgeRoutable) must pass. Fail-closed on both.
+  const oneShotSelector = data.slice(0, 10).toLowerCase();
+  if (BRIDGE_SELECTORS.has(oneShotSelector)) {
+    const decoded = decodeCall(target, value, data);
+    const recipients = decoded.args.recipients.map((r) => r.toLowerCase());
+    if (decoded.reject !== undefined || recipients.length !== 1 || recipients[0] !== ctx.accountAddr.toLowerCase()) {
+      return standDown('bridge one-shot refused: recipient is not the same-address account (SE-8 rail)');
+    }
+    if (!deps.bridgeGuard) {
+      return standDown('bridge one-shot refused: no bridge pre-routing gate configured (fail-closed)');
+    }
+    try {
+      await deps.bridgeGuard(target);
+    } catch (err) {
+      return standDown(
+        `bridge one-shot refused by the pre-routing gate: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   // 4. Freshness re-check at submit time (P3C-6). getPolicyView is a required

@@ -143,7 +143,7 @@ async function waitFor(cond: () => Promise<boolean>, timeoutMs = 180_000): Promi
   beforeAll(async () => {
     const factory = factoryAddr();
     // fresh deterministic account on Base (owner == sessionKey == ops, timelock 0)
-    accountSalt = `0x${randomBytes(32).toString('hex')}` as Hex;
+    accountSalt = `0x${randomBytes(32).toString('hex')}`;
     const policy = { perTransferCap: 10n ** 12n, windowCap: 10n ** 12n, windowSeconds: 3600, expiresAt: 2 ** 31 - 1 };
     const mintArgs = [
       OPS.address,
@@ -156,13 +156,13 @@ async function waitFor(cond: () => Promise<boolean>, timeoutMs = 180_000): Promi
       { perTransferCapToken: 0n, windowCapToken: 0n },
       accountSalt,
     ] as const;
-    account = (await basePub.readContract({ address: factory, abi: factoryV4DeterministicAbi, functionName: 'predictAccountV4', args: [...mintArgs] })) as Hex;
+    account = (await basePub.readContract({ address: factory, abi: factoryV4DeterministicAbi, functionName: 'predictAccountV4', args: [...mintArgs] }));
     const mintTx = await baseWallet.writeContract({ chain: baseWallet.chain, account: OPS, address: factory, abi: factoryV4DeterministicAbi, functionName: 'createAccountV4', args: [...mintArgs] });
     await confirmReceipt(basePub, mintTx);
     // grants: native budget + the bridgeETHTo rule (recipientMode 0 = self)
-    await send(account, 'proposeSpendBudget', [('0x' + '00'.repeat(20)) as Hex, PER_CALL_CAP * 2n]);
+    await send(account, 'proposeSpendBudget', [('0x' + '00'.repeat(20)), PER_CALL_CAP * 2n]);
     await applyWithRetry(account, 'applySpendBudget');
-    await send(account, 'proposeCallRule', [BRIDGE, SEL_BRIDGE_ETH_TO, 0, [], PER_CALL_CAP, PER_CALL_CAP * 2n, ('0x' + '00'.repeat(32)) as Hex]);
+    await send(account, 'proposeCallRule', [BRIDGE, SEL_BRIDGE_ETH_TO, 0, [], PER_CALL_CAP, PER_CALL_CAP * 2n, ('0x' + '00'.repeat(32))]);
     await applyWithRetry(account, 'applyCallRule');
     const fund = await baseWallet.sendTransaction({ chain: baseWallet.chain, account: OPS, to: account, value: BRIDGE_AMOUNT * 4n });
     await confirmReceipt(basePub, fund);

@@ -70,12 +70,13 @@ describe('SE-8 decodeCall — bridge decoders (mirror the on-chain wall byte-for
     expect(d.args.spendToken).toBe(ZERO);
   });
 
-  it('bridgeERC20To canonical: recipient + amount decoded, spendToken = the bridge target', () => {
+  it('bridgeERC20To canonical: recipient + amount decoded, spendToken = the LOCAL TOKEN (E-12 M-01)', () => {
     const d = decodeCall(BRIDGE, 0n, enc('bridgeERC20To', [TOKEN, REMOTE, SELF, 777n, 200000, '0x']));
     expect(d.reject).toBeUndefined();
     expect(d.args.recipients).toEqual([SELF.toLowerCase()]);
     expect(d.args.amount).toBe(777n);
-    expect(d.args.spendToken).toBe(BRIDGE.toLowerCase());
+    // unit-correct budget key: the token that actually moves, never the unit-blind bridge key
+    expect(d.args.spendToken).toBe(TOKEN.toLowerCase());
   });
 
   it('non-empty extraData is a payload surface → DecodeMismatch (both selectors)', () => {
@@ -184,10 +185,13 @@ describe('SE-8 buildGovernedCall — never-guess-money bridge build', () => {
     expect(d.args.recipients).toEqual([SELF.toLowerCase()]);
   });
 
-  it('bridgeETHTo with an allowlist-mode rule is NOT authority-determined (which recipient?)', () => {
+  it('bridgeETHTo under an allowlist-mode rule STILL pins self (E-12 M-02: mode ignored for bridges)', () => {
     const g = grant([rule(BRIDGE, SEL_ETH, { recipientMode: 'allowlist' })], { bridgeTargets: [BRIDGE] });
     const built = buildGovernedCall({ target: BRIDGE, selector: SEL_ETH, amountWei: '500' }, g, SELF);
-    expect(built).toEqual({ ok: false, reason: 'not_authority_determined' });
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    const d = decodeCall(BRIDGE, built.value, built.data);
+    expect(d.args.recipients).toEqual([SELF.toLowerCase()]); // self, never an allowlist pick
   });
 
   it('bridgeERC20To is NOT buildable from model intent (token route args are free) — owner JIT only', () => {

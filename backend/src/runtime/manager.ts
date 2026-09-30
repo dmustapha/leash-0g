@@ -277,7 +277,16 @@ export class LeashRuntimeManager implements RuntimeManager {
       // SE-7 (carry #2): the consume submits on the AGENT'S chain — resolved
       // per chainId via the registry when wired, defaulting to the single chain.
       const chain = this.deps.resolveChain?.(agent.chainId) ?? this.deps.chain;
-      const deps = { pool: this.deps.pool, hub: this.deps.hub, chain };
+      // SE-8: the bridge one-shot rail — same-address pre-routing gate (E-12 fix).
+      const registry = this.deps.chainRegistry;
+      const deps = {
+        pool: this.deps.pool,
+        hub: this.deps.hub,
+        chain,
+        ...(registry
+          ? { bridgeGuard: (bridgeTarget: string) => assertBridgeRoutable(registry, agent, bridgeTarget) }
+          : {}),
+      };
       // The decision carries the authorizeOnce txHash, but a client may report it
       // optimistically before it mines — the first consume then sees the one-shot
       // not-yet-live and stands down `retryable` (the request stays re-claimable).

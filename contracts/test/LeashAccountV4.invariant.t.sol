@@ -187,10 +187,9 @@ contract LeashAccountV4InvariantTest is Test {
         vm.warp(block.timestamp + 15 minutes);
         acct.applySpendBudget();
         acct.applyCallRule();
-        acct.proposeSpendBudget(address(bridge), BUDGET);
+        // M-01: the ERC-20 bridge leg debits the TOKEN (usd) budget — already granted above.
         acct.proposeCallRule(address(bridge), SEL_BRIDGE_ERC20_TO, 0, new address[](0), 100e6, 200e6, bytes32(0));
         vm.warp(block.timestamp + 15 minutes);
-        acct.applySpendBudget();
         acct.applyCallRule();
         vm.stopPrank();
         vm.deal(address(acct), 100 ether);
@@ -240,13 +239,13 @@ contract LeashAccountV4InvariantTest is Test {
         assertEq(bridge.erc20Bridged(dest), 0);
     }
 
-    /// SE-8: bridge selectors constant integrity (bytecode-pinned selector set).
+    /// SE-8: whatever DID bridge went to self only; the native budget (ETH leg)
+    /// and the token budget (ERC-20 leg, M-01 token-keyed) are never exceeded.
     function invariant_bridgeSelfOnlyEverAccrues() public view {
-        // whatever DID bridge went to self only; native budget never exceeded.
         (, uint128 cap, uint128 spent,) = acct.spendBudget(address(0));
         assertLe(spent, cap);
-        (, uint128 bcap, uint128 bspent,) = acct.spendBudget(address(bridge));
-        assertLe(bspent, bcap);
+        (, uint128 tcap, uint128 tspent,) = acct.spendBudget(address(usd));
+        assertLe(tspent, tcap);
     }
 
     /// The agent (session key) can never widen its own grant — the pending slot is
