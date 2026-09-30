@@ -187,6 +187,11 @@ contract LeashAccountV4 is ReentrancyGuard {
     bytes4 internal constant SEL_TRANSFER_FROM = 0x23b872dd; // transferFrom(address,address,uint256)
     bytes4 internal constant SEL_SET_APPROVAL_FOR_ALL = 0xa22cb465; // setApprovalForAll(address,bool)
     bytes4 internal constant SEL_DEPOSIT = 0x6e553f65; // deposit(uint256,address) — ERC-4626 curated-vault
+    // Stage E (SE-8) — OP-stack bridge family (BR-2: a bridge selector without a
+    // structured decoder is default-DENIED by the off-chain gate; these two are the
+    // only bridge selectors the wall understands).
+    bytes4 internal constant SEL_BRIDGE_ETH_TO = 0xe11013dd; // bridgeETHTo(address,uint32,bytes)
+    bytes4 internal constant SEL_BRIDGE_ERC20_TO = 0x540abf73; // bridgeERC20To(address,address,address,uint256,uint32,bytes)
 
     mapping(address => bool) public callTargetAllowlist;
     mapping(bytes32 => CallRule) public callRules; // key = keccak256(target, selector)
@@ -478,6 +483,44 @@ contract LeashAccountV4 is ReentrancyGuard {
             address receiver = _decodeAddress(data, 36);
             _checkRecipient(receiver, rule.recipientMode);
             return (assets, target, false);
+        }
+        // SE-8 governed bridging (E-9) — OP-stack bridge family, strict canonical.
+        // The recipient pin IS the same-address guarantee: recipientMode=0 requires
+        // `to == address(this)`, and the account sits at the SAME CREATE2 address on
+        // every chain (SD-E9) — so far-chain funds can only land on the leashed
+        // account itself. `extraData` is forced EMPTY (canonical 0x60/0xc0 head
+        // offset + zero length): bridging never needs it, and an arbitrary-bytes
+        // tail would be an opaque payload surface the wall cannot read.
+        if (selector == SEL_BRIDGE_ETH_TO) {
+            // bridgeETHTo(address to, uint32 minGasLimit, bytes extraData)
+            if (data.length != 4 + 128) revert DecodeMismatch();
+            address to = _decodeAddress(data, 4);
+            uint256 minGas = _decodeUint(data, 36);
+            if (minGas >> 32 != 0) revert DecodeMismatch();
+            if (_decodeUint(data, 68) != 0x60) revert DecodeMismatch(); // extraData head offset
+            if (_decodeUint(data, 100) != 0) revert DecodeMismatch(); // extraData length == 0
+            _checkRecipient(to, rule.recipientMode);
+            // the bridged amount is msg.value — charged against the NATIVE budget.
+            return (value, address(0), false);
+        }
+        if (selector == SEL_BRIDGE_ERC20_TO) {
+            // bridgeERC20To(address localToken, address remoteToken, address to,
+            //               uint256 amount, uint32 minGasLimit, bytes extraData)
+            if (data.length != 4 + 224) revert DecodeMismatch();
+            if (value != 0) revert DecodeMismatch(); // nonpayable: value may never ride uncharged
+            _decodeAddress(data, 4); // localToken — canonical check only
+            _decodeAddress(data, 36); // remoteToken — canonical check only
+            address to = _decodeAddress(data, 68);
+            uint256 amount = _decodeUint(data, 100);
+            uint256 minGas = _decodeUint(data, 132);
+            if (minGas >> 32 != 0) revert DecodeMismatch();
+            if (_decodeUint(data, 164) != 0xc0) revert DecodeMismatch(); // extraData head offset
+            if (_decodeUint(data, 196) != 0) revert DecodeMismatch(); // extraData length == 0
+            _checkRecipient(to, rule.recipientMode);
+            // charge `amount` against the per-call cap + the cumulative budget keyed
+            // by the BRIDGE address (legible per-bridge cap, deposit-decoder pattern;
+            // the token pull is separately bounded by the governed approve envelope).
+            return (amount, target, false);
         }
         // Non-structured allowlisted selector: bound msg.value against the native
         // budget; the off-chain gate supplies rich arg legibility + recursive unwrap.

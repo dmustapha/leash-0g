@@ -6,6 +6,7 @@ import {LeashAccountV4} from "../src/LeashAccountV4.sol";
 import {MockERC20} from "../src/MockERC20.sol";
 import {MockRouter} from "../src/MockRouter.sol";
 import {MockVault} from "../src/MockVault.sol";
+import {MockBridge} from "../src/MockBridge.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /// A token whose transfer/approve returns false without reverting (fake-success, H-05).
@@ -200,6 +201,76 @@ contract LeashAccountV4AdversarialTest is Test {
         vm.prank(session);
         vm.expectRevert(LeashAccountV4.DecodeMismatch.selector);
         acct.executeCall(address(vault), 0, data);
+    }
+
+    // ============ SE-8 (E-9): bridge-drain / redirect — a hijacked session key can NEVER free-bridge ============
+    // The bridge decoders pin the recipient (mode 0 → self = the SAME CREATE2 address on the far
+    // chain) and charge the bridged amount; an ungranted bridge target/selector is default-denied.
+    bytes4 constant SEL_BRIDGE_ETH_TO = 0xe11013dd;
+    bytes4 constant SEL_BRIDGE_ERC20_TO = 0x540abf73;
+
+    function test_E9_bridgeEthRedirect_reverts(address to) public {
+        vm.assume(to != address(acct));
+        MockBridge bridge = new MockBridge();
+        _budget(address(0), 2 ether);
+        _grant(address(bridge), SEL_BRIDGE_ETH_TO, 0, new address[](0), 1 ether, 2 ether);
+        vm.prank(session);
+        vm.expectRevert();
+        acct.executeCall(
+            address(bridge), 0.5 ether, abi.encodeWithSelector(SEL_BRIDGE_ETH_TO, to, uint32(1), bytes(""))
+        );
+        assertEq(bridge.ethBridged(to), 0, "redirected bridge value must never move");
+    }
+
+    function test_E9_bridgeErc20Redirect_reverts(address to) public {
+        vm.assume(to != address(acct));
+        MockBridge bridge = new MockBridge();
+        _budget(address(bridge), 500e6);
+        _grant(address(bridge), SEL_BRIDGE_ERC20_TO, 0, new address[](0), 200e6, 400e6);
+        vm.prank(session);
+        vm.expectRevert();
+        acct.executeCall(
+            address(bridge),
+            0,
+            abi.encodeWithSelector(
+                SEL_BRIDGE_ERC20_TO, address(usd), address(0xBEEF), to, uint256(10e6), uint32(1), bytes("")
+            )
+        );
+        assertEq(bridge.erc20Bridged(to), 0, "redirected bridge tokens must never move");
+    }
+
+    function test_E9_freeBridge_ungrantedBridge_reverts() public {
+        MockBridge bridge = new MockBridge();
+        vm.prank(session);
+        vm.expectRevert(abi.encodeWithSelector(LeashAccountV4.TargetNotAllowlisted.selector, address(bridge)));
+        acct.executeCall(
+            address(bridge), 1 ether, abi.encodeWithSelector(SEL_BRIDGE_ETH_TO, address(acct), uint32(1), bytes(""))
+        );
+    }
+
+    function test_E9_bridgeExtraDataPayload_reverts(bytes calldata extraData) public {
+        vm.assume(extraData.length > 0);
+        MockBridge bridge = new MockBridge();
+        _budget(address(0), 2 ether);
+        _grant(address(bridge), SEL_BRIDGE_ETH_TO, 0, new address[](0), 1 ether, 2 ether);
+        vm.prank(session);
+        vm.expectRevert(LeashAccountV4.DecodeMismatch.selector);
+        acct.executeCall(
+            address(bridge), 0.5 ether, abi.encodeWithSelector(SEL_BRIDGE_ETH_TO, address(acct), uint32(1), extraData)
+        );
+    }
+
+    function test_E9_bridgeEthOverCap_fuzz_reverts(uint256 amount) public {
+        amount = bound(amount, 1 ether + 1, 100 ether);
+        MockBridge bridge = new MockBridge();
+        _budget(address(0), 200 ether);
+        _grant(address(bridge), SEL_BRIDGE_ETH_TO, 0, new address[](0), 1 ether, uint128(200 ether));
+        vm.deal(address(acct), 200 ether);
+        vm.prank(session);
+        vm.expectRevert(abi.encodeWithSelector(LeashAccountV4.OverPerCallCap.selector, amount, uint128(1 ether)));
+        acct.executeCall(
+            address(bridge), amount, abi.encodeWithSelector(SEL_BRIDGE_ETH_TO, address(acct), uint32(1), bytes(""))
+        );
     }
 
     // ============ C-05: proxy upgrade / metamorphic (codehash pin) ============
