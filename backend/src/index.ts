@@ -273,6 +273,9 @@ async function main(): Promise<void> {
       jitTtlMs: cfg.JIT_TTL_MS,
       defaultChainId,
     },
+    // SE-7: the owner chain routes (list + second-chain onboarding) resolve
+    // per-chain ops through the SAME registry the runtime uses (default-deny).
+    chainRegistry,
   };
   // M-01 split surfaces: the public server carries owner API + SSE + healthz
   // ONLY; the gateway gets its own server, ALWAYS bound to loopback.

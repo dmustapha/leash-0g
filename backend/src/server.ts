@@ -3,7 +3,7 @@ import type { Pool } from 'pg';
 import type { ComputeQueue } from './gateway/compute-queue.js';
 import type { TargetCatalog } from './governed-call/index.js';
 import { gatewayRouter } from './gateway/routes.js';
-import { ownerRouter } from './api/owner-routes.js';
+import { ownerRouter, type OwnerChainRegistry } from './api/owner-routes.js';
 import type { PrivyVerifier } from './api/privy.js';
 import type { SseHub } from './sse/hub.js';
 import type { ApprovalBroker } from './approvals/broker.js';
@@ -163,6 +163,8 @@ export interface AppDeps {
   /** Present only when TELEGRAM_BOT_TOKEN is configured (S9). */
   telegram?: { bot: TelegramBot; webhookSecret: string } | undefined;
   settings: Settings;
+  /** SE-7: multichain registry surface for the owner chain routes (optional). */
+  chainRegistry?: OwnerChainRegistry | undefined;
 }
 
 interface Surfaces {
