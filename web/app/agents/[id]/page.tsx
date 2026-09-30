@@ -12,6 +12,8 @@ import { useOwnerWallet } from '@/lib/owner-wallet';
 import { connectSse } from '@/lib/sse';
 import type {
   AgentDetail,
+  AgentNetworksView,
+  NetworkChain,
   CallRule,
   CapabilityEnvelopeView,
   CapabilityRuleAction,
@@ -55,6 +57,7 @@ import { StatusChat } from '@/components/cockpit/StatusChat';
 import { CapabilityGrant } from '@/components/cockpit/CapabilityGrant';
 import { CapabilityDecisionCard } from '@/components/cockpit/CapabilityDecisionCard';
 import { CapabilityEnvelope } from '@/components/cockpit/CapabilityEnvelope';
+import { NetworksPanel } from '@/components/cockpit/NetworksPanel';
 import {
   applyCallRuleOnchain,
   authorizeOnceOnchain,
@@ -87,6 +90,10 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
   const [chains, setChains] = useState<{ chain: Chain; hops: Delegation[] }[]>([]);
   // Stage D: the capability envelope (grants + presets + recent JIT decisions).
   const [capabilities, setCapabilities] = useState<CapabilityEnvelopeView | null>(null);
+  // SE-7: registered blockchain networks + this agent's per-chain presence (NOT /api/chains —
+  // that is the delegation graph above).
+  const [networks, setNetworks] = useState<NetworkChain[]>([]);
+  const [agentNetworks, setAgentNetworks] = useState<AgentNetworksView | null>(null);
   // Deep-link focus: /agents/<id>?jit=<requestId> highlights & scrolls to that JIT card.
   const searchParams = useSearchParams();
   const focusJitId = searchParams.get('jit');
@@ -96,6 +103,16 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
       setCapabilities(await api.listCapabilities(id));
     } catch {
       /* non-fatal: the envelope is a read-model convenience */
+    }
+  }, [api, id]);
+
+  const loadNetworks = useCallback(async () => {
+    try {
+      const [{ chains }, view] = await Promise.all([api.listNetworks(), api.getAgentNetworks(id)]);
+      setNetworks(chains);
+      setAgentNetworks(view);
+    } catch {
+      /* non-fatal: multichain may be unavailable; the panel shows its loading state */
     }
   }, [api, id]);
 
@@ -126,8 +143,9 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
       }
       void loadChains();
       void loadCapabilities();
+      void loadNetworks();
     })();
-  }, [api, id, loadChains, loadCapabilities]);
+  }, [api, id, loadChains, loadCapabilities, loadNetworks]);
   const seqRef = useRef(0);
 
   const refresh = useCallback(async () => {
@@ -571,6 +589,17 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
           {detail ? (
             <RulesEditor rules={detail.agent?.gatewayRules ?? []} onSave={saveRules} />
           ) : null}
+          {/* SE-7 (spec §7.C): per-chain presence + the onboard action, one address everywhere. */}
+          <NetworksPanel
+            view={agentNetworks}
+            networks={networks}
+            onOnboard={async (chainId) => {
+              const result = await api.onboardNetwork(id, chainId);
+              await loadNetworks();
+              return result;
+            }}
+          />
+
           {detail && detail.status !== 'revoked' ? (
             <div id="capability-grant">
               <CapabilityGrant
