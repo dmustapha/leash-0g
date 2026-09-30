@@ -176,6 +176,7 @@ async function main() {
   const create = {
     ownerAddr: ops.address,
     sessionKeyAddr: ops.address, // drill account: owner == sessionKey == ops (SE-4 shape)
+    guardianAddr: guardian.address, // M-01: the CREATE-TIME guardian, explicit
     policy: {
       perTransferCap: 10n ** 12n,
       windowCap: 10n ** 12n,
@@ -233,12 +234,35 @@ async function main() {
     );
   }
 
-  // ---- 4. POST-DEPLOY: assertSameAddress still passes (deployed codehash identity) ----
+  // ---- 4. POST-DEPLOY: assertSameAddress in the FULL pre-routing shape ----
+  // (M-01) binds the prediction to the persisted account + requires the home
+  // chain to host the deployed bytecode — the exact call SE-8 makes before
+  // routing funds cross-chain.
   try {
-    const post = await withFlakeRetry(() => registryFor().assertSameAddress(sameInput), { label: 'assertSameAddress post' });
-    record('assertSameAddress post-deploy', post === verified, `verified ${post} (deployed bytecode identical on both chains)`);
+    const post = await withFlakeRetry(
+      () =>
+        registryFor().assertSameAddress({
+          ...sameInput,
+          expectedAccountAddr: verified,
+          homeChainId: ZG.chainId,
+        }),
+      { label: 'assertSameAddress post' },
+    );
+    record('assertSameAddress post-deploy', post === verified, `verified ${post} (bound to persisted account + home-chain deployed + bytecode identical)`);
   } catch (err) {
     record('assertSameAddress post-deploy', false, String(err), isFlake(err) ? 'flake' : 'fail');
+  }
+  // (M-01 negative, live) a counterfactual persisted address is REFUSED.
+  try {
+    await registryFor().assertSameAddress({
+      ...sameInput,
+      expectedAccountAddr: '0x' + 'bd'.repeat(20),
+      homeChainId: ZG.chainId,
+    });
+    record('expected-account-refused', false, 'counterfactual persisted address was NOT refused');
+  } catch (err) {
+    const ok = err instanceof SameAddressMismatchError && err.field === 'expected_account';
+    record('expected-account-refused', ok, ok ? `refused: ${(err as Error).message.slice(0, 120)}` : `unexpected: ${String(err).slice(0, 120)}`);
   }
 
   // ---- 5. the wall is LIVE on the far chain (Base Sepolia) ----
@@ -247,7 +271,11 @@ async function main() {
       abi: leashAccountV4Abi,
       functionName: 'executeCall',
       args: [
-        ('0x' + '11'.repeat(20)) as Hex, // never-allowlisted target
+        // A CODE-BEARING, never-allowlisted target (the factory itself) so the
+        // wall's refusal is deterministically TargetNotAllowlisted — a codeless
+        // probe target reverts EmptyCodeTarget (0xc3c2a014) instead, which the
+        // selector-anchored check correctly flagged as the wrong reason.
+        FACTORY_ADDR,
         0n,
         encodeFunctionData({
           abi: [{ type: 'function', name: 'approve', inputs: [{ type: 'address' }, { type: 'uint256' }], outputs: [{ type: 'bool' }] }],
@@ -259,14 +287,34 @@ async function main() {
     await BASE.pub.call({ account: ops.address, to: verified as Hex, data: probe });
     record('wall-live@base-sepolia', false, 'off-allowlist executeCall unexpectedly SUCCEEDED');
   } catch (err) {
+    // Anchor on the ACTUAL revert data where the node returns it (code-review
+    // NIT): walk the viem error cause-chain for the raw `data` field — the
+    // TargetNotAllowlisted(address) selector is 0x042a9b0d. Wrong-selector
+    // revert data = FAIL (wrong reason, never masked); revert with NO data
+    // surfaced = pass-with-note (0G/Base RPC roughness precedent, SE-1 E-2);
+    // transport flake = flake.
     const msg = String((err as { shortMessage?: string; message?: string }).shortMessage ?? (err as Error).message);
-    // TargetNotAllowlisted(address) selector — anchored where the RPC surfaces revert data.
-    const anchored = /0x042a9b0d|TargetNotAllowlisted/i.test(msg);
-    const genericRevert = /revert/i.test(msg) && !isFlake(err);
+    let revertData: string | null = null;
+    let cursor: unknown = err;
+    for (let i = 0; i < 8 && cursor; i++) {
+      const c = cursor as { data?: unknown; cause?: unknown };
+      if (typeof c.data === 'string' && c.data.startsWith('0x') && c.data.length >= 10) {
+        revertData = c.data;
+        break;
+      }
+      cursor = c.cause;
+    }
+    const anchored = (revertData?.startsWith('0x042a9b0d') ?? false) || /0x042a9b0d|TargetNotAllowlisted/i.test(msg);
+    const wrongReason = revertData !== null && !anchored;
+    const genericRevert = revertData === null && /revert/i.test(msg) && !isFlake(err);
     record(
       'wall-live@base-sepolia',
       anchored || genericRevert,
-      anchored ? `REVERTED TargetNotAllowlisted: ${msg.slice(0, 120)}` : `reverted (selector not surfaced): ${msg.slice(0, 120)}`,
+      anchored
+        ? `REVERTED TargetNotAllowlisted (selector-anchored): ${(revertData ?? msg).slice(0, 100)}`
+        : wrongReason
+          ? `reverted with the WRONG selector: ${revertData?.slice(0, 100)}`
+          : `reverted (no revert data surfaced by the RPC): ${msg.slice(0, 100)}`,
       anchored || genericRevert ? 'pass' : isFlake(err) ? 'flake' : 'fail',
     );
   }

@@ -155,35 +155,53 @@ export class LeashChainOps implements ChainOps {
               args: [...constructionArgs, accountSalt],
             })) as string)
           : null;
-      const createHash = await this.opsWallet.writeContract({
-        chain: this.opsWallet.chain,
-        account: this.opsAccount,
-        address: createAddr,
-        abi: isV4 ? factoryV4DeterministicAbi : factoryAbi,
-        functionName: isV4 ? 'createAccountV4' : 'createAccount',
-        args: isV4 && accountSalt ? [...constructionArgs, accountSalt] : [...constructionArgs],
-      });
-      const createReceipt = await waitReceipt(this.publicClient, createHash);
-      // Bind the event from the factory we actually called (address-filtered) so
-      // a co-emitted same-shape event in the tx can never bind the wrong address.
-      const createLogs = createReceipt.logs.filter(
-        (l) => l.address.toLowerCase() === createAddr.toLowerCase(),
-      );
-      const created = isV4
-        ? parseEventLogs({ abi: factoryV4DeterministicAbi, logs: createLogs, eventName: 'AccountCreatedV4' })[0]
-        : parseEventLogs({ abi: factoryAbi, logs: createLogs, eventName: 'AccountCreated' })[0];
-      if (!created) {
-        throw new Error(
-          `factory ${isV4 ? 'createAccountV4' : 'createAccount'} emitted no ${isV4 ? 'AccountCreatedV4' : 'AccountCreated'} event`,
+      // Adopt-existing (security M-02): createAccountV4 is permissionless and the
+      // tuple+salt are public after the first chain's mint, so a griefer can
+      // pre-deploy the (owner, salt) slot on another chain. CREATE2 makes that
+      // harmless — code can exist at the prediction ONLY if the byte-exact
+      // initcode (this exact tuple, this owner's authority state) deployed it —
+      // so we ADOPT the existing account instead of letting the factory revert
+      // AccountAlreadyDeployed and strand the onboard (the grief becomes a gas
+      // subsidy). Registration still runs below.
+      let adopted = false;
+      let accountAddr: Hex;
+      let createHash: Hex;
+      const preExisting = predicted ? await this.publicClient.getCode({ address: predicted as Hex }) : undefined;
+      if (predicted && preExisting && preExisting !== '0x') {
+        adopted = true;
+        accountAddr = predicted as Hex;
+        createHash = `0x${'0'.repeat(64)}`; // no mint tx — adopted a pre-existing deterministic deploy
+      } else {
+        createHash = await this.opsWallet.writeContract({
+          chain: this.opsWallet.chain,
+          account: this.opsAccount,
+          address: createAddr,
+          abi: isV4 ? factoryV4DeterministicAbi : factoryAbi,
+          functionName: isV4 ? 'createAccountV4' : 'createAccount',
+          args: isV4 && accountSalt ? [...constructionArgs, accountSalt] : [...constructionArgs],
+        });
+        const createReceipt = await waitReceipt(this.publicClient, createHash);
+        // Bind the event from the factory we actually called (address-filtered) so
+        // a co-emitted same-shape event in the tx can never bind the wrong address.
+        const createLogs = createReceipt.logs.filter(
+          (l) => l.address.toLowerCase() === createAddr.toLowerCase(),
         );
-      }
-      const accountAddr = created.args.account;
-      if (predicted && accountAddr.toLowerCase() !== predicted.toLowerCase()) {
-        // Deterministic-deploy integrity: the mint landed off-prediction — refuse
-        // to bind rather than record an unverifiable account (address-spoof guard).
-        throw new Error(
-          `deterministic V4 mint mismatch: event account ${accountAddr} != CREATE2 prediction ${predicted}`,
-        );
+        const created = isV4
+          ? parseEventLogs({ abi: factoryV4DeterministicAbi, logs: createLogs, eventName: 'AccountCreatedV4' })[0]
+          : parseEventLogs({ abi: factoryAbi, logs: createLogs, eventName: 'AccountCreated' })[0];
+        if (!created) {
+          throw new Error(
+            `factory ${isV4 ? 'createAccountV4' : 'createAccount'} emitted no ${isV4 ? 'AccountCreatedV4' : 'AccountCreated'} event`,
+          );
+        }
+        accountAddr = created.args.account;
+        if (predicted && accountAddr.toLowerCase() !== predicted.toLowerCase()) {
+          // Deterministic-deploy integrity: the mint landed off-prediction — refuse
+          // to bind rather than record an unverifiable account (address-spoof guard).
+          throw new Error(
+            `deterministic V4 mint mismatch: event account ${accountAddr} != CREATE2 prediction ${predicted}`,
+          );
+        }
       }
 
       const auditPubKeyHex = (
@@ -214,6 +232,33 @@ export class LeashChainOps implements ChainOps {
         // SE-6: the CREATE2 salt actually used (null for legacy mints) — persisted
         // so onboarding the agent to another chain reuses it (same address).
         accountSalt,
+        // SE-6 (code-review W2): the EXACT canonical construction tuple this mint
+        // used, serializable — persisted so a later chain onboard replays it
+        // verbatim (it is baked into the CREATE2 initcode; a reconstructed tuple
+        // with a time-derived expiry would predict a different address).
+        accountCreateTuple: isV4
+          ? {
+              ownerAddr: input.ownerAddr.toLowerCase(),
+              guardianAddr: this.guardianAccount.address.toLowerCase(),
+              sessionKeyAddr: input.sessionKeyAddr.toLowerCase(),
+              policy: {
+                perTransferCap: input.policy.perTransferCap.toString(),
+                windowCap: input.policy.windowCap.toString(),
+                windowSeconds: input.policy.windowSeconds,
+                expiresAt: input.policy.expiresAt,
+              },
+              allowlist: input.allowlist.map((a) => a.toLowerCase()),
+              timelockDelay: input.timelockDelay,
+              settlementToken: (input.settlementToken ?? '0x0000000000000000000000000000000000000000').toLowerCase(),
+              tokenPolicy: {
+                perTransferCapToken: (input.tokenPolicy?.perTransferCapToken ?? 0n).toString(),
+                windowCapToken: (input.tokenPolicy?.windowCapToken ?? 0n).toString(),
+              },
+            }
+          : null,
+        // SE-6 (security M-02): true when a pre-existing deterministic deploy at
+        // the predicted address was adopted (no mint tx; createTx is the zero hash).
+        adopted,
       };
     });
   }
@@ -232,6 +277,13 @@ export class LeashChainOps implements ChainOps {
   async predictAccountV4(
     input: Omit<Parameters<ChainOps['deployAndRegister']>[0], 'accountVersion' | 'auditPubKey' | 'name'> & {
       accountSalt: string;
+      /**
+       * The CREATE-TIME guardian (persisted `agents.guardian_addr`). When
+       * omitted, the lane's current guardian key is used (create-time predict).
+       * A later verification MUST pass the persisted value (security M-01): a
+       * rotated guardian key would silently shift every prediction.
+       */
+      guardianAddr?: string;
     },
   ): Promise<string> {
     const v4Addr = this.opts.factoryV4Addr;
@@ -242,7 +294,7 @@ export class LeashChainOps implements ChainOps {
       functionName: 'predictAccountV4',
       args: [
         input.ownerAddr as Hex,
-        this.guardianAccount.address,
+        (input.guardianAddr ?? this.guardianAccount.address) as Hex,
         input.sessionKeyAddr as Hex,
         {
           perTransferCap: input.policy.perTransferCap,

@@ -19,6 +19,21 @@ import type { PolicyView } from './types.js';
  * registry, funding; dedicated guardian key for revoke — independent nonce
  * spaces so a revoke never queues behind a create burst.
  */
+/**
+ * SE-6: the serializable canonical v4 construction tuple (bigints as strings) —
+ * the exact args baked into the account's CREATE2 initcode at mint time.
+ */
+export interface AccountCreateTuple {
+  ownerAddr: string;
+  guardianAddr: string;
+  sessionKeyAddr: string;
+  policy: { perTransferCap: string; windowCap: string; windowSeconds: number; expiresAt: number };
+  allowlist: string[];
+  timelockDelay: number;
+  settlementToken: string;
+  tokenPolicy: { perTransferCapToken: string; windowCapToken: string };
+}
+
 export interface ChainOps {
   deployAndRegister(input: {
     ownerAddr: string;
@@ -49,7 +64,23 @@ export interface ChainOps {
      * another chain at the SAME address). Ignored for legacy v2 mints.
      */
     accountSalt?: string;
-  }): Promise<{ accountAddr: string; chainAgentId: bigint; createTx: string; registerTx: string; guardianAddr: string; accountVersion: 2 | 4; accountSalt: string | null }>;
+  }): Promise<{
+    accountAddr: string;
+    chainAgentId: bigint;
+    createTx: string;
+    registerTx: string;
+    guardianAddr: string;
+    accountVersion: 2 | 4;
+    accountSalt: string | null;
+    /**
+     * SE-6: the EXACT canonical construction tuple the v4 mint used (serializable;
+     * null for legacy mints) — persisted so a later chain onboard replays it
+     * verbatim (the tuple is baked into the CREATE2 initcode).
+     */
+    accountCreateTuple: AccountCreateTuple | null;
+    /** SE-6 (M-02): a pre-existing deterministic deploy was adopted (no mint tx). */
+    adopted: boolean;
+  }>;
   /**
    * `accountGuardianAddr` = the guardian recorded for this account at create
    * (null = legacy ops-key guardian, S7). Rejects (throws) on a reverted tx —

@@ -65,7 +65,14 @@ export interface ChainTestClients {
 export class SameAddressMismatchError extends Error {
   constructor(
     public readonly chainId: number,
-    public readonly field: 'factory_addr' | 'factory_codehash' | 'predicted_address' | 'account_codehash' | 'factory_missing',
+    public readonly field:
+      | 'factory_addr'
+      | 'factory_codehash'
+      | 'predicted_address'
+      | 'account_codehash'
+      | 'factory_missing'
+      | 'expected_account'
+      | 'home_chain_undeployed',
     public readonly expected: string,
     public readonly actual: string,
   ) {
@@ -76,10 +83,23 @@ export class SameAddressMismatchError extends Error {
   }
 }
 
-/** The construction tuple assertSameAddress predicts with (must be chain-invariant). */
+/**
+ * The construction tuple assertSameAddress predicts with. Must be the EXACT
+ * create-time tuple (persisted at mint, `agents.account_create_tuple`) — it is
+ * baked into the CREATE2 initcode, so any reconstruction drift (time-derived
+ * expiry, rotated guardian key, reordered allowlist) predicts a DIFFERENT
+ * address and the verification correctly refuses.
+ */
 export interface SameAddressCreateInput {
   ownerAddr: string;
   sessionKeyAddr: string;
+  /**
+   * The CREATE-TIME guardian address (persisted `agents.guardian_addr`) —
+   * NEVER the lane's live guardian key (security M-01): a rotated guardian key
+   * would consistently shift every chain's prediction to an address where no
+   * account exists, vacuously skipping the deployed-codehash check.
+   */
+  guardianAddr: string;
   policy: { perTransferCap: bigint; windowCap: bigint; windowSeconds: number; expiresAt: number };
   allowlist: string[];
   timelockDelay: number;
@@ -189,6 +209,20 @@ export class ChainRegistry {
     accountSalt: string;
     create: SameAddressCreateInput;
     chainIds: readonly number[];
+    /**
+     * The persisted account address (`agents.account_addr`) the caller is about
+     * to route funds for. When provided, the verification BINDS the prediction
+     * to it — a reconstructed-tuple drift can never "verify" a counterfactual
+     * address the agent row is not bound to (security M-01). Omit only at
+     * pre-create time (no account exists yet).
+     */
+    expectedAccountAddr?: string;
+    /**
+     * The agent's home chain: when provided, the account must have DEPLOYED
+     * bytecode there — "verified but deployed nowhere" is a refusal, not a
+     * success (security M-01/L-02).
+     */
+    homeChainId?: number;
   }): Promise<string> {
     if (input.chainIds.length < 2) {
       throw new Error('assertSameAddress requires at least 2 chains (cross-chain verification)');
@@ -231,6 +265,7 @@ export class ChainRegistry {
           await ops.predictAccountV4({
             ownerAddr: input.ownerAddr,
             sessionKeyAddr: input.create.sessionKeyAddr,
+            guardianAddr: input.create.guardianAddr,
             policy: input.create.policy,
             allowlist: input.create.allowlist,
             timelockDelay: input.create.timelockDelay,
@@ -257,6 +292,25 @@ export class ChainRegistry {
     for (const c of perChain.slice(1)) {
       if (c.predicted !== ref.predicted) {
         throw new SameAddressMismatchError(c.chainId, 'predicted_address', ref.predicted, c.predicted);
+      }
+    }
+    // Bind the prediction to the PERSISTED account (security M-01): consistent
+    // tuple-reconstruction drift shifts every chain's prediction in lockstep —
+    // predictions agree with each other but not with the account the agent row
+    // (and any funds routing) is actually bound to. Refuse, never "verify" a
+    // counterfactual address.
+    if (input.expectedAccountAddr !== undefined && ref.predicted !== input.expectedAccountAddr.toLowerCase()) {
+      throw new SameAddressMismatchError(ref.chainId, 'expected_account', input.expectedAccountAddr.toLowerCase(), ref.predicted);
+    }
+    // "Verified but deployed nowhere" is a refusal (M-01/L-02): the agent's home
+    // chain must host the account's bytecode before anything routes cross-chain.
+    if (input.homeChainId !== undefined) {
+      const home = perChain.find((c) => c.chainId === input.homeChainId);
+      if (!home) {
+        throw new SameAddressMismatchError(input.homeChainId, 'home_chain_undeployed', 'home chain among the verified chainIds', 'absent');
+      }
+      if (home.accountCodehash === null) {
+        throw new SameAddressMismatchError(input.homeChainId, 'home_chain_undeployed', 'deployed account bytecode on the home chain', 'no code');
       }
     }
     // Account-bytecode identity across the chains where it IS deployed. (A chain

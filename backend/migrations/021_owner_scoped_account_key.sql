@@ -18,5 +18,27 @@
 
 ALTER TABLE agents ADD COLUMN account_salt text;
 
+-- (security L-03) The uniqueness below indexes raw values, so canonical
+-- (lowercase) storage must be a DB-level guarantee too — not an application
+-- convention a future insert path could silently defeat.
+ALTER TABLE agents ADD CONSTRAINT agents_owner_addr_lowercase CHECK (owner_addr = lower(owner_addr));
+ALTER TABLE agents ADD CONSTRAINT agents_account_addr_lowercase CHECK (account_addr = lower(account_addr));
+
+-- (code-review W3) Deterministic failure with the offending rows surfaced —
+-- the old reads tolerated duplicates (ORDER BY … LIMIT 1), so a pre-existing
+-- duplicate must abort THIS migration legibly, never as an opaque index error.
+-- (Verified zero duplicates on the live DB before landing this migration.)
+DO $$
+DECLARE dup record;
+BEGIN
+  FOR dup IN
+    SELECT owner_addr, chain_id, account_addr, count(*) AS n
+      FROM agents GROUP BY 1, 2, 3 HAVING count(*) > 1
+  LOOP
+    RAISE EXCEPTION 'migration 021 blocked: % agents share (owner %, chain %, account %) — resolve before the unique index',
+      dup.n, dup.owner_addr, dup.chain_id, dup.account_addr;
+  END LOOP;
+END $$;
+
 CREATE UNIQUE INDEX agents_owner_chain_account
   ON agents (owner_addr, chain_id, account_addr);
