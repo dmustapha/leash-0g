@@ -199,9 +199,16 @@ export function buildChainConfigs(cfg: Config): ChainConfig[] {
       gasFloorWei: 0n, // Base enforces no static floor; EIP-1559 estimation applies
       ...(cfg.BASE_PROTOCOL_ALLOWLIST
         ? {
-            protocolAllowlist: cfg.BASE_PROTOCOL_ALLOWLIST.split(',')
-              .map((a) => a.trim().toLowerCase())
-              .filter((a) => /^0x[0-9a-f]{40}$/.test(a)),
+            // sec L-03 (SE-7): a malformed entry FAILS startup — silently
+            // dropping a typo'd real-protocol address would make a governed
+            // call to the intended protocol refuse unexpectedly at runtime.
+            protocolAllowlist: cfg.BASE_PROTOCOL_ALLOWLIST.split(',').map((raw) => {
+              const a = raw.trim().toLowerCase();
+              if (!/^0x[0-9a-f]{40}$/.test(a)) {
+                throw new Error(`BASE_PROTOCOL_ALLOWLIST entry is not an address: "${raw.trim()}"`);
+              }
+              return a;
+            }),
           }
         : {}),
     });

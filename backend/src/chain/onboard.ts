@@ -172,14 +172,27 @@ export async function onboardAgentToChain(
       `minted ${result.accountAddr.toLowerCase()} != persisted ${agent.accountAddr.toLowerCase()} — not recording`,
     );
   }
-  const deployment = await insertChainDeployment(deps.pool, {
-    agentId: agent.id,
-    chainId: targetChainId,
-    accountAddr: result.accountAddr,
-    createTx: result.createTx,
-    registerTx: result.registerTx,
-    chainAgentId: result.chainAgentId,
-    adopted: result.adopted,
-  });
+  let deployment: ChainDeploymentRow;
+  try {
+    deployment = await insertChainDeployment(deps.pool, {
+      agentId: agent.id,
+      chainId: targetChainId,
+      accountAddr: result.accountAddr,
+      createTx: result.createTx,
+      registerTx: result.registerTx,
+      chainAgentId: result.chainAgentId,
+      adopted: result.adopted,
+    });
+  } catch (err) {
+    // sec L-01 (SE-7): two concurrent onboards can both pass the pre-check;
+    // CREATE2 makes the double-mint harmless (the second adopts the same
+    // address) and UNIQUE(agent_id, chain_id) refuses the double record —
+    // resolve the race to the idempotent shape, never a 500.
+    if ((err as { code?: string }).code === '23505') {
+      const raced = await getChainDeployment(deps.pool, agent.id, targetChainId);
+      if (raced) return { deployment: raced, adopted: raced.adopted, alreadyOnboarded: true };
+    }
+    throw err;
+  }
   return { deployment, adopted: result.adopted, alreadyOnboarded: false };
 }

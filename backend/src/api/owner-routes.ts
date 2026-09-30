@@ -652,12 +652,28 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
   const GLOBAL_LLM_PER_HOUR = 500;
   const globalLlmOk = (): Promise<boolean> => checkGlobalLlmRate(deps.pool, GLOBAL_LLM_PER_HOUR);
 
+  /**
+   * SE-7 (code-review BLOCKER fix): every on-chain owner op resolves the ops
+   * lane for the AGENT'S HOME CHAIN — a Base-home agent's revoke/policy/balance
+   * must never land on the default chain's client (a wrong-chain revoke is a
+   * successful no-op tx = a kill-switch bypass). Default chain keeps the
+   * existing single-client wire; any other chain resolves through the registry
+   * (default-deny beyond it) and FAILS LOUDLY when the registry is absent.
+   */
+  function chainForAgent(a: { chainId: number }): ChainOps {
+    if (a.chainId === deps.settings.defaultChainId) return deps.chain;
+    if (!deps.chainRegistry) {
+      throw new Error(`agent home chain ${a.chainId} requires the multichain registry (not configured)`);
+    }
+    return deps.chainRegistry.getChainOps(a.chainId);
+  }
+
   const balanceCache = new Map<string, { value: bigint; at: number }>();
-  async function cachedBalance(addr: string): Promise<bigint> {
-    const key = addr.toLowerCase();
+  async function cachedBalance(addr: string, chainId: number): Promise<bigint> {
+    const key = `${chainId}:${addr.toLowerCase()}`;
     const hit = balanceCache.get(key);
     if (hit && Date.now() - hit.at < deps.settings.balanceCacheTtlMs) return hit.value;
-    const value = await deps.chain.getBalance(addr);
+    const value = await chainForAgent({ chainId }).getBalance(addr);
     balanceCache.set(key, { value, at: Date.now() });
     return value;
   }
@@ -686,7 +702,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
         capabilityLabel: a.capabilityLabel,
         accountAddr: a.accountAddr,
         sessionKeyAddr: a.sessionKeyAddr,
-        accountBalanceWei: (await cachedBalance(a.accountAddr)).toString(),
+        accountBalanceWei: (await cachedBalance(a.accountAddr, a.chainId)).toString(),
         createdAt: a.createdAt,
       })),
     );
@@ -730,8 +746,8 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       // Role-aware allowlist candidate (spec §3b): treasury/sentinel =
       // beneficiary, requester = fee recipient, executor/provider/evaluator =
       // none. The view still returns caps/expiry/revoked regardless.
-      deps.chain.getPolicyView(agent.accountAddr, goalAllowlistCandidates(agent.goal)),
-      deps.chain.getBalance(agent.accountAddr),
+      chainForAgent(agent).getPolicyView(agent.accountAddr, goalAllowlistCandidates(agent.goal)),
+      chainForAgent(agent).getBalance(agent.accountAddr),
     ]);
     // Shape = FE AgentDetail (web/lib/types.ts): running|paused|revoked, wei-string
     // policy fields, live balances, addresses, and the blind audit-key blob.
@@ -866,7 +882,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
    */
   async function resyncGuardian(agent: AgentRow): Promise<string | null> {
     try {
-      const onchain = await deps.chain.getGuardian(agent.accountAddr);
+      const onchain = await chainForAgent(agent).getGuardian(agent.accountAddr);
       if (onchain !== (agent.guardianAddr ?? '')) {
         await updateAgentGuardian(deps.pool, agent.id, onchain);
         return onchain;
@@ -1055,7 +1071,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
         continue;
       }
       try {
-        const { txHash } = await deps.chain.revoke(fresh.accountAddr, fresh.guardianAddr);
+        const { txHash } = await chainForAgent(fresh).revoke(fresh.accountAddr, fresh.guardianAddr);
         await applyRevokeFanout(
           { pool: deps.pool, hub: deps.hub, runtime: deps.runtime, coordinator: deps.coordinator, alerts: deps.alerts },
           fresh.id,
@@ -1171,7 +1187,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     const agent = await requireOwnedAgent(req, res);
     if (!agent) return;
     try {
-      const { txHash } = await deps.chain.revoke(agent.accountAddr, agent.guardianAddr);
+      const { txHash } = await chainForAgent(agent).revoke(agent.accountAddr, agent.guardianAddr);
       await applyRevokeFanout(
         { pool: deps.pool, hub: deps.hub, runtime: deps.runtime, coordinator: deps.coordinator, alerts: deps.alerts },
         agent.id,
@@ -1808,7 +1824,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     res.json({ chains: deps.chainRegistry.listChains().map((c) => ({ chainId: c.chainId, name: c.name })) });
   }));
 
-  // GET /api/agents/:id/chains — the agent's per-chain presence: home chain +
+  // GET /api/agents/:id/networks — the agent's per-chain presence: home chain +
   // every onboarded chain (same CREATE2 address by construction, SD-E9).
   router.get('/api/agents/:id/networks', asyncRoute(async (req: OwnerRequest, res) => {
     const agent = await requireOwnedAgent(req, res);
@@ -1835,7 +1851,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     });
   }));
 
-  // POST /api/agents/:id/chains — SECOND-CHAIN ONBOARDING (E-7): replay the
+  // POST /api/agents/:id/networks — SECOND-CHAIN ONBOARDING (E-7): replay the
   // persisted construction tuple byte-exact on the target chain so the account
   // lands at the SAME address; any tuple/salt drift is REFUSED before minting.
   // ownerAddr comes from the AUTHENTICATED SESSION via requireOwnedAgent (L-04).
@@ -1889,7 +1905,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     }
   }));
 
-  // GET /api/chains/:chainId/accounts/:accountAddr — the owner-scoped per-chain
+  // GET /api/networks/:chainId/accounts/:accountAddr — the owner-scoped per-chain
   // account view (L-04, BINDING from the SE-6 gate): ownerAddr derives from the
   // AUTHENTICATED SESSION (req.ownerAddr), NEVER caller/request text — under
   // CREATE2 two owners can share an address, so session scoping is what keeps

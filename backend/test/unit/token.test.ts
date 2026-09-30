@@ -16,7 +16,10 @@ describe('gateway tokens', () => {
     const hash = await hashTokenSecret(t.secret);
     expect(hash.startsWith('$argon2id$')).toBe(true);
     expect(await verifyTokenSecret(hash, t.secret)).toBe(true);
-    expect(await verifyTokenSecret(hash, t.secret.slice(0, -1) + '0')).toBe(false);
+    // Flip the last char to one GUARANTEED different — appending '0' was a
+    // no-op mutation whenever the secret already ended in '0' (flaky false-pass).
+    const flipped = t.secret.slice(0, -1) + (t.secret.endsWith('0') ? '1' : '0');
+    expect(await verifyTokenSecret(hash, flipped)).toBe(false);
   });
 
   it('rejects malformed tokens', () => {

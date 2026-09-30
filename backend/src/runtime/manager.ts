@@ -168,7 +168,7 @@ export class LeashRuntimeManager implements RuntimeManager {
           {
             pool: this.deps.pool,
             hub: this.deps.hub,
-            chain: this.deps.chain,
+            chain: this.deps.resolveChain?.(agent.chainId) ?? this.deps.chain,
             uploader: this.requireUploader(),
             gatewayUrl: this.deps.settings.gatewayUrl,
             defaultModel: this.deps.settings.defaultModel,
@@ -186,7 +186,7 @@ export class LeashRuntimeManager implements RuntimeManager {
           {
             pool: this.deps.pool,
             hub: this.deps.hub,
-            chain: this.deps.chain,
+            chain: this.deps.resolveChain?.(agent.chainId) ?? this.deps.chain,
             gatewayUrl: this.deps.settings.gatewayUrl,
             defaultModel: this.deps.settings.defaultModel,
             getCoordinator: () => this.coordinator,

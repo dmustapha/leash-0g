@@ -84,6 +84,8 @@ function buildFeeLabel(
 export interface DigestServiceDeps {
   pool: Pool;
   chain: { getBalance(addr: string): Promise<bigint> };
+  /** SE-7: per-chain balance reads (ChainRegistry.getChainOps in production). */
+  resolveChain?: ((chainId: number) => { getBalance(addr: string): Promise<bigint> }) | undefined;
   settings: { digestDefaultHourUtc: number };
 }
 
@@ -92,6 +94,7 @@ interface AgentRowLite {
   name: string;
   status: string;
   account_addr: string;
+  chain_id: string | number;
 }
 
 export class DigestService {
@@ -112,7 +115,7 @@ export class DigestService {
     const owner = ownerAddr.toLowerCase();
     const cursor = await this.loadCursor(owner);
     const agents = await this.deps.pool.query<AgentRowLite>(
-      `SELECT id, name, status, account_addr FROM agents WHERE owner_addr = $1 ORDER BY created_at ASC`,
+      `SELECT id, name, status, account_addr, chain_id FROM agents WHERE owner_addr = $1 ORDER BY created_at ASC`,
       [owner],
     );
     const perAgent: AgentDigest[] = [];
@@ -204,7 +207,9 @@ export class DigestService {
             break;
         }
       }
-      const balance = await this.deps.chain.getBalance(a.account_addr);
+      // SE-7: read the balance on the AGENT'S home chain (falls back to the
+      // single default client when no resolver is wired — test setups).
+      const balance = await (this.deps.resolveChain?.(Number(a.chain_id)) ?? this.deps.chain).getBalance(a.account_addr);
       const priorBalance = prior?.balanceWei;
       const agentFeeLabel = buildFeeLabel(jobFeeByToken, feeTokenMeta);
       perAgent.push({
