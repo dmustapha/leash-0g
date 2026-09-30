@@ -16,7 +16,7 @@ export type ArgRole = 'spender' | 'recipient' | 'from' | 'amount' | 'approvedBoo
 export interface SelectorSpec {
   signature: string;
   /** the ABI param types in order (static-position decode). */
-  paramTypes: ('address' | 'uint256' | 'bool')[];
+  paramTypes: ('address' | 'uint256' | 'uint32' | 'bool')[];
   /** role of each positional arg (same length as paramTypes). */
   roles: ArgRole[];
   /**
@@ -31,6 +31,18 @@ export interface SelectorSpec {
   spendToken: 'target' | 'native';
   /** a short label for the human-readable card verb. */
   verb: string;
+  /**
+   * SE-8 bridge decoders: the signature ends in a dynamic `bytes extraData` the
+   * wall FORCES EMPTY (canonical head offset + zero length — an arbitrary tail
+   * would be an opaque payload surface). Adds exactly 2 words to the calldata.
+   */
+  trailingEmptyBytes?: true;
+  /** the chargeable amount is `msg.value` (payable bridge leg), not an arg word. */
+  valueIsAmount?: true;
+  /** msg.value MUST be zero (nonpayable; value may never ride uncharged). */
+  forbidValue?: true;
+  /** SE-8: this selector is a structured BRIDGE-family decoder (BR-2). */
+  bridge?: true;
 }
 
 /** Build a spec keyed by its computed 4-byte selector. */
@@ -84,6 +96,32 @@ export const SELECTORS: ReadonlyMap<string, SelectorSpec> = new Map<string, Sele
     amountIndex: null,
     spendToken: 'target',
     verb: 'set approval-for-all on',
+  }),
+  // ---- SE-8 structured OP-stack bridge family (on-chain hard-decoded, BR-2) ----
+  spec({
+    signature: 'function bridgeETHTo(address to, uint32 minGasLimit, bytes extraData)',
+    paramTypes: ['address', 'uint32'],
+    roles: ['recipient', 'ignore'],
+    structured: true,
+    amountIndex: null,
+    spendToken: 'native',
+    verb: 'bridge',
+    trailingEmptyBytes: true,
+    valueIsAmount: true,
+    bridge: true,
+  }),
+  spec({
+    signature:
+      'function bridgeERC20To(address localToken, address remoteToken, address to, uint256 amount, uint32 minGasLimit, bytes extraData)',
+    paramTypes: ['address', 'address', 'address', 'uint256', 'uint32'],
+    roles: ['ignore', 'ignore', 'recipient', 'amount', 'ignore'],
+    structured: true,
+    amountIndex: 3,
+    spendToken: 'target',
+    verb: 'bridge',
+    trailingEmptyBytes: true,
+    forbidValue: true,
+    bridge: true,
   }),
   // ---- curated router/vault set (off-chain legibility only; on-chain non-structured) ----
   // MockRouter.swap(tokenIn,tokenOut,amountIn,amountOutMin,recipient,deadline).
@@ -145,6 +183,16 @@ export const SELF_EDIT_SELECTORS: ReadonlySet<string> = new Set(
     // governance-style delegation (M-01)
     'function delegate(address)',
   ].map((s) => toFunctionSelector(s).toLowerCase()),
+);
+
+/**
+ * SE-8 (BR-2): the ONLY bridge selectors a governed call may carry. A call to a
+ * bridge-allowlisted target with ANY other selector is default-DENIED (a bridge
+ * without a structured decoder is never governable); a bridge selector against a
+ * target NOT in the chain's bridge allowlist is likewise refused.
+ */
+export const BRIDGE_SELECTORS: ReadonlySet<string> = new Set(
+  [...SELECTORS.entries()].filter(([, s]) => s.bridge).map(([sel]) => sel),
 );
 
 export const SELECTOR_APPROVE = toFunctionSelector('function approve(address,uint256)').toLowerCase();

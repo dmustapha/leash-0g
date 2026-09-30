@@ -143,6 +143,9 @@ async function main(): Promise<void> {
     // non-home chain submits through THAT chain's client (default-deny beyond
     // the registry).
     resolveChain: (chainId: number) => chainRegistry.getSessionChain(chainId),
+    // SE-8: the bridge lane (bridge allowlist enforcement + the assertSameAddress
+    // pre-routing gate) resolves through the full registry.
+    chainRegistry,
     checkpointer,
     settings: {
       keyEncryptionSecret: cfg.KEY_ENCRYPTION_SECRET,

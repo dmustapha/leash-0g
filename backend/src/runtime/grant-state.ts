@@ -24,11 +24,21 @@ export async function loadGrantState(
   chain: RuntimeChain,
   agentId: string,
   accountAddr: string,
+  /**
+   * SE-8 (carry #2): the chain's bridge allowlist (`ChainConfig.bridgeAllowlist`,
+   * lowercased) — attached to the grant state so classify ENFORCES it (a bridge
+   * selector off-allowlist / a non-decoder selector on a bridge target are both
+   * forbidden). Omitted = no bridging possible (fail-closed).
+   */
+  bridgeTargets?: Set<string>,
 ): Promise<GrantState> {
   const grants = await listGrants(pool, agentId); // non-removed only
   const rules = grants.map((g) => ({ target: g.target, selector: g.selector, spenders: g.spenderSet }));
   // The structured ERC-20 spend token IS the target contract (approve/transfer/…
   // debit the target's per-token budget) — probe each distinct target for a budget.
+  // (A bridge rule's budget is keyed by the bridge target too — same probe shape.)
   const tokens = [...new Set(grants.map((g) => g.target.toLowerCase()))];
-  return chain.readCallGrantState({ accountAddr, rules, tokens });
+  const state = await chain.readCallGrantState({ accountAddr, rules, tokens });
+  if (bridgeTargets && bridgeTargets.size > 0) state.bridgeTargets = bridgeTargets;
+  return state;
 }

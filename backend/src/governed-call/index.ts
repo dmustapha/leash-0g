@@ -18,4 +18,4 @@ export {
   type TargetCatalog,
   type TargetKey,
 } from './presets.js';
-export { SELECTORS, WRAPPER_SELECTORS, SELF_EDIT_SELECTORS } from './selectors.js';
+export { SELECTORS, WRAPPER_SELECTORS, SELF_EDIT_SELECTORS, BRIDGE_SELECTORS } from './selectors.js';

@@ -1,6 +1,6 @@
 import { encodeAbiParameters, type Hex } from 'viem';
 import type { GrantState } from './types.js';
-import { SELECTORS, type SelectorSpec } from './selectors.js';
+import { SELECTORS } from './selectors.js';
 import { ruleKey } from './classify.js';
 
 /**
@@ -28,6 +28,13 @@ import { ruleKey } from './classify.js';
  */
 
 const ZERO = '0x0000000000000000000000000000000000000000';
+
+/**
+ * SE-8: the server-side minGasLimit for a built OP-stack bridge leg. A NON-authority
+ * arg (it can never move value to a party) resolved from this server constant so it
+ * never originates from model text; 200k matches the OP-stack default relay budget.
+ */
+const BRIDGE_MIN_GAS_LIMIT = 200_000n;
 
 export type BuildGovernedCallResult =
   | { ok: true; target: string; value: bigint; data: string }
@@ -79,13 +86,18 @@ export function buildGovernedCall(
     return only ? only.toLowerCase() : null;
   };
 
-  const words: { type: 'address' | 'uint256' | 'bool'; value: Hex | bigint | boolean }[] = [];
+  const words: { type: 'address' | 'uint256' | 'uint32' | 'bool' | 'bytes'; value: Hex | bigint | boolean }[] = [];
   for (let i = 0; i < spec.paramTypes.length; i++) {
     const type = spec.paramTypes[i];
     const role = spec.roles[i];
     if (type === undefined || role === undefined) return { ok: false, reason: 'not_authority_determined' };
     if (type === 'uint256' && role === 'amount') {
       words.push({ type, value: amount });
+      continue;
+    }
+    if (type === 'uint32' && spec.bridge === true) {
+      // bridge minGasLimit: non-authority, server-constant (never model text).
+      words.push({ type, value: BRIDGE_MIN_GAS_LIMIT });
       continue;
     }
     if (type === 'address' && role === 'recipient') {
@@ -112,20 +124,23 @@ export function buildGovernedCall(
     return { ok: false, reason: 'not_authority_determined' };
   }
 
-  const data = encodeCall(selector, spec, words);
-  // v1 selector set (structured ERC-20 + curated swap/deposit) moves value via the
-  // amount arg, never msg.value — every governed call is zero-value for now. A
-  // value-bearing selector (e.g. a payable deposit) would set this explicitly.
-  const value = 0n;
+  // SE-8: a bridge signature ends in `bytes extraData` — always encoded EMPTY
+  // (the wall reverts any non-empty tail; bridging never needs a payload).
+  if (spec.trailingEmptyBytes) words.push({ type: 'bytes', value: '0x' });
+
+  const data = encodeCall(selector, words);
+  // The v1 selector set moves value via the amount arg (zero-value calls) EXCEPT
+  // the payable bridge leg (`bridgeETHTo`), whose chargeable amount IS msg.value —
+  // charged on-chain against the native budget.
+  const value = spec.valueIsAmount ? amount : 0n;
   return { ok: true, target, value, data };
 }
 
 function encodeCall(
   selector: string,
-  spec: SelectorSpec,
-  words: { type: 'address' | 'uint256' | 'bool'; value: Hex | bigint | boolean }[],
+  words: { type: 'address' | 'uint256' | 'uint32' | 'bool' | 'bytes'; value: Hex | bigint | boolean }[],
 ): string {
-  const params = spec.paramTypes.map((t) => ({ type: t }));
+  const params = words.map((w) => ({ type: w.type }));
   const encoded = encodeAbiParameters(params, words.map((w) => w.value));
   return (selector + encoded.slice(2)).toLowerCase();
 }

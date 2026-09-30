@@ -13,10 +13,12 @@ import type { ChainOps } from '../server.js';
  * (E-11 chain-spoof guard), so no code path can silently act on a chain the owner
  * never configured.
  *
- * Scope note: `protocolAllowlist` / `bridgeAllowlist` are carried on the type for
- * forward-compatibility (SE-7 real protocols, SE-8 bridging) but are NOT consumed
- * yet. SE-6 defined `assertSameAddress` — the cross-chain CREATE2 same-address
- * verification that must PASS before any funds are routed cross-chain (spec §8).
+ * SE-8: `bridgeAllowlist`/`bridgeDestinations` are CONSUMED (bridge lane classify
+ * + the runtime's pre-routing gate) and `protocolAllowlist` gates the owner grant
+ * surface — no dormant spend-gate-looking fields remain (SE-7 gate carry #2).
+ * `assertSameAddress` (SE-6) is the cross-chain CREATE2 same-address verification
+ * that must PASS before any funds are routed cross-chain (spec §8) — its first
+ * production caller is the SE-8 bridge pre-routing gate (`runtime/bridge-gate.ts`).
  */
 export interface ChainConfig {
   chainId: number;
@@ -42,10 +44,25 @@ export interface ChainConfig {
   };
   /** 0G enforces a 2-gwei floor; other chains have their own. Applied at send time. */
   gasFloorWei: bigint;
-  /** SE-7 forward-compat: allowlisted real protocols (Uniswap/Aave/Permit2, …). */
+  /**
+   * Allowlisted real protocols (Uniswap/Aave/Permit2, …). SE-8 (carry #2): when
+   * SET, the owner grant surface refuses call-rule/preset targets outside
+   * `protocolAllowlist ∪ bridgeAllowlist ∪ canonical` — no longer dormant.
+   */
   protocolAllowlist?: readonly string[] | undefined;
-  /** SE-8 forward-compat: allowlisted bridge contracts. */
+  /**
+   * SE-8 (carry #2, CONSUMED): allowlisted bridge contracts on this chain. Fed
+   * into `GrantState.bridgeTargets` — classify refuses a bridge selector against
+   * any target outside this set, and any non-bridge selector against a target
+   * inside it (BR-2 default-DENY).
+   */
   bridgeAllowlist?: readonly string[] | undefined;
+  /**
+   * SE-8: lowercased bridge address → the chain id its far leg lands on. The
+   * runtime's HARD pre-routing gate verifies the same-CREATE2-address account on
+   * that destination chain (`assertSameAddress`) BEFORE any bridge call routes.
+   */
+  bridgeDestinations?: Readonly<Record<string, number>> | undefined;
 }
 
 /** Signing material shared across chains (same owner/ops/guardian keys per EVM). */

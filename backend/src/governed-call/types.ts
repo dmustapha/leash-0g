@@ -104,6 +104,14 @@ export interface GrantState {
   budgets: Map<string, string>;
   /** the account's recipient allowlist (lowercased addresses) — for `recipientMode:'allowlist'`. */
   allowlist: Set<string>;
+  /**
+   * SE-8: the chain's owner-configured bridge allowlist (`ChainConfig.bridgeAllowlist`,
+   * lowercased) — CONSUMED by classify (carry #2, never a dormant field): a bridge
+   * selector against a target outside this set is forbidden, and ANY selector against
+   * a target inside it that lacks a structured bridge decoder is forbidden (BR-2
+   * default-DENY). Absent/empty = no bridging is possible on this chain.
+   */
+  bridgeTargets?: Set<string>;
 }
 
 /** Classification of an intended call against the on-chain envelope (the three-lane model). */
@@ -130,4 +138,7 @@ export type ForbiddenReason =
   | 'recipient_not_self'
   | 'from_not_self'
   | 'unknown_batcher'
-  | 'delegatecall';
+  | 'delegatecall'
+  // SE-8 (BR-2): bridge lane refusals — no structured decoder / off-allowlist bridge.
+  | 'bridge_undecodable'
+  | 'bridge_not_allowlisted';
