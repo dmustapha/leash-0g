@@ -75,6 +75,18 @@ import type { AgentRow, AuditBatch, Link } from '../types.js';
 import { goalAllowlistCandidates, goalRole } from '../types.js';
 import type { Json } from '../crypto/canonical.js';
 import type { ChainOps, RuntimeManager, Settings } from '../server.js';
+import { onboardAgentToChain, OnboardRefusedError, type OnboardChainOps } from '../chain/onboard.js';
+import { UnregisteredChainError } from '../chain/registry.js';
+import { listChainDeployments, getOwnedAgentIdByDeployment } from '../store/chain-deployments.js';
+import { getAgentByAccountAndChain } from '../store/agents.js';
+import { listRequestsByChainAndAccount } from '../store/capabilities.js';
+
+/** SE-7: the registry surface the owner routes need (structural — tests fake it). */
+export interface OwnerChainRegistry {
+  has(chainId: number): boolean;
+  listChains(): Array<{ chainId: number; name: string }>;
+  getChainOps(chainId: number): OnboardChainOps;
+}
 
 export interface OwnerApiDeps {
   pool: Pool;
@@ -91,6 +103,12 @@ export interface OwnerApiDeps {
   /** Present only when the Telegram bot is configured (S9). */
   telegram?: TelegramBot | undefined;
   settings: Settings;
+  /**
+   * SE-7: multichain registry surface (chain list + second-chain onboarding).
+   * Optional so single-chain apps still build; chain routes respond legibly
+   * (503 multichain_unavailable) when absent.
+   */
+  chainRegistry?: OwnerChainRegistry | undefined;
 }
 
 const addressSchema = z.string().regex(/^0x[0-9a-fA-F]{40}$/);
@@ -1756,6 +1774,131 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       listRecentRequests(deps.pool, agent.id, 20),
     ]);
     res.json({ grants, presets, recentRequests });
+  }));
+
+  // ── SE-7: multichain owner surfaces ────────────────────────────────────────
+  // Namespaced /api/networks — "/api/chains" is the Phase-5.6 AGENT-CHAIN
+  // (delegation graph) surface; blockchain networks are a different concept.
+  // GET /api/networks — the registered chain table (FE chain selector). Config-
+  // only onboarding: what this returns IS what can be targeted (default-deny beyond).
+  router.get('/api/networks', asyncRoute(async (_req: OwnerRequest, res) => {
+    if (!deps.chainRegistry) {
+      res.status(503).json({ error: { message: 'multichain_unavailable' } });
+      return;
+    }
+    res.json({ chains: deps.chainRegistry.listChains().map((c) => ({ chainId: c.chainId, name: c.name })) });
+  }));
+
+  // GET /api/agents/:id/chains — the agent's per-chain presence: home chain +
+  // every onboarded chain (same CREATE2 address by construction, SD-E9).
+  router.get('/api/agents/:id/networks', asyncRoute(async (req: OwnerRequest, res) => {
+    const agent = await requireOwnedAgent(req, res);
+    if (!agent) return;
+    const deployments = await listChainDeployments(deps.pool, agent.id);
+    res.json({
+      accountAddr: agent.accountAddr,
+      // Whether this agent CAN onboard to another chain (deterministic V4 with
+      // the persisted salt+tuple) — the FE surfaces the action only when true.
+      onboardable: agent.accountVersion === 4 && !!agent.accountSalt && !!agent.accountCreateTuple,
+      homeChainId: agent.chainId,
+      chains: [
+        { chainId: agent.chainId, accountAddr: agent.accountAddr, role: 'home' as const },
+        ...deployments.map((d) => ({
+          chainId: d.chainId,
+          accountAddr: d.accountAddr,
+          role: 'onboarded' as const,
+          createTx: d.createTx,
+          registerTx: d.registerTx,
+          adopted: d.adopted,
+          createdAt: d.createdAt,
+        })),
+      ],
+    });
+  }));
+
+  // POST /api/agents/:id/chains — SECOND-CHAIN ONBOARDING (E-7): replay the
+  // persisted construction tuple byte-exact on the target chain so the account
+  // lands at the SAME address; any tuple/salt drift is REFUSED before minting.
+  // ownerAddr comes from the AUTHENTICATED SESSION via requireOwnedAgent (L-04).
+  router.post('/api/agents/:id/networks', asyncRoute(async (req: OwnerRequest, res) => {
+    const agent = await requireOwnedAgent(req, res);
+    if (!agent) return;
+    if (!deps.chainRegistry) {
+      res.status(503).json({ error: { message: 'multichain_unavailable' } });
+      return;
+    }
+    const parsed = z.object({ chainId: z.number().int().positive() }).safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: { message: 'invalid request body' } });
+      return;
+    }
+    const registry = deps.chainRegistry;
+    try {
+      const result = await onboardAgentToChain(
+        { pool: deps.pool, getChainOps: (chainId) => registry.getChainOps(chainId) },
+        agent,
+        parsed.data.chainId,
+      );
+      const rec = await appendTrace(deps.pool, {
+        agentId: agent.id,
+        kind: 'decision',
+        detail: {
+          summary: result.alreadyOnboarded
+            ? `${agent.name} is already onboarded on chain ${parsed.data.chainId} (idempotent)`
+            : `${agent.name} onboarded onto chain ${parsed.data.chainId} at its same-address account ${agent.accountAddr}${result.adopted ? ' (adopted a pre-existing deterministic deploy)' : ''}`,
+        },
+      });
+      deps.hub.emit(agent.id, 'trace', traceEvent(rec));
+      res.status(result.alreadyOnboarded ? 200 : 201).json({
+        chainId: result.deployment.chainId,
+        accountAddr: result.deployment.accountAddr,
+        createTx: result.deployment.createTx,
+        registerTx: result.deployment.registerTx,
+        adopted: result.adopted,
+        alreadyOnboarded: result.alreadyOnboarded,
+      });
+    } catch (err) {
+      if (err instanceof OnboardRefusedError) {
+        res.status(409).json({ error: { message: err.message, reason: err.reason } });
+        return;
+      }
+      if (err instanceof UnregisteredChainError) {
+        res.status(409).json({ error: { message: err.message, reason: 'unregistered_chain' } });
+        return;
+      }
+      throw err;
+    }
+  }));
+
+  // GET /api/chains/:chainId/accounts/:accountAddr — the owner-scoped per-chain
+  // account view (L-04, BINDING from the SE-6 gate): ownerAddr derives from the
+  // AUTHENTICATED SESSION (req.ownerAddr), NEVER caller/request text — under
+  // CREATE2 two owners can share an address, so session scoping is what keeps
+  // one owner from reading another's agent through a colliding address.
+  router.get('/api/networks/:chainId/accounts/:accountAddr', asyncRoute(async (req: OwnerRequest, res) => {
+    const chainId = Number.parseInt(req.params['chainId'] ?? '', 10);
+    const accountAddr = req.params['accountAddr'] ?? '';
+    if (!Number.isInteger(chainId) || chainId <= 0 || !addressSchema.safeParse(accountAddr).success) {
+      res.status(400).json({ error: { message: 'invalid chainId or accountAddr' } });
+      return;
+    }
+    const ownerAddr = req.ownerAddr as string; // authenticated session (L-04)
+    let agent = await getAgentByAccountAndChain(deps.pool, ownerAddr, chainId, accountAddr);
+    if (!agent) {
+      // Not a home-chain row — an ONBOARDED chain's presence resolves through
+      // the deployment table (still owner-scoped via the agents join).
+      const agentId = await getOwnedAgentIdByDeployment(deps.pool, ownerAddr, chainId, accountAddr);
+      agent = agentId ? await getAgentById(deps.pool, agentId) : null;
+    }
+    if (!agent) {
+      res.status(404).json({ error: { message: 'not found' } });
+      return;
+    }
+    const requests = await listRequestsByChainAndAccount(deps.pool, ownerAddr, chainId, accountAddr, 50);
+    res.json({
+      agent: { id: agent.id, name: agent.name, status: agent.status, accountAddr: agent.accountAddr, chainId: agent.chainId },
+      requests,
+    });
   }));
 
   // POST /api/agents/:id/wind-down — lifespan dial (D-10): owner marks the agent
