@@ -124,6 +124,22 @@ const envSchema = z.object({
   // How long a JIT (L2) capability card stays actionable before it auto-expires
   // (the sweep resolves it). Reuses the approval-timeout posture as the default.
   JIT_TTL_MS: z.coerce.number().int().positive().default(600_000),
+  // SE-7 (E-7): Base Sepolia — the first REAL second chain. The entry is
+  // config-only (SE-5's promise): setting BOTH env vars onboards the chain; no
+  // code fork. The V4 factory is the SAME deterministic CREATE2 address on
+  // every chain (SD-E9), so it reuses LEASH_FACTORY_V4_ADDR. There is NO legacy
+  // v2 factory on Base — legacy creates on Base fail loudly (default-deny).
+  BASE_SEPOLIA_RPC: z.string().url().optional(),
+  AGENT_REGISTRY_BASE_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  // Real deployed protocol targets on Base Sepolia (SE-7): router = Uniswap
+  // SwapRouter02, vault = Aave stataWETH (ERC-4626 over aWETH — exposes the
+  // structured deposit(uint256,address) wall decoder), settlementToken = USDC.
+  BASE_CAP_ROUTER_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  BASE_CAP_VAULT_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  BASE_CAP_SETTLEMENT_TOKEN_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  // Comma-separated allowlisted REAL protocol contracts on Base Sepolia
+  // (Uniswap router / Permit2 / Aave stata vault / WETH / USDC).
+  BASE_PROTOCOL_ALLOWLIST: z.string().optional(),
 });
 
 export type Config = z.infer<typeof envSchema>;
@@ -147,7 +163,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
  * gas floor (observed live, 2026-09); other chains carry their own.
  */
 export function buildChainConfigs(cfg: Config): ChainConfig[] {
-  return [
+  const chains: ChainConfig[] = [
     {
       chainId: cfg.ZERO_G_CHAIN_ID,
       name: '0G Galileo Testnet',
@@ -164,4 +180,31 @@ export function buildChainConfigs(cfg: Config): ChainConfig[] {
       gasFloorWei: 2_000_000_000n, // 2 gwei — 0G node minimum
     },
   ];
+  // SE-7: Base Sepolia (84532) — appended only when BOTH env vars are set
+  // (default-deny otherwise: an unregistered chain cannot be targeted, E-11).
+  if (cfg.BASE_SEPOLIA_RPC && cfg.AGENT_REGISTRY_BASE_ADDR) {
+    chains.push({
+      chainId: 84532,
+      name: 'Base Sepolia',
+      rpcUrl: cfg.BASE_SEPOLIA_RPC,
+      // No legacy v2 factory on Base — a legacy create there fails loudly.
+      factoryV4Addr: cfg.LEASH_FACTORY_V4_ADDR,
+      registryAddr: cfg.AGENT_REGISTRY_BASE_ADDR,
+      accountVersion: 4,
+      canonical: {
+        router: cfg.BASE_CAP_ROUTER_ADDR,
+        vault: cfg.BASE_CAP_VAULT_ADDR,
+        settlementToken: cfg.BASE_CAP_SETTLEMENT_TOKEN_ADDR,
+      },
+      gasFloorWei: 0n, // Base enforces no static floor; EIP-1559 estimation applies
+      ...(cfg.BASE_PROTOCOL_ALLOWLIST
+        ? {
+            protocolAllowlist: cfg.BASE_PROTOCOL_ALLOWLIST.split(',')
+              .map((a) => a.trim().toLowerCase())
+              .filter((a) => /^0x[0-9a-f]{40}$/.test(a)),
+          }
+        : {}),
+    });
+  }
+  return chains;
 }
