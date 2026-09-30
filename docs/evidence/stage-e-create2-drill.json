@@ -10,71 +10,9 @@
       "chainId": 84532
     }
   ],
-  "factoryAddr": "0xb5294B428a98567B1219e89A1A1e020174320B7a",
+  "factoryAddr": "0x9581fe7BeaA62ba0a4e2C089EdA89cD67D937368",
   "factorySalt": "0x3dd341292a8c65b2d8dbdcc3851661bda556a7d94d0dbcd5bfaf811f42bde85d",
   "runs": [
-    {
-      "when": "2026-09-29T23:28:02.866Z",
-      "accountSalt": "0xb5868046b4a1027f7aa4613b53c94ee7fd55a3f709c507120f337396cbac2150",
-      "verifiedAccount": "0x2557e030ea316234b2f60d087d688ed0abd204f5",
-      "mintTxs": {
-        "0g-16602": "0xabf646fa2e6c20b7c759906c47afc6cfb47afe414039eeb534015992655b1040",
-        "base-sepolia": "0xa38e6fdf0992d3d11411a8d6623ef1e47fd2e904a63f74d3bc522f4b08754a51"
-      },
-      "counts": {
-        "pass": 9,
-        "fail": 0,
-        "flake": 0
-      },
-      "green": true,
-      "results": [
-        {
-          "check": "factory@0g-16602",
-          "ok": true,
-          "detail": "already deployed at 0xa0249c5808E8F3b31d406d1eF6492B4508014dA0 (idempotent skip)"
-        },
-        {
-          "check": "factory@base-sepolia",
-          "ok": true,
-          "detail": "already deployed at 0xa0249c5808E8F3b31d406d1eF6492B4508014dA0 (idempotent skip)"
-        },
-        {
-          "check": "assertSameAddress pre-deploy",
-          "ok": true,
-          "detail": "verified address 0x2557e030ea316234b2f60d087d688ed0abd204f5"
-        },
-        {
-          "check": "mint@0g-16602",
-          "ok": true,
-          "detail": "account 0x2557e030ea316234b2f60d087d688ed0abd204f5 has code (tx 0xabf646fa2e6c20b7c759906c47afc6cfb47afe414039eeb534015992655b1040)"
-        },
-        {
-          "check": "mint@base-sepolia",
-          "ok": true,
-          "detail": "account 0x2557e030ea316234b2f60d087d688ed0abd204f5 has code (tx 0xa38e6fdf0992d3d11411a8d6623ef1e47fd2e904a63f74d3bc522f4b08754a51)"
-        },
-        {
-          "check": "assertSameAddress post-deploy",
-          "ok": true,
-          "detail": "verified 0x2557e030ea316234b2f60d087d688ed0abd204f5 (bound to persisted account + home-chain deployed + bytecode identical)"
-        },
-        {
-          "check": "expected-account-refused",
-          "ok": true,
-          "detail": "refused: same-address verification REFUSED at chain 16602: expected_account diverges (expected 0xbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbd"
-        },
-        {
-          "check": "wall-live@base-sepolia",
-          "ok": true,
-          "detail": "REVERTED TargetNotAllowlisted (selector-anchored): 0x042a9b0d000000000000000000000000a0249c5808e8f3b31d406d1ef6492b4508014da0"
-        },
-        {
-          "check": "mismatch-refused",
-          "ok": true,
-          "detail": "refused: same-address verification REFUSED at chain 84532: factory_addr diverges (expected 0xa0249c5808e8f3b31d406d1ef6492b4508014da0, got 0x4e59b448"
-        }
-      ]
-    },
     {
       "when": "2026-09-29T23:28:34.308Z",
       "accountSalt": "0xf976fcdc3668c953e31f7f84a1d06c6c78308e01c45accd0db9ed91e370d3cce",
@@ -258,6 +196,68 @@
           "check": "mismatch-refused",
           "ok": true,
           "detail": "refused: same-address verification REFUSED at chain 84532: factory_addr diverges (expected 0xb5294b428a98567b1219e89a1a1e020174320b7a, got 0x4e59b448"
+        }
+      ]
+    },
+    {
+      "when": "2026-09-30T17:36:02.354Z",
+      "accountSalt": "0x4e14a27cc337c14f7cfda3a49c28c86a4626a59422f1502d99c5e5d6e790d7ae",
+      "verifiedAccount": "0x83fc41e1b6737c333897cb83acbe883ea349ba11",
+      "mintTxs": {
+        "0g-16602": "0x6aec86833cc68b5e23de1327e2d830458797a3288258eb4be93d2bc6c76066af",
+        "base-sepolia": "0x3fd1c45128da6c8e009bf2116f031b200398fdbf97d75c263c3d45aab4043686"
+      },
+      "counts": {
+        "pass": 9,
+        "fail": 0,
+        "flake": 0
+      },
+      "green": true,
+      "results": [
+        {
+          "check": "factory@0g-16602",
+          "ok": true,
+          "detail": "deployed at 0x9581fe7BeaA62ba0a4e2C089EdA89cD67D937368 (tx 0x5aad82bf15f3d594e5baf01dde3641e24b490454543eff48f909f03cb3951e21)"
+        },
+        {
+          "check": "factory@base-sepolia",
+          "ok": true,
+          "detail": "deployed at 0x9581fe7BeaA62ba0a4e2C089EdA89cD67D937368 (tx 0xbb64fb4504079281fbbe05bd70a921e64ea65fa29e968f4965274ac9fe819ed7)"
+        },
+        {
+          "check": "assertSameAddress pre-deploy",
+          "ok": true,
+          "detail": "verified address 0x83fc41e1b6737c333897cb83acbe883ea349ba11"
+        },
+        {
+          "check": "mint@0g-16602",
+          "ok": true,
+          "detail": "account 0x83fc41e1b6737c333897cb83acbe883ea349ba11 has code (tx 0x6aec86833cc68b5e23de1327e2d830458797a3288258eb4be93d2bc6c76066af)"
+        },
+        {
+          "check": "mint@base-sepolia",
+          "ok": true,
+          "detail": "account 0x83fc41e1b6737c333897cb83acbe883ea349ba11 has code (tx 0x3fd1c45128da6c8e009bf2116f031b200398fdbf97d75c263c3d45aab4043686)"
+        },
+        {
+          "check": "assertSameAddress post-deploy",
+          "ok": true,
+          "detail": "verified 0x83fc41e1b6737c333897cb83acbe883ea349ba11 (bound to persisted account + home-chain deployed + bytecode identical)"
+        },
+        {
+          "check": "expected-account-refused",
+          "ok": true,
+          "detail": "refused: same-address verification REFUSED at chain 16602: expected_account diverges (expected 0xbdbdbdbdbdbdbdbdbdbdbdbdbdbdbdbd"
+        },
+        {
+          "check": "wall-live@base-sepolia",
+          "ok": true,
+          "detail": "REVERTED TargetNotAllowlisted (selector-anchored): 0x042a9b0d0000000000000000000000009581fe7beaa62ba0a4e2c089eda89cd67d937368"
+        },
+        {
+          "check": "mismatch-refused",
+          "ok": true,
+          "detail": "refused: same-address verification REFUSED at chain 84532: factory_addr diverges (expected 0x9581fe7beaa62ba0a4e2c089eda89cd67d937368, got 0x4e59b448"
         }
       ]
     }
