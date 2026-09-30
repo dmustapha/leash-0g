@@ -44,6 +44,10 @@ const multicallAbi = parseAbi(['function multicall(bytes[] data)']);
 const vault = parseAbi([
   'function deposit(uint256 assets, address receiver) returns (uint256 shares)',
 ]);
+const opBridge = parseAbi([
+  'function bridgeETHTo(address to, uint32 minGasLimit, bytes extraData) payable',
+  'function bridgeERC20To(address localToken, address remoteToken, address to, uint256 amount, uint32 minGasLimit, bytes extraData)',
+]);
 
 const entries = [];
 const add = (e) => entries.push(e);
@@ -70,6 +74,14 @@ add({ name: 'setApprovalForAll_false', kind: 'setApprovalForAll', mutation: fals
 add({ name: 'deposit_canonical', kind: 'deposit', mutation: false,
   data: encodeFunctionData({ abi: vault, functionName: 'deposit', args: [777n, SELF] }),
   expect: { addr0: SELF, amount: '777' } });
+
+// SE-8 bridge decoders — canonical OP-stack encodings (extraData EMPTY = canonical)
+add({ name: 'bridgeETHTo_canonical', kind: 'bridgeEth', mutation: false,
+  data: encodeFunctionData({ abi: opBridge, functionName: 'bridgeETHTo', args: [SELF, 200000, '0x'] }),
+  expect: { addr0: SELF, minGas: '200000' } });
+add({ name: 'bridgeERC20To_canonical', kind: 'bridgeErc20', mutation: false,
+  data: encodeFunctionData({ abi: opBridge, functionName: 'bridgeERC20To', args: [A, B, SELF, 123456n, 200000, '0x'] }),
+  expect: { addr0: A, addr1: B, addr2: SELF, amount: '123456' } });
 
 // approve(max) — canonical shape but semantically forbidden on-chain (InfiniteApprovalForbidden)
 add({ name: 'approve_max_forbidden', kind: 'approve', mutation: false, forbidden: 'infinite',
@@ -115,6 +127,27 @@ add({ name: 'setApprovalForAll_true_forbidden', kind: 'setApprovalForAll', mutat
   add({ name: 'deposit_dirty_receiver_high_bits', kind: 'deposit', mutation: true, data: dirty });
 }
 
+// bridge mutations: non-empty extraData (payload smuggle) + dirty recipient bits + redirect
+{
+  const payload = encodeFunctionData({ abi: opBridge, functionName: 'bridgeETHTo', args: [SELF, 200000, '0xdeadbeef'] });
+  add({ name: 'bridgeETHTo_extraData_payload', kind: 'bridgeEth', mutation: true, data: payload });
+}
+{
+  const base = encodeFunctionData({ abi: opBridge, functionName: 'bridgeETHTo', args: [SELF, 200000, '0x'] }).slice(2);
+  // `to` word at bytes [4,36): high 12 bytes are hex chars [8,32)
+  const dirty = '0x' + base.slice(0, 8) + 'ff' + base.slice(10);
+  add({ name: 'bridgeETHTo_dirty_to_high_bits', kind: 'bridgeEth', mutation: true, data: dirty });
+}
+{
+  const redirect = encodeFunctionData({ abi: opBridge, functionName: 'bridgeERC20To', args: [A, B, '0x4444444444444444444444444444444444444444', 123456n, 200000, '0x'] });
+  add({ name: 'bridgeERC20To_redirect', kind: 'bridgeErc20', mutation: false, forbidden: 'redirect', data: redirect,
+    expect: { addr0: A, addr1: B, addr2: '0x4444444444444444444444444444444444444444', amount: '123456' } });
+}
+{
+  const payload = encodeFunctionData({ abi: opBridge, functionName: 'bridgeERC20To', args: [A, B, SELF, 123456n, 200000, '0x01'] });
+  add({ name: 'bridgeERC20To_extraData_payload', kind: 'bridgeErc20', mutation: true, data: payload });
+}
+
 // ---- real-world non-structured encodings (off-chain decode; on-chain charges msg.value) ----
 add({ name: 'uniswapV3_exactInputSingle', kind: 'nonstructured', mutation: false,
   data: encodeFunctionData({ abi: univ3, functionName: 'exactInputSingle', args: [{
@@ -138,14 +171,16 @@ add({ name: 'multicall_wrapper', kind: 'nonstructured', mutation: false,
 // Self-check: viem re-decodes every canonical structured entry (the oracle is genuinely viem).
 for (const e of entries) {
   if (e.mutation || e.kind === 'nonstructured') continue;
-  const dec = decodeFunctionData({ abi: e.kind === 'deposit' ? vault : erc20, data: e.data });
+  const abi = e.kind === 'deposit' ? vault : (e.kind === 'bridgeEth' || e.kind === 'bridgeErc20') ? opBridge : erc20;
+  const dec = decodeFunctionData({ abi, data: e.data });
   // sanity: viem decodes without throwing (canonical)
   if (!dec.functionName) throw new Error('viem failed to decode ' + e.name);
 }
 
 const out = { generatedBy: 'viem ' + '(gen-corpus.mjs)', count: entries.length, selectors: {
   approve: '0x095ea7b3', increaseAllowance: '0x39509351', transfer: '0xa9059cbb',
-  transferFrom: '0x23b872dd', setApprovalForAll: '0xa22cb465', deposit: '0x6e553f65' }, entries };
+  transferFrom: '0x23b872dd', setApprovalForAll: '0xa22cb465', deposit: '0x6e553f65',
+  bridgeETHTo: '0xe11013dd', bridgeERC20To: '0x540abf73' }, entries };
 writeFileSync(new URL('../test/corpus/corpus.json', import.meta.url), JSON.stringify(out, null, 2));
 console.log('wrote corpus:', entries.length, 'entries (' +
   entries.filter(e => e.mutation).length + ' mutations, ' +

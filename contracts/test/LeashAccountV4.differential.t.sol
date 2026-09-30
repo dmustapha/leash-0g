@@ -88,6 +88,23 @@ contract LeashAccountV4DifferentialTest is Test {
                 address a0 = h.decodeAddress(data, 4);
                 assertEq(a0, _addr(i, ".expect.addr0"), _s(i, ".name"));
                 checked++;
+            } else if (k == keccak256("bridgeEth")) {
+                // bridgeETHTo(address to, uint32 minGasLimit, bytes extraData): to @ 4
+                address a0 = h.decodeAddress(data, 4);
+                assertEq(a0, _addr(i, ".expect.addr0"), _s(i, ".name"));
+                checked++;
+            } else if (k == keccak256("bridgeErc20")) {
+                // bridgeERC20To(localToken,remoteToken,to,amount,minGas,extraData):
+                // localToken @ 4, remoteToken @ 36, to @ 68, amount @ 100
+                address a0 = h.decodeAddress(data, 4);
+                address a1 = h.decodeAddress(data, 36);
+                address a2 = h.decodeAddress(data, 68);
+                uint256 amt = h.decodeUint(data, 100);
+                assertEq(a0, _addr(i, ".expect.addr0"), _s(i, ".name"));
+                assertEq(a1, _addr(i, ".expect.addr1"), _s(i, ".name"));
+                assertEq(a2, _addr(i, ".expect.addr2"), _s(i, ".name"));
+                assertEq(amt, _uintStr(_s(i, ".expect.amount")), _s(i, ".name"));
+                checked++;
             } else if (k == keccak256("deposit")) {
                 // deposit(uint256 assets, address receiver): amount @ 4, receiver @ 36
                 uint256 amt = h.decodeUint(data, 4);
@@ -178,6 +195,9 @@ contract LeashAccountV4DifferentialTest is Test {
             // deposit targets a vault (not the ERC20 mock); its wall admittance is proven in
             // the primary suite (test_flow_approveThenVaultDeposit_succeeds) + adversarial C-04.
             if (_eq(kind, "deposit")) continue;
+            // bridge kinds target a bridge (not the ERC20 mock); wall admittance proven in
+            // the primary suite (test_bridgeEthTo_self_inCap_lands / test_bridgeErc20To_...).
+            if (_eq(kind, "bridgeEth") || _eq(kind, "bridgeErc20")) continue;
             bytes memory data = _rewriteRecipientsToSelf(kind, _bytes(i));
             vm.prank(session);
             (bool ok, bytes memory ret) =
@@ -274,6 +294,8 @@ contract LeashAccountV4DifferentialTest is Test {
         _rule(SEL_TRANSFER, 0, sp);
         _rule(SEL_TRANSFER_FROM, 0, sp);
         _rule(SEL_SET_APPROVAL_FOR_ALL, 0, sp);
+        _rule(0xe11013dd, 0, sp); // bridgeETHTo (SE-8)
+        _rule(0x540abf73, 0, sp); // bridgeERC20To (SE-8)
         vm.stopPrank();
     }
 

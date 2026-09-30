@@ -6,6 +6,7 @@ import {LeashAccountV4} from "../src/LeashAccountV4.sol";
 import {MockERC20} from "../src/MockERC20.sol";
 import {MockRouter} from "../src/MockRouter.sol";
 import {MockVault} from "../src/MockVault.sol";
+import {MockBridge} from "../src/MockBridge.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /// A token whose transfer returns false without reverting (fake-success, H-05).
@@ -22,6 +23,7 @@ contract LeashAccountV4Test is Test {
     MockERC20 internal tout; // a second token (swap output)
     MockRouter internal router;
     MockVault internal vault;
+    MockBridge internal bridge;
 
     address internal owner = makeAddr("owner");
     address internal guardian = makeAddr("guardian");
@@ -41,6 +43,8 @@ contract LeashAccountV4Test is Test {
     bytes4 constant SEL_SET_APPROVAL_FOR_ALL = 0xa22cb465;
     bytes4 constant SEL_SWAP = MockRouter.swap.selector;
     bytes4 constant SEL_DEPOSIT = MockVault.deposit.selector;
+    bytes4 constant SEL_BRIDGE_ETH_TO = MockBridge.bridgeETHTo.selector;
+    bytes4 constant SEL_BRIDGE_ERC20_TO = MockBridge.bridgeERC20To.selector;
 
     function _policy() internal view returns (LeashAccountV4.Policy memory) {
         return LeashAccountV4.Policy({
@@ -57,6 +61,7 @@ contract LeashAccountV4Test is Test {
         tout = new MockERC20("Out USD", "OUT", 6);
         router = new MockRouter();
         vault = new MockVault(IERC20(address(usd)));
+        bridge = new MockBridge();
 
         address[] memory list = new address[](1);
         list[0] = dest;
@@ -382,6 +387,184 @@ contract LeashAccountV4Test is Test {
         acct.executeCall(address(vault), 0, depData);
         vm.stopPrank();
         assertEq(vault.shares(address(acct)), 100e6);
+    }
+
+    // ================= SE-8 (E-9): governed bridging — OP-stack bridge decoders =================
+
+    function _bridgeEthData(address to) internal pure returns (bytes memory) {
+        return abi.encodeWithSelector(SEL_BRIDGE_ETH_TO, to, uint32(200_000), bytes(""));
+    }
+
+    function _bridgeErc20Data(address localTok, address to, uint256 amount) internal pure returns (bytes memory) {
+        return abi.encodeWithSelector(
+            SEL_BRIDGE_ERC20_TO, localTok, address(0xBEEF), to, amount, uint32(200_000), bytes("")
+        );
+    }
+
+    function _grantEthBridge(uint128 perCall, uint128 nativeBudget) internal {
+        _grantBudget(address(0), nativeBudget);
+        _grantRule(address(bridge), SEL_BRIDGE_ETH_TO, 0, new address[](0), perCall, nativeBudget);
+    }
+
+    function _grantErc20Bridge(uint128 perCall, uint128 bridgeBudget) internal {
+        _grantBudget(address(bridge), bridgeBudget);
+        _grantRule(address(bridge), SEL_BRIDGE_ERC20_TO, 0, new address[](0), perCall, bridgeBudget);
+    }
+
+    function test_bridgeEthTo_self_inCap_lands() public {
+        _grantEthBridge(1 ether, 2 ether);
+        vm.prank(session);
+        acct.executeCall(address(bridge), 0.5 ether, _bridgeEthData(address(acct)));
+        // recipient pinned to the SAME CREATE2 address (self) — far-chain funds stay leashed
+        assertEq(bridge.ethBridged(address(acct)), 0.5 ether);
+        (,, uint128 spent,) = acct.spendBudget(address(0));
+        assertEq(spent, 0.5 ether);
+    }
+
+    function test_bridgeEthTo_redirect_reverts_recipientNotSelf() public {
+        _grantEthBridge(1 ether, 2 ether);
+        vm.prank(session);
+        vm.expectRevert(abi.encodeWithSelector(LeashAccountV4.RecipientNotSelf.selector, rando));
+        acct.executeCall(address(bridge), 0.5 ether, _bridgeEthData(rando));
+    }
+
+    function test_bridgeEthTo_overPerCallCap_reverts() public {
+        _grantEthBridge(1 ether, 5 ether);
+        vm.prank(session);
+        vm.expectRevert(abi.encodeWithSelector(LeashAccountV4.OverPerCallCap.selector, 2 ether, uint128(1 ether)));
+        acct.executeCall(address(bridge), 2 ether, _bridgeEthData(address(acct)));
+    }
+
+    function test_bridgeEthTo_offAllowlistBridge_reverts() public {
+        // no rule/target grant at all → the wall refuses the bridge target itself
+        vm.prank(session);
+        vm.expectRevert(abi.encodeWithSelector(LeashAccountV4.TargetNotAllowlisted.selector, address(bridge)));
+        acct.executeCall(address(bridge), 0.5 ether, _bridgeEthData(address(acct)));
+    }
+
+    function test_bridgeEthTo_nonEmptyExtraData_reverts_decodeMismatch() public {
+        _grantEthBridge(1 ether, 2 ether);
+        bytes memory data =
+            abi.encodeWithSelector(SEL_BRIDGE_ETH_TO, address(acct), uint32(200_000), bytes(hex"deadbeef"));
+        vm.prank(session);
+        vm.expectRevert(LeashAccountV4.DecodeMismatch.selector);
+        acct.executeCall(address(bridge), 0.5 ether, data);
+    }
+
+    function test_bridgeEthTo_dirtyRecipientBits_reverts() public {
+        _grantEthBridge(1 ether, 2 ether);
+        bytes memory data = abi.encodePacked(
+            SEL_BRIDGE_ETH_TO,
+            bytes32(uint256(uint160(address(acct))) | (uint256(1) << 160)), // dirty upper bits
+            bytes32(uint256(200_000)),
+            bytes32(uint256(0x60)),
+            bytes32(0)
+        );
+        vm.prank(session);
+        vm.expectRevert(LeashAccountV4.DecodeMismatch.selector);
+        acct.executeCall(address(bridge), 0.5 ether, data);
+    }
+
+    function test_bridgeEthTo_nonCanonicalOffset_reverts() public {
+        _grantEthBridge(1 ether, 2 ether);
+        bytes memory data = abi.encodePacked(
+            SEL_BRIDGE_ETH_TO,
+            bytes32(uint256(uint160(address(acct)))),
+            bytes32(uint256(200_000)),
+            bytes32(uint256(0x80)), // non-canonical head offset
+            bytes32(0),
+            bytes32(0)
+        );
+        vm.prank(session);
+        vm.expectRevert(LeashAccountV4.DecodeMismatch.selector);
+        acct.executeCall(address(bridge), 0.5 ether, data);
+    }
+
+    function test_bridgeErc20To_self_inCap_lands_andChargesBridgeBudget() public {
+        _grantBudget(address(usd), 500e6);
+        _grantRule(address(usd), SEL_APPROVE, 0, _spenders(address(bridge)), 200e6, 1_000e6);
+        _grantErc20Bridge(200e6, 400e6);
+        vm.startPrank(session);
+        acct.executeCall(address(usd), 0, _approveData(address(bridge), 100e6));
+        acct.executeCall(address(bridge), 0, _bridgeErc20Data(address(usd), address(acct), 100e6));
+        vm.stopPrank();
+        assertEq(bridge.erc20Bridged(address(acct)), 100e6);
+        (,, uint128 spent,) = acct.spendBudget(address(bridge));
+        assertEq(spent, 100e6);
+    }
+
+    function test_bridgeErc20To_redirect_reverts_recipientNotSelf() public {
+        _grantErc20Bridge(200e6, 400e6);
+        vm.prank(session);
+        vm.expectRevert(abi.encodeWithSelector(LeashAccountV4.RecipientNotSelf.selector, rando));
+        acct.executeCall(address(bridge), 0, _bridgeErc20Data(address(usd), rando, 100e6));
+    }
+
+    function test_bridgeErc20To_overPerCallCap_reverts() public {
+        _grantErc20Bridge(200e6, 400e6);
+        vm.prank(session);
+        vm.expectRevert(abi.encodeWithSelector(LeashAccountV4.OverPerCallCap.selector, 300e6, uint128(200e6)));
+        acct.executeCall(address(bridge), 0, _bridgeErc20Data(address(usd), address(acct), 300e6));
+    }
+
+    function test_bridgeErc20To_overCumulativeBudget_reverts() public {
+        _grantBudget(address(usd), 500e6);
+        _grantRule(address(usd), SEL_APPROVE, 0, _spenders(address(bridge)), 200e6, 1_000e6);
+        _grantErc20Bridge(200e6, 300e6);
+        vm.startPrank(session);
+        acct.executeCall(address(usd), 0, _approveData(address(bridge), 200e6));
+        acct.executeCall(address(bridge), 0, _bridgeErc20Data(address(usd), address(acct), 200e6));
+        vm.expectRevert(abi.encodeWithSelector(LeashAccountV4.OverCumulativeSpend.selector, 400e6, uint128(300e6)));
+        acct.executeCall(address(bridge), 0, _bridgeErc20Data(address(usd), address(acct), 200e6));
+        vm.stopPrank();
+    }
+
+    function test_bridgeErc20To_valueRides_reverts_decodeMismatch() public {
+        _grantErc20Bridge(200e6, 400e6);
+        // nonpayable canonical: msg.value may never ride uncharged on the ERC-20 leg
+        vm.prank(session);
+        vm.expectRevert(LeashAccountV4.DecodeMismatch.selector);
+        acct.executeCall(address(bridge), 1 wei, _bridgeErc20Data(address(usd), address(acct), 100e6));
+    }
+
+    function test_bridgeErc20To_nonEmptyExtraData_reverts_decodeMismatch() public {
+        _grantErc20Bridge(200e6, 400e6);
+        bytes memory data = abi.encodeWithSelector(
+            SEL_BRIDGE_ERC20_TO, address(usd), address(0xBEEF), address(acct), uint256(100e6), uint32(200_000),
+            bytes(hex"01")
+        );
+        vm.prank(session);
+        vm.expectRevert(LeashAccountV4.DecodeMismatch.selector);
+        acct.executeCall(address(bridge), 0, data);
+    }
+
+    function test_bridgeErc20To_dirtyMinGasBits_reverts() public {
+        _grantErc20Bridge(200e6, 400e6);
+        bytes memory data = abi.encodePacked(
+            SEL_BRIDGE_ERC20_TO,
+            bytes32(uint256(uint160(address(usd)))),
+            bytes32(uint256(uint160(address(0xBEEF)))),
+            bytes32(uint256(uint160(address(acct)))),
+            bytes32(uint256(100e6)),
+            bytes32(uint256(200_000) | (uint256(1) << 32)), // dirty bits above uint32
+            bytes32(uint256(0xc0)),
+            bytes32(0)
+        );
+        vm.prank(session);
+        vm.expectRevert(LeashAccountV4.DecodeMismatch.selector);
+        acct.executeCall(address(bridge), 0, data);
+    }
+
+    function test_bridgeEthTo_allowlistMode_permitsAllowlistedRecipient() public {
+        // recipientMode=1: an owner may deliberately allow a non-self allowlisted recipient
+        _grantBudget(address(0), 2 ether);
+        _grantRule(address(bridge), SEL_BRIDGE_ETH_TO, 1, new address[](0), 1 ether, 2 ether);
+        vm.prank(session);
+        acct.executeCall(address(bridge), 0.25 ether, _bridgeEthData(dest));
+        assertEq(bridge.ethBridged(dest), 0.25 ether);
+        vm.prank(session);
+        vm.expectRevert(abi.encodeWithSelector(LeashAccountV4.NotAllowlisted.selector, rando));
+        acct.executeCall(address(bridge), 0.25 ether, _bridgeEthData(rando));
     }
 
     // ================= D-6: grant timelock (loosen-timelocked / tighten-instant) =================

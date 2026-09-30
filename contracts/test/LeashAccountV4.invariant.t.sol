@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {LeashAccountV4} from "../src/LeashAccountV4.sol";
 import {MockERC20} from "../src/MockERC20.sol";
 import {MockVault} from "../src/MockVault.sol";
+import {MockBridge} from "../src/MockBridge.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /// Handler: random governed calls (approve/transfer/deposit to varied recipients incl.
@@ -13,6 +14,7 @@ contract V4Handler is Test {
     LeashAccountV4 public acct;
     MockERC20 public usd;
     MockVault public vault;
+    MockBridge public bridge;
     address public owner;
     address public guardian;
     address public session;
@@ -23,11 +25,14 @@ contract V4Handler is Test {
     bytes4 constant SEL_APPROVE = 0x095ea7b3;
     bytes4 constant SEL_TRANSFER = 0xa9059cbb;
     bytes4 constant SEL_DEPOSIT = 0x6e553f65;
+    bytes4 constant SEL_BRIDGE_ETH_TO = 0xe11013dd;
+    bytes4 constant SEL_BRIDGE_ERC20_TO = 0x540abf73;
 
     constructor(
         LeashAccountV4 a,
         MockERC20 t,
         MockVault v,
+        MockBridge b,
         address o,
         address g,
         address s,
@@ -38,6 +43,7 @@ contract V4Handler is Test {
         acct = a;
         usd = t;
         vault = v;
+        bridge = b;
         owner = o;
         guardian = g;
         session = s;
@@ -69,6 +75,30 @@ contract V4Handler is Test {
         try acct.executeCall(address(vault), 0, abi.encodeWithSelector(SEL_DEPOSIT, uint256(amount), to)) {} catch {}
     }
 
+    /// Try to bridge ETH to {dest, attacker, self} — only self may ever succeed
+    /// (recipientMode 0), and any extraData payload must revert.
+    function doBridgeEth(uint96 amount, uint8 who, bool dirtyExtra) external {
+        amount = uint96(bound(amount, 1, 2 ether));
+        address to = who % 3 == 0 ? dest : (who % 3 == 1 ? attacker : address(acct));
+        bytes memory extra = dirtyExtra ? bytes(hex"01") : bytes("");
+        vm.prank(session);
+        try acct.executeCall(
+            address(bridge), amount, abi.encodeWithSelector(SEL_BRIDGE_ETH_TO, to, uint32(1), extra)
+        ) {} catch {}
+    }
+
+    /// Try to bridge ERC-20 to {dest, attacker, self} — only self may ever succeed.
+    function doBridgeErc20(uint96 amount, uint8 who) external {
+        amount = uint96(bound(amount, 1, 300e6));
+        address to = who % 3 == 0 ? dest : (who % 3 == 1 ? attacker : address(acct));
+        vm.prank(session);
+        try acct.executeCall(
+            address(bridge),
+            0,
+            abi.encodeWithSelector(SEL_BRIDGE_ERC20_TO, address(usd), address(0xBEEF), to, uint256(amount), uint32(1), bytes(""))
+        ) {} catch {}
+    }
+
     /// A hijacked agent tries to grant itself a rule — MUST always revert (owner-only).
     function doAgentSelfWiden() external {
         address[] memory sp = new address[](1);
@@ -97,6 +127,7 @@ contract LeashAccountV4InvariantTest is Test {
     LeashAccountV4 internal acct;
     MockERC20 internal usd;
     MockVault internal vault;
+    MockBridge internal bridge;
     V4Handler internal handler;
 
     address internal owner = makeAddr("owner");
@@ -106,12 +137,15 @@ contract LeashAccountV4InvariantTest is Test {
     address internal attacker = makeAddr("attacker");
     address internal spender = makeAddr("spender");
 
+    bytes4 constant SEL_BRIDGE_ETH_TO = 0xe11013dd;
+    bytes4 constant SEL_BRIDGE_ERC20_TO = 0x540abf73;
     uint128 constant BUDGET = 250e6;
 
     function setUp() public {
         vm.warp(1_700_000_000);
         usd = new MockERC20("Test USD", "TestUSD", 6);
         vault = new MockVault(IERC20(address(usd)));
+        bridge = new MockBridge();
         address[] memory list = new address[](1);
         list[0] = dest;
         acct = new LeashAccountV4(
@@ -147,13 +181,28 @@ contract LeashAccountV4InvariantTest is Test {
         vm.warp(block.timestamp + 15 minutes);
         acct.applySpendBudget();
         acct.applyCallRule();
+        // SE-8 bridge rules (recipientMode 0 = self-only) + native + bridge-keyed budgets.
+        acct.proposeSpendBudget(address(0), uint128(2 ether));
+        acct.proposeCallRule(address(bridge), SEL_BRIDGE_ETH_TO, 0, new address[](0), uint128(1 ether), uint128(2 ether), bytes32(0));
+        vm.warp(block.timestamp + 15 minutes);
+        acct.applySpendBudget();
+        acct.applyCallRule();
+        acct.proposeSpendBudget(address(bridge), BUDGET);
+        acct.proposeCallRule(address(bridge), SEL_BRIDGE_ERC20_TO, 0, new address[](0), 100e6, 200e6, bytes32(0));
+        vm.warp(block.timestamp + 15 minutes);
+        acct.applySpendBudget();
+        acct.applyCallRule();
         vm.stopPrank();
+        vm.deal(address(acct), 100 ether);
 
         // let the vault pull the underlying so self-deposits can actually settle.
-        vm.prank(address(acct));
+        vm.startPrank(address(acct));
         usd.approve(address(vault), type(uint256).max);
+        // let the bridge pull the underlying so self-bridges can actually settle.
+        usd.approve(address(bridge), type(uint256).max);
+        vm.stopPrank();
 
-        handler = new V4Handler(acct, usd, vault, owner, guardian, session, dest, attacker, spender);
+        handler = new V4Handler(acct, usd, vault, bridge, owner, guardian, session, dest, attacker, spender);
         targetContract(address(handler));
     }
 
@@ -183,6 +232,21 @@ contract LeashAccountV4InvariantTest is Test {
         // and no autonomous vault deposit can ever mint shares to the attacker (or dest).
         assertEq(vault.shares(attacker), 0);
         assertEq(vault.shares(dest), 0);
+        // and no governed bridge call can ever land far-chain funds anywhere but SELF
+        // (the same-CREATE2-address account) — attacker AND dest both zero (E-9 spine).
+        assertEq(bridge.ethBridged(attacker), 0);
+        assertEq(bridge.ethBridged(dest), 0);
+        assertEq(bridge.erc20Bridged(attacker), 0);
+        assertEq(bridge.erc20Bridged(dest), 0);
+    }
+
+    /// SE-8: bridge selectors constant integrity (bytecode-pinned selector set).
+    function invariant_bridgeSelfOnlyEverAccrues() public view {
+        // whatever DID bridge went to self only; native budget never exceeded.
+        (, uint128 cap, uint128 spent,) = acct.spendBudget(address(0));
+        assertLe(spent, cap);
+        (, uint128 bcap, uint128 bspent,) = acct.spendBudget(address(bridge));
+        assertLe(bspent, bcap);
     }
 
     /// The agent (session key) can never widen its own grant — the pending slot is
