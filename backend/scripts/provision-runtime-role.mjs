@@ -10,6 +10,12 @@
 // (UPDATE/DELETE/TRUNCATE on trace_records are ALSO blocked for everyone by
 //  the 001/007 triggers — the role is defense-in-depth per PHASE-1-REVIEW C-6.)
 //
+// AUDIT-INTEGRITY TRUST ROOT: the append-only guarantee ultimately rests on
+// controlling the ADMIN / MIGRATE_DATABASE_URL credential, not on the trigger
+// alone — the table owner can DISABLE the trigger (migrations 020/024 do this
+// for a scoped backfill). Keep that credential migration-only; never reuse it
+// as a runtime, console, or ad-hoc query credential.
+//
 // ROLLBACK (if the swap breaks the deploy): restore the previous DATABASE_URL
 // value on Render/CI — the admin role keeps every grant it had; nothing else
 // to undo. The leash_runtime role can be left in place (it grants nothing to
@@ -60,7 +66,13 @@ async function main() {
     if (ownerRecordsExists.rowCount) {
       await client.query(`REVOKE UPDATE, DELETE, TRUNCATE ON owner_records FROM ${ROLE}`);
     }
-    // future tables created by admin-run migrations inherit app grants
+    // future tables created by admin-run migrations inherit app grants.
+    // CAUTION: this blanket default grants UPDATE/DELETE on FUTURE tables too.
+    // The REVOKEs above are one-time, against the tables that exist now — they
+    // do NOT cover a future append-only log table. If you add another
+    // trace_records-style table, add a matching `REVOKE UPDATE, DELETE,
+    // TRUNCATE ... FROM ${ROLE}` here (the 001/007-style trigger stays the
+    // primary guard, but keep the GRANT-layer defense-in-depth in parity).
     await client.query(
       `ALTER DEFAULT PRIVILEGES IN SCHEMA ${schema} GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO ${ROLE}`,
     );

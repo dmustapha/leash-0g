@@ -17,6 +17,13 @@ import { createPool } from '../../src/db/pool.js';
 // This test reproduces prod: it applies 001..019, inserts a trace row (the
 // append-only trigger permits INSERT), THEN applies 020..024 and asserts the
 // owner-run DISABLE/ENABLE-trigger backfill succeeds AND restores the guard.
+//
+// SCOPE: the final UPDATE-rejects assertion runs under THIS test's connection
+// (the dev DATABASE_URL, effectively the owner), so it proves the TRIGGER is
+// re-enabled after the backfill — NOT that the restricted runtime role is
+// grant-blocked. That role-level guarantee (leash_runtime has no UPDATE on
+// trace_records) is owned by scripts/provision-runtime-role.mjs and exercised
+// by the chain-isolation suite; the two together cover both layers.
 
 const MIGRATIONS_DIR = fileURLToPath(new URL('../../migrations', import.meta.url));
 
