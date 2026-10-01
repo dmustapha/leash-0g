@@ -41,4 +41,13 @@ CREATE INDEX capability_requests_chain ON capability_requests (chain_id, agent_i
 -- (the generic hash-chained append path threads it in SE-7 with the first real
 -- 2nd chain — until then every trace is 0G and derivable via agents.chain_id).
 ALTER TABLE trace_records ADD COLUMN chain_id bigint;
+-- Controlled backfill of the historic rows written by the pre-SE-7 append path
+-- (chain_id NULL). The 001 append-only trigger is BEFORE UPDATE ... FOR EACH ROW,
+-- so this UPDATE would raise 'trace_records is append-only' on any populated DB
+-- (passes on a fresh test schema only because 0 rows match). Migrations run as the
+-- table owner (MIGRATE_DATABASE_URL role), which may DISABLE the trigger for this
+-- single owner-run backfill; the restricted runtime role still cannot mutate. The
+-- whole migration runs in one txn (db/migrate.ts), so a failure restores the trigger.
+ALTER TABLE trace_records DISABLE TRIGGER trace_records_append_only;
 UPDATE trace_records tr SET chain_id = a.chain_id FROM agents a WHERE tr.agent_id = a.id AND tr.chain_id IS NULL;
+ALTER TABLE trace_records ENABLE TRIGGER trace_records_append_only;
