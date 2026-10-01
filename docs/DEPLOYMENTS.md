@@ -264,3 +264,25 @@ codehash exactly (`backend/scripts/se-close-deploy-factory.ts`, idempotent).
   allowlists). The prior SE-8 value (`0x3f15B3E8…5036`) is superseded.
 - **Per-chain AgentRegistry (all resolve live):** 0G `0xA74d573F…642C3` · Base `0x820f23B9…4857` ·
   Arb `0xca4c00bb…a23a` · Eth Sepolia `0xB8191023…3Ca8`.
+
+## Stage E — PROD DEPLOY (merge→main + Render flip, LIVE 2026-10-01)
+Master re-gate chat. `stage-d-governed-calldata` merged to `main` (fast-forward) and pushed; Render
+service **`leash-0g-backend` (`srv-dao4q9jtqb8s73dt96b0`)** auto-deployed the 4-chain governed code.
+- **Live deploy:** `c5c1808` (commit `Stage E (DEPLOY): fast-listen boot + startup phase instrumentation`).
+  `/healthz` 200; `schema_migrations` → `024`; chain registry resolves all 4 chains at runtime.
+- **Env flip:** 37 vars (atomic `PUT /v1/services/.../env-vars`) — 21 preserved byte-identical (incl.
+  secrets + `MIGRATE_DATABASE_URL`/`HOST`) + 16 chain-table additions; `PORT` excluded (Render injects
+  10000). `LEASH_FACTORY_V4_ADDR=0x9C10b48…E46f` now live in prod. Prior value backed up pre-PUT.
+- **Deploy blocker #1 — migration append-only (fixed):** mig 020/024 backfill `UPDATE trace_records
+  SET chain_id` tripped the 001 `FOR EACH ROW` append-only trigger on the **812 real prod rows**
+  (passed on the empty CI schema). Fix: wrap the owner-run (`neondb_owner`) backfill in
+  `ALTER TABLE … DISABLE/ENABLE TRIGGER trace_records_append_only` (runtime role still can't mutate) +
+  regression test `test/integration/migration-trace-backfill.test.ts`. Post-deploy: **812 rows, 0 null
+  chain_id**, `chain_id NOT NULL` holds.
+- **Deploy blocker #2 — cold-start port timeout (fixed):** `await runtime.sweepResumableOneShots()`
+  made a blocking chain round-trip BEFORE `listen()`, exceeding Render's ~60s port-scan deadline
+  (3 deploys killed with no bound port). Fix: **fast-listen** — bind owner+gateway ports immediately
+  after the apps are built; move batchers/revoke-watcher/sweeper/one-shot re-drive to after `listen()`.
+  Added `[boot +Xs]` phase logging. **Prod cold start now ~4.5s** (migrations 3.4s, co-located Neon).
+- Prod remained on the old single-chain code (deploy `dep-dav8p3l9…`, commit `7f1ced9`) and healthy
+  throughout all failed attempts — zero downtime, zero data loss.

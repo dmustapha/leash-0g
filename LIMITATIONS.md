@@ -71,3 +71,10 @@ LEASH is a work-in-progress research project. This is an honest scope boundary: 
 
 - The owner UX is functional and improving; some flows (token-policy post-create edits, richer analytics) are still being built out.
 - This is an evolving codebase with a living README; treat any single snapshot as a point on the roadmap, not a finished product.
+
+- **SE-10 cosmetic carries (Stage-E close, non-blocking; master Gate-② PASS-WITH-CARRIES).**
+  (1) `registryAddr` / `SEPOLIA_CAP_*` / `canonical` config values are not lowercased in
+  `buildChainConfigs` (harmless — these are compared/stored as given, not used as map keys);
+  (2) the `EXTRA_CHAINS` `>32`-entry upper bound is enforced but untested; (3)
+  `ARB_PROTOCOL_ALLOWLIST` parsing duplicates `parseAddressList` instead of reusing it.
+  All three are cosmetic (no behavior/security impact) and deferred past Stage-E close.
