@@ -34,10 +34,24 @@ const SEL_ETH = toFunctionSelector('function bridgeETHTo(address,uint32,bytes)')
 const SEL_ERC20 = toFunctionSelector(
   'function bridgeERC20To(address,address,address,uint256,uint32,bytes)',
 ).toLowerCase();
+// SE-9 Arbitrum divergent bridge family
+const SEL_ARB_OUTBOUND = toFunctionSelector('function outboundTransfer(address,address,uint256,bytes)').toLowerCase();
+const SEL_ARB_WITHDRAW_ETH = toFunctionSelector('function withdrawEth(address)').toLowerCase();
 
 const enc = (fn: string, args: readonly unknown[]): string =>
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   encodeFunctionData({ abi: bridgeAbi as any, functionName: fn as any, args: args as any });
+
+const arbAbi = parseAbi([
+  'function outboundTransfer(address l1Token, address to, uint256 amount, bytes data)',
+  'function withdrawEth(address destination)',
+]);
+const encArb = (fn: string, args: readonly unknown[]): string =>
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  encodeFunctionData({ abi: arbAbi as any, functionName: fn as any, args: args as any });
+const ARB_ROUTER = '0x' + 'a7'.repeat(20); // L2 GatewayRouter
+const ARB_SYS = '0x0000000000000000000000000000000000000064'; // ArbSys precompile
+const L1TOKEN = '0x' + 'e1'.repeat(20);
 
 function rule(target: string, selector: string, over: Partial<CallRule> = {}): CallRule {
   return {
@@ -206,7 +220,58 @@ describe('SE-8 buildGovernedCall — never-guess-money bridge build', () => {
     expect(built).toEqual({ ok: false, reason: 'no_grant' });
   });
 
-  it('BRIDGE_SELECTORS carries exactly the two structured bridge decoders', () => {
-    expect([...BRIDGE_SELECTORS].sort()).toEqual([SEL_ERC20, SEL_ETH].sort());
+  it('BRIDGE_SELECTORS carries exactly the structured bridge decoders (OP-stack + SE-9 Arbitrum)', () => {
+    expect([...BRIDGE_SELECTORS].sort()).toEqual(
+      [SEL_ERC20, SEL_ETH, SEL_ARB_OUTBOUND, SEL_ARB_WITHDRAW_ETH].sort(),
+    );
+  });
+});
+
+describe('SE-9 Arbitrum divergent bridge family — off-chain mirror parity', () => {
+  it('outboundTransfer canonical: l1Token is the budget key (arg0), recipient=arg1, amount=arg2', () => {
+    const d = decodeCall(ARB_ROUTER, 0n, encArb('outboundTransfer', [L1TOKEN, SELF, 777n, '0x']));
+    expect(d.reject).toBeUndefined();
+    expect(d.args.recipients).toEqual([SELF.toLowerCase()]);
+    expect(d.args.amount).toBe(777n);
+    // the l1Token (arg0) IS the budget key for the Arbitrum family (divergent from OP-stack)
+    expect(d.args.spendToken).toBe(L1TOKEN.toLowerCase());
+  });
+
+  it('outboundTransfer non-empty data → DecodeMismatch (payload surface closed)', () => {
+    expect(decodeCall(ARB_ROUTER, 0n, encArb('outboundTransfer', [L1TOKEN, SELF, 1n, '0x01'])).reject).toBe(
+      'DecodeMismatch',
+    );
+  });
+
+  it('outboundTransfer with riding value → DecodeMismatch (nonpayable)', () => {
+    expect(decodeCall(ARB_ROUTER, 1n, encArb('outboundTransfer', [L1TOKEN, SELF, 1n, '0x'])).reject).toBe(
+      'DecodeMismatch',
+    );
+  });
+
+  it('withdrawEth canonical: single-arg recipient, amount = msg.value, native budget', () => {
+    const d = decodeCall(ARB_SYS, 500n, encArb('withdrawEth', [SELF]));
+    expect(d.reject).toBeUndefined();
+    expect(d.args.recipients).toEqual([SELF.toLowerCase()]);
+    expect(d.args.amount).toBe(500n);
+    expect(d.args.spendToken).toBe(ZERO);
+  });
+
+  it('classify: an Arbitrum bridge redirect to a non-self recipient is never in-envelope', () => {
+    const g = grant([rule(ARB_ROUTER, SEL_ARB_OUTBOUND)], {
+      budgets: [[L1TOKEN, '2000000000000000000']],
+      bridgeTargets: [ARB_ROUTER],
+    });
+    const redirect = decodeCall(ARB_ROUTER, 0n, encArb('outboundTransfer', [L1TOKEN, ATTACKER, 1n, '0x']));
+    // bridge recipient must be self regardless of rule mode → new_recipient (L2), never L1
+    expect(classify(redirect, g, SELF).lane).not.toBe('l1');
+    const happy = decodeCall(ARB_ROUTER, 0n, encArb('outboundTransfer', [L1TOKEN, SELF, 1n, '0x']));
+    expect(classify(happy, g, SELF).lane).toBe('l1');
+  });
+
+  it('classify: an Arbitrum bridge selector on a NON-bridge-allowlisted target is forbidden (BR-2)', () => {
+    const g = grant([rule(ARB_ROUTER, SEL_ARB_OUTBOUND)], { budgets: [[L1TOKEN, '1000']] }); // no bridgeTargets
+    const d = decodeCall(ARB_ROUTER, 0n, encArb('outboundTransfer', [L1TOKEN, SELF, 1n, '0x']));
+    expect(classify(d, g, SELF)).toMatchObject({ lane: 'forbidden', reason: 'bridge_not_allowlisted' });
   });
 });

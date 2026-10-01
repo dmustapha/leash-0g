@@ -2,6 +2,21 @@
 
 LEASH is built in phases, each ending in a scope + build review gate and proven on the 0G Galileo testnet (chain 16602) before the next begins. This log tracks those phases.
 
+## Stage E — Multichain (2026-10)
+
+- One agent, one address, many chains: the governed account is deployed at the SAME CREATE2 address on every home chain (0G Galileo 16602, Base Sepolia 84532, Arbitrum Sepolia 421614, Ethereum Sepolia 11155111) via the canonical CREATE2 deployer — identical wall bytecode, verified codehash-identical on all four.
+- Governance proven chain-agnostic: the same classify→gate→wall spine enforces real protocols on Base (Uniswap SwapRouter02, Permit2, Aave v3 via ERC-4626) and two divergent bridge families (OP-stack `bridgeETHTo`/`bridgeERC20To`, Arbitrum GatewayRouter `outboundTransfer`/ArbSys `withdrawEth`) — each new family is a decoder + config, not a new enforcement path.
+- Adding a chain is config, not code: a generic `EXTRA_CHAINS` table onboards further testnets as pure configuration; unregistered chains are default-denied (E-11), and a testnet-only boot guard + duplicate-chain guard run over the full chain table so no mainnet can be smuggled in.
+- Cross-chain safety: bridge recipients are hard-pinned to the account's own same-address self on every leg and lane, destination chain-ids are cross-checked, and the one-shot rail's call-hash is bound to `block.chainid` so a consumed grant cannot replay on another chain.
+- Final deterministic factory `0x9C10b48748Da1cA0CEE5AD7DA0725490A7d5E46f` (codehash `0x4771f057…f325`) live on all four home chains; per-chain AgentRegistry deployed per chain.
+
+## Stage D — Governed calldata (2026-09)
+
+- A third execution path beyond native transfers: agents may call allowlisted contract functions, but every call is decoded and bounded on-chain by a structured wall (`LeashAccountV4`) — selector + target + spender allowlists, per-call and per-window caps, per-token budgets, recipient-self pinning, and no infinite approvals.
+- Never-guess-money: authority arguments (spender, recipient, amount ceilings) are pinned from the owner's on-chain grant state, never from model text; the runtime builds the call from server-held grant state.
+- Just-in-time capability rail: an agent's novel over-envelope call is quarantined and raised to the owner, who can approve-once (a consumable one-shot grant) or always-allow (a standing on-chain rule) — both enforced by the contract, not the backend.
+- Proven on-chain with an adversarial drill: happy governed `approve`/`deposit` land; `approve(max)`, off-allowlist spender/target, over-cap, and recipient-redirect all revert at the true boundary (selector-anchored) on a live testnet.
+
 ## Phase 5.6 — Agent chaining across capabilities (2026-09)
 
 - Direct one of your agents to hand its result to another of your OWN agents: a confirmed directive can carry an owner-authored chain plan ("run my analyst, then hand the finding to my trader"), built in the same read-back, one confirm.

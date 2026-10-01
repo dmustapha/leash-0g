@@ -200,7 +200,7 @@ describe('raiseCapabilityRequest (D-8)', () => {
     expect(created).toBe(true);
     expect(request.status).toBe('pending');
     expect(request.approvalId).toBeTruthy();
-    expect(request.callHash).toBe(computeCallHash(TOKEN, 0n, data));
+    expect(request.callHash).toBe(computeCallHash(16602, TOKEN, 0n, data));
 
     // approval row exists + pending
     const approval = await getApproval(db.pool, nn(request.approvalId));

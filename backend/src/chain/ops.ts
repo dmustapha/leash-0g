@@ -95,6 +95,17 @@ export class LeashChainOps implements ChainOps {
     return this.opsAccount.address;
   }
 
+  /**
+   * SE-9 (L-02): the destination chain's SELF-REPORTED chain id (`eth_chainId`).
+   * The bridge pre-routing gate cross-checks this against the configured
+   * destination id so destination-RPC trust is self-verifying, not an
+   * operator-config boundary (a mis-pointed RPC can never silently route a bridge
+   * to the wrong chain).
+   */
+  async getChainId(): Promise<number> {
+    return this.publicClient.getChainId();
+  }
+
   get guardianAddress(): string {
     return this.guardianAccount.address;
   }

@@ -39,6 +39,8 @@ export function plainOnboardRefusal(reason: string | undefined): string {
 const EXPLORER_TX_PREFIX: Record<number, string> = {
   [config.chainId]: 'https://chainscan-galileo.0g.ai/tx/', // 0G Galileo (home)
   84532: 'https://sepolia.basescan.org/tx/', // Base Sepolia
+  11155111: 'https://sepolia.etherscan.io/tx/', // Ethereum Sepolia (bridge destination)
+  421614: 'https://sepolia.arbiscan.io/tx/', // Arbitrum Sepolia (SE-9)
 };
 
 /** Explorer link for a tx on `chainId`, or null when no explorer is known for that chain. */

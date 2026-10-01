@@ -182,3 +182,85 @@ governed-calldata wall drilled against REAL deployed protocols (nothing mocked).
 - **E-8 drill:** `backend/scripts/deployed-winddown-drill.mjs` (live Render stack) — wind-down
   mid-chain terminates the chain + cancels the in-flight hop; stale approve cannot resurrect.
   Evidence: `docs/evidence/stage-e-winddown-drill.json`.
+
+## Stage E — SE-8 governed bridging (2026-09-30)
+Governed cross-chain bridging live: the V4 wall gains the OP-stack bridge structured decoders
+(BR-2) — a CONTRACT change, so the deterministic factory redeployed (new bytecode → new CREATE2
+address, same on every chain via the canonical deployer `0x4e59b448…956C`). Ops/deployer
+`0xc211C942946011859ca634F22400d80570ED12A5`.
+- **LeashAccountV4FactoryDeterministic (FINAL SE-8 bytecode, incl. E-12 fixes):**
+  `0x9581fe7BeaA62ba0a4e2C089EdA89cD67D937368` — SAME address on 0G Galileo (16602), Base
+  Sepolia (84532) and Ethereum Sepolia (11155111). BR-1 config swap: `LEASH_FACTORY_V4_ADDR`
+  updated in backend/.env (set the same in Render at the Stage-E deploy). The two interim SE-8
+  factories (`0xb5294B428a98567B1219e89A1A1e020174320B7a` pre-E-12-fix, and the pre-SE-8
+  `0xa0249c5808E8F3b31d406d1eF6492B4508014dA0`) remain on-chain but are no longer configured;
+  accounts minted through them lack the (final) bridge decoders.
+- **AgentRegistry (Ethereum Sepolia, per-chain shape — SD-E10):**
+  `0xB8191023378a12ae89DB1D5e59d8a2f75d0B3Ca8` — deploy tx
+  `0x9a44098522de81b3aecd653acfbd26be734990aa770f016a9fa98387ebdb122a`. Sepolia is registered as
+  the bridge DESTINATION chain (same-address verification substrate), not yet a full governed
+  chain (that is SE-10).
+- **Bridge policy (config-only):** `BASE_BRIDGE_ALLOWLIST=0x4200000000000000000000000000000000000010:11155111`
+  (the REAL OP-stack L2StandardBridge predeploy on Base Sepolia → Ethereum Sepolia) +
+  `ETHEREUM_SEPOLIA_RPC` + `AGENT_REGISTRY_SEPOLIA_ADDR` staged in backend/.env (mirror in Render).
+- **E-9 drill:** `backend/scripts/se8-bridge-drill.ts` — 2× GREEN 15/15 on the final bytecode:
+  same (owner,salt) account minted on Base AND Sepolia at one address; production pre-routing gate
+  (`assertBridgeRoutable` → `assertSameAddress`) PASS; governed `bridgeETHTo(self)` LANDS on the
+  real L2StandardBridge; over-cap/redirect/extraData/off-allowlist REVERT selector-anchored; a real
+  redirect tx confirmed status 0; off-allowlist / mutated-tuple / unregistered-destination REFUSED
+  typed. Evidence: `docs/evidence/stage-e-bridge-drill.json` (runs history).
+- **Carry #4 live loop:** `backend/test/integration/se8-base-home-runtime-deployed.test.ts`
+  (RUN_DEPLOYED_DRILL=1) — a Base-home agent's full sense→decide→gate→act cycle 2× live on the
+  final bytecode.
+
+## Stage E — SE-9 Arbitrum divergent bridge family (2026-10-01)
+Governance proven CHAIN-AGNOSTIC: a SECOND bridge family (Arbitrum GatewayRouter `outboundTransfer`
+0x7b3a3c8b + ArbSys `withdrawEth` 0x25e16063) runs through the same wall spine with only a new decoder
++ config. A CONTRACT change (new decoders + the L-01 `bridgeRemoteToken` pin + carry-#4 `block.chainid`
+callHash), and `via_ir=true` was enabled (EIP-170 headroom) → the deterministic factory REDEPLOYS at a
+new SAME-address value (BR-1 config swap). SD-E12 (`~/0g-fleet/docs/07`).
+- **LeashAccountV4FactoryDeterministic (FINAL SE-9 bytecode) — DEPLOYED + `cast`-CONFIRMED (2026-10-01):**
+  `0x9C10b48748Da1cA0CEE5AD7DA0725490A7d5E46f` — the SAME CREATE2 address (canonical deployer
+  `0x4e59b448…956C`, salt `keccak256("LEASH-V4-DETERMINISTIC-FACTORY-v1")`, size 19218 < 24576).
+  **Live on Arbitrum Sepolia** (tx `0xeaf1800c…`) **and Ethereum Sepolia** (tx `0x5e9ce407…`); factory
+  codehash `0x4771f0574001ae3435299d296f76e60546fe5de413940aab18e8a6faf904f325` **IDENTICAL on both**
+  (and the minted account wall codehash `0xdfe935d6…da89` identical on both). Set `LEASH_FACTORY_V4_ADDR`
+  to this at Stage-E close + redeploy to 0G/Base (same CREATE2 address) before flipping Render.
+- **AgentRegistry (Arbitrum Sepolia, per-chain SD-E10 shape):** `0xca4c00bb3ebf449dcd9378ae64c730801973a23a`
+  — deploy tx `0x87cab372…`. Arbitrum (421614) is now a full governed chain (not destination-only).
+- **Arbitrum Sepolia (421614)** onboarded CONFIG-only (SE-5 seam) — staged in `backend/.env`:
+  `ARBITRUM_SEPOLIA_RPC=https://sepolia-rollup.arbitrum.io/rpc` (chainId 0x66eee) ·
+  `ARB_BRIDGE_ALLOWLIST=0x9fDD1C4E4AA24EEc1d913FABea925594a20d43C7:11155111` (L2 GatewayRouter → Eth
+  Sepolia) · `ARB_L2_ERC20_GATEWAY=0xCFB1f08A4852699a979909e22c30263ca249556D` (WETH gateway = approve
+  spender) · `ARB_CAP_BRIDGE_TOKEN_L2=0x980B62Da83eFf3D4576C647993b0c1D7faf17c73` (aeWETH, the token
+  that moves) · `ARB_CAP_BRIDGE_TOKEN_L1=0x7b79995e5f793A07Bc00c21412e50Ecae098E7f9` (Sepolia WETH =
+  `outboundTransfer` arg0). Gas was bridged L1→L2 via `Inbox.depositEth` (`0xaAe29B03…ae21`, L1 tx
+  `0x7603c63e…`); test token via aeWETH `deposit()` (`0x91c90a98…`).
+- **E-10 drill:** `backend/scripts/se9-bridge-drill.ts` — **GREEN 17/17 (0 fail / 0 flake), LIVE
+  2026-10-01.** Same-address account `0xb46829e4ee297c9C4b4A4A354CEC6358d273245c` minted on BOTH chains;
+  production pre-routing gate (incl. the SE-9 L-02 `eth_chainId` cross-check) PASS; the LIVE governed
+  ERC-20 bridge `approve(gateway)` → `outboundTransfer(l1WETH, self, 100000)` **LANDED on the real
+  Arbitrum GatewayRouter** (tx `0xc1dc5391…`, status 1 — carry #3 closed); malicious matrix REVERTED
+  selector-anchored (OverPerCallCap · RecipientNotSelf · DecodeMismatch×2 · TargetNotAllowlisted) + a
+  **real redirect tx confirmed status 0** (`0xe813a5b6…`); all four gate refusals typed incl.
+  `destination_chainid_mismatch` (L-02). Evidence → `docs/evidence/stage-e-se9-bridge-drill.json`.
+
+## Stage E — CLOSE: final factory deployed to ALL four home chains (2026-10-01)
+Stage-E DEPLOY REVIEW + merge-to-main. The final SE-9 deterministic factory is now live at the
+SAME CREATE2 address on every home chain. Deployer/ops `0xc211C942946011859ca634F22400d80570ED12A5`,
+canonical CREATE2 deployer `0x4e59b44847b379578588920cA78FbF26c0B4956C`, salt
+`keccak256("LEASH-V4-DETERMINISTIC-FACTORY-v1")`. The freshly-built artifact reproduces the address +
+codehash exactly (`backend/scripts/se-close-deploy-factory.ts`, idempotent).
+- **LeashAccountV4FactoryDeterministic (FINAL):** `0x9C10b48748Da1cA0CEE5AD7DA0725490A7d5E46f`
+  - runtime codehash `0x4771f0574001ae3435299d296f76e60546fe5de413940aab18e8a6faf904f325` — **`cast`-CONFIRMED
+    IDENTICAL on all four home chains:**
+    - 0G Galileo **16602** — deploy tx `0x5f477442bbf91e5b11facc949b4d2af65bf5c5aa1996d10963905eb088d6f1c4` (this close)
+    - Base Sepolia **84532** — deploy tx `0xf02f606d0937ece035f5218b3b8ef927f1d4bded9c9f8eed258b6a185e146a0a` (this close)
+    - Arbitrum Sepolia **421614** — SE-9 (tx `0xeaf1800c…`)
+    - Ethereum Sepolia **11155111** — SE-9 (tx `0x5e9ce407…`)
+- **BR-1 config swap applied:** `LEASH_FACTORY_V4_ADDR=0x9C10b48748Da1cA0CEE5AD7DA0725490A7d5E46f`
+  in `backend/.env` AND mirrored into the Render env along with the full Stage-D/E chain table
+  (Base/Arb/Eth RPCs + per-chain AgentRegistry + Base/Arb capability catalog + bridge/protocol
+  allowlists). The prior SE-8 value (`0x3f15B3E8…5036`) is superseded.
+- **Per-chain AgentRegistry (all resolve live):** 0G `0xA74d573F…642C3` · Base `0x820f23B9…4857` ·
+  Arb `0xca4c00bb…a23a` · Eth Sepolia `0xB8191023…3Ca8`.

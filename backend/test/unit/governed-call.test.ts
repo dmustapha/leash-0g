@@ -260,19 +260,23 @@ describe('expandPreset — the broad-grant UX', () => {
 // ---------- one-shot call hash (D-7) ----------
 describe('computeCallHash — deterministic, exact-call bound (D-7 replay guard)', () => {
   const data = enc(erc20, 'approve', [ROUTER, 100n]);
+  const CHAIN = 16602;
   it('is deterministic + 32 bytes', () => {
-    const h = computeCallHash(TOKEN, 0n, data);
+    const h = computeCallHash(CHAIN, TOKEN, 0n, data);
     expect(h).toMatch(/^0x[0-9a-f]{64}$/);
-    expect(computeCallHash(TOKEN, 0n, data)).toBe(h);
+    expect(computeCallHash(CHAIN, TOKEN, 0n, data)).toBe(h);
   });
   it('differs when target / value / any data byte changes (no cross-call replay)', () => {
-    const h = computeCallHash(TOKEN, 0n, data);
-    expect(computeCallHash(OTHER, 0n, data)).not.toBe(h);
-    expect(computeCallHash(TOKEN, 1n, data)).not.toBe(h);
-    expect(computeCallHash(TOKEN, 0n, enc(erc20, 'approve', [ROUTER, 101n]))).not.toBe(h);
+    const h = computeCallHash(CHAIN, TOKEN, 0n, data);
+    expect(computeCallHash(CHAIN, OTHER, 0n, data)).not.toBe(h);
+    expect(computeCallHash(CHAIN, TOKEN, 1n, data)).not.toBe(h);
+    expect(computeCallHash(CHAIN, TOKEN, 0n, enc(erc20, 'approve', [ROUTER, 101n]))).not.toBe(h);
+  });
+  it('SE-9 carry #4: differs by chainId (no cross-chain one-shot replay)', () => {
+    expect(computeCallHash(84532, TOKEN, 0n, data)).not.toBe(computeCallHash(421614, TOKEN, 0n, data));
   });
   it('malformed data does not throw', () => {
-    expect(() => computeCallHash(TOKEN, 0n, '0x')).not.toThrow();
+    expect(() => computeCallHash(CHAIN, TOKEN, 0n, '0x')).not.toThrow();
   });
 });
 

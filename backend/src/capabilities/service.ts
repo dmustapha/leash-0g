@@ -123,7 +123,7 @@ export async function raiseCapabilityRequest(
   }
   const novelty: Novelty[] = gate.classification.novelty;
   const d = gate.decoded;
-  const callHash = computeCallHash(d.target, d.value, d.data);
+  const callHash = computeCallHash(agent.chainId, d.target, d.value, d.data);
 
   // Quarantined, sanitized, inert intent — the on-chain wall never trusts this.
   const decoded: Json = {

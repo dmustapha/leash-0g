@@ -92,7 +92,7 @@ export async function consumeOneShot(
   const data = req.callData;
 
   // 3. Integrity: the stored bytes must reproduce the authorized callHash (D-7).
-  if (computeCallHash(target, value, data).toLowerCase() !== req.callHash.toLowerCase()) {
+  if (computeCallHash(req.chainId, target, value, data).toLowerCase() !== req.callHash.toLowerCase()) {
     return standDown('call bytes do not reproduce the authorized one-shot hash');
   }
 

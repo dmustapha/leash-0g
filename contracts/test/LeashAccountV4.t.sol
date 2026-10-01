@@ -7,6 +7,7 @@ import {MockERC20} from "../src/MockERC20.sol";
 import {MockRouter} from "../src/MockRouter.sol";
 import {MockVault} from "../src/MockVault.sol";
 import {MockBridge} from "../src/MockBridge.sol";
+import {MockGatewayRouter, MockArbSys} from "../src/MockArbitrumBridge.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /// A token whose transfer returns false without reverting (fake-success, H-05).
@@ -24,6 +25,9 @@ contract LeashAccountV4Test is Test {
     MockRouter internal router;
     MockVault internal vault;
     MockBridge internal bridge;
+    MockGatewayRouter internal arbRouter; // SE-9 Arbitrum ERC-20 withdrawal target
+    MockArbSys internal arbSys; // SE-9 Arbitrum ETH withdrawal target
+    address internal l1Token = makeAddr("l1Token"); // the Arbitrum remote (L1) token
 
     address internal owner = makeAddr("owner");
     address internal guardian = makeAddr("guardian");
@@ -45,6 +49,8 @@ contract LeashAccountV4Test is Test {
     bytes4 constant SEL_DEPOSIT = MockVault.deposit.selector;
     bytes4 constant SEL_BRIDGE_ETH_TO = MockBridge.bridgeETHTo.selector;
     bytes4 constant SEL_BRIDGE_ERC20_TO = MockBridge.bridgeERC20To.selector;
+    bytes4 constant SEL_OUTBOUND_TRANSFER = MockGatewayRouter.outboundTransfer.selector;
+    bytes4 constant SEL_WITHDRAW_ETH = MockArbSys.withdrawEth.selector;
 
     function _policy() internal view returns (LeashAccountV4.Policy memory) {
         return LeashAccountV4.Policy({
@@ -62,6 +68,8 @@ contract LeashAccountV4Test is Test {
         router = new MockRouter();
         vault = new MockVault(IERC20(address(usd)));
         bridge = new MockBridge();
+        arbRouter = new MockGatewayRouter(IERC20(address(usd))); // pulls the L2 token (usd)
+        arbSys = new MockArbSys();
 
         address[] memory list = new address[](1);
         list[0] = dest;
@@ -100,6 +108,15 @@ contract LeashAccountV4Test is Test {
         vm.warp(block.timestamp + DELAY);
         vm.prank(owner);
         acct.applySpendBudget();
+    }
+
+    // SE-9 (L-01): pin the owner-expected L1 remote token for an OP-stack localToken.
+    function _grantRemoteToken(address localToken, address remoteToken) internal {
+        vm.prank(owner);
+        acct.proposeBridgeRemoteToken(localToken, remoteToken);
+        vm.warp(block.timestamp + DELAY);
+        vm.prank(owner);
+        acct.applyBridgeRemoteToken();
     }
 
     function _approveData(address sp, uint256 amt) internal pure returns (bytes memory) {
@@ -410,6 +427,7 @@ contract LeashAccountV4Test is Test {
         // E-12 M-01: the ERC-20 bridge leg charges the LOCAL TOKEN's budget (unit-correct).
         _grantBudget(address(usd), tokenBudget);
         _grantRule(address(bridge), SEL_BRIDGE_ERC20_TO, 0, new address[](0), perCall, tokenBudget);
+        _grantRemoteToken(address(usd), address(0xBEEF)); // L-01: pin remoteToken used by _bridgeErc20Data
     }
 
     function test_bridgeEthTo_self_inCap_lands() public {
@@ -485,6 +503,7 @@ contract LeashAccountV4Test is Test {
         _grantBudget(address(usd), 500e6);
         _grantRule(address(usd), SEL_APPROVE, 0, _spenders(address(bridge)), 200e6, 1_000e6);
         _grantRule(address(bridge), SEL_BRIDGE_ERC20_TO, 0, new address[](0), 200e6, 400e6);
+        _grantRemoteToken(address(usd), address(0xBEEF));
         vm.startPrank(session);
         acct.executeCall(address(usd), 0, _approveData(address(bridge), 100e6));
         acct.executeCall(address(bridge), 0, _bridgeErc20Data(address(usd), address(acct), 100e6));
@@ -517,6 +536,7 @@ contract LeashAccountV4Test is Test {
         _grantBudget(address(usd), 500e6);
         _grantRule(address(usd), SEL_APPROVE, 0, _spenders(address(bridge)), 200e6, 1_000e6);
         _grantRule(address(bridge), SEL_BRIDGE_ERC20_TO, 0, new address[](0), 200e6, 1_000e6);
+        _grantRemoteToken(address(usd), address(0xBEEF));
         vm.startPrank(session);
         acct.executeCall(address(usd), 0, _approveData(address(bridge), 200e6));
         acct.executeCall(address(bridge), 0, _bridgeErc20Data(address(usd), address(acct), 200e6));
@@ -573,6 +593,213 @@ contract LeashAccountV4Test is Test {
         vm.prank(session);
         acct.executeCall(address(bridge), 0.25 ether, _bridgeEthData(address(acct)));
         assertEq(bridge.ethBridged(address(acct)), 0.25 ether);
+    }
+
+    // ===== SE-9 (E-10, L-01): the OP-stack remote-token pin, explicit =====
+
+    function test_bridgeErc20To_unpinnedRemoteToken_reverts() public {
+        // budget + rule granted, but NO remote-token pin → the leg is refused.
+        _grantBudget(address(usd), 400e6);
+        _grantRule(address(bridge), SEL_BRIDGE_ERC20_TO, 0, new address[](0), 200e6, 400e6);
+        vm.prank(session);
+        vm.expectRevert(abi.encodeWithSelector(LeashAccountV4.RemoteTokenNotPinned.selector, address(usd)));
+        acct.executeCall(address(bridge), 0, _bridgeErc20Data(address(usd), address(acct), 100e6));
+    }
+
+    function test_bridgeErc20To_wrongRemoteToken_reverts() public {
+        _grantBudget(address(usd), 400e6);
+        _grantRule(address(bridge), SEL_BRIDGE_ERC20_TO, 0, new address[](0), 200e6, 400e6);
+        _grantRemoteToken(address(usd), makeAddr("correctRemote")); // pinned to a DIFFERENT L1 token
+        vm.prank(session);
+        // _bridgeErc20Data passes remoteToken = 0xBEEF ≠ the pinned correctRemote
+        vm.expectRevert(
+            abi.encodeWithSelector(LeashAccountV4.RemoteTokenMismatch.selector, makeAddr("correctRemote"), address(0xBEEF))
+        );
+        acct.executeCall(address(bridge), 0, _bridgeErc20Data(address(usd), address(acct), 100e6));
+    }
+
+    function test_removeBridgeRemoteToken_instant_disablesLeg() public {
+        _grantErc20Bridge(200e6, 400e6); // pins usd → 0xBEEF
+        vm.prank(owner);
+        acct.removeBridgeRemoteToken(address(usd));
+        vm.prank(session);
+        vm.expectRevert(abi.encodeWithSelector(LeashAccountV4.RemoteTokenNotPinned.selector, address(usd)));
+        acct.executeCall(address(bridge), 0, _bridgeErc20Data(address(usd), address(acct), 100e6));
+    }
+
+    // ================= SE-9 (E-10): Arbitrum DIVERGENT bridge family =================
+    // Proves chain-agnostic governance: a 2nd bridge FAMILY (Inbox/GatewayRouter,
+    // NOT OP-stack) runs through the SAME wall spine with only a new decoder branch.
+
+    function _outboundData(address l1Tok, address to, uint256 amount) internal pure returns (bytes memory) {
+        return abi.encodeWithSelector(SEL_OUTBOUND_TRANSFER, l1Tok, to, amount, bytes(""));
+    }
+
+    function _withdrawEthData(address to) internal pure returns (bytes memory) {
+        return abi.encodeWithSelector(SEL_WITHDRAW_ETH, to);
+    }
+
+    // ---- Arbitrum ERC-20 (outboundTransfer) — the LIVE leg family (carry #3) ----
+
+    function test_arb_outboundTransfer_self_inCap_lands_andChargesL1TokenBudget() public {
+        // the bridge leg charges the l1Token-keyed budget; the enabling approve leg
+        // charges the L2 token (usd) budget — divergent key, same governance.
+        _grantBudget(address(usd), 500e6); // approve leg (L2 token)
+        _grantBudget(l1Token, 400e6); // bridge leg (remote/L1 token key)
+        _grantRule(address(usd), SEL_APPROVE, 0, _spenders(address(arbRouter)), 200e6, 1_000e6);
+        _grantRule(address(arbRouter), SEL_OUTBOUND_TRANSFER, 0, new address[](0), 200e6, 400e6);
+        vm.startPrank(session);
+        acct.executeCall(address(usd), 0, _approveData(address(arbRouter), 100e6));
+        acct.executeCall(address(arbRouter), 0, _outboundData(l1Token, address(acct), 100e6));
+        vm.stopPrank();
+        assertEq(arbRouter.outbound(address(acct)), 100e6);
+        (,, uint128 spentL1,) = acct.spendBudget(l1Token);
+        assertEq(spentL1, 100e6, "bridge leg debits the l1Token budget");
+        (,, uint128 spentUsd,) = acct.spendBudget(address(usd));
+        assertEq(spentUsd, 100e6, "approve leg debits the L2 token budget");
+    }
+
+    function _grantArbErc20(uint128 perCall, uint128 budget) internal {
+        _grantBudget(l1Token, budget);
+        _grantRule(address(arbRouter), SEL_OUTBOUND_TRANSFER, 0, new address[](0), perCall, budget);
+    }
+
+    function test_arb_outboundTransfer_redirect_reverts_recipientNotSelf() public {
+        _grantArbErc20(200e6, 400e6);
+        vm.prank(session);
+        vm.expectRevert(abi.encodeWithSelector(LeashAccountV4.RecipientNotSelf.selector, rando));
+        acct.executeCall(address(arbRouter), 0, _outboundData(l1Token, rando, 100e6));
+    }
+
+    function test_arb_outboundTransfer_overPerCallCap_reverts() public {
+        _grantArbErc20(200e6, 400e6);
+        vm.prank(session);
+        vm.expectRevert(abi.encodeWithSelector(LeashAccountV4.OverPerCallCap.selector, 300e6, uint128(200e6)));
+        acct.executeCall(address(arbRouter), 0, _outboundData(l1Token, address(acct), 300e6));
+    }
+
+    function test_arb_outboundTransfer_offAllowlistTarget_reverts() public {
+        vm.prank(session);
+        vm.expectRevert(abi.encodeWithSelector(LeashAccountV4.TargetNotAllowlisted.selector, address(arbRouter)));
+        acct.executeCall(address(arbRouter), 0, _outboundData(l1Token, address(acct), 100e6));
+    }
+
+    function test_arb_outboundTransfer_valueRides_reverts_decodeMismatch() public {
+        _grantArbErc20(200e6, 400e6);
+        vm.prank(session);
+        vm.expectRevert(LeashAccountV4.DecodeMismatch.selector); // nonpayable
+        acct.executeCall(address(arbRouter), 1 wei, _outboundData(l1Token, address(acct), 100e6));
+    }
+
+    function test_arb_outboundTransfer_nonEmptyData_reverts_decodeMismatch() public {
+        _grantArbErc20(200e6, 400e6);
+        bytes memory data = abi.encodeWithSelector(SEL_OUTBOUND_TRANSFER, l1Token, address(acct), uint256(100e6), bytes(hex"dead"));
+        vm.prank(session);
+        vm.expectRevert(LeashAccountV4.DecodeMismatch.selector);
+        acct.executeCall(address(arbRouter), 0, data);
+    }
+
+    function test_arb_outboundTransfer_nonCanonicalOffset_reverts() public {
+        _grantArbErc20(200e6, 400e6);
+        bytes memory data = abi.encodePacked(
+            SEL_OUTBOUND_TRANSFER,
+            bytes32(uint256(uint160(l1Token))),
+            bytes32(uint256(uint160(address(acct)))),
+            bytes32(uint256(100e6)),
+            bytes32(uint256(0xA0)), // non-canonical data head offset (should be 0x80)
+            bytes32(0)
+        );
+        vm.prank(session);
+        vm.expectRevert(LeashAccountV4.DecodeMismatch.selector);
+        acct.executeCall(address(arbRouter), 0, data);
+    }
+
+    function test_arb_outboundTransfer_dirtyRecipientBits_reverts() public {
+        _grantArbErc20(200e6, 400e6);
+        bytes memory data = abi.encodePacked(
+            SEL_OUTBOUND_TRANSFER,
+            bytes32(uint256(uint160(l1Token))),
+            bytes32(uint256(uint160(address(acct))) | (uint256(1) << 160)), // dirty upper bits on `to`
+            bytes32(uint256(100e6)),
+            bytes32(uint256(0x80)),
+            bytes32(0)
+        );
+        vm.prank(session);
+        vm.expectRevert(LeashAccountV4.DecodeMismatch.selector);
+        acct.executeCall(address(arbRouter), 0, data);
+    }
+
+    function test_arb_outboundTransfer_unconfiguredToken_reverts_budgetNotSet() public {
+        // the l1Token budget key IS the Arbitrum-family remote-token pin: an
+        // unconfigured remote token reverts BudgetNotSet (never silently bridged).
+        address other = makeAddr("otherL1");
+        _grantArbErc20(200e6, 400e6); // budget set for l1Token, NOT `other`
+        vm.prank(session);
+        vm.expectRevert(abi.encodeWithSelector(LeashAccountV4.BudgetNotSet.selector, other));
+        acct.executeCall(address(arbRouter), 0, _outboundData(other, address(acct), 100e6));
+    }
+
+    // ---- Arbitrum ETH (withdrawEth) — single-arg, payable, maximally divergent ----
+
+    function test_arb_withdrawEth_self_inCap_lands() public {
+        _grantBudget(address(0), 2 ether);
+        _grantRule(address(arbSys), SEL_WITHDRAW_ETH, 0, new address[](0), 1 ether, 2 ether);
+        vm.prank(session);
+        acct.executeCall(address(arbSys), 0.5 ether, _withdrawEthData(address(acct)));
+        assertEq(arbSys.withdrawn(address(acct)), 0.5 ether);
+        (,, uint128 spent,) = acct.spendBudget(address(0));
+        assertEq(spent, 0.5 ether);
+    }
+
+    function test_arb_withdrawEth_redirect_reverts_recipientNotSelf() public {
+        _grantBudget(address(0), 2 ether);
+        _grantRule(address(arbSys), SEL_WITHDRAW_ETH, 0, new address[](0), 1 ether, 2 ether);
+        vm.prank(session);
+        vm.expectRevert(abi.encodeWithSelector(LeashAccountV4.RecipientNotSelf.selector, rando));
+        acct.executeCall(address(arbSys), 0.5 ether, _withdrawEthData(rando));
+    }
+
+    function test_arb_withdrawEth_overPerCallCap_reverts() public {
+        _grantBudget(address(0), 5 ether);
+        _grantRule(address(arbSys), SEL_WITHDRAW_ETH, 0, new address[](0), 1 ether, 5 ether);
+        vm.prank(session);
+        vm.expectRevert(abi.encodeWithSelector(LeashAccountV4.OverPerCallCap.selector, 2 ether, uint128(1 ether)));
+        acct.executeCall(address(arbSys), 2 ether, _withdrawEthData(address(acct)));
+    }
+
+    function test_arb_withdrawEth_extraArgBytes_reverts_decodeMismatch() public {
+        _grantBudget(address(0), 2 ether);
+        _grantRule(address(arbSys), SEL_WITHDRAW_ETH, 0, new address[](0), 1 ether, 2 ether);
+        // an extra trailing word → length != 4+32 → DecodeMismatch
+        bytes memory data = abi.encodePacked(SEL_WITHDRAW_ETH, bytes32(uint256(uint160(address(acct)))), bytes32(uint256(7)));
+        vm.prank(session);
+        vm.expectRevert(LeashAccountV4.DecodeMismatch.selector);
+        acct.executeCall(address(arbSys), 0.5 ether, data);
+    }
+
+    // ---- SE-9 carry #4: a BRIDGE one-shot is self-pinned ON-CHAIN too ----
+
+    function test_oneShot_bridgeRedirect_refused_onChain() public {
+        // Even an owner-signed one-shot for a bridge REDIRECT is refused by the wall:
+        // the one-shot lane re-runs the bridge recipient-self check (carry #4).
+        bytes memory data = _withdrawEthData(rando); // redirect to a non-self recipient
+        bytes32 h = _callHash(address(arbSys), data, 0.5 ether);
+        vm.prank(owner);
+        acct.authorizeOnce(h, uint64(block.timestamp + 1 hours));
+        vm.prank(session);
+        vm.expectRevert(abi.encodeWithSelector(LeashAccountV4.RecipientNotSelf.selector, rando));
+        acct.executeCall(address(arbSys), 0.5 ether, data);
+    }
+
+    function test_oneShot_bridgeToSelf_succeeds_viaOwnerLane() public {
+        // a self-pinned bridge one-shot is honored (no standing rule needed).
+        bytes memory data = _withdrawEthData(address(acct));
+        bytes32 h = _callHash(address(arbSys), data, 0.5 ether);
+        vm.prank(owner);
+        acct.authorizeOnce(h, uint64(block.timestamp + 1 hours));
+        vm.prank(session);
+        acct.executeCall(address(arbSys), 0.5 ether, data);
+        assertEq(arbSys.withdrawn(address(acct)), 0.5 ether);
     }
 
     // ================= D-6: grant timelock (loosen-timelocked / tighten-instant) =================
@@ -659,8 +886,9 @@ contract LeashAccountV4Test is Test {
 
     // ================= D-7: one-shot JIT (approve-once) =================
 
-    function _callHash(address target, bytes memory data, uint256 value) internal pure returns (bytes32) {
-        return keccak256(abi.encode(target, bytes4(data), data, value));
+    function _callHash(address target, bytes memory data, uint256 value) internal view returns (bytes32) {
+        // SE-9 carry #4: callHash binds block.chainid (cross-chain one-shot replay immunity).
+        return keccak256(abi.encode(block.chainid, target, bytes4(data), data, value));
     }
 
     function test_oneShot_exactCall_succeedsOnce_thenReverts() public {

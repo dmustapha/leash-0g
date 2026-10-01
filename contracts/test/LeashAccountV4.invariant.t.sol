@@ -166,30 +166,35 @@ contract LeashAccountV4InvariantTest is Test {
         usd.mint(address(acct), 1_000_000e6);
 
         // grant: a per-token budget + an approve rule (spender) + a transfer rule (mode 1, dest only).
+        // NOTE: time is tracked in an explicit local `t` rather than re-reading
+        // `block.timestamp` after each warp — under via-IR the TIMESTAMP opcode is
+        // CSE'd within one frame (sound: timestamp is constant inside a real tx; only
+        // the `vm.warp` cheatcode mutates it mid-frame), so a re-read would be stale.
+        uint256 t = block.timestamp;
         vm.startPrank(owner);
         acct.proposeSpendBudget(address(usd), BUDGET);
         acct.proposeCallRule(address(usd), 0x095ea7b3, 0, _one(spender), 100e6, 200e6, bytes32(0));
-        vm.warp(block.timestamp + 15 minutes);
+        vm.warp(t += 15 minutes);
         acct.applySpendBudget();
         acct.applyCallRule();
         acct.proposeCallRule(address(usd), 0xa9059cbb, 1, new address[](0), 100e6, 200e6, bytes32(0));
-        vm.warp(block.timestamp + 15 minutes);
+        vm.warp(t += 15 minutes);
         acct.applyCallRule();
         // deposit rule (recipientMode 0 = shares must be minted to self) + vault-keyed budget.
         acct.proposeSpendBudget(address(vault), BUDGET);
         acct.proposeCallRule(address(vault), 0x6e553f65, 0, new address[](0), 100e6, 200e6, bytes32(0));
-        vm.warp(block.timestamp + 15 minutes);
+        vm.warp(t += 15 minutes);
         acct.applySpendBudget();
         acct.applyCallRule();
         // SE-8 bridge rules (recipientMode 0 = self-only) + native + bridge-keyed budgets.
         acct.proposeSpendBudget(address(0), uint128(2 ether));
         acct.proposeCallRule(address(bridge), SEL_BRIDGE_ETH_TO, 0, new address[](0), uint128(1 ether), uint128(2 ether), bytes32(0));
-        vm.warp(block.timestamp + 15 minutes);
+        vm.warp(t += 15 minutes);
         acct.applySpendBudget();
         acct.applyCallRule();
         // M-01: the ERC-20 bridge leg debits the TOKEN (usd) budget — already granted above.
         acct.proposeCallRule(address(bridge), SEL_BRIDGE_ERC20_TO, 0, new address[](0), 100e6, 200e6, bytes32(0));
-        vm.warp(block.timestamp + 15 minutes);
+        vm.warp(t += 15 minutes);
         acct.applyCallRule();
         vm.stopPrank();
         vm.deal(address(acct), 100 ether);

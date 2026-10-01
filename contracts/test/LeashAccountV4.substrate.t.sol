@@ -674,7 +674,7 @@ contract LeashAccountV4SubstrateTest is Test {
     function test_oneShot_boolReturningSelector_fakeSuccess_reverts() public {
         FakeTok f = new FakeTok();
         bytes memory data = abi.encodeWithSelector(SEL_TRANSFER, dest, 1);
-        bytes32 h = keccak256(abi.encode(address(f), SEL_TRANSFER, data, uint256(0)));
+        bytes32 h = keccak256(abi.encode(block.chainid, address(f), SEL_TRANSFER, data, uint256(0)));
         vm.prank(owner);
         acct.authorizeOnce(h, uint64(block.timestamp + 1 hours));
         vm.prank(session);
@@ -685,7 +685,7 @@ contract LeashAccountV4SubstrateTest is Test {
     function test_oneShot_callFails_reverts() public {
         Reverter r = new Reverter();
         bytes memory data = abi.encodeWithSelector(bytes4(0xdeadbeef));
-        bytes32 h = keccak256(abi.encode(address(r), bytes4(0xdeadbeef), data, uint256(0)));
+        bytes32 h = keccak256(abi.encode(block.chainid, address(r), bytes4(0xdeadbeef), data, uint256(0)));
         vm.prank(owner);
         acct.authorizeOnce(h, uint64(block.timestamp + 1 hours));
         vm.prank(session);
@@ -698,7 +698,7 @@ contract LeashAccountV4SubstrateTest is Test {
         vm.prank(address(acct));
         usd.approve(address(acct), type(uint256).max);
         bytes memory data = abi.encodeWithSelector(SEL_TRANSFER_FROM, address(acct), dest, 10e6);
-        bytes32 h = keccak256(abi.encode(address(usd), SEL_TRANSFER_FROM, data, uint256(0)));
+        bytes32 h = keccak256(abi.encode(block.chainid, address(usd), SEL_TRANSFER_FROM, data, uint256(0)));
         vm.prank(owner);
         acct.authorizeOnce(h, uint64(block.timestamp + 1 hours));
         vm.prank(session);

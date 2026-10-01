@@ -149,6 +149,47 @@ const envSchema = z.object({
   /** SE-8: bridge DESTINATION chain (same-address verification substrate). */
   ETHEREUM_SEPOLIA_RPC: z.string().url().optional(),
   AGENT_REGISTRY_SEPOLIA_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  // SE-9 (E-10): Arbitrum Sepolia (421614) — the DIVERGENT-bridge chain. Config-only
+  // onboarding (SE-5's promise): setting BOTH vars registers the chain, no code fork.
+  // The V4 factory is the SAME deterministic CREATE2 address everywhere (SD-E9), so
+  // it reuses LEASH_FACTORY_V4_ADDR. Default-deny while unset (E-11).
+  ARBITRUM_SEPOLIA_RPC: z.string().url().optional(),
+  AGENT_REGISTRY_ARBITRUM_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  /**
+   * SE-9: allowlisted Arbitrum bridges, `bridgeAddr:destChainId` comma-list — the L2
+   * GatewayRouter (`outboundTransfer`) and ArbSys (`withdrawEth`), both → Ethereum
+   * Sepolia (11155111). Fail-loud parse (L-03).
+   */
+  ARB_BRIDGE_ALLOWLIST: z.string().optional(),
+  /** Comma-separated allowlisted protocol contracts on Arbitrum Sepolia (e.g. the L2 ERC-20 gateway the approve leg targets). */
+  ARB_PROTOCOL_ALLOWLIST: z.string().optional(),
+  /** SE-9: a bridgeable test ERC-20 on Arb Sepolia (localToken, the L2 asset that moves). */
+  ARB_CAP_BRIDGE_TOKEN_L2: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  /** SE-9: its Ethereum-Sepolia (L1) counterpart — the `outboundTransfer` arg0 (remote token). */
+  ARB_CAP_BRIDGE_TOKEN_L1: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  // SE-10 (E-11): PROMOTE Ethereum Sepolia (11155111) from a bridge DESTINATION-only
+  // chain (SE-8) to a FULL governed HOME chain — a home-on-Eth-Sepolia agent runs its
+  // full sense→decide→gate→act loop and lands a governed call against a REAL protocol
+  // available on that chain. These are the real-protocol targets the owner grant
+  // surface allows (router = Uniswap SwapRouter02, settlementToken = WETH/USDC,
+  // vault = an ERC-4626 if present). All optional: unset ⇒ Eth Sepolia stays
+  // destination-only (no promotion), never a partial/implicit grant.
+  SEPOLIA_CAP_ROUTER_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  SEPOLIA_CAP_VAULT_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  SEPOLIA_CAP_SETTLEMENT_TOKEN_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  /** SE-10: comma-separated allowlisted REAL protocol contracts on Ethereum Sepolia. */
+  SEPOLIA_PROTOCOL_ALLOWLIST: z.string().optional(),
+  /**
+   * SE-10 (E-11): the GENERIC chain-table — onboard any remaining top EVM testnet
+   * (Optimism Sepolia, Polygon Amoy, …) as PURE CONFIG, no code fork (fulfils the
+   * SE-5 "adding a chain is config-only" promise end-to-end). A JSON array of
+   * `{ chainId, name, rpcUrl, registryAddr, factoryV4Addr?, protocolAllowlist?,
+   * bridgeAllowlist?, canonical? }`. `factoryV4Addr` defaults to the deterministic
+   * CREATE2 factory (same address everywhere, SD-E9); accountVersion is always 4.
+   * Fail-loud parse (L-03 posture) + testnet-only guard (registry) + default-deny
+   * for any chain NOT listed (E-11). Unset ⇒ no extra chains.
+   */
+  EXTRA_CHAINS: z.string().optional(),
 });
 
 export type Config = z.infer<typeof envSchema>;
@@ -197,6 +238,89 @@ function parseBridgeAllowlist(raw: string): {
     bridgeDestinations[addr] = dest;
   }
   return { bridgeAllowlist, bridgeDestinations };
+}
+
+/**
+ * Fail-loud (L-03) comma-separated address list → lowercased addresses. A typo'd
+ * entry FAILS startup rather than silently dropping a real-protocol address (which
+ * would turn a legitimate governed call into an unexplained runtime refusal).
+ */
+function parseAddressList(raw: string, label: string): string[] {
+  return raw.split(',').map((e) => {
+    const a = e.trim().toLowerCase();
+    if (!/^0x[0-9a-f]{40}$/.test(a)) throw new Error(`${label} entry is not an address: "${e.trim()}"`);
+    return a;
+  });
+}
+
+const extraChainSchema = z.object({
+  chainId: z.number().int().positive(),
+  name: z.string().min(1),
+  rpcUrl: z.string().url(),
+  registryAddr: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
+  factoryV4Addr: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  protocolAllowlist: z.array(z.string().regex(/^0x[0-9a-fA-F]{40}$/)).optional(),
+  bridgeAllowlist: z.string().optional(), // "addr:destChainId" comma-list (same grammar as the per-chain vars)
+  canonical: z
+    .object({
+      router: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+      vault: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+      settlementToken: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+    })
+    .optional(),
+  gasFloorWei: z.string().regex(/^\d{1,30}$/).optional(),
+});
+
+/**
+ * SE-10 (E-11): parse the GENERIC chain-table. Each entry becomes a `ChainConfig`
+ * with NO per-chain code — the proof that "a new chain is config, not code". The V4
+ * factory defaults to the deterministic CREATE2 address (same everywhere, SD-E9);
+ * accountVersion is always 4. Fail-loud (L-03): a malformed blob FAILS startup.
+ * The registry's `assertTestnetOnly` + duplicate-chain guard still apply downstream.
+ */
+export function parseExtraChains(raw: string, defaultFactoryV4?: string): ChainConfig[] {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error('EXTRA_CHAINS is not valid JSON');
+  }
+  if (!Array.isArray(parsed)) throw new Error('EXTRA_CHAINS must be a JSON array of chain entries');
+  // sec L-02 (SE-10 gate): bound the operator-controlled table so a fat-fingered
+  // blob cannot spin up an unbounded number of chain clients at boot.
+  if (parsed.length > 32) throw new Error(`EXTRA_CHAINS has too many entries (${parsed.length} > 32)`);
+  return parsed.map((entryRaw, i) => {
+    const r = extraChainSchema.safeParse(entryRaw);
+    if (!r.success) {
+      throw new Error(`EXTRA_CHAINS[${i}] invalid: ${r.error.issues.map((x) => x.path.join('.') || '(root)').join(', ')}`);
+    }
+    const e = r.data;
+    const factoryV4Addr = e.factoryV4Addr ?? defaultFactoryV4;
+    if (!factoryV4Addr) {
+      throw new Error(`EXTRA_CHAINS[${i}] (${e.name}) has no factoryV4Addr and LEASH_FACTORY_V4_ADDR is unset`);
+    }
+    const bridge = e.bridgeAllowlist ? parseBridgeAllowlist(e.bridgeAllowlist) : undefined;
+    return {
+      chainId: e.chainId,
+      name: e.name,
+      rpcUrl: e.rpcUrl,
+      factoryV4Addr: factoryV4Addr.toLowerCase(),
+      registryAddr: e.registryAddr,
+      accountVersion: 4,
+      gasFloorWei: e.gasFloorWei ? BigInt(e.gasFloorWei) : 0n,
+      ...(e.canonical
+        ? {
+            canonical: {
+              ...(e.canonical.router ? { router: e.canonical.router.toLowerCase() } : {}),
+              ...(e.canonical.vault ? { vault: e.canonical.vault.toLowerCase() } : {}),
+              ...(e.canonical.settlementToken ? { settlementToken: e.canonical.settlementToken.toLowerCase() } : {}),
+            },
+          }
+        : {}),
+      ...(e.protocolAllowlist ? { protocolAllowlist: e.protocolAllowlist.map((a) => a.toLowerCase()) } : {}),
+      ...(bridge ?? {}),
+    } satisfies ChainConfig;
+  });
 }
 
 export function buildChainConfigs(cfg: Config): ChainConfig[] {
@@ -264,7 +388,60 @@ export function buildChainConfigs(cfg: Config): ChainConfig[] {
       registryAddr: cfg.AGENT_REGISTRY_SEPOLIA_ADDR,
       accountVersion: 4,
       gasFloorWei: 0n,
+      // SE-10 (E-11): PROMOTION — when the real-protocol targets are configured, Eth
+      // Sepolia becomes a FULL governed home chain (a home agent can be minted here
+      // and granted real-protocol rules). Unset ⇒ it stays a bridge-destination-only
+      // chain (SE-8 posture), never a partial grant.
+      ...(cfg.SEPOLIA_CAP_ROUTER_ADDR || cfg.SEPOLIA_CAP_VAULT_ADDR || cfg.SEPOLIA_CAP_SETTLEMENT_TOKEN_ADDR
+        ? {
+            canonical: {
+              ...(cfg.SEPOLIA_CAP_ROUTER_ADDR ? { router: cfg.SEPOLIA_CAP_ROUTER_ADDR } : {}),
+              ...(cfg.SEPOLIA_CAP_VAULT_ADDR ? { vault: cfg.SEPOLIA_CAP_VAULT_ADDR } : {}),
+              ...(cfg.SEPOLIA_CAP_SETTLEMENT_TOKEN_ADDR ? { settlementToken: cfg.SEPOLIA_CAP_SETTLEMENT_TOKEN_ADDR } : {}),
+            },
+          }
+        : {}),
+      ...(cfg.SEPOLIA_PROTOCOL_ALLOWLIST
+        ? { protocolAllowlist: parseAddressList(cfg.SEPOLIA_PROTOCOL_ALLOWLIST, 'SEPOLIA_PROTOCOL_ALLOWLIST') }
+        : {}),
     });
+  }
+  // SE-9 (E-10): Arbitrum Sepolia (421614) — the DIVERGENT bridge family. Appended
+  // only when BOTH env vars are set (default-deny otherwise, E-11). Proves governance
+  // is chain-agnostic: a 2nd bridge family (GatewayRouter/ArbSys) onboards as CONFIG
+  // (this entry + the bridge allowlist + a token pair), not new code.
+  if (cfg.ARBITRUM_SEPOLIA_RPC && cfg.AGENT_REGISTRY_ARBITRUM_ADDR) {
+    chains.push({
+      chainId: 421614,
+      name: 'Arbitrum Sepolia',
+      rpcUrl: cfg.ARBITRUM_SEPOLIA_RPC,
+      factoryV4Addr: cfg.LEASH_FACTORY_V4_ADDR,
+      registryAddr: cfg.AGENT_REGISTRY_ARBITRUM_ADDR,
+      accountVersion: 4,
+      canonical: {
+        settlementToken: cfg.ARB_CAP_BRIDGE_TOKEN_L2,
+      },
+      gasFloorWei: 0n, // Arbitrum uses EIP-1559 estimation; no static floor
+      ...(cfg.ARB_PROTOCOL_ALLOWLIST
+        ? {
+            protocolAllowlist: cfg.ARB_PROTOCOL_ALLOWLIST.split(',').map((raw) => {
+              const a = raw.trim().toLowerCase();
+              if (!/^0x[0-9a-f]{40}$/.test(a)) {
+                throw new Error(`ARB_PROTOCOL_ALLOWLIST entry is not an address: "${raw.trim()}"`);
+              }
+              return a;
+            }),
+          }
+        : {}),
+      ...(cfg.ARB_BRIDGE_ALLOWLIST ? parseBridgeAllowlist(cfg.ARB_BRIDGE_ALLOWLIST) : {}),
+    });
+  }
+  // SE-10 (E-11): the GENERIC chain-table — remaining top EVM testnets onboard here
+  // as PURE CONFIG (no per-chain code block). This is the end-to-end proof of SE-5's
+  // "adding a chain is config-only" promise: any JSON entry below becomes a full
+  // governed chain with the same wall + registry + default-deny guarantees.
+  if (cfg.EXTRA_CHAINS) {
+    chains.push(...parseExtraChains(cfg.EXTRA_CHAINS, cfg.LEASH_FACTORY_V4_ADDR));
   }
   return chains;
 }
