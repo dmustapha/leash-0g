@@ -6,6 +6,14 @@ solc_version = "0.8.30"
 evm_version = "cancun"
 optimizer = true
 optimizer_runs = 200
+# SE-9 (SD-E12): the Arbitrum bridge decoder family + the L-01 remote-token pin
+# grew the account/factory past the EIP-170 24576-byte limit under the legacy
+# pipeline. via-IR shrinks the deterministic factory to ~19.2k (wide headroom)
+# while preserving behavior (full suite green). New wall bytecode ⇒ the
+# deterministic factory redeploys at a new same-address value (BR-1, expected).
+# Tradeoff: via-IR compiles ~3-5x slower than the legacy pipeline (dev-loop cost,
+# not a regression) — accepted for the EIP-170 headroom.
+via_ir = true
 # D-15 differential decode oracle reads the viem-generated corpus fixture.
 fs_permissions = [{ access = "read", path = "./test/corpus" }]
 

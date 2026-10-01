@@ -48,6 +48,11 @@ const opBridge = parseAbi([
   'function bridgeETHTo(address to, uint32 minGasLimit, bytes extraData) payable',
   'function bridgeERC20To(address localToken, address remoteToken, address to, uint256 amount, uint32 minGasLimit, bytes extraData)',
 ]);
+// SE-9 Arbitrum L2→L1 bridge family — DIVERGENT shapes (GatewayRouter + ArbSys).
+const arbBridge = parseAbi([
+  'function outboundTransfer(address l1Token, address to, uint256 amount, bytes data)',
+  'function withdrawEth(address destination) payable',
+]);
 
 const entries = [];
 const add = (e) => entries.push(e);
@@ -82,6 +87,36 @@ add({ name: 'bridgeETHTo_canonical', kind: 'bridgeEth', mutation: false,
 add({ name: 'bridgeERC20To_canonical', kind: 'bridgeErc20', mutation: false,
   data: encodeFunctionData({ abi: opBridge, functionName: 'bridgeERC20To', args: [A, B, SELF, 123456n, 200000, '0x'] }),
   expect: { addr0: A, addr1: B, addr2: SELF, amount: '123456' } });
+
+// SE-9 Arbitrum bridge decoders — canonical DIVERGENT encodings (data EMPTY = canonical).
+add({ name: 'arbOutboundTransfer_canonical', kind: 'arbOutbound', mutation: false,
+  data: encodeFunctionData({ abi: arbBridge, functionName: 'outboundTransfer', args: [A, SELF, 123456n, '0x'] }),
+  expect: { addr0: A, addr1: SELF, amount: '123456' } });
+add({ name: 'arbWithdrawEth_canonical', kind: 'arbWithdrawEth', mutation: false,
+  data: encodeFunctionData({ abi: arbBridge, functionName: 'withdrawEth', args: [SELF] }),
+  expect: { addr0: SELF } });
+// Arbitrum mutations: non-empty data (payload smuggle) + dirty recipient bits + redirect.
+{
+  const payload = encodeFunctionData({ abi: arbBridge, functionName: 'outboundTransfer', args: [A, SELF, 123456n, '0x01'] });
+  add({ name: 'arbOutboundTransfer_data_payload', kind: 'arbOutbound', mutation: true, data: payload });
+}
+{
+  const base = encodeFunctionData({ abi: arbBridge, functionName: 'outboundTransfer', args: [A, SELF, 123456n, '0x'] }).slice(2);
+  // `to` word at bytes [36,68): high 12 bytes are hex chars [72,96)
+  const dirty = '0x' + base.slice(0, 72) + 'ff' + base.slice(74);
+  add({ name: 'arbOutboundTransfer_dirty_to_high_bits', kind: 'arbOutbound', mutation: true, data: dirty });
+}
+{
+  const redirect = encodeFunctionData({ abi: arbBridge, functionName: 'outboundTransfer', args: [A, '0x4444444444444444444444444444444444444444', 123456n, '0x'] });
+  add({ name: 'arbOutboundTransfer_redirect', kind: 'arbOutbound', mutation: false, forbidden: 'redirect', data: redirect,
+    expect: { addr0: A, addr1: '0x4444444444444444444444444444444444444444', amount: '123456' } });
+}
+{
+  // withdrawEth with a trailing extra word → wrong length → DecodeMismatch
+  const base = encodeFunctionData({ abi: arbBridge, functionName: 'withdrawEth', args: [SELF] });
+  add({ name: 'arbWithdrawEth_trailing_word', kind: 'arbWithdrawEth', mutation: true,
+    data: base + '0000000000000000000000000000000000000000000000000000000000000007' });
+}
 
 // approve(max) — canonical shape but semantically forbidden on-chain (InfiniteApprovalForbidden)
 add({ name: 'approve_max_forbidden', kind: 'approve', mutation: false, forbidden: 'infinite',
@@ -171,7 +206,13 @@ add({ name: 'multicall_wrapper', kind: 'nonstructured', mutation: false,
 // Self-check: viem re-decodes every canonical structured entry (the oracle is genuinely viem).
 for (const e of entries) {
   if (e.mutation || e.kind === 'nonstructured') continue;
-  const abi = e.kind === 'deposit' ? vault : (e.kind === 'bridgeEth' || e.kind === 'bridgeErc20') ? opBridge : erc20;
+  const abi = e.kind === 'deposit'
+    ? vault
+    : (e.kind === 'bridgeEth' || e.kind === 'bridgeErc20')
+      ? opBridge
+      : (e.kind === 'arbOutbound' || e.kind === 'arbWithdrawEth')
+        ? arbBridge
+        : erc20;
   const dec = decodeFunctionData({ abi, data: e.data });
   // sanity: viem decodes without throwing (canonical)
   if (!dec.functionName) throw new Error('viem failed to decode ' + e.name);
@@ -180,7 +221,8 @@ for (const e of entries) {
 const out = { generatedBy: 'viem ' + '(gen-corpus.mjs)', count: entries.length, selectors: {
   approve: '0x095ea7b3', increaseAllowance: '0x39509351', transfer: '0xa9059cbb',
   transferFrom: '0x23b872dd', setApprovalForAll: '0xa22cb465', deposit: '0x6e553f65',
-  bridgeETHTo: '0xe11013dd', bridgeERC20To: '0x540abf73' }, entries };
+  bridgeETHTo: '0xe11013dd', bridgeERC20To: '0x540abf73',
+  outboundTransfer: '0x7b3a3c8b', withdrawEth: '0x25e16063' }, entries };
 writeFileSync(new URL('../test/corpus/corpus.json', import.meta.url), JSON.stringify(out, null, 2));
 console.log('wrote corpus:', entries.length, 'entries (' +
   entries.filter(e => e.mutation).length + ' mutations, ' +

@@ -56,6 +56,9 @@ function fakeRegistry(over: Partial<Record<string, unknown>> = {}): ChainRegistr
       if (!c) throw new UnregisteredChainError(id);
       return c;
     },
+    // SE-9 (L-02): the gate cross-checks the destination RPC's self-reported id.
+    // By default each chain reports its own id (honest RPC → passes).
+    getChainOps: (id: number) => ({ getChainId: async () => id }),
     assertSameAddress: vi.fn().mockResolvedValue(ACCOUNT),
     ...over,
   } as unknown as ChainRegistry;
@@ -115,6 +118,17 @@ describe('SE-8 assertBridgeRoutable — the HARD pre-routing gate (carry #1)', (
     await expect(
       assertBridgeRoutable(fakeRegistry(), agent({ accountCreateTuple: null }), BRIDGE),
     ).rejects.toMatchObject({ reason: 'no_persisted_tuple' });
+  });
+
+  it('REFUSES when the destination RPC self-reports a DIFFERENT chain id (L-02)', async () => {
+    const reg = fakeRegistry({
+      // a mis-pointed destination RPC: reports some other chain, not DEST
+      getChainOps: (id: number) => ({ getChainId: async () => (id === DEST ? 999999 : id) }),
+    });
+    await expect(assertBridgeRoutable(reg, agent(), BRIDGE)).rejects.toMatchObject({
+      name: 'BridgeRoutingRefusedError',
+      reason: 'destination_chainid_mismatch',
+    });
   });
 
   it('WRAPS a SameAddressMismatchError as same_address_refused (funds never route)', async () => {

@@ -42,6 +42,12 @@ export function noveltyReason(n: Novelty): string {
 export const SELECTOR_BRIDGE_ETH_TO = '0xe11013dd';
 /** bridgeERC20To(address localToken, address remoteToken, address to, uint256 amount, uint32 minGasLimit, bytes extraData) */
 export const SELECTOR_BRIDGE_ERC20_TO = '0x540abf73';
+// SE-9: the Arbitrum DIVERGENT bridge family (GatewayRouter + ArbSys). Same
+// server-verified-bytes decode, divergent shapes (no remoteToken/minGas args).
+/** outboundTransfer(address l1Token, address to, uint256 amount, bytes data) — Arbitrum ERC-20 */
+export const SELECTOR_ARB_OUTBOUND_TRANSFER = '0x7b3a3c8b';
+/** withdrawEth(address destination) — Arbitrum ETH (ArbSys) */
+export const SELECTOR_ARB_WITHDRAW_ETH = '0x25e16063';
 
 /** Canonical address word: upper 96 bits MUST be zero (mirrors the wall). */
 function wordToAddress(word: string): string | null {
@@ -97,6 +103,28 @@ export function describeBridgeRequest(
     if (!localToken || !to) return null;
     const amount = BigInt('0x' + w[3]!).toString();
     return `bridge ${amount} base-units of token ${shortAddr(localToken)} via bridge ${bridge} ${recipientPhrase(to, accountAddr)} on the destination chain`;
+  }
+
+  // SE-9 Arbitrum ERC-20: outboundTransfer(l1Token, to, amount, data). `l1Token`
+  // (arg0) IS the remote token; recipient is arg1; data is forced empty (5 words).
+  if (selector === SELECTOR_ARB_OUTBOUND_TRANSFER) {
+    const w = words(data, 5);
+    if (!w) return null;
+    const l1Token = wordToAddress(w[0]!);
+    const to = wordToAddress(w[1]!);
+    if (!l1Token || !to) return null;
+    const amount = BigInt('0x' + w[2]!).toString();
+    return `bridge ${amount} base-units of token ${shortAddr(l1Token)} via Arbitrum gateway ${bridge} ${recipientPhrase(to, accountAddr)} on the destination chain`;
+  }
+
+  // SE-9 Arbitrum ETH: withdrawEth(destination) — single-arg, value = bridged amount.
+  if (selector === SELECTOR_ARB_WITHDRAW_ETH) {
+    const w = words(data, 1);
+    if (!w) return null;
+    const to = wordToAddress(w[0]!);
+    if (!to) return null;
+    const value = request.callValue ?? request.decoded.value;
+    return `bridge ${value} base-units via Arbitrum ${bridge} ${recipientPhrase(to, accountAddr)} on the destination chain`;
   }
 
   return null;

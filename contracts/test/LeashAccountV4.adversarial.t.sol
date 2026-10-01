@@ -7,6 +7,7 @@ import {MockERC20} from "../src/MockERC20.sol";
 import {MockRouter} from "../src/MockRouter.sol";
 import {MockVault} from "../src/MockVault.sol";
 import {MockBridge} from "../src/MockBridge.sol";
+import {MockGatewayRouter, MockArbSys} from "../src/MockArbitrumBridge.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /// A token whose transfer/approve returns false without reverting (fake-success, H-05).
@@ -273,6 +274,58 @@ contract LeashAccountV4AdversarialTest is Test {
         );
     }
 
+    // ============ SE-9: Arbitrum DIVERGENT bridge family — fuzz the drain vectors ============
+
+    bytes4 constant SEL_OUTBOUND_TRANSFER = 0x7b3a3c8b; // outboundTransfer(address,address,uint256,bytes)
+    bytes4 constant SEL_WITHDRAW_ETH = 0x25e16063; // withdrawEth(address)
+
+    function test_SE9_arbOutboundRedirect_fuzz_reverts(address to, uint256 amount) public {
+        vm.assume(to != address(acct));
+        amount = bound(amount, 1, 400e6);
+        MockGatewayRouter router = new MockGatewayRouter(IERC20(address(usd)));
+        address l1Tok = makeAddr("l1Tok");
+        _budget(l1Tok, 400e6);
+        _grant(address(router), SEL_OUTBOUND_TRANSFER, 0, new address[](0), 400e6, 400e6);
+        vm.prank(session);
+        vm.expectRevert(abi.encodeWithSelector(LeashAccountV4.RecipientNotSelf.selector, to));
+        acct.executeCall(address(router), 0, abi.encodeWithSelector(SEL_OUTBOUND_TRANSFER, l1Tok, to, amount, bytes("")));
+        assertEq(router.outbound(to), 0, "redirected Arbitrum ERC-20 must never move");
+    }
+
+    function test_SE9_arbOutboundValueRides_fuzz_reverts(uint256 value) public {
+        value = bound(value, 1, 100 ether);
+        MockGatewayRouter router = new MockGatewayRouter(IERC20(address(usd)));
+        address l1Tok = makeAddr("l1Tok");
+        _budget(l1Tok, 400e6);
+        _grant(address(router), SEL_OUTBOUND_TRANSFER, 0, new address[](0), 400e6, 400e6);
+        vm.prank(session);
+        vm.expectRevert(LeashAccountV4.DecodeMismatch.selector); // nonpayable: value may never ride
+        acct.executeCall(address(router), value, abi.encodeWithSelector(SEL_OUTBOUND_TRANSFER, l1Tok, address(acct), uint256(1), bytes("")));
+    }
+
+    function test_SE9_arbWithdrawEthRedirect_fuzz_reverts(address to, uint256 amount) public {
+        vm.assume(to != address(acct));
+        amount = bound(amount, 1, 1 ether);
+        MockArbSys arbSys = new MockArbSys();
+        _budget(address(0), 2 ether);
+        _grant(address(arbSys), SEL_WITHDRAW_ETH, 0, new address[](0), 1 ether, 2 ether);
+        vm.prank(session);
+        vm.expectRevert(abi.encodeWithSelector(LeashAccountV4.RecipientNotSelf.selector, to));
+        acct.executeCall(address(arbSys), amount, abi.encodeWithSelector(SEL_WITHDRAW_ETH, to));
+        assertEq(arbSys.withdrawn(to), 0, "redirected Arbitrum ETH must never move");
+    }
+
+    function test_SE9_arbWithdrawEthOverCap_fuzz_reverts(uint256 amount) public {
+        amount = bound(amount, 1 ether + 1, 100 ether);
+        MockArbSys arbSys = new MockArbSys();
+        _budget(address(0), 200 ether);
+        _grant(address(arbSys), SEL_WITHDRAW_ETH, 0, new address[](0), 1 ether, uint128(200 ether));
+        vm.deal(address(acct), 200 ether);
+        vm.prank(session);
+        vm.expectRevert(abi.encodeWithSelector(LeashAccountV4.OverPerCallCap.selector, amount, uint128(1 ether)));
+        acct.executeCall(address(arbSys), amount, abi.encodeWithSelector(SEL_WITHDRAW_ETH, address(acct)));
+    }
+
     // ============ C-05: proxy upgrade / metamorphic (codehash pin) ============
     function test_C05_codehashPinMismatch_reverts() public {
         _budget(address(usd), 500e6);
@@ -401,7 +454,7 @@ contract LeashAccountV4AdversarialTest is Test {
     // ============ M-03: deadline/expiry + replay (one-shot expiry) ============
     function test_M03_oneShotExpiry_bounded() public {
         bytes memory data = abi.encodeWithSelector(SEL_APPROVE, spender, 10e6);
-        bytes32 h = keccak256(abi.encode(address(usd), SEL_APPROVE, data, uint256(0)));
+        bytes32 h = keccak256(abi.encode(block.chainid, address(usd), SEL_APPROVE, data, uint256(0)));
         vm.prank(owner);
         acct.authorizeOnce(h, uint64(block.timestamp + 100));
         vm.warp(block.timestamp + 101);

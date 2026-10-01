@@ -122,6 +122,9 @@ contract LeashAccountV4 is ReentrancyGuard {
     error CodehashMismatch();
     error OneShotExpired();
     error EmptyCodeTarget(address target);
+    // Stage E (SE-9, L-01) — the ERC-20 bridge remote-token pin (OP-stack leg).
+    error RemoteTokenNotPinned(address localToken);
+    error RemoteTokenMismatch(address expected, address got);
 
     // ---------- events ----------
     event Executed(address indexed to, uint256 value, uint128 spentInWindow);
@@ -149,6 +152,8 @@ contract LeashAccountV4 is ReentrancyGuard {
     event SpendBudgetChanged(address indexed token, uint128 windowCap);
     event OneShotAuthorized(bytes32 indexed callHash, uint64 expiry);
     event OneShotConsumed(bytes32 indexed callHash);
+    event BridgeRemoteTokenProposed(address indexed localToken, address indexed remoteToken, uint64 eta);
+    event BridgeRemoteTokenChanged(address indexed localToken, address indexed remoteToken);
 
     // ---------- v3 state (verbatim) ----------
     address public immutable owner;
@@ -192,6 +197,13 @@ contract LeashAccountV4 is ReentrancyGuard {
     // only bridge selectors the wall understands).
     bytes4 internal constant SEL_BRIDGE_ETH_TO = 0xe11013dd; // bridgeETHTo(address,uint32,bytes)
     bytes4 internal constant SEL_BRIDGE_ERC20_TO = 0x540abf73; // bridgeERC20To(address,address,address,uint256,uint32,bytes)
+    // Stage E (SE-9) — Arbitrum L2→L1 bridge family (DIVERGENT from OP-stack: the
+    // GatewayRouter `outboundTransfer` carries NO remoteToken/minGasLimit args —
+    // `l1Token` IS the remote token — and ArbSys `withdrawEth` is a single-arg
+    // payable withdrawal. SD-E12. BR-2: these are the ONLY two Arbitrum-family
+    // bridge selectors the wall understands; any other is default-DENIED off-chain.
+    bytes4 internal constant SEL_OUTBOUND_TRANSFER = 0x7b3a3c8b; // outboundTransfer(address,address,uint256,bytes)
+    bytes4 internal constant SEL_WITHDRAW_ETH = 0x25e16063; // withdrawEth(address)
 
     mapping(address => bool) public callTargetAllowlist;
     mapping(bytes32 => CallRule) public callRules; // key = keccak256(target, selector)
@@ -199,6 +211,13 @@ contract LeashAccountV4 is ReentrancyGuard {
     mapping(address => bytes32) public callTargetCodehash; // target => pinned codehash (0 = no pin)
     mapping(address => SpendBudget) public spendBudget; // token (address(0)=native) => cumulative outflow budget
     mapping(bytes32 => uint64) public oneShotAuthEta; // callHash => expiry (0 = none)
+    // SE-9 (L-01): the OP-stack ERC-20 bridge remote-token pin. localToken =>
+    // owner-expected remoteToken. The agent may bridge a token ONLY to the L1
+    // counterpart the owner bound here (closes the SE-8 griefing surface where
+    // `remoteToken` was canonical-check-only). The Arbitrum family needs no
+    // analogue: its `outboundTransfer` carries only the L1 token, and that arg is
+    // the budget key — so an unconfigured remote token already reverts BudgetNotSet.
+    mapping(address => address) public bridgeRemoteToken; // localToken => remoteToken (0 = unset)
 
     // single-pending timelock slots for governed-calldata grants
     struct PendingCallRule {
@@ -217,6 +236,11 @@ contract LeashAccountV4 is ReentrancyGuard {
     address public pendingBudgetToken;
     uint128 public pendingBudgetWindowCap;
     uint64 public pendingBudgetEta; // 0 = none (the pending sentinel)
+
+    // SE-9 (L-01) single-pending slot for a remote-token pin (add/change = loosening).
+    address public pendingRemoteLocalToken;
+    address public pendingRemoteTokenValue;
+    uint64 public pendingRemoteTokenEta; // 0 = none
 
     modifier onlyOwner() {
         if (msg.sender != owner) revert NotOwner();
@@ -328,7 +352,11 @@ contract LeashAccountV4 is ReentrancyGuard {
         if (target.code.length == 0) revert EmptyCodeTarget(target);
 
         bytes4 selector = bytes4(data[0:4]);
-        bytes32 callHash = keccak256(abi.encode(target, selector, data, value));
+        // SE-9 (carry #4, DiD): `block.chainid` is bound into the callHash so an
+        // owner-signed one-shot authorized on chain A can NEVER be replayed against
+        // the same-CREATE2-address account on chain B — structural cross-chain
+        // one-shot replay immunity, not merely rail-enforced off-chain.
+        bytes32 callHash = keccak256(abi.encode(block.chainid, target, selector, data, value));
 
         // JIT Lane-2: an owner-reviewed EXACT-call one-shot bypasses the standing
         // envelope ONCE. The owner signed this exact callHash, so full arg authority
@@ -336,6 +364,13 @@ contract LeashAccountV4 is ReentrancyGuard {
         uint64 osEta = oneShotAuthEta[callHash];
         if (osEta != 0) {
             if (block.timestamp > osEta) revert OneShotExpired();
+            // SE-9 (carry #4, DiD): a one-shot bypasses the standing ENVELOPE (the
+            // owner reviewed the exact bytes), but for a BRIDGE selector the
+            // money-spine recipient-self + value guards are replicated ON-CHAIN here
+            // too — so even an owner-signed bridge one-shot can never land far-chain
+            // funds anywhere but the same-address account (previously owner-authority
+            // + the off-chain rail only; now wall-enforced).
+            if (_isBridgeSelector(selector)) _checkBridgeArgs(selector, value, data);
             delete oneShotAuthEta[callHash];
             emit OneShotConsumed(callHash);
             emit CallExecuted(target, selector, value, true);
@@ -484,13 +519,42 @@ contract LeashAccountV4 is ReentrancyGuard {
             _checkRecipient(receiver, rule.recipientMode);
             return (assets, target, false);
         }
-        // SE-8 governed bridging (E-9) — OP-stack bridge family, strict canonical.
-        // The recipient pin IS the same-address guarantee: recipientMode=0 requires
-        // `to == address(this)`, and the account sits at the SAME CREATE2 address on
-        // every chain (SD-E9) — so far-chain funds can only land on the leashed
-        // account itself. `extraData` is forced EMPTY (canonical 0x60/0xc0 head
-        // offset + zero length): bridging never needs it, and an arbitrary-bytes
-        // tail would be an opaque payload surface the wall cannot read.
+        // SE-8/SE-9 governed bridging — both bridge FAMILIES (OP-stack + Arbitrum)
+        // decode through the ONE shared `_checkBridgeArgs` spine (recipient pinned
+        // SELF unconditionally · strict canonical · the L-01 remote-token pin ·
+        // unit-correct token budget). Keeping every bridge leg in one place is what
+        // lets a new chain onboard as config + a decoder branch, not new plumbing.
+        if (_isBridgeSelector(selector)) {
+            return _checkBridgeArgs(selector, value, data);
+        }
+        // Non-structured allowlisted selector: bound msg.value against the native
+        // budget; the off-chain gate supplies rich arg legibility + recursive unwrap.
+        return (value, address(0), false);
+    }
+
+    /// @dev Whether a selector is one of the structured BRIDGE-family decoders
+    ///      (OP-stack `bridgeETHTo`/`bridgeERC20To` + Arbitrum `withdrawEth`/
+    ///      `outboundTransfer`). Bridge legs pin the recipient to SELF regardless
+    ///      of a rule's `recipientMode` (SD-E11, bridge-family-agnostic).
+    function _isBridgeSelector(bytes4 selector) internal pure returns (bool) {
+        return selector == SEL_BRIDGE_ETH_TO || selector == SEL_BRIDGE_ERC20_TO
+            || selector == SEL_WITHDRAW_ETH || selector == SEL_OUTBOUND_TRANSFER;
+    }
+
+    /// @dev The shared bridge decoder spine (SE-8 OP-stack + SE-9 Arbitrum). STRICT
+    ///      CANONICAL on every leg. The recipient is pinned to SELF unconditionally:
+    ///      a home-chain allowlist entry says nothing about who controls that address
+    ///      on the DESTINATION chain, so only the same-CREATE2-address account is a
+    ///      verifiable far-chain recipient (E-12 M-02). There is NO standing non-self
+    ///      bridge lane and the owner one-shot lane re-runs this check too (carry #4).
+    ///      Returns (chargeable, spendToken) — the token budget is the asset that
+    ///      actually moves (E-12 M-01, unit-correct), never a unit-blind bridge key.
+    function _checkBridgeArgs(bytes4 selector, uint256 value, bytes calldata data)
+        internal
+        view
+        returns (uint256 chargeable, address spendToken, bool checkBoolReturn)
+    {
+        // --- OP-stack family (SE-8): bridgeETHTo / bridgeERC20To, `extraData` empty ---
         if (selector == SEL_BRIDGE_ETH_TO) {
             // bridgeETHTo(address to, uint32 minGasLimit, bytes extraData)
             if (data.length != 4 + 128) revert DecodeMismatch();
@@ -499,15 +563,6 @@ contract LeashAccountV4 is ReentrancyGuard {
             if (minGas >> 32 != 0) revert DecodeMismatch();
             if (_decodeUint(data, 68) != 0x60) revert DecodeMismatch(); // extraData head offset
             if (_decodeUint(data, 100) != 0) revert DecodeMismatch(); // extraData length == 0
-            // E-12 M-02: bridge recipients are pinned to SELF unconditionally —
-            // recipientMode is IGNORED for bridge legs. A home-chain allowlist
-            // entry says nothing about who controls that address on the
-            // DESTINATION chain (a contract there may be a different party);
-            // only the same-CREATE2-address account is a verifiable far-chain
-            // recipient. There is NO standing non-self bridge lane; the backend
-            // one-shot consume path refuses non-self bridge recipients too
-            // (SE-8 rail) — an owner who truly needs a non-self far-chain payout
-            // bridges to self first, then pays out on the destination chain.
             if (to != address(this)) revert RecipientNotSelf(to);
             // the bridged amount is msg.value — charged against the NATIVE budget.
             return (value, address(0), false);
@@ -518,27 +573,52 @@ contract LeashAccountV4 is ReentrancyGuard {
             if (data.length != 4 + 224) revert DecodeMismatch();
             if (value != 0) revert DecodeMismatch(); // nonpayable: value may never ride uncharged
             address localToken = _decodeAddress(data, 4);
-            _decodeAddress(data, 36); // remoteToken — canonical check only
+            address remoteToken = _decodeAddress(data, 36);
             address to = _decodeAddress(data, 68);
             uint256 amount = _decodeUint(data, 100);
             uint256 minGas = _decodeUint(data, 132);
             if (minGas >> 32 != 0) revert DecodeMismatch();
             if (_decodeUint(data, 164) != 0xc0) revert DecodeMismatch(); // extraData head offset
             if (_decodeUint(data, 196) != 0) revert DecodeMismatch(); // extraData length == 0
-            // E-12 M-02: recipient pinned to SELF unconditionally (see bridgeETHTo).
             if (to != address(this)) revert RecipientNotSelf(to);
-            // E-12 M-01: charge `amount` against the LOCAL TOKEN's budget — a
-            // bridge-keyed budget is unit-blind when one bridge serves tokens of
-            // different decimals (a "1000 USDC" cap would meaninglessly bound a
-            // WETH leg). Token-keyed = the cap is denominated in the asset that
-            // actually moves. NOTE the conservative additive accounting: the
-            // enabling `approve(bridge, amount)` leg debits the SAME token
-            // budget, so a bridged unit consumes ~2 units of token budget —
-            // fail-closed narrowing, never a widening.
+            // L-01: the remoteToken is no longer canonical-check-only — it MUST equal
+            // the owner-pinned L1 counterpart for this localToken. Closes the SE-8
+            // griefing surface (an agent bridging to a wrong/zero remote token).
+            address pinned = bridgeRemoteToken[localToken];
+            if (pinned == address(0)) revert RemoteTokenNotPinned(localToken);
+            if (remoteToken != pinned) revert RemoteTokenMismatch(pinned, remoteToken);
+            // E-12 M-01: charge `amount` against the LOCAL TOKEN's budget (unit-correct;
+            // additive with the enabling approve leg — a fail-closed narrowing).
             return (amount, localToken, false);
         }
-        // Non-structured allowlisted selector: bound msg.value against the native
-        // budget; the off-chain gate supplies rich arg legibility + recursive unwrap.
+        // --- Arbitrum family (SE-9): DIVERGENT shapes, same governance ---
+        if (selector == SEL_OUTBOUND_TRANSFER) {
+            // outboundTransfer(address l1Token, address to, uint256 amount, bytes data)
+            // Arbitrum L2→L1 ERC-20 withdrawal via the GatewayRouter. `l1Token` IS the
+            // remote (L1) token — there is NO separate remoteToken arg and NO
+            // minGasLimit arg (the OP-stack divergence). `data` forced EMPTY.
+            if (data.length != 4 + 160) revert DecodeMismatch();
+            if (value != 0) revert DecodeMismatch(); // nonpayable
+            address l1Token = _decodeAddress(data, 4);
+            address to = _decodeAddress(data, 36);
+            uint256 amount = _decodeUint(data, 68);
+            if (_decodeUint(data, 100) != 0x80) revert DecodeMismatch(); // data head offset (4 words)
+            if (_decodeUint(data, 132) != 0) revert DecodeMismatch(); // data length == 0
+            if (to != address(this)) revert RecipientNotSelf(to);
+            // The budget is keyed by `l1Token` (the only token id in calldata). An
+            // unconfigured remote token reverts BudgetNotSet downstream — so the
+            // budget key IS the remote-token pin for this family (no separate map).
+            // The enabling `approve(l2gateway, amount)` leg charges the L2 token's
+            // own budget; conservative additive accounting as on the OP-stack leg.
+            return (amount, l1Token, false);
+        }
+        // SEL_WITHDRAW_ETH — the only remaining bridge selector.
+        // withdrawEth(address destination) — ArbSys L2→L1 ETH withdrawal. payable,
+        // single-arg, no minGasLimit / no extraData (maximally divergent). The
+        // bridged amount is msg.value, charged against the NATIVE budget.
+        if (data.length != 4 + 32) revert DecodeMismatch();
+        address dest = _decodeAddress(data, 4);
+        if (dest != address(this)) revert RecipientNotSelf(dest);
         return (value, address(0), false);
     }
 
@@ -726,7 +806,47 @@ contract LeashAccountV4 is ReentrancyGuard {
         emit SpendBudgetChanged(token, windowCap);
     }
 
+    // ---------- SE-9 (L-01): the ERC-20 bridge remote-token pin ----------
+
+    /// @notice Bind the owner-expected L1 `remoteToken` for an OP-stack-family
+    ///         `localToken` — adding/changing a binding ENABLES a bridge leg, so it
+    ///         is LOOSENING → timelocked. (The Arbitrum family needs no analogue;
+    ///         see `bridgeRemoteToken`.)
+    function proposeBridgeRemoteToken(address localToken, address remoteToken) external onlyOwner {
+        if (localToken == address(0) || remoteToken == address(0)) revert ZeroAddress();
+        pendingRemoteLocalToken = localToken;
+        pendingRemoteTokenValue = remoteToken;
+        pendingRemoteTokenEta = uint64(block.timestamp) + timelockDelay;
+        emit BridgeRemoteTokenProposed(localToken, remoteToken, pendingRemoteTokenEta);
+    }
+
+    function applyBridgeRemoteToken() external onlyOwner {
+        uint64 eta = pendingRemoteTokenEta;
+        if (eta == 0) revert NothingPending();
+        if (block.timestamp < eta) revert TimelockNotElapsed(eta);
+        bridgeRemoteToken[pendingRemoteLocalToken] = pendingRemoteTokenValue;
+        emit BridgeRemoteTokenChanged(pendingRemoteLocalToken, pendingRemoteTokenValue);
+        _clearPendingRemoteToken();
+    }
+
+    /// @notice Remove a remote-token binding — TIGHTENING (disables that bridge
+    ///         leg) → INSTANT. Clears ALL pending slots DELIBERATELY, matching the
+    ///         project-wide tighten convention (`removeCallTarget`/`removeCallSelector`/
+    ///         `tighten*`): a matured loosening can never stay armed after any tighten.
+    ///         Over-clearing is fail-safe (never widens); audited LOW, accepted.
+    function removeBridgeRemoteToken(address localToken) external onlyOwner {
+        delete bridgeRemoteToken[localToken];
+        _clearPendingTimelocks();
+        emit BridgeRemoteTokenChanged(localToken, address(0));
+    }
+
     // ---------- revoke / re-arm ----------
+
+    function _clearPendingRemoteToken() internal {
+        pendingRemoteLocalToken = address(0);
+        pendingRemoteTokenValue = address(0);
+        pendingRemoteTokenEta = 0;
+    }
 
     function _clearPendingCallRule() internal {
         delete pendingCallRule;
@@ -751,6 +871,7 @@ contract LeashAccountV4 is ReentrancyGuard {
         pendingTokenPolicyEta = 0;
         _clearPendingCallRule();
         _clearPendingBudget();
+        _clearPendingRemoteToken();
     }
 
     function revoke() external {

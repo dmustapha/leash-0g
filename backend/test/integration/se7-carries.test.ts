@@ -35,7 +35,7 @@ const CALL_DATA = encodeFunctionData({
   functionName: 'approve',
   args: [SPENDER as `0x${string}`, 2000n],
 });
-const CALL_HASH = computeCallHash(TOKEN, 0n, CALL_DATA);
+const CALL_HASH = computeCallHash(84532, TOKEN, 0n, CALL_DATA);
 
 class FakeChain implements RuntimeChain {
   public calls: Array<{ target: string; data: string }> = [];

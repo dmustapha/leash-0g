@@ -112,6 +112,20 @@ contract LeashAccountV4DifferentialTest is Test {
                 assertEq(amt, _uintStr(_s(i, ".expect.amount")), _s(i, ".name"));
                 assertEq(a0, _addr(i, ".expect.addr0"), _s(i, ".name"));
                 checked++;
+            } else if (k == keccak256("arbOutbound")) {
+                // SE-9 outboundTransfer(l1Token, to, amount, data): l1Token @ 4, to @ 36, amount @ 68
+                address a0 = h.decodeAddress(data, 4);
+                address a1 = h.decodeAddress(data, 36);
+                uint256 amt = h.decodeUint(data, 68);
+                assertEq(a0, _addr(i, ".expect.addr0"), _s(i, ".name"));
+                assertEq(a1, _addr(i, ".expect.addr1"), _s(i, ".name"));
+                assertEq(amt, _uintStr(_s(i, ".expect.amount")), _s(i, ".name"));
+                checked++;
+            } else if (k == keccak256("arbWithdrawEth")) {
+                // SE-9 withdrawEth(destination): destination @ 4
+                address a0 = h.decodeAddress(data, 4);
+                assertEq(a0, _addr(i, ".expect.addr0"), _s(i, ".name"));
+                checked++;
             }
         }
         assertGe(checked, 5, "expected >=5 structured corpus entries");
@@ -198,6 +212,9 @@ contract LeashAccountV4DifferentialTest is Test {
             // bridge kinds target a bridge (not the ERC20 mock); wall admittance proven in
             // the primary suite (test_bridgeEthTo_self_inCap_lands / test_bridgeErc20To_...).
             if (_eq(kind, "bridgeEth") || _eq(kind, "bridgeErc20")) continue;
+            // SE-9 Arbitrum kinds target a GatewayRouter/ArbSys (not the ERC20 mock);
+            // wall admittance proven in the primary suite (test_arb_outboundTransfer_* / test_arb_withdrawEth_*).
+            if (_eq(kind, "arbOutbound") || _eq(kind, "arbWithdrawEth")) continue;
             bytes memory data = _rewriteRecipientsToSelf(kind, _bytes(i));
             vm.prank(session);
             (bool ok, bytes memory ret) =

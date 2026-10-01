@@ -1,0 +1,317 @@
+{
+  "drill": "stage-e-se10-ethereum-sepolia-promotion",
+  "chains": [
+    {
+      "name": "ethereum-sepolia",
+      "chainId": 11155111
+    }
+  ],
+  "factoryAddr": "0x9C10b48748Da1cA0CEE5AD7DA0725490A7d5E46f",
+  "weth": "0x7b79995e5f793a07bc00c21412e50ecae098e7f9",
+  "runs": [
+    {
+      "when": "2026-10-01T09:21:25.944Z",
+      "accountSalt": "0xd6bedb13d723473a6e6097db80e9dea68745e6134db9f248d5e933e33493b743",
+      "account": "0xDFeBa9dEA81f670bef1E7f1AAD5CF5d4b8Ab730B",
+      "weth": "0x7b79995e5f793a07bc00c21412e50ecae098e7f9",
+      "mintTx": "0x2e3b4cfced9bcb10c7dff5cc270b4fc187f2840c35dafa7cf59de173f46153e1",
+      "happyTx": "0xb61d78b53e99d2769cd9d60321ac146a95fc35240db5068ccc9ced6a7884fe42",
+      "counts": {
+        "pass": 12,
+        "fail": 0,
+        "flake": 0
+      },
+      "green": true,
+      "results": [
+        {
+          "check": "factory@ethereum-sepolia",
+          "ok": true,
+          "detail": "already deployed at 0x9C10b48748Da1cA0CEE5AD7DA0725490A7d5E46f (idempotent skip)"
+        },
+        {
+          "check": "mint@ethereum-sepolia",
+          "ok": true,
+          "detail": "account 0xDFeBa9dEA81f670bef1E7f1AAD5CF5d4b8Ab730B has code (tx 0x2e3b4cfced9bcb10c7dff5cc270b4fc187f2840c35dafa7cf59de173f46153e1)"
+        },
+        {
+          "check": "grants@ethereum-sepolia",
+          "ok": true,
+          "detail": "WETH budget + transfer(self) rule granted (perCallCap 200000000000000)"
+        },
+        {
+          "check": "real-protocol-happy LANDS",
+          "ok": true,
+          "detail": "transfer(self, 100000000000000) status 1 (tx 0xb61d78b53e99d2769cd9d60321ac146a95fc35240db5068ccc9ced6a7884fe42) — real WETH move inside the leashed account"
+        },
+        {
+          "check": "over-cap REVERTS",
+          "ok": true,
+          "detail": "REVERTED OverPerCallCap (selector-anchored): 0x2671b8a60000000000000000000000000000000000000000000000000000b5e620f480010000000000000000"
+        },
+        {
+          "check": "redirect REVERTS",
+          "ok": true,
+          "detail": "REVERTED RecipientNotSelf (selector-anchored): 0x239e7696000000000000000000000000bebebebebebebebebebebebebebebebebebebebe"
+        },
+        {
+          "check": "bad-payload REVERTS",
+          "ok": true,
+          "detail": "REVERTED DecodeMismatch (selector-anchored): 0xee0f83ce"
+        },
+        {
+          "check": "off-allowlist REVERTS",
+          "ok": true,
+          "detail": "REVERTED TargetNotAllowlisted (selector-anchored): 0x042a9b0d0000000000000000000000009c10b48748da1ca0cee5ad7da0725490a7d5e46f"
+        },
+        {
+          "check": "real-redirect-tx status 0",
+          "ok": true,
+          "detail": "redirect tx 0x2391926ff63dec4267a28c4d92771e8728390a68398e5f01283a2b13ffddfebb → reverted"
+        },
+        {
+          "check": "default-deny unregistered-chain",
+          "ok": true,
+          "detail": "refused: chain 999999 is not registered — default-deny (add a ChainConfig to onboard it)"
+        },
+        {
+          "check": "gate-unregistered-destination REFUSED",
+          "ok": true,
+          "detail": "refused: bridge routing REFUSED (destination_unregistered): destination chain 84532 is not registered (default-deny)"
+        },
+        {
+          "check": "gate-chainid-mismatch REFUSED (L-02)",
+          "ok": true,
+          "detail": "refused: bridge routing REFUSED (destination_chainid_mismatch): destination RPC reports chain 11155111, configured 84532 — refusi"
+        }
+      ]
+    },
+    {
+      "when": "2026-10-01T09:23:50.693Z",
+      "accountSalt": "0x05d87f659010670184f3288ad6c0d269ebf7cfb61cc90b010694d7d626dca15f",
+      "account": "0xeeAf3f0b7BC33aEE4C67c3EBc29ebFf19de517eB",
+      "weth": "0x7b79995e5f793a07bc00c21412e50ecae098e7f9",
+      "mintTx": "0x8ce5d775cb771eaa2210b8feb05a679c975e87bf9235f4fdf07b0602b246b3a9",
+      "happyTx": "0xbfd217cb29fe45aa3c86ac2c0825759ce60a5bdaf48c48425f2d0bd1ab1bcab3",
+      "counts": {
+        "pass": 12,
+        "fail": 0,
+        "flake": 0
+      },
+      "green": true,
+      "results": [
+        {
+          "check": "factory@ethereum-sepolia",
+          "ok": true,
+          "detail": "already deployed at 0x9C10b48748Da1cA0CEE5AD7DA0725490A7d5E46f (idempotent skip)"
+        },
+        {
+          "check": "mint@ethereum-sepolia",
+          "ok": true,
+          "detail": "account 0xeeAf3f0b7BC33aEE4C67c3EBc29ebFf19de517eB has code (tx 0x8ce5d775cb771eaa2210b8feb05a679c975e87bf9235f4fdf07b0602b246b3a9)"
+        },
+        {
+          "check": "grants@ethereum-sepolia",
+          "ok": true,
+          "detail": "WETH budget + transfer(self) rule granted (perCallCap 200000000000000)"
+        },
+        {
+          "check": "real-protocol-happy LANDS",
+          "ok": true,
+          "detail": "transfer(self, 100000000000000) status 1 (tx 0xbfd217cb29fe45aa3c86ac2c0825759ce60a5bdaf48c48425f2d0bd1ab1bcab3) — real WETH move inside the leashed account"
+        },
+        {
+          "check": "over-cap REVERTS",
+          "ok": true,
+          "detail": "REVERTED OverPerCallCap (selector-anchored): 0x2671b8a60000000000000000000000000000000000000000000000000000b5e620f480010000000000000000"
+        },
+        {
+          "check": "redirect REVERTS",
+          "ok": true,
+          "detail": "REVERTED RecipientNotSelf (selector-anchored): 0x239e7696000000000000000000000000bebebebebebebebebebebebebebebebebebebebe"
+        },
+        {
+          "check": "bad-payload REVERTS",
+          "ok": true,
+          "detail": "REVERTED DecodeMismatch (selector-anchored): 0xee0f83ce"
+        },
+        {
+          "check": "off-allowlist REVERTS",
+          "ok": true,
+          "detail": "REVERTED TargetNotAllowlisted (selector-anchored): 0x042a9b0d0000000000000000000000009c10b48748da1ca0cee5ad7da0725490a7d5e46f"
+        },
+        {
+          "check": "real-redirect-tx status 0",
+          "ok": true,
+          "detail": "redirect tx 0xe143168ce917e4f64473e39627e4c2f1fea56b3cf22e0433ba828dd40e022fa7 → reverted"
+        },
+        {
+          "check": "default-deny unregistered-chain",
+          "ok": true,
+          "detail": "refused: chain 999999 is not registered — default-deny (add a ChainConfig to onboard it)"
+        },
+        {
+          "check": "gate-unregistered-destination REFUSED",
+          "ok": true,
+          "detail": "refused: bridge routing REFUSED (destination_unregistered): destination chain 84532 is not registered (default-deny)"
+        },
+        {
+          "check": "gate-chainid-mismatch REFUSED (L-02)",
+          "ok": true,
+          "detail": "refused: bridge routing REFUSED (destination_chainid_mismatch): destination RPC reports chain 11155111, configured 84532 — refusi"
+        }
+      ]
+    },
+    {
+      "when": "2026-10-01T09:33:19.016Z",
+      "accountSalt": "0x2b7e9af542f3b4a9f107d961972745896a06b8ad8b363c5b199eb2eec6f4efc3",
+      "account": "0xfFF9226Cd4a21fAF165cd0f33B70D7C6Fa327E07",
+      "weth": "0x7b79995e5f793a07bc00c21412e50ecae098e7f9",
+      "mintTx": "0xf95260667d0fddc6a7704e62438198d91ff2f91c83d672e0e9cc93388da9d9ff",
+      "happyTx": "0x15eea2a26ba9c737686990998de43da0a4a579b1b40c63e07699fee34211c7a7",
+      "counts": {
+        "pass": 12,
+        "fail": 0,
+        "flake": 0
+      },
+      "green": true,
+      "results": [
+        {
+          "check": "factory@ethereum-sepolia",
+          "ok": true,
+          "detail": "already deployed at 0x9C10b48748Da1cA0CEE5AD7DA0725490A7d5E46f (idempotent skip)"
+        },
+        {
+          "check": "mint@ethereum-sepolia",
+          "ok": true,
+          "detail": "account 0xfFF9226Cd4a21fAF165cd0f33B70D7C6Fa327E07 has code (tx 0xf95260667d0fddc6a7704e62438198d91ff2f91c83d672e0e9cc93388da9d9ff)"
+        },
+        {
+          "check": "grants@ethereum-sepolia",
+          "ok": true,
+          "detail": "WETH budget + transfer(self) rule granted (perCallCap 200000000000000)"
+        },
+        {
+          "check": "real-protocol-happy LANDS",
+          "ok": true,
+          "detail": "transfer(self, 100000000000000) status 1 (tx 0x15eea2a26ba9c737686990998de43da0a4a579b1b40c63e07699fee34211c7a7) — real WETH move inside the leashed account"
+        },
+        {
+          "check": "over-cap REVERTS",
+          "ok": true,
+          "detail": "REVERTED OverPerCallCap (selector-anchored): 0x2671b8a60000000000000000000000000000000000000000000000000000b5e620f480010000000000000000"
+        },
+        {
+          "check": "redirect REVERTS",
+          "ok": true,
+          "detail": "REVERTED RecipientNotSelf (selector-anchored): 0x239e7696000000000000000000000000bebebebebebebebebebebebebebebebebebebebe"
+        },
+        {
+          "check": "bad-payload REVERTS",
+          "ok": true,
+          "detail": "REVERTED DecodeMismatch (selector-anchored): 0xee0f83ce"
+        },
+        {
+          "check": "off-allowlist REVERTS",
+          "ok": true,
+          "detail": "REVERTED TargetNotAllowlisted (selector-anchored): 0x042a9b0d0000000000000000000000009c10b48748da1ca0cee5ad7da0725490a7d5e46f"
+        },
+        {
+          "check": "real-redirect-tx status 0",
+          "ok": true,
+          "detail": "redirect tx 0xc17a9b9300cfefb52a43c2be7f2bc6dae39f9e6d38c49b86c28e2032d6231978 → reverted"
+        },
+        {
+          "check": "default-deny unregistered-chain",
+          "ok": true,
+          "detail": "refused: chain 999999 is not registered — default-deny (add a ChainConfig to onboard it)"
+        },
+        {
+          "check": "gate-unregistered-destination REFUSED",
+          "ok": true,
+          "detail": "refused: bridge routing REFUSED (destination_unregistered): destination chain 84532 is not registered (default-deny)"
+        },
+        {
+          "check": "gate-chainid-mismatch REFUSED (L-02)",
+          "ok": true,
+          "detail": "refused: bridge routing REFUSED (destination_chainid_mismatch): destination RPC reports chain 11155111, configured 84532 — refusi"
+        }
+      ]
+    },
+    {
+      "when": "2026-10-01T09:35:14.496Z",
+      "accountSalt": "0xfbbd126a4220f9c5fe17ef3a10123af4c2c02905d6326f7593cd1644c9726862",
+      "account": "0xA128e5a0125e1dB1B2Ec27DB737547bfD3F6F4F0",
+      "weth": "0x7b79995e5f793a07bc00c21412e50ecae098e7f9",
+      "mintTx": "0xdbff9ae37185fc41258f6779746403ee98a3ac0dfad48bda64206bbc7e92d68a",
+      "happyTx": "0xc1c826fa63b734daf51a335f9b05a86d4af4c22dabb41f72187aa31577aa042a",
+      "counts": {
+        "pass": 12,
+        "fail": 0,
+        "flake": 0
+      },
+      "green": true,
+      "results": [
+        {
+          "check": "factory@ethereum-sepolia",
+          "ok": true,
+          "detail": "already deployed at 0x9C10b48748Da1cA0CEE5AD7DA0725490A7d5E46f (idempotent skip)"
+        },
+        {
+          "check": "mint@ethereum-sepolia",
+          "ok": true,
+          "detail": "account 0xA128e5a0125e1dB1B2Ec27DB737547bfD3F6F4F0 has code (tx 0xdbff9ae37185fc41258f6779746403ee98a3ac0dfad48bda64206bbc7e92d68a)"
+        },
+        {
+          "check": "grants@ethereum-sepolia",
+          "ok": true,
+          "detail": "WETH budget + transfer(self) rule granted (perCallCap 200000000000000)"
+        },
+        {
+          "check": "real-protocol-happy LANDS",
+          "ok": true,
+          "detail": "transfer(self, 100000000000000) status 1 (tx 0xc1c826fa63b734daf51a335f9b05a86d4af4c22dabb41f72187aa31577aa042a) — real WETH move inside the leashed account"
+        },
+        {
+          "check": "over-cap REVERTS",
+          "ok": true,
+          "detail": "REVERTED OverPerCallCap (selector-anchored): 0x2671b8a60000000000000000000000000000000000000000000000000000b5e620f480010000000000000000"
+        },
+        {
+          "check": "redirect REVERTS",
+          "ok": true,
+          "detail": "REVERTED RecipientNotSelf (selector-anchored): 0x239e7696000000000000000000000000bebebebebebebebebebebebebebebebebebebebe"
+        },
+        {
+          "check": "bad-payload REVERTS",
+          "ok": true,
+          "detail": "REVERTED DecodeMismatch (selector-anchored): 0xee0f83ce"
+        },
+        {
+          "check": "off-allowlist REVERTS",
+          "ok": true,
+          "detail": "REVERTED TargetNotAllowlisted (selector-anchored): 0x042a9b0d0000000000000000000000009c10b48748da1ca0cee5ad7da0725490a7d5e46f"
+        },
+        {
+          "check": "real-redirect-tx status 0",
+          "ok": true,
+          "detail": "redirect tx 0x4fc06df3c0efaa423ad2bf032c8a3aead8d127bc402faf254a486a5a6f4d0866 → reverted"
+        },
+        {
+          "check": "default-deny unregistered-chain",
+          "ok": true,
+          "detail": "refused: chain 999999 is not registered — default-deny (add a ChainConfig to onboard it)"
+        },
+        {
+          "check": "gate-unregistered-destination REFUSED",
+          "ok": true,
+          "detail": "refused: bridge routing REFUSED (destination_unregistered): destination chain 84532 is not registered (default-deny)"
+        },
+        {
+          "check": "gate-chainid-mismatch REFUSED (L-02)",
+          "ok": true,
+          "detail": "refused: bridge routing REFUSED (destination_chainid_mismatch): destination RPC reports chain 11155111, configured 84532 — refusi"
+        }
+      ]
+    }
+  ]
+}

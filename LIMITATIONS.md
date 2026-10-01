@@ -42,6 +42,25 @@ LEASH is a work-in-progress research project. This is an honest scope boundary: 
 - **The multichain runtime requires the chain registry to be wired** (`resolveChain` +
   `chainRegistry`); a deploy that omits it falls back to the single default chain and
   allows no bridging (fail-closed).
+- **Arbitrum `outboundTransfer` budget-key doctrine (SD-E13, SE-10 carry correction).**
+  The in-code comment on the `SEL_OUTBOUND_TRANSFER` branch (`LeashAccountV4.sol`
+  `_checkStructuredArgs`) states that an unconfigured remote token "already reverts
+  BudgetNotSet". That is accurate only for a bridged **`amount > 0`**: the shared debit
+  path guards `if (chargeable > 0) _debitSpendBudget(...)`, so an **`amount == 0`**
+  `outboundTransfer` to an *unconfigured* `l1Token` skips the budget check and does NOT
+  revert. This is a comment/accounting-accuracy note, **not an over-spend or
+  fund-loss**: a 0-amount withdrawal moves no funds, the recipient is still hard-pinned
+  to `self`, and both the per-call and window caps bind for every `amount > 0`. The
+  Arbitrum family INTENTIONALLY keys the budget by the destination `l1Token` (the only
+  token id in its calldata — there is no separate L2 `remoteToken` arg to pin as there
+  is on `bridgeERC20To`), so for `amount > 0` the budget key doubles as the
+  remote-token pin. The correction is recorded here (and in `07` SD-E13) rather than in
+  the contract source **by design**: editing even a comment changes the Solidity
+  metadata hash → the account/factory codehash → it would make the SE-9-deployed,
+  cross-chain-codehash-identical wall non-reproducible and force a redeploy. SE-10 is a
+  config/thin-repeat slice and must not be a contract change, so the deployed
+  (semantically-correct) wall is left byte-identical and the doctrine is corrected in
+  the docs that auditors read.
 
 ## Infrastructure
 

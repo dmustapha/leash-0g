@@ -129,6 +129,34 @@ export const SELECTORS: ReadonlyMap<string, SelectorSpec> = new Map<string, Sele
     forbidValue: true,
     bridge: true,
   }),
+  // ---- SE-9 structured Arbitrum bridge family (on-chain hard-decoded, BR-2) ----
+  // DIVERGENT from OP-stack: `outboundTransfer` carries NO remoteToken/minGasLimit
+  // args — `l1Token` (arg0) IS the remote token AND the budget key — and ArbSys
+  // `withdrawEth` is a single-arg payable withdrawal (no minGas, no extraData).
+  spec({
+    signature: 'function outboundTransfer(address l1Token, address to, uint256 amount, bytes data)',
+    paramTypes: ['address', 'address', 'uint256'],
+    roles: ['ignore', 'recipient', 'amount'],
+    structured: true,
+    amountIndex: 2,
+    spendToken: 'target', // overridden by spendTokenFromArg (the l1Token's budget key)
+    spendTokenFromArg: 0,
+    verb: 'bridge',
+    trailingEmptyBytes: true,
+    forbidValue: true,
+    bridge: true,
+  }),
+  spec({
+    signature: 'function withdrawEth(address destination)',
+    paramTypes: ['address'],
+    roles: ['recipient'],
+    structured: true,
+    amountIndex: null,
+    spendToken: 'native',
+    verb: 'bridge',
+    valueIsAmount: true,
+    bridge: true,
+  }),
   // ---- curated router/vault set (off-chain legibility only; on-chain non-structured) ----
   // MockRouter.swap(tokenIn,tokenOut,amountIn,amountOutMin,recipient,deadline).
   spec({

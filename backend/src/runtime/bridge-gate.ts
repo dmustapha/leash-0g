@@ -29,6 +29,7 @@ export class BridgeRoutingRefusedError extends Error {
       | 'bridge_not_allowlisted'
       | 'no_destination'
       | 'destination_unregistered'
+      | 'destination_chainid_mismatch'
       | 'no_persisted_tuple'
       | 'same_address_refused',
     detail: string,
@@ -71,6 +72,17 @@ export async function assertBridgeRoutable(
       );
     }
     throw err;
+  }
+  // SE-9 (L-02): cross-check the destination RPC's self-reported chain id against
+  // the configured destination id — destination-RPC trust is now self-verifying,
+  // not an operator-config boundary. A mis-pointed destination RPC (wrong chain)
+  // is refused BEFORE any same-address verification or routing.
+  const reportedDestId = await registry.getChainOps(destinationChainId).getChainId();
+  if (reportedDestId !== destinationChainId) {
+    throw new BridgeRoutingRefusedError(
+      'destination_chainid_mismatch',
+      `destination RPC reports chain ${reportedDestId}, configured ${destinationChainId} — refusing (L-02)`,
+    );
   }
   if (agent.accountVersion !== 4 || !agent.accountSalt) {
     throw new BridgeRoutingRefusedError(

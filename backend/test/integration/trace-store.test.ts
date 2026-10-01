@@ -70,8 +70,8 @@ describe('trace store', () => {
       kind: 'inference',
     };
     await db.pool.query(
-      `INSERT INTO trace_records (agent_id, seq, prev_hash, hash, ts, kind, record)
-       VALUES ($1, 999, $2, $3, now(), 'inference', $4)`,
+      `INSERT INTO trace_records (agent_id, seq, prev_hash, hash, ts, kind, record, chain_id)
+       VALUES ($1, 999, $2, $3, now(), 'inference', $4, (SELECT chain_id FROM agents WHERE id = $1::uuid))`,
       [agentId, forged.prevHash, forged.hash, JSON.stringify(forged)],
     );
     const verdict = await verifyAgentChain(db.pool, agentId);
@@ -82,8 +82,8 @@ describe('trace store', () => {
   it('duplicate seq insert violates the unique constraint', async () => {
     await expect(
       db.pool.query(
-        `INSERT INTO trace_records (agent_id, seq, prev_hash, hash, ts, kind, record)
-         VALUES ($1, 0, $2, $3, now(), 'inference', '{}')`,
+        `INSERT INTO trace_records (agent_id, seq, prev_hash, hash, ts, kind, record, chain_id)
+         VALUES ($1, 0, $2, $3, now(), 'inference', '{}', (SELECT chain_id FROM agents WHERE id = $1::uuid))`,
         [agentId, GENESIS_HASH, '0x' + 'aa'.repeat(32)],
       ),
     ).rejects.toThrow(/duplicate key/);
@@ -117,9 +117,10 @@ describe('incremental chain verification (L-04)', () => {
 
     // forge a NEW record with a broken prevHash link (INSERT is allowed; UPDATE/DELETE are not)
     await db.pool.query(
-      `INSERT INTO trace_records (agent_id, seq, prev_hash, hash, ts, kind, record)
+      `INSERT INTO trace_records (agent_id, seq, prev_hash, hash, ts, kind, record, chain_id)
        VALUES ($1::uuid, 5, '0xdead', '0xbeef', now(), 'action',
-               jsonb_build_object('agentId',$2::text,'seq',5,'prevHash','0xdead','ts',now()::text,'kind','action','hash','0xbeef'))`,
+               jsonb_build_object('agentId',$2::text,'seq',5,'prevHash','0xdead','ts',now()::text,'kind','action','hash','0xbeef'),
+               (SELECT chain_id FROM agents WHERE id = $1::uuid))`,
       [freshAgent, freshAgent],
     );
     const bad = await verifyAgentChainIncremental(db.pool, freshAgent);

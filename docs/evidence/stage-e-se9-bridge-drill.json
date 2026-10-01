@@ -1,0 +1,124 @@
+{
+  "drill": "stage-e-se9-governed-bridging-arbitrum",
+  "chains": [
+    {
+      "name": "arbitrum-sepolia",
+      "chainId": 421614
+    },
+    {
+      "name": "ethereum-sepolia",
+      "chainId": 11155111
+    }
+  ],
+  "factoryAddr": "0x9C10b48748Da1cA0CEE5AD7DA0725490A7d5E46f",
+  "router": "0x9fdd1c4e4aa24eec1d913fabea925594a20d43c7",
+  "runs": [
+    {
+      "when": "2026-10-01T08:12:14.595Z",
+      "accountSalt": "0x3b03dbbd59f9bbd93edb8fea96109eb1aff5297b30a9f0a14b6a48bfc4b04900",
+      "account": "0xb46829e4ee297c9C4b4A4A354CEC6358d273245c",
+      "router": "0x9fdd1c4e4aa24eec1d913fabea925594a20d43c7",
+      "gateway": "0xcfb1f08a4852699a979909e22c30263ca249556d",
+      "l1Token": "0x7b79995e5f793a07bc00c21412e50ecae098e7f9",
+      "l2Token": "0x980b62da83eff3d4576c647993b0c1d7faf17c73",
+      "mintTxs": {
+        "arbitrum-sepolia": "0xc628e163967e4208df9b2e96f64a354299a6036c9a01286a845d7259a37bb4f1",
+        "ethereum-sepolia": "0xf4c33b825c0a6c4ccc75c9608d9ffaac8404ad8ab7c7ffed4d5752f062712a16"
+      },
+      "happyTx": "0xc1dc53913177575ca5e2bd6b86e0cb98d9c904728c6d30804a4e9e6e9854c8a7",
+      "counts": {
+        "pass": 17,
+        "fail": 0,
+        "flake": 0
+      },
+      "green": true,
+      "results": [
+        {
+          "check": "factory@arbitrum-sepolia",
+          "ok": true,
+          "detail": "deployed at 0x9C10b48748Da1cA0CEE5AD7DA0725490A7d5E46f (tx 0xeaf1800c51d253a2c38f62b52a41bb6d6313f8eee6a8820b7ccc920ec8ae7fd2)"
+        },
+        {
+          "check": "factory@ethereum-sepolia",
+          "ok": true,
+          "detail": "deployed at 0x9C10b48748Da1cA0CEE5AD7DA0725490A7d5E46f (tx 0x5e9ce4074f86cca27ef820df1bfdd15f01f9e86df4f757772883f48101f9284b)"
+        },
+        {
+          "check": "mint@arbitrum-sepolia",
+          "ok": true,
+          "detail": "account 0xb46829e4ee297c9C4b4A4A354CEC6358d273245c has code (tx 0xc628e163967e4208df9b2e96f64a354299a6036c9a01286a845d7259a37bb4f1)"
+        },
+        {
+          "check": "mint@ethereum-sepolia",
+          "ok": true,
+          "detail": "account 0xb46829e4ee297c9C4b4A4A354CEC6358d273245c has code (tx 0xf4c33b825c0a6c4ccc75c9608d9ffaac8404ad8ab7c7ffed4d5752f062712a16)"
+        },
+        {
+          "check": "grants@arb",
+          "ok": true,
+          "detail": "L2+L1 token budgets + approve(gateway) + outboundTransfer rule granted (perCallCap 200000)"
+        },
+        {
+          "check": "pre-routing-gate PASS",
+          "ok": true,
+          "detail": "same-address 0xb46829e4ee297c9c4b4a4a354cec6358d273245c verified on destination 11155111 (L-02 chainId cross-check passed)"
+        },
+        {
+          "check": "bridge-happy LANDS",
+          "ok": true,
+          "detail": "outboundTransfer(l1Token, self, 100000) status 1 (tx 0xc1dc53913177575ca5e2bd6b86e0cb98d9c904728c6d30804a4e9e6e9854c8a7) — real Arbitrum GatewayRouter withdrawal initiated"
+        },
+        {
+          "check": "bridge-over-cap REVERTS",
+          "ok": true,
+          "detail": "REVERTED OverPerCallCap (selector-anchored): 0x2671b8a60000000000000000000000000000000000000000000000000000000000030d410000000000000000"
+        },
+        {
+          "check": "bridge-redirect REVERTS",
+          "ok": true,
+          "detail": "REVERTED RecipientNotSelf (selector-anchored): 0x239e7696000000000000000000000000bebebebebebebebebebebebebebebebebebebebe"
+        },
+        {
+          "check": "bridge-data-payload REVERTS",
+          "ok": true,
+          "detail": "REVERTED DecodeMismatch (selector-anchored): 0xee0f83ce"
+        },
+        {
+          "check": "bridge-value-rides REVERTS",
+          "ok": true,
+          "detail": "REVERTED DecodeMismatch(nonpayable) (selector-anchored): 0xee0f83ce"
+        },
+        {
+          "check": "off-allowlist-bridge REVERTS",
+          "ok": true,
+          "detail": "REVERTED TargetNotAllowlisted (selector-anchored): 0x042a9b0d0000000000000000000000009c10b48748da1ca0cee5ad7da0725490a7d5e46f"
+        },
+        {
+          "check": "real-redirect-tx status 0",
+          "ok": true,
+          "detail": "redirect tx 0xe813a5b69b75f916c20520571ebb6dbf3dbd43d9a65581574fbe5ca2943bf7fe → reverted"
+        },
+        {
+          "check": "gate-off-allowlist REFUSED",
+          "ok": true,
+          "detail": "refused: bridge routing REFUSED (bridge_not_allowlisted): bridge 0x9c10b48748da1ca0cee5ad7da0725490a7d5e46f is not in c"
+        },
+        {
+          "check": "gate-mutated-tuple REFUSED",
+          "ok": true,
+          "detail": "refused: bridge routing REFUSED (same_address_refused): same-address verification REFUSED at chain 421614: expected_account diver"
+        },
+        {
+          "check": "gate-unregistered-destination REFUSED",
+          "ok": true,
+          "detail": "refused: bridge routing REFUSED (destination_unregistered): destination chain 11155111 is not registered (default-deny)"
+        },
+        {
+          "check": "gate-chainid-mismatch REFUSED (L-02)",
+          "ok": true,
+          "detail": "refused: bridge routing REFUSED (destination_chainid_mismatch): destination RPC reports chain 421614, configured 11155111 — refus"
+        }
+      ]
+    }
+  ]
+}

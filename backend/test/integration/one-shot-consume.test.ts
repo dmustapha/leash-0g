@@ -38,7 +38,7 @@ const CALL_DATA = encodeFunctionData({
   functionName: 'approve',
   args: [SPENDER as `0x${string}`, 2000n],
 });
-const CALL_HASH = computeCallHash(TOKEN, 0n, CALL_DATA);
+const CALL_HASH = computeCallHash(16602, TOKEN, 0n, CALL_DATA);
 
 class FakeChain implements RuntimeChain {
   public calls: Array<{ target: string; data: string }> = [];
@@ -280,7 +280,7 @@ describe('SE-2 runtime one-shot-consume (E-3)', () => {
       ownerAddr: OWNER,
       decoded: { label: 'UNVERIFIED', target: BRIDGE, selector: '0xe11013dd' },
       novelty: ['new_target'],
-      callHash: computeCallHash(BRIDGE, 100n, data),
+      callHash: computeCallHash(16602, BRIDGE, 100n, data),
       callTarget: BRIDGE,
       callValue: '100',
       callData: data,

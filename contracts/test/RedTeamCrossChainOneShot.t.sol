@@ -8,9 +8,10 @@ import {MockERC20} from "../src/MockERC20.sol";
 /// SE-8 red-team: cross-chain one-shot replay (attack class 2).
 /// Models the SAME account (same owner/session/guardian/tuple → same CREATE2
 /// address) deployed on two chains as TWO independent LeashAccountV4 instances
-/// (EVM storage on chain A and chain B is physically disjoint). The callHash
-/// has NO chainId — we prove that does not matter, because oneShotAuthEta is
-/// per-account storage and authorizeOnce is an onlyOwner tx on ONE instance.
+/// (EVM storage on chain A and chain B is physically disjoint). SE-9 carry #4
+/// hardens this further: the callHash now binds `block.chainid`, so the SAME
+/// bytes yield a DIFFERENT callHash per chain — cross-chain replay is refused
+/// STRUCTURALLY (hash mismatch), not merely by disjoint storage.
 contract RedTeamCrossChainOneShot is Test {
     LeashAccountV4 internal chainA;
     LeashAccountV4 internal chainB;
@@ -59,7 +60,7 @@ contract RedTeamCrossChainOneShot is Test {
         // on both accounts' bytes. What matters is the callHash + storage slot.
         bytes memory data = abi.encodeWithSelector(SEL_TRANSFER, attacker, uint256(10e6));
         bytes4 selector = bytes4(data);
-        bytes32 callHash = keccak256(abi.encode(address(usdA), selector, data, uint256(0)));
+        bytes32 callHash = keccak256(abi.encode(block.chainid, address(usdA), selector, data, uint256(0)));
 
         // Owner authorizes the one-shot ONLY on chain A.
         vm.prank(owner);
@@ -90,7 +91,7 @@ contract RedTeamCrossChainOneShot is Test {
     function test_oneShot_consumeOnce_sameChain() public {
         usdA.mint(address(chainA), 1_000e6);
         bytes memory data = abi.encodeWithSelector(SEL_TRANSFER, attacker, uint256(5e6));
-        bytes32 callHash = keccak256(abi.encode(address(usdA), bytes4(data), data, uint256(0)));
+        bytes32 callHash = keccak256(abi.encode(block.chainid, address(usdA), bytes4(data), data, uint256(0)));
         vm.prank(owner);
         chainA.authorizeOnce(callHash, uint64(block.timestamp + 100));
         vm.prank(session);
@@ -99,5 +100,23 @@ contract RedTeamCrossChainOneShot is Test {
         vm.expectRevert();
         chainA.executeCall(address(usdA), 0, data);
         assertEq(usdA.balanceOf(attacker), 5e6, "one-shot consumed exactly once");
+    }
+
+    /// SE-9 carry #4: a one-shot authorized with a callHash computed for a FOREIGN
+    /// chainId can never be consumed here — the wall recomputes the hash with the
+    /// LIVE `block.chainid`, so a cross-chain-authorized hash simply does not exist
+    /// in `oneShotAuthEta` and the call falls through to the standing wall (refused).
+    function test_oneShot_chainIdBound_foreignChainHash_refused() public {
+        usdA.mint(address(chainA), 1_000e6);
+        bytes memory data = abi.encodeWithSelector(SEL_TRANSFER, attacker, uint256(7e6));
+        // a hash computed as if for a DIFFERENT chain (block.chainid + 1)
+        bytes32 foreignHash = keccak256(abi.encode(block.chainid + 1, address(usdA), bytes4(data), data, uint256(0)));
+        vm.prank(owner);
+        chainA.authorizeOnce(foreignHash, uint64(block.timestamp + 100));
+        // the live-chain hash differs → the one-shot is not found → standing wall refuses.
+        vm.prank(session);
+        vm.expectRevert();
+        chainA.executeCall(address(usdA), 0, data);
+        assertEq(usdA.balanceOf(attacker), 0, "foreign-chain one-shot hash never consumable here");
     }
 }

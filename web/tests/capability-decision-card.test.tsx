@@ -60,7 +60,36 @@ const BRIDGE_ERC20: CapabilityRequestRow = {
   decoded: { ...BRIDGE_ETH.decoded, selector: '0x540abf73', value: '0' },
 };
 
+// SE-9 Arbitrum ERC-20: outboundTransfer(l1Token=TOKEN, to=ACCOUNT, amount=100000000, data="") — 5 words.
+const ARB_OUTBOUND: CapabilityRequestRow = {
+  ...BRIDGE_ETH,
+  callValue: '0',
+  callData: '0x7b3a3c8b' + word(TOKEN) + word(ACCOUNT) + word('5f5e100') + word('80') + word('0'),
+  decoded: { ...BRIDGE_ETH.decoded, target: BRIDGE as `0x${string}`, selector: '0x7b3a3c8b', value: '0' },
+};
+// SE-9 Arbitrum ETH: withdrawEth(destination=ACCOUNT) — single arg, value = bridged amount.
+const ARB_WITHDRAW: CapabilityRequestRow = {
+  ...BRIDGE_ETH,
+  callValue: '5000000000000000',
+  callData: '0x25e16063' + word(ACCOUNT),
+  decoded: { ...BRIDGE_ETH.decoded, selector: '0x25e16063', value: '5000000000000000' },
+};
+
 describe('CapabilityDecisionCard', () => {
+  it('SE-9: decodes Arbitrum outboundTransfer (l1Token + amount) and pins the same-address recipient', () => {
+    render(<CapabilityDecisionCard request={ARB_OUTBOUND} accountAddr={ACCOUNT} onApproveOnce={vi.fn()} onAlwaysAllow={vi.fn()} onDeny={vi.fn()} />);
+    expect(screen.getByTestId('jit-intent').textContent).toBe(
+      'bridge 100000000 base-units of token 0xdddd…dddd via Arbitrum gateway 0x4200…0010 to your same-address account on the destination chain',
+    );
+  });
+
+  it('SE-9: decodes Arbitrum withdrawEth (single-arg ETH withdrawal) to human terms', () => {
+    render(<CapabilityDecisionCard request={ARB_WITHDRAW} accountAddr={ACCOUNT} onApproveOnce={vi.fn()} onAlwaysAllow={vi.fn()} onDeny={vi.fn()} />);
+    expect(screen.getByTestId('jit-intent').textContent).toBe(
+      'bridge 5000000000000000 base-units via Arbitrum 0x4200…0010 to your same-address account on the destination chain',
+    );
+  });
+
   it('decodes bridgeETHTo from the server-verified bytes to human terms, still UNVERIFIED', () => {
     render(<CapabilityDecisionCard request={BRIDGE_ETH} accountAddr={ACCOUNT} onApproveOnce={vi.fn()} onAlwaysAllow={vi.fn()} onDeny={vi.fn()} />);
     expect(screen.getByTestId('jit-intent').textContent).toBe(

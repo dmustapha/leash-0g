@@ -12,6 +12,7 @@ import { listTraces } from '../../src/trace/trace-store.js';
 import { LeashRuntimeManager } from '../../src/runtime/manager.js';
 import { upsertGrant } from '../../src/store/capabilities.js';
 import { UnregisteredChainError, type ChainRegistry } from '../../src/chain/registry.js';
+import type { LeashChainOps } from '../../src/chain/ops.js';
 import type { RuntimeChain, GrantStateCandidates } from '../../src/runtime/session-chain.js';
 import type { CallRule, GrantState } from '../../src/governed-call/index.js';
 import type { PolicyView } from '../../src/types.js';
@@ -103,8 +104,15 @@ let manager: LeashRuntimeManager;
 let sameAddressMock: ReturnType<typeof vi.fn>;
 const startedAgents: string[] = [];
 
+// Typed partial — only the registry surface the bridge lane actually exercises.
+// Typing against `Pick<ChainRegistry, …>` (instead of `as unknown as ChainRegistry`)
+// makes tsc validate each mocked member's signature against the real interface, so
+// future drift (e.g. SE-9's added `getChainOps` destination cross-check) fails the
+// build instead of surfacing only as a runtime "is not a function" at test time.
+type FakeChainRegistry = Pick<ChainRegistry, 'has' | 'getChainConfig' | 'getChainOps' | 'assertSameAddress'>;
+
 function fakeRegistry(): ChainRegistry {
-  return {
+  const fake: FakeChainRegistry = {
     has: (id: number) => id === HOME_CHAIN || id === DEST_CHAIN,
     getChainConfig: (id: number) => {
       if (id === HOME_CHAIN) {
@@ -112,13 +120,17 @@ function fakeRegistry(): ChainRegistry {
           chainId: HOME_CHAIN,
           bridgeAllowlist: [BRIDGE],
           bridgeDestinations: { [BRIDGE]: DEST_CHAIN },
-        };
+        } as unknown as ReturnType<ChainRegistry['getChainConfig']>;
       }
-      if (id === DEST_CHAIN) return { chainId: DEST_CHAIN };
+      if (id === DEST_CHAIN) return { chainId: DEST_CHAIN } as unknown as ReturnType<ChainRegistry['getChainConfig']>;
       throw new UnregisteredChainError(id);
     },
+    // SE-9 L-02: bridge-gate cross-checks the destination RPC's self-reported
+    // chain id — the fake ops lane reports its own id so the happy path passes.
+    getChainOps: (id: number) => ({ getChainId: async () => id }) as unknown as LeashChainOps,
     assertSameAddress: sameAddressMock,
-  } as unknown as ChainRegistry;
+  };
+  return fake as ChainRegistry;
 }
 
 beforeAll(async () => {
