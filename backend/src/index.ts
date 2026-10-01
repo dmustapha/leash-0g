@@ -32,7 +32,16 @@ import { getAgentById } from './store/agents.js';
 
 /** Composition root: wire every module, migrate, listen, run the loops. */
 async function main(): Promise<void> {
+  // Boot phase timing — on a cold start Render kills the instance if no port is
+  // bound within its startup window, so we log elapsed-ms per phase to make a
+  // slow phase visible in the deploy logs (and we bind the port before the
+  // non-essential background init below).
+  const bootStart = Date.now();
+  const phase = (label: string): void =>
+    console.error(`[boot +${((Date.now() - bootStart) / 1000).toFixed(1)}s] ${label}`);
+
   const cfg = loadConfig();
+  phase('config loaded');
   // Sanity: the configured ops address must be the ops key's address — a
   // mismatch means the wrong key is deployed (fail fast, before any wiring).
   const opsAddr = privateKeyToAccount(cfg.OPS_PRIVATE_KEY as `0x${string}`).address;
@@ -53,6 +62,7 @@ async function main(): Promise<void> {
   const migratePool = cfg.MIGRATE_DATABASE_URL ? createPool(cfg.MIGRATE_DATABASE_URL) : pool;
   const applied = await migrate(migratePool);
   if (applied.length > 0) console.error(`migrations applied: ${applied.join(', ')}`);
+  phase(`migrations done (${applied.length} applied)`);
   // S7: legacy Phase-1 rows get their real (ops-key) guardian recorded so the
   // revoke lane selection is explicit, not inferred from NULL.
   const backfilled = await backfillLegacyGuardian(pool, opsAddr);
@@ -90,6 +100,7 @@ async function main(): Promise<void> {
     await new PostgresSaver(migratePool, undefined, { schema: 'public' }).setup();
     await migratePool.end();
   }
+  phase('checkpointer setup done');
 
   const hub = new SseHub({
     maxGlobal: cfg.SSE_MAX_GLOBAL,
@@ -110,6 +121,7 @@ async function main(): Promise<void> {
   // delegations → expired, chain-visibly, before any loop starts.
   const sweptDelegations = await runBootSweep(pool, hub, alerts);
   if (sweptDelegations.length > 0) console.error(`swept ${sweptDelegations.length} orphaned delegation(s)`);
+  phase('boot sweeps done');
   const queue = new ComputeQueue({ baseUrl: cfg.COMPUTE_BASE_URL, apiKey: cfg.ZERO_G_COMPUTE_API_KEY });
   // SE-5 (E-5): the multichain backbone — one registry resolves ops/session clients
   // per chainId (default-deny for unregistered chains). The default chain drives the
@@ -123,6 +135,7 @@ async function main(): Promise<void> {
   });
   const defaultChainId = cfg.ZERO_G_CHAIN_ID;
   const chain = chainRegistry.getChainOps(defaultChainId);
+  phase(`chain registry built (${chainConfigs.length} chains: ${chainConfigs.map((c) => c.chainId).join(',')})`);
 
   // 0G Storage Log Layer wrapper — the audit batcher's sink AND the Phase-4
   // job graph's deliverable/PoA sink (built here so the runtime can thread it).
@@ -162,10 +175,10 @@ async function main(): Promise<void> {
 
   // L-01 (SE-5.0): crash-durability for the fire-and-forget one-shot retry.
   // consumeApprovedOneShot is an in-memory trigger; a restart mid-retry would
-  // strand an owner-authorized approve-once. Boot sweep + timer (cadence = the
-  // one-shot TTL) re-drive resumable one-shots. Idempotent via the CAS claim.
-  const resumedOnBoot = await runtime.sweepResumableOneShots();
-  if (resumedOnBoot > 0) console.error(`re-drove ${resumedOnBoot} resumable one-shot consume(s) on boot`);
+  // strand an owner-authorized approve-once. The boot re-drive is deferred to
+  // AFTER the port binds (startAfterListen) so a slow chain round-trip here
+  // never delays the listener past Render's cold-start deadline; the periodic
+  // timer (cadence = the one-shot TTL) re-drives resumable one-shots regardless.
   const oneShotSweepTimer = setInterval(() => {
     void runtime.sweepResumableOneShots().catch((err: unknown) =>
       console.error('one-shot consume sweep tick failed', err),
@@ -290,6 +303,30 @@ async function main(): Promise<void> {
   const ownerApp = createOwnerApp(appDeps);
   const gatewayApp = createGatewayApp(appDeps);
 
+  // Bind the ports BEFORE the non-essential background services (batchers,
+  // revoke watcher, delegation sweeper, one-shot re-drive). The DB schema +
+  // runtime wiring above are already complete, so every route is correct the
+  // instant it serves; opening the port first means a slow chain/storage round
+  // trip in the background loops can never delay the listener past Render's
+  // cold-start port-scan deadline (the Stage-E deploy footgun).
+  const server = ownerApp.listen(cfg.PORT, cfg.HOST, () => {
+    console.error(`leash owner API listening on ${cfg.HOST}:${cfg.PORT}`);
+  });
+  // M-01 timeouts. requestTimeout stays 0: SSE streams are long-lived; slow
+  // clients are bounded by headersTimeout + the JSON body caps instead.
+  server.headersTimeout = 15_000;
+  server.requestTimeout = 0;
+  server.keepAliveTimeout = 65_000;
+
+  // Loopback-only gateway server (M-01): never reachable from off-box.
+  const gatewayServer = gatewayApp.listen(cfg.GATEWAY_PORT, '127.0.0.1', () => {
+    console.error(`leash gateway listening on 127.0.0.1:${cfg.GATEWAY_PORT}`);
+  });
+  gatewayServer.headersTimeout = 15_000;
+  gatewayServer.requestTimeout = 0;
+  gatewayServer.keepAliveTimeout = 65_000;
+  phase('listening — ports bound');
+
   const batcher = new AuditBatcher({ pool, uploader });
   batcher.start();
   // §3d: the owner-stream batcher — same machinery, second source. Defers
@@ -318,22 +355,16 @@ async function main(): Promise<void> {
   // Expiry point B: 60s periodic sweeper for stale delegations.
   coordinator.startSweeper();
 
-  const server = ownerApp.listen(cfg.PORT, cfg.HOST, () => {
-    console.error(`leash owner API listening on ${cfg.HOST}:${cfg.PORT}`);
-  });
-  // M-01 timeouts. requestTimeout stays 0: SSE streams are long-lived; slow
-  // clients are bounded by headersTimeout + the JSON body caps instead.
-  server.headersTimeout = 15_000;
-  server.requestTimeout = 0;
-  server.keepAliveTimeout = 65_000;
-
-  // Loopback-only gateway server (M-01): never reachable from off-box.
-  const gatewayServer = gatewayApp.listen(cfg.GATEWAY_PORT, '127.0.0.1', () => {
-    console.error(`leash gateway listening on 127.0.0.1:${cfg.GATEWAY_PORT}`);
-  });
-  gatewayServer.headersTimeout = 15_000;
-  gatewayServer.requestTimeout = 0;
-  gatewayServer.keepAliveTimeout = 65_000;
+  // L-01: deferred one-shot boot re-drive (moved off the pre-listen path). A
+  // chain round-trip here no longer gates the port; the periodic timer above
+  // still re-drives on its cadence if this is slow.
+  runtime
+    .sweepResumableOneShots()
+    .then((n) => {
+      if (n > 0) console.error(`re-drove ${n} resumable one-shot consume(s) on boot`);
+      phase('background init complete');
+    })
+    .catch((err: unknown) => console.error('one-shot boot re-drive failed', err));
 
   const shutdown = (signal: string): void => {
     console.error(`${signal} received — shutting down`);
