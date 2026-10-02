@@ -79,9 +79,25 @@ export function buildPoaRecord(input: {
 }
 
 /**
+ * SF-0 / L-01 (F-0b): the sender of a `job.verdict` MUST be the job's bound
+ * evaluator. Delegation provenance is server-authored (the coordinator stamps
+ * `fromAgentId` from the issuing agent's row, never from untrusted payload), so
+ * this rejects a verdict issued by ANY other agent — including a same-owner one —
+ * impersonating the evaluator, even with an otherwise-valid-looking payload.
+ * Fail-closed: an absent sender is refused.
+ */
+export function assertEvaluatorIdentity(
+  senderAgentId: string | null | undefined,
+  job: { evaluatorAgentId: string },
+): boolean {
+  return typeof senderAgentId === 'string' && senderAgentId.length > 0 && senderAgentId === job.evaluatorAgentId;
+}
+
+/**
  * Verify all three party signatures against their expected session-key
- * addresses. Returns which (if any) failed — used by the master review / a
- * third party re-verifying the PoA from 0G Storage.
+ * addresses. Returns which (if any) failed — used by the LIVE verdict→approval
+ * gate (SF-0/L-01, F-0a), the master review, and a third party re-verifying the
+ * PoA from 0G Storage.
  */
 export async function verifyPoa(
   poa: PoaRecord,

@@ -30,8 +30,9 @@ import {
 import { evaluateAcceptance, renderAcceptanceContract, type AcceptanceResult } from './acceptance.js';
 import { evaluateGate } from './gate.js';
 import { buildProviderRequest, parseDeliverable, buildEvaluatorRequest, parseVerdict } from './prompt.js';
-import { hashJobSpec, verdictMessage, signWithSessionKey, buildPoaRecord } from './poa.js';
+import { hashJobSpec, verdictMessage, signWithSessionKey, buildPoaRecord, verifyPoa, assertEvaluatorIdentity } from './poa.js';
 import { getJobSpec } from '../store/job-specs.js';
+import { getAgentById } from '../store/agents.js';
 import {
   createJob,
   getJob,
@@ -395,6 +396,77 @@ export function buildJobGraph(deps: JobGraphDeps, ctx: JobAgentContext, checkpoi
     const job = await getJob(deps.pool, p.jobId);
     if (!job || job.requesterAgentId !== ctx.agentId) {
       return { outcome: { type: 'failed', reason: 'verdict for an unknown job' }, route: 'noop' };
+    }
+    // P5C-2 (hoisted above the SF-0 checks): a re-emitted / checkpoint-replayed
+    // job.verdict on a job that already advanced past evaluation is an idempotent
+    // no-op. It MUST short-circuit here, BEFORE the SF-0 reject paths below —
+    // otherwise a stale/failing replay would markJobStatus('rejected') and clobber
+    // an already-approved or settled job. recordVerdict advances only from
+    // delivered/evaluating; a job carrying an approval_id already reached the owner.
+    if ((job.status !== 'delivered' && job.status !== 'evaluating') || job.approvalId) {
+      return { outcome: { type: 'rejected', jobId: p.jobId, reason: 'duplicate or out-of-state verdict ignored' }, route: 'noop' };
+    }
+    // SF-0 / L-01 (F-0b): sender-identity — a job.verdict MUST originate from the
+    // job's bound evaluator. Delegation provenance is server-authored (the
+    // coordinator stamps fromAgentId), so a verdict from any OTHER agent — even a
+    // same-owner one — is refused before any state advances, regardless of how
+    // valid the payload looks.
+    if (!assertEvaluatorIdentity(state.inboundDelegation?.fromAgentId, job)) {
+      await markJobStatus(deps.pool, p.jobId, 'rejected', { blockedBy: 'evaluator_identity' });
+      return {
+        outcome: { type: 'rejected', jobId: p.jobId, reason: 'verdict sender is not the bound evaluator' },
+        route: 'noop',
+      };
+    }
+    // SF-0 / L-01 (F-0a): verify the signed Proof-of-Agreement in the LIVE
+    // verdict→approval path (verifyPoa was defined but never called here — the
+    // structural L-01 gap). The evaluatorSig MUST recover to the evaluator agent's
+    // session-key address; the already-stored requester/provider sigs are
+    // re-verified as defence in depth. A forged / absent / wrong-signer verdict
+    // fails CLOSED here — before recordVerdict advances the job — so no approval
+    // card is ever raised and no settlement can follow.
+    const [providerRow, evaluatorRow] = await Promise.all([
+      getAgentById(deps.pool, job.providerAgentId),
+      getAgentById(deps.pool, job.evaluatorAgentId),
+    ]);
+    if (!providerRow || !evaluatorRow) {
+      await markJobStatus(deps.pool, p.jobId, 'rejected', { blockedBy: 'poa_identity' });
+      return {
+        outcome: { type: 'rejected', jobId: p.jobId, reason: 'cannot resolve job party identities for verdict verification' },
+        route: 'noop',
+      };
+    }
+    // Defense-in-depth: never recover a signature over absent material. In an
+    // evaluatable state these are always present (recordDelivery set them); assert
+    // it rather than silently coalescing a null to '' and signing the empty string.
+    if (!job.deliverableRoot || !job.providerSig || !job.requesterSig) {
+      await markJobStatus(deps.pool, p.jobId, 'rejected', { blockedBy: 'poa_incomplete' });
+      return {
+        outcome: { type: 'rejected', jobId: p.jobId, reason: 'verdict arrived before complete PoA material' },
+        route: 'noop',
+      };
+    }
+    const poaCandidate = buildPoaRecord({
+      jobId: job.jobId,
+      jobSpecHash: job.jobSpecHash,
+      requesterSig: job.requesterSig,
+      deliverableRoot: job.deliverableRoot ?? '',
+      providerSig: job.providerSig ?? '',
+      verdict: p.verdict,
+      evaluatorSig: p.evaluatorSig,
+      acceptance: job.acceptance ?? { passed: false, failures: [], checked: 0 },
+    });
+    const poaCheck = await verifyPoa(poaCandidate, {
+      requester: ctx.agentRow.sessionKeyAddr,
+      provider: providerRow.sessionKeyAddr,
+      evaluator: evaluatorRow.sessionKeyAddr,
+    });
+    if (!poaCheck.ok) {
+      await markJobStatus(deps.pool, p.jobId, 'rejected', { blockedBy: 'poa_verification' });
+      return {
+        outcome: { type: 'rejected', jobId: p.jobId, reason: `verdict signature verification failed: ${poaCheck.failures.join('; ')}` },
+        route: 'noop',
+      };
     }
     // P5C-2: a re-emitted / duplicate job.verdict must be idempotent. recordVerdict
     // advances ONLY from an evaluatable state (returns false otherwise), and a job
