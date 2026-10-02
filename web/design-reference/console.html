@@ -549,9 +549,9 @@ const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAl
 
 /* ---------- data ---------- */
 const AGENTS = [
-  {name:'research-agent', addr:'0xA91f…3e', ens:'research.org.leash.eth', status:'active', spent:188, cap:500, daily:500, allow:4, last:'ALLOW'},
-  {name:'ops-agent',      addr:'0x4c2d…b8', ens:'ops.org.leash.eth',      status:'nearcap', spent:910, cap:250, daily:1000, allow:7, last:'DENY'},
-  {name:'scraper-agent',  addr:'0x7e10…af', ens:'scraper.org.leash.eth',  status:'revoked', spent:0, cap:0, daily:0, allow:0, last:'REVOKED'},
+  {name:'research-agent', addr:'0xA91f…3e', ens:'research.org.leash.eth', status:'active', spent:188, cap:500, daily:500, allow:4, last:'ALLOW', protocol:'openai'},
+  {name:'ops-agent',      addr:'0x4c2d…b8', ens:'ops.org.leash.eth',      status:'nearcap', spent:910, cap:250, daily:1000, allow:7, last:'DENY', protocol:'anthropic'},
+  {name:'scraper-agent',  addr:'0x7e10…af', ens:'scraper.org.leash.eth',  status:'revoked', spent:0, cap:0, daily:0, allow:0, last:'REVOKED', protocol:'mcp'},
 ];
 const VERDICTS = [
   ['deny','ops-agent','api.render.com','OVER_DAILY_CAP',620.00,'—','14:41'],
@@ -608,12 +608,15 @@ function fleetCard(a){
   const chip = a.status==='active'?'<span class="chip chip-allow">Active</span>'
     : a.status==='nearcap'?'<span class="chip chip-pend">Near cap</span>'
     : '<span class="chip chip-deny">Revoked</span>';
+  // SF-1 (F-Xd): per-protocol presence — which model protocol this bound agent
+  // speaks to the gateway. Every agent routes LEASH; the chip says HOW.
+  const proto = protocolChip(a.protocol);
   const lastCls = a.last==='ALLOW'?'v-allow':a.last==='DENY'||a.last==='REVOKED'?'v-deny':'';
   const actions = isCut
     ? `<button class="btn btn-ghost press" disabled>Edit policy</button><button class="btn btn-ghost press">Re-issue</button>`
     : `<button class="btn btn-ghost press" data-cmd="edit" data-agent="${a.name}">Edit policy</button><button class="btn btn-danger press" data-cmd="cut" data-agent="${a.name}">Cut leash</button>`;
   return `<div class="agent lift" tabindex="0" role="button" data-open="${a.name}" aria-label="Open cockpit for ${a.name}">
-    <div class="row1"><div><div class="name">${a.name}</div><div class="addr">${a.addr} · ENS ${a.ens}</div></div>${chip}</div>
+    <div class="row1"><div><div class="name">${a.name}</div><div class="addr">${a.addr} · ENS ${a.ens}</div></div><div style="display:flex;gap:var(--s-2);align-items:center">${proto}${chip}</div></div>
     <div class="meter">${meter}<div class="cap-label">${capLabel}</div></div>
     <div class="facts">
       <div class="fact"><div class="k">Per-transfer</div><div class="v">${isCut?'<span class="faint">—</span>':'$'+a.cap}</div></div>
@@ -622,6 +625,20 @@ function fleetCard(a){
     </div>
     <div class="actions">${actions}</div>
   </div>`;
+}
+// SF-1 (F-Xd): the per-protocol presence chip. OpenAI-compatible, Anthropic-
+// native (adapted onto 0G Compute, SD-F4), and MCP all ride the one gateway
+// spine; the chip surfaces which protocol a bound agent speaks.
+function protocolChip(p){
+  const map = {
+    openai:   {label:'OpenAI',    cls:'jade'},
+    anthropic:{label:'Anthropic', cls:'accent'},
+    mcp:      {label:'MCP',       cls:'accent'},
+  };
+  const m = map[p]; if(!m) return '';
+  return `<span class="badge-pill ${m.cls}" title="Speaks the ${m.label} protocol — routed through the LEASH gateway">`
+    + `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8h10M9 4l4 4-4 4" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>`
+    + `${m.label}</span>`;
 }
 function renderFleet(){ fleet.innerHTML = AGENTS.map(fleetCard).join(''); }
 function renderSummary(){
