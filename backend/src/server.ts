@@ -3,6 +3,7 @@ import type { Pool } from 'pg';
 import type { ComputeQueue } from './gateway/compute-queue.js';
 import type { TargetCatalog } from './governed-call/index.js';
 import { gatewayRouter } from './gateway/routes.js';
+import type { McpToolProvider } from './gateway/mcp/provider.js';
 import { ownerRouter, type OwnerChainRegistry } from './api/owner-routes.js';
 import type { PrivyVerifier } from './api/privy.js';
 import type { SseHub } from './sse/hub.js';
@@ -165,6 +166,11 @@ export interface AppDeps {
   settings: Settings;
   /** SE-7: multichain registry surface for the owner chain routes (optional). */
   chainRegistry?: OwnerChainRegistry | undefined;
+  /**
+   * SF-1 (BR-F2): the MCP tool-provider for the gateway `/mcp` transport.
+   * Omitted ⇒ `denyAllProvider` (default-deny; SF-3 injects the governed one).
+   */
+  mcpProvider?: McpToolProvider | undefined;
 }
 
 interface Surfaces {
@@ -224,6 +230,7 @@ function buildApp(deps: AppDeps, surfaces: Surfaces): Express {
         broker: deps.broker,
         alerts: deps.alerts,
         approvalTimeoutMs: deps.settings.approvalTimeoutMs,
+        mcpProvider: deps.mcpProvider,
       }),
     );
   }
