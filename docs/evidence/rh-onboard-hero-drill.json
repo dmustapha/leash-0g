@@ -1,0 +1,38 @@
+{
+  "drill": "RH onboard + oracle-aware hero (Arbitrum Open House)",
+  "chainId": 46630,
+  "factoryV4": "0x93Bb77c3d9458f4738501fA82d7506225d61F767",
+  "account": "0x4EfC4f10e2b9DD491900dD9Ff4D52cB25E0D5c1f",
+  "createTx": "0x0933ec9750fee0628d5d92f862fbd8c35d65cf08d88fd15194c4650ccaef6c96",
+  "registerTx": "0x41346bfbe7d7a021308568777b49f015ce33af7a04775c82189bae3a4ca825e2",
+  "greenTx": "0xf8ca6853a669cdcfe829fe3478d5281f4f849e99f56454caa83b437aa1af8afe",
+  "score": "5/5",
+  "checks": [
+    {
+      "check": "production onboard → RH-home V4 agent",
+      "ok": true,
+      "detail": "account=0x4EfC4f10e2b9DD491900dD9Ff4D52cB25E0D5c1f chainAgentId=1 createTx=0x0933ec9750fee0628d5d92f862fbd8c35d65cf08d88fd15194c4650ccaef6c96"
+    },
+    {
+      "check": "governed approve ACCEPTED",
+      "ok": true,
+      "detail": "allowance=2000000000000000000000 tx=0x5f394a66776e3ae1151479a03334ef9c92d386a29c6143c71e7a0b4bed424514"
+    },
+    {
+      "check": "agent trades sanely — in-band swap ACCEPTED",
+      "ok": true,
+      "detail": "sTSLA=100000000000000000000 tx=0xf8ca6853a669cdcfe829fe3478d5281f4f849e99f56454caa83b437aa1af8afe"
+    },
+    {
+      "check": "premium trade BLOCKED (PremiumBreach)",
+      "ok": true,
+      "detail": "Execution reverted for an unknown reason."
+    },
+    {
+      "check": "stale feed → trade BLOCKED (StaleOracle, fail-closed)",
+      "ok": true,
+      "detail": "Execution reverted for an unknown reason."
+    }
+  ],
+  "at": "2026-10-03T16:27:26.905Z"
+}
