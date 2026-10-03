@@ -110,7 +110,12 @@ async function handleOpenAI(deps: GatewayDeps, req: Request, res: Response): Pro
     res.status(400).json(openaiShaper.shapeError(400, 'unrecognized request shape'));
     return;
   }
-  await runGoverned(deps, req, res, req.body as Json, openaiShaper);
+  const auth = await authenticateAgent(deps.pool, req.headers.authorization);
+  if (!auth.ok) {
+    res.status(auth.status).json(openaiShaper.shapeError(auth.status, auth.status === 401 ? 'unauthorized' : 'forbidden'));
+    return;
+  }
+  await runGoverned(deps, auth.agent, res, req.body as Json, openaiShaper);
 }
 
 /**
@@ -125,6 +130,14 @@ async function handleAnthropic(deps: GatewayDeps, req: Request, res: Response): 
     res.status(400).json(anthropicError(400, 'unrecognized request shape'));
     return;
   }
+  // C-SF1-2: authenticate BEFORE protocol-adaptation. An unauthenticated or
+  // revoked caller is refused before the adapter does any work on its body —
+  // the adapter never runs on an unauthorized request.
+  const auth = await authenticateAgent(deps.pool, req.headers.authorization);
+  if (!auth.ok) {
+    res.status(auth.status).json(anthropicError(auth.status, auth.status === 401 ? 'unauthorized' : 'forbidden'));
+    return;
+  }
   const obj = body as Record<string, Json>;
   if (obj['stream'] === true) {
     res.status(400).json(anthropicError(400, 'streaming is not supported on this gateway (v1)'));
@@ -135,7 +148,7 @@ async function handleAnthropic(deps: GatewayDeps, req: Request, res: Response): 
     res.status(400).json(anthropicError(400, `request could not be adapted: ${adapted.reason}`));
     return;
   }
-  await runGoverned(deps, req, res, adapted.openai, anthropicShaper(obj['model'] as string));
+  await runGoverned(deps, auth.agent, res, adapted.openai, anthropicShaper(obj['model'] as string));
 }
 
 async function handleMcp(
@@ -171,17 +184,11 @@ async function handleMcp(
  */
 async function runGoverned(
   deps: GatewayDeps,
-  req: Request,
+  agent: AgentRow,
   res: Response,
   body: Json,
   shaper: ProtocolShaper,
 ): Promise<void> {
-  const auth = await authenticateAgent(deps.pool, req.headers.authorization);
-  if (!auth.ok) {
-    res.status(auth.status).json(shaper.shapeError(auth.status, auth.status === 401 ? 'unauthorized' : 'forbidden'));
-    return;
-  }
-  const agent = auth.agent;
   const outcome = evaluateRules(agent.gatewayRules, body);
 
   // C-5: non-text parts can't be scanned by rules — record their presence on

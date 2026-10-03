@@ -8,6 +8,8 @@ import { createPool, createDirectPool } from './db/pool.js';
 import { migrate } from './db/migrate.js';
 import { createOwnerApp, createGatewayApp } from './server.js';
 import { ComputeQueue } from './gateway/compute-queue.js';
+import { createGovernedMcpProvider, createDbGrantLoader } from './gateway/mcp/governed-provider.js';
+import { createHttpMcpEgressClient, parseEgressConfigFromEnv } from './gateway/mcp/egress.js';
 import { SseHub } from './sse/hub.js';
 import { ApprovalBroker } from './approvals/broker.js';
 import { createPrivyVerifier } from './api/privy.js';
@@ -314,6 +316,19 @@ async function main(): Promise<void> {
     // SE-7: the owner chain routes (list + second-chain onboarding) resolve
     // per-chain ops through the SAME registry the runtime uses (default-deny).
     chainRegistry,
+    // SF-3: the governed MCP tool-provider rides the SF-1 seam (one-line swap
+    // from denyAllProvider). Egress policy is owner/LEASH-configured via env;
+    // empty config ⇒ every tool is egress-forbidden (safe default-deny).
+    mcpProvider: createGovernedMcpProvider({
+      pool,
+      hub,
+      broker,
+      alerts,
+      approvalTimeoutMs: cfg.APPROVAL_TIMEOUT_MS,
+      jitTtlMs: cfg.JIT_TTL_MS,
+      egress: createHttpMcpEgressClient(),
+      loadGrant: createDbGrantLoader(pool, parseEgressConfigFromEnv()),
+    }),
   };
   // M-01 split surfaces: the public server carries owner API + SSE + healthz
   // ONLY; the gateway gets its own server, ALWAYS bound to loopback.

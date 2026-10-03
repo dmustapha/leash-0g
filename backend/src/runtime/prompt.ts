@@ -31,13 +31,17 @@ export interface PolicySnapshot {
 }
 
 export interface AgentDecision {
-  action: 'send' | 'call' | 'stand_down';
+  action: 'send' | 'call' | 'tool_call' | 'stand_down';
   amountWei: string;
   reason: string;
   /** Stage D (D-10) governed call: the granted target contract (only for action 'call'). */
   target?: string;
   /** Stage D (D-10) governed call: the granted 4-byte selector (only for action 'call'). */
   selector?: string;
+  /** SF-3 governed tool-use: the canonical tool id (only for action 'tool_call'). */
+  toolId?: string;
+  /** SF-3 governed tool-use: the tool arguments (only for action 'tool_call'); re-guarded by the gate. */
+  toolArgs?: Record<string, Json>;
 }
 
 /**
@@ -289,7 +293,7 @@ function buildObservation(ctx: ReasonContext) {
 
 const decisionSchema = z
   .object({
-    action: z.enum(['send', 'call', 'stand_down']),
+    action: z.enum(['send', 'call', 'tool_call', 'stand_down']),
     amountWei: z.string().regex(/^\d{1,30}$/).default('0'),
     reason: z.string().max(1000).default(''),
     // Stage D (D-10): present only for action 'call'. Strict shape — the decide
@@ -300,12 +304,20 @@ const decisionSchema = z
     // every polite stand-down parsed as a miss, burning cycles as F-4 noise).
     target: z.preprocess((v) => (v === '' || v === null ? undefined : v), z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional()),
     selector: z.preprocess((v) => (v === '' || v === null ? undefined : v), z.string().regex(/^0x[0-9a-fA-F]{8}$/).optional()),
+    // SF-3: present only for action 'tool_call'. The args are re-guarded +
+    // re-classified by the tool-gate (never trusted as authority).
+    toolId: z.string().min(1).max(128).optional(),
+    toolArgs: z.record(z.unknown()).optional(),
   })
   .superRefine((d, ctx) => {
     // A 'call' with no target/selector is malformed → reject (falls back to a
     // deterministic stand-down in the decide overlay).
     if (d.action === 'call' && (!d.target || !d.selector)) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'call requires target and selector' });
+    }
+    // A 'tool_call' with no toolId is malformed → reject (deterministic stand-down).
+    if (d.action === 'tool_call' && !d.toolId) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'tool_call requires toolId' });
     }
   });
 
@@ -358,14 +370,17 @@ export function parseDecision(content: string): AgentDecision | null {
     const parsed = decisionSchema.safeParse(raw);
     if (!parsed.success) continue;
     const d = parsed.data;
-    // Normalize to AgentDecision: carry target/selector ONLY for a 'call' (omit the
-    // keys entirely otherwise — exactOptionalPropertyTypes forbids `undefined`).
+    // Normalize to AgentDecision: carry target/selector ONLY for a 'call' and
+    // toolId/toolArgs ONLY for a 'tool_call' (omit the keys entirely otherwise —
+    // exactOptionalPropertyTypes forbids `undefined`).
     last = {
       action: d.action,
       amountWei: d.amountWei,
       reason: d.reason,
       ...(d.action === 'call' && d.target ? { target: d.target } : {}),
       ...(d.action === 'call' && d.selector ? { selector: d.selector } : {}),
+      ...(d.action === 'tool_call' && d.toolId ? { toolId: d.toolId } : {}),
+      ...(d.action === 'tool_call' && d.toolArgs ? { toolArgs: d.toolArgs as Record<string, Json> } : {}),
     };
   }
   return last;

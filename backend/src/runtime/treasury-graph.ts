@@ -25,6 +25,10 @@ import type { TradeFill } from '../governed-call/call-builder.js';
 import { classifyIntendedCall } from '../gateway/call-gate.js';
 import { raiseCapabilityRequest, type CapabilityDeps } from '../capabilities/service.js';
 import { listGrants } from '../store/capabilities.js';
+import { gateToolCall } from '../gateway/mcp/tool-gate.js';
+import { guardToolResult, type ToolGrantState, type ToolRegistry } from '../tool-use/index.js';
+import { raiseToolRequest, type ToolServiceDeps } from '../tool-use/tool-service.js';
+import type { McpEgressClient } from '../gateway/mcp/governed-provider.js';
 import {
   buildReasonRequest,
   completionContent,
@@ -59,9 +63,26 @@ export type CycleOutcome =
   | { type: 'delegated'; delegationId: string }
   | { type: 'stood_down'; reason: string }
   | { type: 'denied'; reason: string }
-  | { type: 'failed'; reason: string; decoded?: DecodedLeashError };
+  | { type: 'failed'; reason: string; decoded?: DecodedLeashError }
+  | { type: 'tool_used'; toolId: string; isError?: boolean };
 
-type Route = 'act' | 'approval' | 'delegate' | 'call' | 'stand_down';
+type Route = 'act' | 'approval' | 'delegate' | 'call' | 'tool_call' | 'stand_down';
+
+/**
+ * SF-3 — the runtime tool rail (OPTIONAL, mirror of the `capabilities` dep). When
+ * wired, the decide node routes a `tool_call` action through the SAME tool-gate
+ * the MCP gateway uses: L1 executes via the egress client + records a `tool_used`
+ * outcome (symmetric with `callAct` recording a txHash); L2 raises a JIT request
+ * and stands down (owner grants before it can ever run); forbidden stands down.
+ * Absent ⇒ a `tool_call` simply stands down, traced (safe default-deny).
+ */
+export interface ToolRail {
+  registry: ToolRegistry;
+  loadGrant: (agentId: string) => Promise<ToolGrantState>;
+  service: ToolServiceDeps;
+  executor: McpEgressClient;
+  maxIoBytes?: number | undefined;
+}
 
 const TreasuryState = Annotation.Root({
   /** Set by the manager when this cycle processes an inbound delegation (spec §3b). */
@@ -90,6 +111,11 @@ const TreasuryState = Annotation.Root({
   callTarget: Annotation<string>,
   callData: Annotation<string>,
   callValue: Annotation<string>,
+  /** SF-3: the resolved L1 tool call for the `tool_call` route (egress leg). */
+  toolName: Annotation<string>,
+  toolEndpoint: Annotation<string>,
+  toolArgs: Annotation<Json>,
+  toolIdResolved: Annotation<string>,
   /** Verbatim markFailed reason for a rejected inbound envelope (spec §3b). */
   inboundReject: Annotation<string>,
   approvalId: Annotation<string>,
@@ -115,6 +141,8 @@ export interface TreasuryGraphDeps {
    * / alert-free test setups — a novel call then simply stands down, traced.
    */
   capabilities?: CapabilityDeps | undefined;
+  /** SF-3 — the governed tool-use rail (optional; absent ⇒ tool_call stands down). */
+  toolRail?: ToolRail | undefined;
   /**
    * SE-8 — the governed-bridging lane. `targets` = the chain's bridge allowlist
    * (classify enforcement, carry #2); `assertRoutable` = the HARD pre-routing
@@ -467,6 +495,7 @@ export function buildTreasuryGraph(
     // read (never native-transfer window damping — its caps live on-chain +
     // in classify). Resolve it BEFORE the transfer-damping block.
     if (verdict.route === 'call') return decideCall(state, verdict.decision);
+    if (verdict.route === 'tool_call') return decideToolCall(state, verdict.decision);
     // P3C-6(iii): boundary damping. Refresh clear conditions first (window
     // reset / policy change / re-arm — clearing resolves the limit_hit
     // alert and re-enables normal flow), then short-circuit outcomes that
@@ -748,6 +777,64 @@ export function buildTreasuryGraph(
     }
   }
 
+  /**
+   * SF-3 — the governed tool-use decide node (mirror of `decideCall`). Routes a
+   * `tool_call` through the SAME tool-gate the MCP gateway uses, grant-state only:
+   * forbidden/absent-rail → stand down; L2 (sensitive or policy edge) → raise a
+   * JIT request + stand down; L1 → resolve the egress leg and route to `toolAct`.
+   */
+  async function decideToolCall(state: State, decision: AgentDecision): Promise<Partial<State>> {
+    const standDownResult = (reason: string): Partial<State> => ({
+      decision: { action: 'stand_down', amountWei: '0', reason },
+      route: 'stand_down',
+    });
+    if (state.policy.revoked) return standDownResult('account revoked since sense — not using a tool');
+    const rail = deps.toolRail;
+    if (!rail) return standDownResult('tool_call requested but no tool rail configured — standing down');
+    const toolId = decision.toolId ?? '';
+    const grant = await rail.loadGrant(ctx.agentId);
+    const gate = gateToolCall(toolId, decision.toolArgs ?? {}, rail.registry, grant, rail.maxIoBytes);
+
+    if (gate.classification.lane === 'forbidden') {
+      return standDownResult(`tool call forbidden (${gate.classification.reason})`);
+    }
+    if (gate.classification.lane === 'l2') {
+      await raiseToolRequest(rail.service, ctx.agentRow, gate);
+      return standDownResult(`tool call needs owner approval (${gate.classification.triggers.join(', ')}) — raised a tool request`);
+    }
+    // L1 — resolve the egress leg; defence-in-depth (classify forbade no-endpoint).
+    if (!gate.endpoint || !gate.descriptor) return standDownResult('tool call egress not resolvable — standing down');
+    return {
+      decision,
+      route: 'tool_call',
+      toolIdResolved: gate.toolId,
+      toolName: gate.descriptor.name,
+      toolEndpoint: gate.endpoint,
+      toolArgs: gate.guardedArgs,
+    };
+  }
+
+  /**
+   * SF-3 — execute an L1 governed tool call via the egress proxy and record a
+   * `tool_used` outcome (symmetric with `callAct`). The RESULT is I/O-guarded
+   * before it ever leaves this node (prompt-injection-via-result / exfiltration /
+   * proto-pollution, F-3b); a rejected result is recorded as an error outcome.
+   */
+  async function toolAct(state: State): Promise<Partial<State>> {
+    const rail = deps.toolRail;
+    if (!rail) return { outcome: { type: 'stood_down', reason: 'tool rail disappeared before execution' } };
+    try {
+      const result = await rail.executor.call(state.toolEndpoint, state.toolName, state.toolArgs);
+      const guarded = guardToolResult(result.content ?? [], rail.maxIoBytes);
+      const isError = result.isError === true || !guarded.ok;
+      return { outcome: { type: 'tool_used', toolId: state.toolIdResolved, ...(isError ? { isError: true } : {}) } };
+    } catch (err) {
+      return {
+        outcome: { type: 'failed', reason: `tool call failed: ${err instanceof Error ? err.message : String(err)}` },
+      };
+    }
+  }
+
   async function requestApproval(state: State): Promise<Partial<State>> {
     // Pauses here; the manager persists the consent record BEFORE resuming.
     const resume = interrupt<Json, ApprovalDecision>({
@@ -1008,6 +1095,7 @@ export function buildTreasuryGraph(
     .addNode('decide', decide)
     .addNode('act', act)
     .addNode('callAct', callAct)
+    .addNode('toolAct', toolAct)
     .addNode('requestApproval', requestApproval)
     .addNode('delegate', delegate)
     .addNode('standDown', standDown)
@@ -1019,12 +1107,14 @@ export function buildTreasuryGraph(
     .addConditionalEdges('decide', (state: State) => state.route, {
       act: 'act',
       call: 'callAct',
+      tool_call: 'toolAct',
       approval: 'requestApproval',
       delegate: 'delegate',
       stand_down: 'standDown',
     })
     .addEdge('act', 'record')
     .addEdge('callAct', 'record')
+    .addEdge('toolAct', 'record')
     .addEdge('requestApproval', 'record')
     .addEdge('delegate', 'record')
     .addEdge('standDown', 'record')
@@ -1098,6 +1188,14 @@ function evaluateDecision(
     return { decision: parsed, route: 'call' };
   }
 
+  // SF-3 (STAGE-F §3b): a governed tool call. Deterministic pre-checks here; the
+  // grant-state classify + I/O guard happen in the decide node (never-trust-model).
+  if (parsed.action === 'tool_call') {
+    if (!parsed.toolId) return stand('tool_call decision missing toolId');
+    if (state.policy.revoked) return stand('account is revoked');
+    return { decision: parsed, route: 'tool_call' };
+  }
+
   // FR3 (F-8): the trader NEVER sends native transfers — a 'send' from it is a
   // model error (or an injected instruction); refuse deterministically.
   if (ctx.goal.type === 'trader') return stand('trader never sends native transfers');
@@ -1145,6 +1243,8 @@ function outcomeSummary(o: CycleOutcome): string {
       return `owner denied the transfer: ${o.reason}`;
     case 'failed':
       return o.reason;
+    case 'tool_used':
+      return o.isError ? `tool ${o.toolId} returned an error` : `used tool ${o.toolId}`;
     default:
       return 'cycle complete';
   }

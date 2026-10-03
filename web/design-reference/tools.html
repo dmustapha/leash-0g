@@ -1,0 +1,524 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>LEASH · Governed Tool-Use</title>
+<script>try{if(localStorage.getItem('leash-theme')==='light')document.documentElement.setAttribute('data-theme','light')}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://api.fontshare.com/v2/css?f[]=clash-display@500,600,700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./tokens.css">
+<style>
+/* ===== TOOLS SURFACE (PROFILE = PRODUCT-APP) — restrained motion, data is the show.
+   SF-3 / SD-F8 design-reference. Three owner surfaces for governed tool-use.
+   All color/type comes from tokens.css; this block is page-specific LAYOUT only. ===== */
+body { max-width: 1120px; margin: 0 auto; padding: var(--s-6) var(--s-5) var(--s-9); }
+
+/* page header (glass) */
+header.top { position: sticky; top:0; z-index:20; display:flex; align-items:center; gap:var(--s-4);
+  justify-content:space-between; padding: var(--s-4) var(--s-5); margin: calc(-1 * var(--s-6)) calc(-1 * var(--s-5)) var(--s-6);
+  border-bottom:1px solid var(--border); background: var(--glass-bg-strong);
+  backdrop-filter: blur(var(--glass-blur)); -webkit-backdrop-filter: blur(var(--glass-blur)); box-shadow: var(--glass-hi); }
+.top .brand { display:flex; align-items:center; gap:9px; font-family:var(--font-display); font-weight:600; font-size:16px; }
+.top .crumb { display:flex; align-items:baseline; gap:10px; min-width:0; }
+.top h1 { font-family: var(--font-display); font-weight:500; font-size:1.1rem; margin:0; letter-spacing:-0.01em; }
+.top .sub { font-family:var(--font-mono); font-size:11px; color:var(--ink-faint); }
+.top .right { display:flex; align-items:center; gap:var(--s-3); flex:none; }
+.theme-toggle { display:grid; place-items:center; width:32px; height:32px; border-radius:var(--r-full);
+  border:1px solid var(--border-strong); background:var(--surface-1); color:var(--ink-dim); cursor:pointer;
+  transition: border-color var(--t-fast), color var(--t-fast), background var(--t-fast); }
+.theme-toggle:hover { border-color:var(--ink-24); color:var(--ink); background:var(--hover-fill); }
+.theme-toggle svg { width:15px; height:15px; }
+
+/* in-page section tabs */
+.tabs { display:flex; gap:var(--s-2); flex-wrap:wrap; margin-bottom: var(--s-6); }
+.tab { font-family:var(--font-mono); font-size:11px; color:var(--ink-dim); padding:7px 14px;
+  border:1px solid var(--border-strong); border-radius:var(--r-full); background:transparent; cursor:pointer;
+  transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast); }
+.tab:hover { color:var(--ink); border-color:var(--ink-24); }
+.tab[aria-selected="true"] { background: var(--accent-12); color: var(--ink); border-color: var(--accent-24); }
+
+/* section scaffold (console idioms) */
+.surface[hidden] { display:none; }
+.section-title { font-family:var(--font-mono); font-size:11px; text-transform:uppercase;
+  letter-spacing:.16em; color:var(--ink-faint); margin: 0 0 var(--s-4); display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.section-title .n { color: var(--ink-dim); }
+.lede { font-size:var(--t-small); color:var(--ink-dim); max-width: 64ch; margin: 0 0 var(--s-5); line-height:1.6; }
+.lede b { color: var(--ink); font-weight:600; }
+
+.panel { background: var(--surface-1); border:1px solid var(--border); border-radius:var(--r-md);
+  padding: var(--s-5); margin-bottom: var(--s-4); }
+.panel > .p-title { font-family:var(--font-mono); font-size:10px; text-transform:uppercase; letter-spacing:.14em;
+  color:var(--ink-faint); margin:0 0 var(--s-4); display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+.panel-hi { border-color: var(--accent-24); box-shadow: inset 3px 0 0 var(--accent); }
+.row-btns { display:flex; gap:var(--s-3); flex-wrap:wrap; }
+.btn-sm { padding:6px 12px; font-size:11px; }
+.mono { font-family:var(--font-mono); }
+
+/* ===== SURFACE 1 — ALLOWLIST EDITOR ===== */
+/* preset picker */
+.presets { display:grid; grid-template-columns: repeat(3,1fr); gap: var(--s-3); margin-bottom: var(--s-5); }
+@media (max-width:760px){ .presets{ grid-template-columns:1fr; } }
+.preset { text-align:left; background:var(--surface-2); border:1px solid var(--border); border-radius:var(--r-md);
+  padding: var(--s-4); cursor:pointer; font-family:var(--font-sans); color:var(--ink-dim);
+  transition: border-color var(--t-fast), background var(--t-fast); }
+.preset:hover { border-color:var(--ink-24); }
+.preset[aria-pressed="true"] { border-color:var(--accent-24); background:var(--accent-08); box-shadow: inset 2px 0 0 var(--accent); }
+.preset .pn { font-family:var(--font-display); font-weight:500; font-size:1rem; color:var(--ink); margin-bottom:4px; }
+.preset .pt { font-family:var(--font-mono); font-size:10px; text-transform:uppercase; letter-spacing:.1em; color:var(--ink-faint); margin-bottom:8px; }
+.preset .pd { font-size:12px; line-height:1.5; }
+
+/* tool rows */
+.tool-list { display:flex; flex-direction:column; gap:1px; background:var(--border); border:1px solid var(--border); border-radius:var(--r-md); overflow:hidden; }
+.tool { background:var(--surface-1); padding: var(--s-4) var(--s-5); }
+.tool .trow1 { display:flex; align-items:center; gap:var(--s-3); flex-wrap:wrap; }
+.tool .tid { font-family:var(--font-mono); font-size:13px; color:var(--ink); font-weight:500; }
+.tool .tdesc { font-family:var(--font-sans); font-size:12px; color:var(--ink-faint); margin-top:2px; flex-basis:100%; }
+.tool .tgrow { flex:1; }
+.sens-badge { font-family:var(--font-mono); font-size:9px; letter-spacing:.1em; text-transform:uppercase; font-weight:600;
+  color:var(--ember); border:1px solid var(--ember-24); background:var(--ember-16); border-radius:4px; padding:2px 7px; display:inline-flex; align-items:center; gap:5px; }
+.sens-badge svg { width:10px; height:10px; }
+
+/* toggle switch (allow/deny) */
+.switch { position:relative; display:inline-flex; align-items:center; gap:9px; cursor:pointer; user-select:none; }
+.switch input { position:absolute; opacity:0; width:0; height:0; }
+.switch .track { width:38px; height:21px; border-radius:var(--r-full); background:var(--ink-10); border:1px solid var(--border-strong);
+  transition: background var(--t-fast), border-color var(--t-fast); flex:none; }
+.switch .knob { position:absolute; top:3px; left:3px; width:15px; height:15px; border-radius:var(--r-full); background:var(--ink-dim);
+  transition: transform var(--t-fast) var(--ease-out-cubic), background var(--t-fast); }
+.switch input:checked + .track { background:var(--allow-24); border-color:var(--allow-40); }
+.switch input:checked + .track + .knob { transform: translateX(17px); background:var(--allow); }
+.switch input:focus-visible + .track { outline:2px solid var(--focus-ring); outline-offset:2px; }
+.switch .slabel { font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.04em; text-transform:uppercase; }
+.switch[data-on="true"] .slabel { color:var(--allow); } .switch[data-on="false"] .slabel { color:var(--ink-faint); }
+
+/* per-tool policy fields */
+.policy-fields { border-top:1px solid var(--border); margin-top: var(--s-4); padding-top: var(--s-4);
+  display:grid; grid-template-columns: repeat(auto-fit, minmax(230px,1fr)); gap: var(--s-4); }
+.pf .pk { font-family:var(--font-mono); font-size:10px; text-transform:uppercase; letter-spacing:.1em; color:var(--ink-faint); margin-bottom:6px; display:flex; align-items:center; gap:7px; }
+.pf .pk code { font-family:var(--font-mono); font-size:10px; color:var(--accent-ink); background:var(--accent-08); padding:1px 5px; border-radius:4px; }
+.inp { width:100%; background:var(--surface-2); border:1px solid var(--border-strong); border-radius:var(--r-sm);
+  color:var(--ink); font-family:var(--font-mono); font-size:12px; padding:8px var(--s-3); }
+.inp:focus { outline:none; border-color:var(--accent-24); }
+.chips-wrap { display:flex; flex-wrap:wrap; gap:var(--s-2); margin-top: 8px; }
+.list-chip { display:inline-flex; align-items:center; gap:8px; font-family:var(--font-mono); font-size:11px; color:var(--ink);
+  background:var(--surface-2); border:1px solid var(--border); border-radius:var(--r-full); padding:4px 6px 4px 11px; }
+.list-chip button { all:unset; cursor:pointer; width:15px; height:15px; display:grid; place-items:center; border-radius:var(--r-full); color:var(--ink-faint); line-height:1; }
+.list-chip button:hover { color:var(--deny); background:var(--deny-14); }
+.always-note { font-family:var(--font-mono); font-size:10px; color:var(--ember); display:inline-flex; align-items:center; gap:7px;
+  border:1px dashed var(--ember-24); border-radius:var(--r-sm); padding:5px 10px; margin-top: var(--s-3); }
+.always-note svg { width:12px; height:12px; flex:none; }
+
+/* ===== SURFACE 2 — JIT APPROVAL CARD ===== */
+.jit .intent { font-family:var(--font-mono); font-size:12px; color:var(--ink); background:var(--surface-2);
+  border:1px solid var(--border); border-left:2px solid var(--ember); border-radius:var(--r-sm);
+  padding:11px var(--s-4); margin:var(--s-3) 0; white-space:pre-wrap; word-break:break-word; }
+.countdown { font-family:var(--font-mono); font-size:11px; color:var(--ember); font-variant-numeric:tabular-nums; }
+.reason-chip { display:inline-flex; align-items:center; gap:7px; font-family:var(--font-mono); font-size:10px; color:var(--accent-ink);
+  background:var(--accent-12); border:1px solid var(--accent-24); border-radius:var(--r-full); padding:4px 11px; }
+.reason-chip svg { width:11px; height:11px; }
+.jit-meta { display:grid; grid-template-columns:130px 1fr; gap:7px var(--s-4); font-family:var(--font-mono); font-size:11px;
+  border-top:1px solid var(--border); padding-top:var(--s-4); margin-top:var(--s-4); }
+.jit-meta .mk { color:var(--ink-faint); } .jit-meta .mv { color:var(--ink-dim); }
+.jit-meta .mv b { color:var(--ink); font-weight:600; }
+.always-caveat { font-family:var(--font-sans); font-size:12px; color:var(--ink-dim); line-height:1.5;
+  border-top:1px solid var(--border); margin-top:var(--s-4); padding-top:var(--s-4); display:flex; gap:10px; align-items:flex-start; }
+.always-caveat svg { width:16px; height:16px; color:var(--ember); flex:none; margin-top:1px; }
+.always-caveat b { color:var(--ember); font-weight:600; }
+
+/* ===== SURFACE 3 — LIVE TOOL-CALL FEED ===== */
+.feed-table { background: var(--border); border:1px solid var(--border); border-radius: var(--r-md); overflow:hidden; display:grid; gap:1px; }
+.ft-head, .ft-row { display:grid; align-items:center; background: var(--surface-1);
+  grid-template-columns: 78px 1fr 118px 128px 96px; font-family:var(--font-mono); font-size:var(--t-data); }
+.ft-head { color:var(--ink-faint); font-size:10px; text-transform:uppercase; letter-spacing:.12em; }
+.ft-row { transition: background var(--t-fast); }
+.ft-row:hover { background: var(--hover-fill); }
+.ft-row > *, .ft-head > * { padding: 11px var(--s-4); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.ft-row .ts { color:var(--ink-faint); }
+.ft-row .tool { color:var(--ink); background:none; padding:11px var(--s-4); }
+.ft-row .tool small { color:var(--ink-faint); }
+.ft-row .act { display:flex; justify-content:flex-end; }
+.ft-row.inflight { background: var(--accent-08); }
+
+/* lane chip — color+shape encodes meaning, same family as console kind/verdict chips */
+.lane-chip { font-family:var(--font-mono); font-size:9px; text-transform:uppercase; letter-spacing:.06em; font-weight:600;
+  padding:3px 9px; border-radius:4px; display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+.lane-chip::before { content:""; width:6px; height:6px; flex:none; }
+.lane-chip.l1 { color:var(--allow); background:var(--allow-14); } .lane-chip.l1::before { border-radius:var(--r-full); background:var(--allow); }
+.lane-chip.l2 { color:var(--accent-ink); background:var(--accent-12); } .lane-chip.l2::before { border-radius:var(--r-full); border:1.5px solid var(--accent); }
+.lane-chip.forbidden { color:var(--deny); background:var(--deny-14); } .lane-chip.forbidden::before { background:var(--deny); }
+
+/* result status chip */
+.res { font-family:var(--font-mono); font-size:11px; display:inline-flex; align-items:center; gap:6px; }
+.res.ok { color:var(--allow); } .res.denied { color:var(--deny); } .res.pending { color:var(--accent-ink); }
+.res .live-dot { width:6px; height:6px; border-radius:var(--r-full); background:var(--accent); }
+
+/* footnote */
+.foot { font-family:var(--font-mono); font-size:10px; color:var(--ink-faint); margin-top:var(--s-6); padding-top:var(--s-4);
+  border-top:1px solid var(--border); line-height:1.7; }
+.foot b { color:var(--ink-dim); }
+
+/* responsive feed collapse */
+@media (max-width:720px){
+  .ft-head, .ft-row { grid-template-columns: 1fr 96px 88px; }
+  .ft-head > :nth-child(1), .ft-row > :nth-child(1),
+  .ft-head > :nth-child(4), .ft-row > :nth-child(4) { display:none; }
+}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="crumb">
+    <span class="brand">
+      <svg width="20" height="20" viewBox="0 0 26 26" aria-hidden="true">
+        <circle cx="8" cy="13" r="5" fill="none" stroke="var(--accent)" stroke-width="2"/>
+        <path d="M13 13 H24 M24 9 v8" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"/></svg>
+      LEASH
+    </span>
+    <h1>Governed tool-use</h1>
+    <span class="sub">research-agent · SF-3</span>
+  </div>
+  <div class="right">
+    <button class="theme-toggle" id="themeToggle" aria-label="Toggle light or dark theme" title="Toggle theme"></button>
+  </div>
+</header>
+
+<div class="tabs" role="tablist" aria-label="Tool-use surfaces">
+  <button class="tab" role="tab" aria-selected="true" aria-controls="s-allowlist" id="t-allowlist" data-surface="allowlist">Tool allowlist editor</button>
+  <button class="tab" role="tab" aria-selected="false" aria-controls="s-approval" id="t-approval" data-surface="approval">Sensitive-tool approval</button>
+  <button class="tab" role="tab" aria-selected="false" aria-controls="s-feed" id="t-feed" data-surface="feed">Live tool-call feed</button>
+</div>
+
+<!-- ============ SURFACE 1 — ALLOWLIST EDITOR ============ -->
+<section class="surface" id="s-allowlist" role="tabpanel" aria-labelledby="t-allowlist">
+  <p class="section-title">Tool allowlist editor · <span class="n">research-agent</span></p>
+  <p class="lede">Choose which tools the agent may call. A preset sets a safe baseline; edit any tool below.
+    <b>A sensitive tool always asks for approval at call time — even when it is on the allowlist.</b>
+    The allowlist can never blanket-suppress a sensitive tool.</p>
+
+  <!-- preset picker -->
+  <div class="panel">
+    <p class="p-title">Preset</p>
+    <div class="presets" role="group" aria-label="Capability presets">
+      <button class="preset" aria-pressed="true" data-preset="researcher">
+        <div class="pn">Researcher</div>
+        <div class="pt">read-only</div>
+        <div class="pd"><code>web_search</code>, <code>fetch_url</code>, <code>read_file</code>. No writes, no sends.</div>
+      </button>
+      <button class="preset" aria-pressed="false" data-preset="communicator">
+        <div class="pn">Communicator</div>
+        <div class="pt">research · always-ask</div>
+        <div class="pd">Researcher tools plus <code>email.send_email</code> &amp; <code>slack.post_message</code> — sensitive, always asks.</div>
+      </button>
+      <button class="preset" aria-pressed="false" data-preset="workspace">
+        <div class="pn">Workspace</div>
+        <div class="pt">read / write files</div>
+        <div class="pd">Read tools plus <code>fs.write_file</code> — sensitive, always asks before writing.</div>
+      </button>
+    </div>
+  </div>
+
+  <!-- tool list -->
+  <p class="section-title">Granted tools · <span class="n" id="toolCount">5 configured</span></p>
+  <div class="tool-list" id="toolList"></div>
+
+  <div class="always-note" style="margin-top:var(--s-4)">
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 1.5 2 4v3.5c0 3.4 2.4 6 6 7 3.6-1 6-3.6 6-7V4L8 1.5Z"/><path d="M8 6v3" stroke-linecap="round"/><circle cx="8" cy="11" r=".6" fill="currentColor" stroke="none"/></svg>
+    Sensitive tools (SEND / WRITE / TRANSFER / EXEC) always route to a just-in-time approval, regardless of allowlist state.
+  </div>
+
+  <div class="row-btns" style="margin-top:var(--s-5)">
+    <button class="btn btn-primary press">Save grant</button>
+    <button class="btn btn-ghost press">Reset to preset</button>
+  </div>
+</section>
+
+<!-- ============ SURFACE 2 — JIT APPROVAL CARD ============ -->
+<section class="surface" id="s-approval" role="tabpanel" aria-labelledby="t-approval" hidden>
+  <p class="section-title">Sensitive-tool approval · <span class="n">held tool call</span></p>
+  <p class="lede">A held call pauses the agent and asks the owner. <b>Always allow</b> whitelists the arguments shape for
+    non-sensitive tools — but a sensitive tool will still ask next time; it cannot be blanket-suppressed.</p>
+
+  <div class="panel jit panel-hi">
+    <p class="p-title">
+      <span>Agent paused — asking permission</span>
+      <span class="countdown" id="jitCountdown" aria-live="polite">auto-denies in 10:00</span>
+    </p>
+    <div style="display:flex; align-items:center; gap:var(--s-3); flex-wrap:wrap; margin-bottom:var(--s-3)">
+      <span class="mono" style="color:var(--ink);font-weight:500">research-agent</span>
+      <span class="sens-badge">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 1.5 2 4v3.5c0 3.4 2.4 6 6 7 3.6-1 6-3.6 6-7V4L8 1.5Z"/></svg>
+        Sensitive
+      </span>
+    </div>
+    <div class="intent"><b>email.send_email</b>
+to: ops@vendor.example · outside recipientAllowlist
+subject: "Q3 renewal — approved budget"
+body: 412 bytes</div>
+    <div style="margin:var(--s-3) 0">
+      <span class="reason-chip">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 1.5 2 4v3.5c0 3.4 2.4 6 6 7 3.6-1 6-3.6 6-7V4L8 1.5Z"/></svg>
+        why held · sensitive tool — always asks
+      </span>
+    </div>
+    <div class="jit-meta">
+      <span class="mk">Tool</span><span class="mv"><b>email.send_email</b></span>
+      <span class="mk">Recipient</span><span class="mv">ops@vendor.example <b style="color:var(--deny)">· not on allowlist</b></span>
+      <span class="mk">Lane</span><span class="mv">L2 · asked</span>
+      <span class="mk">Requested</span><span class="mv">14:41:07 · session 0x7c9d…</span>
+    </div>
+    <div class="row-btns" style="margin-top:var(--s-4)">
+      <button class="btn btn-primary btn-sm press" data-jit="once">Approve once</button>
+      <button class="btn btn-ghost btn-sm press" data-jit="always">Always allow</button>
+      <button class="btn btn-danger btn-sm press" data-jit="deny">Deny</button>
+    </div>
+    <div class="always-caveat">
+      <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6.5"/><path d="M8 5v3.5" stroke-linecap="round"/><circle cx="8" cy="11" r=".6" fill="currentColor" stroke="none"/></svg>
+      <span><b>Always allow</b> adds this recipient to <code class="mono">recipientAllowlist</code>, but because <code class="mono">email.send_email</code> is sensitive it will <b>still ask</b> on the next call — it can never be silently auto-sent.</span>
+    </div>
+  </div>
+
+  <!-- second example: url outside allowlist (non-sensitive) -->
+  <div class="panel jit">
+    <p class="p-title">
+      <span>Agent paused — asking permission</span>
+      <span class="countdown">auto-denies in 09:48</span>
+    </p>
+    <div style="display:flex; align-items:center; gap:var(--s-3); margin-bottom:var(--s-3)">
+      <span class="mono" style="color:var(--ink);font-weight:500">research-agent</span>
+    </div>
+    <div class="intent"><b>fetch.fetch_url</b>
+url: https://paste.unknown.io/raw/9f2 · origin outside urlOriginAllowlist</div>
+    <div style="margin:var(--s-3) 0">
+      <span class="reason-chip">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 8a2.5 2.5 0 0 1 2.5-2.5H10M10 8a2.5 2.5 0 0 1-2.5 2.5H6"/></svg>
+        why held · url outside your allowlist
+      </span>
+    </div>
+    <div class="jit-meta">
+      <span class="mk">Tool</span><span class="mv"><b>fetch.fetch_url</b></span>
+      <span class="mk">Origin</span><span class="mv">paste.unknown.io <b style="color:var(--deny)">· not on urlOriginAllowlist</b></span>
+      <span class="mk">Lane</span><span class="mv">L2 · asked</span>
+    </div>
+    <div class="row-btns" style="margin-top:var(--s-4)">
+      <button class="btn btn-primary btn-sm press" data-jit="once">Approve once</button>
+      <button class="btn btn-ghost btn-sm press" data-jit="always">Always allow origin</button>
+      <button class="btn btn-danger btn-sm press" data-jit="deny">Deny</button>
+    </div>
+  </div>
+</section>
+
+<!-- ============ SURFACE 3 — LIVE TOOL-CALL FEED ============ -->
+<section class="surface" id="s-feed" role="tabpanel" aria-labelledby="t-feed" hidden>
+  <p class="section-title">Live tool-call feed · <span class="n">research-agent cockpit</span></p>
+  <p class="lede">Chronological trace of every tool call. <b>L1 silent</b> runs without asking, <b>L2 asked</b> paused for approval,
+    <b>forbidden</b> was blocked by policy. Intervene on an in-flight row to pause or abort.</p>
+
+  <div class="feed-table" role="table" aria-label="Live tool-call feed">
+    <div class="ft-head" role="row">
+      <span role="columnheader">Time</span>
+      <span role="columnheader">Tool</span>
+      <span role="columnheader">Lane</span>
+      <span role="columnheader">Result</span>
+      <span role="columnheader" style="text-align:right">Action</span>
+    </div>
+
+    <div class="ft-row inflight" role="row">
+      <span class="ts" role="cell">14:41:07</span>
+      <span class="tool" role="cell">email.send_email <small>→ ops@vendor.example</small></span>
+      <span role="cell"><span class="lane-chip l2">L2 asked</span></span>
+      <span role="cell"><span class="res pending"><span class="live-dot" aria-hidden="true"></span>awaiting owner</span></span>
+      <span class="act" role="cell"><button class="btn btn-danger btn-sm press" aria-label="Intervene on email.send_email call to ops@vendor.example">Intervene</button></span>
+    </div>
+
+    <div class="ft-row inflight" role="row">
+      <span class="ts" role="cell">14:41:02</span>
+      <span class="tool" role="cell">fetch.fetch_url <small>→ api.exa.ai/search</small></span>
+      <span role="cell"><span class="lane-chip l1">L1 silent</span></span>
+      <span role="cell"><span class="res pending"><span class="live-dot" aria-hidden="true"></span>running 1.4s</span></span>
+      <span class="act" role="cell"><button class="btn btn-ghost btn-sm press" aria-label="Intervene on in-flight fetch.fetch_url call to api.exa.ai">Intervene</button></span>
+    </div>
+
+    <div class="ft-row" role="row">
+      <span class="ts" role="cell">14:40:51</span>
+      <span class="tool" role="cell">search.web_search <small>→ "render pricing 2026"</small></span>
+      <span role="cell"><span class="lane-chip l1">L1 silent</span></span>
+      <span role="cell"><span class="res ok">ok · 312ms</span></span>
+      <span class="act" role="cell"></span>
+    </div>
+
+    <div class="ft-row" role="row">
+      <span class="ts" role="cell">14:40:38</span>
+      <span class="tool" role="cell">fs.read_file <small>→ ./notes/q3.md</small></span>
+      <span role="cell"><span class="lane-chip l1">L1 silent</span></span>
+      <span role="cell"><span class="res ok">ok · 4.1 KB</span></span>
+      <span class="act" role="cell"></span>
+    </div>
+
+    <div class="ft-row" role="row">
+      <span class="ts" role="cell">14:39:12</span>
+      <span class="tool" role="cell">slack.post_message <small>→ #procurement</small></span>
+      <span role="cell"><span class="lane-chip l2">L2 asked</span></span>
+      <span role="cell"><span class="res ok">approved · sent</span></span>
+      <span class="act" role="cell"></span>
+    </div>
+
+    <div class="ft-row" role="row">
+      <span class="ts" role="cell">14:38:40</span>
+      <span class="tool" role="cell">shell.exec <small>→ rm -rf ./cache</small></span>
+      <span role="cell"><span class="lane-chip forbidden">forbidden</span></span>
+      <span role="cell"><span class="res denied">blocked · not granted</span></span>
+      <span class="act" role="cell"></span>
+    </div>
+
+    <div class="ft-row" role="row">
+      <span class="ts" role="cell">14:38:09</span>
+      <span class="tool" role="cell">fetch.fetch_url <small>→ paste.unknown.io</small></span>
+      <span role="cell"><span class="lane-chip l2">L2 asked</span></span>
+      <span role="cell"><span class="res denied">denied · off-allowlist</span></span>
+      <span class="act" role="cell"></span>
+    </div>
+  </div>
+
+  <p class="foot">
+    <b>FE-surface-parity (F-Xd):</b> every grant-time input the backend accepts is collected on these surfaces —
+    per-tool <code>allowed</code>, <code>maxArgBytes</code>, <code>recipientAllowlist</code>, <code>urlOriginAllowlist</code>,
+    the three presets, and the sensitive-always-asks invariant. Static mock data; SD-F8 design-reference, not the live app.
+  </p>
+</section>
+
+<script>
+/* ---------- theme toggle (persisted, matches console.html) ---------- */
+(function(){
+  const KEY='leash-theme', root=document.documentElement, btn=document.getElementById('themeToggle');
+  const moon='<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13.5 9.3A5.5 5.5 0 1 1 6.7 2.5 4.3 4.3 0 0 0 13.5 9.3Z"/></svg>';
+  const sun ='<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="3.2"/><path d="M8 1v1.6M8 13.4V15M1 8h1.6M13.4 8H15M3 3l1.1 1.1M11.9 11.9 13 13M13 3l-1.1 1.1M4.1 11.9 3 13" stroke-linecap="round"/></svg>';
+  if(!btn) return;
+  const paint=()=>{ btn.innerHTML = root.getAttribute('data-theme')==='light' ? sun : moon; };
+  paint();
+  btn.addEventListener('click',()=>{
+    const toLight = root.getAttribute('data-theme')!=='light';
+    if(toLight){ root.setAttribute('data-theme','light'); localStorage.setItem(KEY,'light'); }
+    else { root.removeAttribute('data-theme'); localStorage.setItem(KEY,'dark'); }
+    paint();
+  });
+})();
+
+/* ---------- in-page tab switching ---------- */
+(function(){
+  const tabs=[...document.querySelectorAll('.tab')];
+  function show(name){
+    tabs.forEach(t=>{
+      const on=t.dataset.surface===name;
+      t.setAttribute('aria-selected', on?'true':'false');
+      document.getElementById('s-'+t.dataset.surface).hidden = !on;
+    });
+  }
+  tabs.forEach(t=>{
+    t.addEventListener('click',()=>show(t.dataset.surface));
+    t.addEventListener('keydown',e=>{
+      const i=tabs.indexOf(t);
+      if(e.key==='ArrowRight'||e.key==='ArrowLeft'){
+        e.preventDefault();
+        const n=(i+(e.key==='ArrowRight'?1:tabs.length-1))%tabs.length;
+        tabs[n].focus(); show(tabs[n].dataset.surface);
+      }
+    });
+  });
+})();
+
+/* ---------- allowlist editor: tools + preset binding ---------- */
+(function(){
+  const SENSITIVE = new Set(['email.send_email','slack.post_message','fs.write_file','payments.transfer','shell.exec']);
+  // role: 'recipient' -> recipientAllowlist, 'url' -> urlOriginAllowlist
+  const TOOLS = [
+    {id:'search.web_search', desc:'Query the web for current results.', role:null, maxArgBytes:2048},
+    {id:'fetch.fetch_url',   desc:'Fetch a single URL (read-only).', role:'url', maxArgBytes:4096, urlOriginAllowlist:['api.exa.ai','docs.leash.dev']},
+    {id:'fs.read_file',      desc:'Read a file from the workspace.', role:null, maxArgBytes:1024},
+    {id:'email.send_email',  desc:'Send an email on the owner\'s behalf.', role:'recipient', maxArgBytes:16384, recipientAllowlist:['team@org.leash.eth']},
+    {id:'slack.post_message',desc:'Post a message to a Slack channel.', role:'recipient', maxArgBytes:8192, recipientAllowlist:['#procurement','#ops']},
+    {id:'fs.write_file',     desc:'Write a file to the workspace.', role:null, maxArgBytes:65536},
+  ];
+  const PRESETS = {
+    researcher:  new Set(['search.web_search','fetch.fetch_url','fs.read_file']),
+    communicator:new Set(['search.web_search','fetch.fetch_url','fs.read_file','email.send_email','slack.post_message']),
+    workspace:   new Set(['search.web_search','fetch.fetch_url','fs.read_file','fs.write_file']),
+  };
+  let allowed = new Set(PRESETS.researcher);
+  const list=document.getElementById('toolList'), count=document.getElementById('toolCount');
+
+  const sensSvg='<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 1.5 2 4v3.5c0 3.4 2.4 6 6 7 3.6-1 6-3.6 6-7V4L8 1.5Z"/></svg>';
+
+  function fieldsFor(t){
+    let f = `<div class="pf"><div class="pk"><code>maxArgBytes</code></div>
+      <input class="inp" type="number" value="${t.maxArgBytes}" aria-label="maxArgBytes for ${t.id}"/></div>`;
+    if(t.role==='recipient'){
+      const chips=(t.recipientAllowlist||[]).map(r=>`<span class="list-chip">${r}<button aria-label="Remove ${r}">×</button></span>`).join('');
+      f += `<div class="pf" style="grid-column:1/-1"><div class="pk"><code>recipientAllowlist</code></div>
+        <input class="inp" placeholder="add recipient and press Enter" aria-label="Add recipient to ${t.id}"/>
+        <div class="chips-wrap">${chips}</div></div>`;
+    }
+    if(t.role==='url'){
+      const chips=(t.urlOriginAllowlist||[]).map(r=>`<span class="list-chip">${r}<button aria-label="Remove ${r}">×</button></span>`).join('');
+      f += `<div class="pf" style="grid-column:1/-1"><div class="pk"><code>urlOriginAllowlist</code></div>
+        <input class="inp" placeholder="add origin and press Enter" aria-label="Add origin to ${t.id}"/>
+        <div class="chips-wrap">${chips}</div></div>`;
+    }
+    return f;
+  }
+
+  function render(){
+    list.innerHTML = TOOLS.map(t=>{
+      const on=allowed.has(t.id), sens=SENSITIVE.has(t.id);
+      return `<div class="tool">
+        <div class="trow1">
+          <span class="tid">${t.id}</span>
+          ${sens?`<span class="sens-badge">${sensSvg}Sensitive</span>`:''}
+          <span class="tgrow"></span>
+          <label class="switch" data-on="${on}">
+            <input type="checkbox" ${on?'checked':''} data-tool="${t.id}" aria-label="${on?'Allow':'Deny'} ${t.id}"/>
+            <span class="track" aria-hidden="true"></span><span class="knob" aria-hidden="true"></span>
+            <span class="slabel">${on?'Allowed':'Denied'}</span>
+          </label>
+          <span class="tdesc">${t.desc}${sens?' · always asks at call time':''}</span>
+        </div>
+        ${on?`<div class="policy-fields">${fieldsFor(t)}</div>`:''}
+      </div>`;
+    }).join('');
+    count.textContent = allowed.size+' allowed · '+TOOLS.length+' available';
+  }
+
+  list.addEventListener('change',e=>{
+    const cb=e.target.closest('[data-tool]'); if(!cb) return;
+    if(cb.checked) allowed.add(cb.dataset.tool); else allowed.delete(cb.dataset.tool);
+    document.querySelectorAll('.preset').forEach(p=>p.setAttribute('aria-pressed','false'));
+    render();
+  });
+  list.addEventListener('click',e=>{
+    const x=e.target.closest('.list-chip button'); if(x){ x.closest('.list-chip').remove(); }
+  });
+
+  document.querySelectorAll('.preset').forEach(p=>{
+    p.addEventListener('click',()=>{
+      document.querySelectorAll('.preset').forEach(q=>q.setAttribute('aria-pressed','false'));
+      p.setAttribute('aria-pressed','true');
+      allowed = new Set(PRESETS[p.dataset.preset]);
+      render();
+    });
+  });
+  render();
+})();
+
+/* ---------- JIT countdown (value-only tick, reduced-motion safe) ---------- */
+(function(){
+  const el=document.getElementById('jitCountdown'); if(!el) return;
+  let s=600;
+  setInterval(()=>{ if(s<=0) return; s--; const m=String(Math.floor(s/60)).padStart(2,'0'), ss=String(s%60).padStart(2,'0');
+    el.textContent='auto-denies in '+m+':'+ss; }, 1000);
+})();
+</script>
+</body>
+</html>
