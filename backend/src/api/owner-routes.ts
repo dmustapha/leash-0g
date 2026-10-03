@@ -55,6 +55,26 @@ import {
   getCapabilityRequest,
 } from '../store/capabilities.js';
 import { presetKeys, type CallRule, type PresetKey, type TargetCatalog } from '../governed-call/index.js';
+import {
+  decideToolRequest,
+  recordToolPresetGrants,
+  type ToolServiceDeps,
+} from '../tool-use/tool-service.js';
+import {
+  expandToolPreset,
+  toolPresetKeys,
+  defaultToolRegistry,
+  type ToolPresetKey,
+  type ToolRule,
+} from '../tool-use/index.js';
+import {
+  listToolRules,
+  upsertToolRule,
+  setToolRuleStatus,
+  listAppliedToolPresets,
+  listRecentToolRequests,
+  getToolRequest,
+} from '../store/tools.js';
 import { applyRevokeFanout } from '../agents/revoke-fanout.js';
 import {
   createLink,
@@ -428,6 +448,28 @@ const capabilityDecisionSchema = z.object({
   txHash: z.string().regex(/^0x[0-9a-fA-F]{64}$/).optional(),
   rule: callRuleSchema.optional(),
 });
+
+// SF-3 (STAGE-F §4) — governed tool-use grant surfaces. A tool rule mirrors a
+// `ToolRule`; the decision rides the SAME `POST /api/approvals/:id` rail as the
+// Stage-D capability JIT, branched on `requestRef.type === 'tool'`. Fully
+// off-chain (no tx) — the owner's consent IS the authority for the call.
+const toolPerCallPolicySchema = z.object({
+  maxArgBytes: z.number().int().positive().max(1_000_000).optional(),
+  recipientAllowlist: z.array(z.string().max(320)).max(64).optional(),
+  urlOriginAllowlist: z.array(z.string().max(320)).max(64).optional(),
+});
+const toolRuleSchema = z.object({
+  toolId: z.string().min(1).max(128),
+  allowed: z.boolean().default(true),
+  sensitive: z.boolean().default(false),
+  perCallPolicy: toolPerCallPolicySchema.optional(),
+});
+const toolPresetApplySchema = z.object({ presetKey: z.string().min(1).max(40) });
+const toolRuleApplySchema = z.object({
+  action: z.enum(['set', 'remove']),
+  rule: toolRuleSchema,
+});
+const toolDecisionSchema = z.object({ decision: z.enum(['approve_once', 'always_allow', 'deny']) });
 
 /** Normalize a validated rule into the CallRule shape (lowercased, no partials). */
 function toCallRule(r: z.infer<typeof callRuleSchema>): CallRule {
@@ -826,6 +868,15 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     alerts: deps.alerts,
     jitTtlMs: deps.settings.jitTtlMs,
   };
+  // SF-3: the tool-use JIT rail deps (same approval rail, off-chain decisions).
+  const toolServiceDeps: ToolServiceDeps = {
+    pool: deps.pool,
+    hub: deps.hub,
+    broker: deps.broker,
+    alerts: deps.alerts,
+    registry: defaultToolRegistry,
+    jitTtlMs: deps.settings.jitTtlMs,
+  };
 
   // H-01 (round-2 red-team): the per-owner limiters above are bypassable by
   // rotating fresh wallet addresses (each new owner gets a fresh bucket), which
@@ -1061,8 +1112,34 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       return;
     }
     const ref = approval.requestRef;
-    const isCapability =
-      ref !== null && typeof ref === 'object' && !Array.isArray(ref) && ref['type'] === 'capability';
+    const refType =
+      ref !== null && typeof ref === 'object' && !Array.isArray(ref) ? ref['type'] : undefined;
+
+    // SF-3: a tool JIT decision (off-chain) — approve-once / always-allow / deny.
+    if (refType === 'tool') {
+      const parsedTool = toolDecisionSchema.safeParse(req.body);
+      if (!parsedTool.success) {
+        res.status(400).json({ error: { message: 'invalid request body' } });
+        return;
+      }
+      const requestId = (ref as Record<string, unknown>)['requestId'];
+      const request = typeof requestId === 'string' ? await getToolRequest(deps.pool, requestId) : null;
+      if (!request) {
+        res.status(404).json({ error: { message: 'not found' } });
+        return;
+      }
+      const outcome = await decideToolRequest(toolServiceDeps, agent, request, parsedTool.data.decision, {
+        channel: 'app',
+      });
+      if (!outcome.ok) {
+        res.status(outcome.reason === 'already_decided' ? 409 : 400).json({ error: { message: outcome.reason } });
+        return;
+      }
+      res.json({ ok: true, request: { id: request.id, status: outcome.status } });
+      return;
+    }
+
+    const isCapability = refType === 'capability';
     if (isCapability) {
       const parsedCap = capabilityDecisionSchema.safeParse(req.body);
       if (!parsedCap.success) {
@@ -2080,6 +2157,92 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       listRecentRequests(deps.pool, agent.id, 20),
     ]);
     res.json({ grants, presets, recentRequests });
+  }));
+
+  // ── SF-3: governed tool-use grant surfaces (STAGE-F §4) ────────────────────
+  // Apply a tool preset (default-deny → broad-grant UX). Records the standing
+  // tool_rules; a sensitive tool in the preset stays always-ask by construction.
+  router.post('/api/agents/:id/tools/preset', asyncRoute(async (req: OwnerRequest, res) => {
+    if (!capabilitiesRateOk(req.ownerAddr ?? '')) {
+      res.status(429).json({ error: { message: 'rate limited' } });
+      return;
+    }
+    const agent = await requireOwnedAgent(req, res);
+    if (!agent) return;
+    const parsed = toolPresetApplySchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: { message: 'invalid request body' } });
+      return;
+    }
+    if (!toolPresetKeys().includes(parsed.data.presetKey as ToolPresetKey)) {
+      res.status(400).json({ error: { message: 'unknown preset' } });
+      return;
+    }
+    const resolved = expandToolPreset(parsed.data.presetKey as ToolPresetKey);
+    if (!resolved) {
+      res.status(422).json({ error: { message: 'unresolvable_preset' } });
+      return;
+    }
+    await recordToolPresetGrants(deps.pool, agent, resolved.key, resolved.rules);
+    res.json({ ok: true, preset: resolved });
+  }));
+
+  // Set or remove a single tool rule (owner-authored allowlist editor).
+  router.post('/api/agents/:id/tools/rule', asyncRoute(async (req: OwnerRequest, res) => {
+    if (!capabilitiesRateOk(req.ownerAddr ?? '')) {
+      res.status(429).json({ error: { message: 'rate limited' } });
+      return;
+    }
+    const agent = await requireOwnedAgent(req, res);
+    if (!agent) return;
+    const parsed = toolRuleApplySchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: { message: 'invalid request body' } });
+      return;
+    }
+    const toolId = parsed.data.rule.toolId.toLowerCase();
+    // A tool outside the registry is never grantable (default-deny, never guessed).
+    const descriptor = defaultToolRegistry.get(toolId);
+    if (!descriptor) {
+      res.status(422).json({ error: { message: `unknown tool ${toolId}` } });
+      return;
+    }
+    if (parsed.data.action === 'remove') {
+      await setToolRuleStatus(deps.pool, agent.id, toolId, 'removed');
+      res.json({ ok: true, action: 'remove' });
+      return;
+    }
+    // Normalize the policy, dropping undefined fields (exactOptionalPropertyTypes).
+    const p = parsed.data.rule.perCallPolicy;
+    const perCallPolicy =
+      p && (p.maxArgBytes !== undefined || p.recipientAllowlist !== undefined || p.urlOriginAllowlist !== undefined)
+        ? {
+            ...(p.maxArgBytes !== undefined ? { maxArgBytes: p.maxArgBytes } : {}),
+            ...(p.recipientAllowlist !== undefined ? { recipientAllowlist: p.recipientAllowlist } : {}),
+            ...(p.urlOriginAllowlist !== undefined ? { urlOriginAllowlist: p.urlOriginAllowlist } : {}),
+          }
+        : undefined;
+    const rule: ToolRule = {
+      toolId,
+      allowed: parsed.data.rule.allowed,
+      // a globally/registry-sensitive tool can never be granted non-sensitive.
+      sensitive: parsed.data.rule.sensitive || descriptor.sensitive,
+      ...(perCallPolicy ? { perCallPolicy } : {}),
+    };
+    await upsertToolRule(deps.pool, { agentId: agent.id, ownerAddr: agent.ownerAddr, rule, source: 'custom', status: 'active' });
+    res.json({ ok: true, action: 'set', rule });
+  }));
+
+  // Read-only tool envelope: granted rules + applied presets + recent JIT decisions.
+  router.get('/api/agents/:id/tools', asyncRoute(async (req: OwnerRequest, res) => {
+    const agent = await requireOwnedAgent(req, res);
+    if (!agent) return;
+    const [rules, presets, recentRequests] = await Promise.all([
+      listToolRules(deps.pool, agent.id),
+      listAppliedToolPresets(deps.pool, agent.id),
+      listRecentToolRequests(deps.pool, agent.id, 20),
+    ]);
+    res.json({ rules, presets, recentRequests, available: defaultToolRegistry.list() });
   }));
 
   // ── SE-7: multichain owner surfaces ────────────────────────────────────────

@@ -33,6 +33,9 @@ import { assertBridgeRoutable } from './bridge-gate.js';
 import { buildTreasuryGraph, type TreasuryGraph } from './treasury-graph.js';
 import { consumeOneShot } from './one-shot-consume.js';
 import type { CapabilityDeps } from '../capabilities/service.js';
+import { defaultToolRegistry } from '../tool-use/index.js';
+import { createDbGrantLoader } from '../gateway/mcp/governed-provider.js';
+import { createHttpMcpEgressClient, parseEgressConfigFromEnv } from '../gateway/mcp/egress.js';
 import { buildJobGraph, type JobGraph } from '../jobs/graph.js';
 import type { StorageUploader } from '../audit/batcher.js';
 import type { InboundDelegationInput } from './prompt.js';
@@ -163,6 +166,30 @@ export class LeashRuntimeManager implements RuntimeManager {
   }
 
   /**
+   * SF-3: the governed tool-use rail (undefined without alerts — raiseToolRequest
+   * needs the alert engine). Egress policy is read from env (same as the gateway
+   * wiring); empty config ⇒ every tool is egress-forbidden → tool_call stands down
+   * (safe default-deny). The runtime shares the gateway's tool-gate + egress leg.
+   */
+  private toolRailDeps(): import('./treasury-graph.js').ToolRail | undefined {
+    const alerts = this.deps.alerts;
+    if (!alerts) return undefined;
+    return {
+      registry: defaultToolRegistry,
+      loadGrant: createDbGrantLoader(this.deps.pool, parseEgressConfigFromEnv()),
+      service: {
+        pool: this.deps.pool,
+        hub: this.deps.hub,
+        broker: this.deps.broker,
+        alerts,
+        registry: defaultToolRegistry,
+        jitTtlMs: this.deps.settings.jitTtlMs ?? 600_000,
+      },
+      executor: createHttpMcpEgressClient(),
+    };
+  }
+
+  /**
    * SE-8: the treasury graph's bridge-lane deps for one agent — the chain's
    * bridge allowlist (classify enforcement) + the HARD pre-routing gate
    * (`assertBridgeRoutable` → `ChainRegistry.assertSameAddress`, carry #1).
@@ -241,6 +268,8 @@ export class LeashRuntimeManager implements RuntimeManager {
             // it); a coordination-free/alert-free test setup then stands down on
             // novelty instead.
             ...(this.capabilityDeps() ? { capabilities: this.capabilityDeps() } : {}),
+            // SF-3: the governed tool-use rail (optional; absent ⇒ tool_call stands down).
+            ...(this.toolRailDeps() ? { toolRail: this.toolRailDeps() } : {}),
             // SE-8: the governed-bridging lane — only when the registry knows the
             // agent's chain AND that chain has an owner-configured bridge allowlist.
             // Absent = fail-closed (a bridge call classifies forbidden / stands down).
