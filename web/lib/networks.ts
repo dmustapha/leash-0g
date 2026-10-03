@@ -41,6 +41,7 @@ const EXPLORER_TX_PREFIX: Record<number, string> = {
   84532: 'https://sepolia.basescan.org/tx/', // Base Sepolia
   11155111: 'https://sepolia.etherscan.io/tx/', // Ethereum Sepolia (bridge destination)
   421614: 'https://sepolia.arbiscan.io/tx/', // Arbitrum Sepolia (SE-9)
+  46630: 'https://explorer.testnet.chain.robinhood.com/tx/', // Robinhood Chain testnet (Orbit L2)
 };
 
 /** Explorer link for a tx on `chainId`, or null when no explorer is known for that chain. */
