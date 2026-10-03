@@ -16,6 +16,13 @@
 | MockRouter | `0x4964991514f731CB3CF252108dFF889d30036fcb` |
 | MockAggregatorV3 (8dp, TSLA=$100) | `0x8E107bAC6f430aecB8Aa11B383E9690e9a5214bE` |
 | LeashAccountV4 (governed account) | `0x4FaEe24384795358a736e9BCADd22C8d975E240f` |
+| LeashAccountV4FactoryDeterministic | `0x93Bb77c3d9458f4738501fA82d7506225d61F767` |
+
+> The deterministic factory (CREATE2 via Arachnid `0x4e59…4956C`, salt
+> `keccak256("LEASH-V4-DETERMINISTIC-FACTORY-v1")`) is what the backend `deployAndRegister`
+> wire uses to onboard a RH-home agent. It lands at a NEW address (`0x93Bb…F767`) rather than
+> the production `0x9C10…E46f` because the price-band branch changes the wall bytecode — honest:
+> it shares an address only with other chains running this branch's factory, not production.
 
 All 7 verified on Blockscout (self-hosted, no API key). The account is granted: `approve(sUSD→router)`
 within a 5,000-sUSD budget, governed `swap(router)`, and a **5% price band** on the swap priced off the
