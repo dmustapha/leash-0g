@@ -86,6 +86,10 @@ export interface OwnerChainRegistry {
   has(chainId: number): boolean;
   listChains(): Array<{ chainId: number; name: string }>;
   getChainOps(chainId: number): OnboardChainOps;
+  /** RH2 (two-factory): resolve a NAMED wall-capability factory for a chain, or undefined. */
+  getCapabilityFactory?(chainId: number, capability: string): string | undefined;
+  /** RH2 (two-factory): ops lane for a configured capability factory (default-deny otherwise). */
+  getChainOpsForFactory?(chainId: number, factoryV4Addr: string): OnboardChainOps;
   /** SE-8 (carry #2): the grant surface reads the chain's protocol/bridge allowlists. */
   getChainConfig(chainId: number): {
     protocolAllowlist?: readonly string[] | undefined;
@@ -248,6 +252,12 @@ const createAgentSchema = z.object({
    * Validated against the ChainRegistry at the route (default-deny, E-11).
    */
   chainId: z.number().int().positive().optional(),
+  /**
+   * RH2 (two-factory): mint through a NAMED secondary wall-capability factory on
+   * the target chain (e.g. `oracleBand` → the price-band wall). A KEY, never an
+   * address — resolved to an operator-configured factory at the route, else 409.
+   */
+  capability: z.string().min(1).max(32).optional(),
 }).superRefine((v, issues) => {
   const role = v.goal.type ?? 'treasury';
   if (role === 'treasury' && v.allowlist.length < 1) {
@@ -499,6 +509,20 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
         return;
       }
       createChain = deps.chainRegistry.getChainOps(createChainId);
+    }
+    // RH2 (two-factory): mint through a NAMED secondary wall-capability factory
+    // when asked (e.g. `oracleBand`). Default-deny: the capability must be
+    // configured for THIS chain, and the default chain has no secondary factories.
+    if (input.capability) {
+      const capFactory =
+        createChainId !== deps.settings.defaultChainId
+          ? deps.chainRegistry?.getCapabilityFactory?.(createChainId, input.capability)
+          : undefined;
+      if (!capFactory || !deps.chainRegistry?.getChainOpsForFactory) {
+        res.status(409).json({ error: 'unknown_capability', capability: input.capability, chainId: createChainId });
+        return;
+      }
+      createChain = deps.chainRegistry.getChainOpsForFactory(createChainId, capFactory);
     }
     const deployed = await createChain.deployAndRegister({
       ownerAddr,

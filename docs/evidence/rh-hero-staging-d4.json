@@ -1,0 +1,22 @@
+{
+  "drill": "B4 — hero staging, on-chain-verifiable half (HACKATHON-RH2 D4)",
+  "chainId": 46630,
+  "hero": "0x8979C4c4291441cE51837a3be86f3443ea51F7A4",
+  "bandLatchOn": true,
+  "heroDrillScore": "5/5",
+  "fleetVisibility": "PENDING-DAMI: owner-authed POST /api/agents from the live cockpit (see RESULTS — which-factory decision)",
+  "score": "2/2",
+  "checks": [
+    {
+      "check": "D4 band latch ON on-chain (requireBandForSwap == true)",
+      "ok": true,
+      "detail": "hero=0x8979C4c4291441cE51837a3be86f3443ea51F7A4 requireBandForSwap=true"
+    },
+    {
+      "check": "D4 headless hero drill 5/5 (onboard→approve→in-band→PremiumBreach→StaleOracle)",
+      "ok": true,
+      "detail": "score=5/5 account=0x8979C4c4291441cE51837a3be86f3443ea51F7A4"
+    }
+  ],
+  "at": "2026-10-04T09:43:04.424Z"
+}
