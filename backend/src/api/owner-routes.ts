@@ -259,6 +259,14 @@ export const createAgentSchema = z.object({
    * address — resolved to an operator-configured factory at the route, else 409.
    */
   capability: z.string().min(1).max(32).optional(),
+  /**
+   * F-5: agents are not born paused. Spend-incapable roles (sentinel/provider/
+   * evaluator) start their runtime loop right after create — they can never
+   * move money, so there is nothing to fund first. Spend-capable roles stay
+   * paused until funded (the FE starts them on funding success). `false` opts
+   * an API caller out entirely.
+   */
+  autoStart: z.boolean().default(true),
 }).superRefine((v, issues) => {
   const role = v.goal.type ?? 'treasury';
   if (role === 'treasury' && v.allowlist.length < 1) {
@@ -607,6 +615,21 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     // Gas dust so the session key can pay execute() gas; funds stay behind the
     // account. Funded on the CHAIN the account was minted on (SE-7).
     await createChain.fundSessionKey(sessionKeyAddr, deps.settings.sessionGasDustWei);
+
+    // F-5: spend-incapable roles go live immediately — an unfunded spender
+    // would burn an LLM cycle + error trace every 30s, so treasury/executor/
+    // requester wait for the FE's funding-success (or explicit) start.
+    const createdRole = input.goal.type ?? 'treasury';
+    if (input.autoStart && (createdRole === 'sentinel' || createdRole === 'provider' || createdRole === 'evaluator')) {
+      try {
+        await deps.runtime.start(agentId);
+        deps.hub.emit(agentId, 'status', statusEvent('running'));
+      } catch (err) {
+        // Create already succeeded — a start hiccup must not fail the response;
+        // the owner still has the manual Start CTA.
+        console.error(`auto-start failed for agent ${agentId}`, err);
+      }
+    }
 
     // Shape = FE CreateAgentResponse (web/lib/types.ts).
     res.status(201).json({

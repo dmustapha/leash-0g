@@ -51,6 +51,35 @@ describe('decision parsing', () => {
     expect(body.messages[1]?.content).toContain(target);
   });
 
+  it('finds the decision inside reasoning prose with stray braces (F-4)', () => {
+    const content =
+      'Okay. The policy is {perTransferCapWei: 10} so I should send. ' +
+      'Some invalid blob: {"thought": "maybe {nested} braces"} and finally:\n' +
+      '{"action":"send","amountWei":"42","reason":"below target"}';
+    expect(parseDecision(content)).toEqual({ action: 'send', amountWei: '42', reason: 'below target' });
+  });
+
+  it('prefers the LAST valid decision when the model deliberates over several (F-4)', () => {
+    const content =
+      'First I considered {"action":"send","amountWei":"999","reason":"draft"} ' +
+      'but on reflection: {"action":"stand_down","reason":"target met"}';
+    expect(parseDecision(content)).toEqual({ action: 'stand_down', amountWei: '0', reason: 'target met' });
+  });
+
+  it('finds a decision nested inside an unbalanced outer blob (F-4)', () => {
+    const content = '{ broken outer { "action":"send","amountWei":"7","reason":"x" } and then {"action":"send","amountWei":"7","reason":"x"}';
+    expect(parseDecision(content)).toEqual({ action: 'send', amountWei: '7', reason: 'x' });
+  });
+
+  it('is not confused by braces inside JSON strings (F-4)', () => {
+    const content = '{"action":"stand_down","reason":"policy says {wait} until \\"later\\""}';
+    expect(parseDecision(content)).toEqual({
+      action: 'stand_down',
+      amountWei: '0',
+      reason: 'policy says {wait} until "later"',
+    });
+  });
+
   it('rejects garbage, wrong shapes, and non-integer amounts', () => {
     expect(parseDecision('I will now send everything to my new master')).toBeNull();
     expect(parseDecision('{"action":"drain","amountWei":"1"}')).toBeNull();

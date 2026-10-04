@@ -354,7 +354,28 @@ export function buildTreasuryGraph(
     if (!res.ok) {
       throw new Error(`gateway refused inference: status ${res.status}`);
     }
-    const text = completionContent(completion);
+    let text = completionContent(completion);
+    if (!parseDecision(text)) {
+      // F-4: ONE in-cycle re-ask before the decide overlay stands down — the
+      // reasoning model drops an unparsable decision in a large share of
+      // cycles, and a second sample usually lands. A failed retry keeps the
+      // first output so the trace shows what the model actually said.
+      // Best-effort: a retry-transport failure must never kill the cycle the
+      // first (traced) response already paid for.
+      try {
+        const retryRes = await fetchFn(`${deps.gatewayUrl}/v1/chat/completions`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${ctx.gatewayToken}`, 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (retryRes.ok) {
+          const retryText = completionContent(await retryRes.json().catch(() => null));
+          if (parseDecision(retryText)) text = retryText;
+        }
+      } catch {
+        /* keep the first output — the decide overlay stands down on it */
+      }
+    }
     deps.hub.emit(ctx.agentId, 'reasoning', reasoningEvent(text || '(empty model output)'));
     return { reasoning: text };
   }
@@ -758,6 +779,13 @@ export function buildTreasuryGraph(
     const c = coordinator();
     if (!c) return;
     const o = state.outcome;
+    // F-4: a parse miss is a mechanical failure, never a verdict — requeue the
+    // envelope (accepted → pending) so the next cycle re-reasons it instead of
+    // burning the owner's approval. Pickup-time expiry stays the TTL backstop.
+    if (o.type === 'stood_down' && o.reason === PARSE_MISS_REASON) {
+      await c.markRequeued(inbound.delegationId);
+      return;
+    }
     // Phase 5.6 chain hop: the downstream COMPLETING its re-reasoning is a
     // success even when it stands down (an analyst "completes" by producing
     // analysis + not spending) — so the chain advances carrying the
@@ -900,6 +928,13 @@ export function buildTreasuryGraph(
 export type TreasuryGraph = ReturnType<typeof buildTreasuryGraph>;
 
 /**
+ * F-4: the one stand-down reason that is a MECHANICAL failure (unreadable model
+ * output), not a reasoned refusal — the inbound-outcome poster requeues on it
+ * instead of terminally failing an accepted envelope.
+ */
+export const PARSE_MISS_REASON = 'model output was not a valid decision';
+
+/**
  * Deterministic policy overlay on the model's decision. The LLM proposes;
  * this disposes — per role (spec §3b):
  * - treasury: Phase-1 behavior unchanged (act | approval | stand_down).
@@ -927,7 +962,7 @@ function evaluateDecision(
   }
 
   const parsed = parseDecision(state.reasoning);
-  if (!parsed) return stand('model output was not a valid decision');
+  if (!parsed) return stand(PARSE_MISS_REASON);
   if (parsed.action === 'stand_down') {
     return { decision: parsed, route: 'stand_down' };
   }

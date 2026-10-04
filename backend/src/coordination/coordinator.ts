@@ -324,6 +324,18 @@ export class DelegationCoordinator {
     return d;
   }
 
+  /**
+   * F-4: hand an accepted envelope back (accepted → pending) after a
+   * mechanical parse miss — the next cycle re-picks it; pickup-time expiry
+   * stays the TTL backstop. CAS: null when another writer already settled it.
+   */
+  async markRequeued(delegationId: string): Promise<Delegation | null> {
+    const d = await transitionDelegation(this.deps.pool, delegationId, ['accepted'], 'pending');
+    if (!d) return null;
+    await this.traceUpdate(d.toAgentId, d, `requeued delegation '${d.kind}' after an unreadable decision`);
+    return d;
+  }
+
   /** Receiver declines an undelivered envelope without accepting it. */
   async markDeclinedByReceiver(delegationId: string, reason?: string): Promise<Delegation | null> {
     const d = await transitionDelegation(this.deps.pool, delegationId, ['pending'], 'declined', { decidedAt: true });
