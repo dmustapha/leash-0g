@@ -251,29 +251,66 @@ const decisionSchema = z
     }
   });
 
-/** Strict JSON parse of the model's decision; null on any deviation. */
-export function parseDecision(content: string): AgentDecision | null {
-  const start = content.indexOf('{');
-  const end = content.lastIndexOf('}');
-  if (start < 0 || end <= start) return null;
-  let raw: unknown;
-  try {
-    raw = JSON.parse(content.slice(start, end + 1));
-  } catch {
-    return null;
+/**
+ * Balanced `{…}` candidates in model output, string-aware (quotes/escapes).
+ * Reasoning models wrap the decision in prose with stray braces and sometimes
+ * emit several JSON blobs — a single greedy indexOf..lastIndexOf slice spans
+ * them all and fails to parse. Every '{' starts a candidate, so a decision
+ * nested inside an unbalanced outer blob is still found.
+ */
+function balancedJsonCandidates(content: string): string[] {
+  const candidates: string[] = [];
+  for (let start = content.indexOf('{'); start >= 0; start = content.indexOf('{', start + 1)) {
+    let depth = 0;
+    let inString = false;
+    for (let i = start; i < content.length; i++) {
+      const ch = content[i];
+      if (inString) {
+        if (ch === '\\') i++;
+        else if (ch === '"') inString = false;
+      } else if (ch === '"') {
+        inString = true;
+      } else if (ch === '{') {
+        depth++;
+      } else if (ch === '}' && --depth === 0) {
+        candidates.push(content.slice(start, i + 1));
+        break;
+      }
+    }
   }
-  const parsed = decisionSchema.safeParse(raw);
-  if (!parsed.success) return null;
-  const d = parsed.data;
-  // Normalize to AgentDecision: carry target/selector ONLY for a 'call' (omit the
-  // keys entirely otherwise — exactOptionalPropertyTypes forbids `undefined`).
-  return {
-    action: d.action,
-    amountWei: d.amountWei,
-    reason: d.reason,
-    ...(d.action === 'call' && d.target ? { target: d.target } : {}),
-    ...(d.action === 'call' && d.selector ? { selector: d.selector } : {}),
-  };
+  return candidates;
+}
+
+/** Strict JSON parse of the model's decision; null when no candidate validates. */
+export function parseDecision(content: string): AgentDecision | null {
+  // The candidate scan is O(n²) on pathological brace soup; reasoning_content
+  // is not bounded by max_tokens, so cap the input. Keep the TAIL — the final
+  // decision comes last.
+  if (content.length > 65_536) content = content.slice(-65_536);
+  // Prefer the LAST valid candidate: reasoning output deliberates over
+  // hypothetical decisions first and states the final one at the end.
+  let last: AgentDecision | null = null;
+  for (const candidate of balancedJsonCandidates(content)) {
+    let raw: unknown;
+    try {
+      raw = JSON.parse(candidate);
+    } catch {
+      continue;
+    }
+    const parsed = decisionSchema.safeParse(raw);
+    if (!parsed.success) continue;
+    const d = parsed.data;
+    // Normalize to AgentDecision: carry target/selector ONLY for a 'call' (omit the
+    // keys entirely otherwise — exactOptionalPropertyTypes forbids `undefined`).
+    last = {
+      action: d.action,
+      amountWei: d.amountWei,
+      reason: d.reason,
+      ...(d.action === 'call' && d.target ? { target: d.target } : {}),
+      ...(d.action === 'call' && d.selector ? { selector: d.selector } : {}),
+    };
+  }
+  return last;
 }
 
 /** Pull assistant text out of an OpenAI-shaped completion body. */

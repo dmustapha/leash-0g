@@ -182,6 +182,7 @@ export default function CreatePage() {
           jobSpecs={jobSpecs}
           {...(prefill ? { prefill } : {})}
           onStartAgent={onManual}
+          startCreatedAgent={(agentId) => api.start(agentId)}
         />
       )}
     </div>

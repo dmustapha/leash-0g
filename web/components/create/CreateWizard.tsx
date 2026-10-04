@@ -65,6 +65,12 @@ export type CreateWizardProps = {
   prefill?: WizardPrefill;
   /** Phase-5 (D-A1): CTA when the requester's advanced-door prerequisites are unmet. */
   onStartAgent?: () => void;
+  /**
+   * F-5: start the created agent's runtime loop. Spend-incapable roles are
+   * auto-started by the backend; for spend-capable roles the done screen calls
+   * this on funding success and from the loud skip-fund Start CTA.
+   */
+  startCreatedAgent?: (agentId: string) => Promise<unknown>;
 };
 
 type Step =
@@ -228,7 +234,7 @@ function seedFromPrefill(p: WizardPrefill): {
   return { role, entryStep: entryStepFor(role, fields), fields, allowlist: p.allowlist };
 }
 
-export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs, prefill, onStartAgent }: CreateWizardProps) {
+export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs, prefill, onStartAgent, startCreatedAgent }: CreateWizardProps) {
   const seed = prefill ? seedFromPrefill(prefill) : null;
   const [step, setStep] = useState<Step>(seed?.entryStep ?? 'name');
   const [role, setRole] = useState<AgentRole>(seed?.role ?? 'treasury');
@@ -1105,9 +1111,30 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
             <button type="button" className="btn" onClick={result.downloadBackup}>
               Download audit key backup
             </button>
-            <a className="btn btn-primary" href={`/agents/${result.response.agentId}`}>
-              Open the cockpit
-            </a>
+            {role === 'sentinel' || role === 'provider' || role === 'evaluator' ? (
+              // Backend auto-started this spend-incapable agent — plain cockpit link.
+              <a className="btn btn-primary" href={`/agents/${result.response.agentId}`}>
+                Open the cockpit — it&apos;s already running
+              </a>
+            ) : (
+              // F-5: loud Start CTA for the skip-fund path — spend-capable agents
+              // are born paused until funded or explicitly started.
+              <button
+                type="button"
+                className="btn btn-primary"
+                data-testid="start-and-open"
+                onClick={async () => {
+                  try {
+                    await startCreatedAgent?.(result.response.agentId);
+                  } catch {
+                    /* cockpit has the Start button as fallback */
+                  }
+                  window.location.href = `/agents/${result.response.agentId}`;
+                }}
+              >
+                Start agent &amp; open cockpit
+              </button>
+            )}
           </div>
           {role !== 'sentinel' ? (
             <section aria-label="Fund your agent" className="panel" style={{ padding: '0.9rem 1rem', display: 'grid', gap: '0.7rem' }}>
@@ -1120,6 +1147,12 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
                 accountAddr={result.response.accountAddr}
                 defaultAmountOg={weiToOg(2n * BigInt(input?.policy.windowCapWei ?? ogToWei(windowAmount)))}
                 onSend={fund ? (valueWei) => fund.send(result.response.accountAddr, valueWei) : undefined}
+                onFunded={
+                  startCreatedAgent
+                    ? // F-5: funding landed — start the spend-capable agent right away.
+                      () => void startCreatedAgent(result.response.agentId).catch(() => {})
+                    : undefined
+                }
                 getBalance={fundGetBalance ? () => fundGetBalance(result.response.accountAddr) : undefined}
                 skipHref={`/agents/${result.response.agentId}`}
               />
