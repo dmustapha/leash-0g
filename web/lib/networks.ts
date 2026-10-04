@@ -44,6 +44,22 @@ const EXPLORER_TX_PREFIX: Record<number, string> = {
   46630: 'https://explorer.testnet.chain.robinhood.com/tx/', // Robinhood Chain testnet (Orbit L2)
 };
 
+/** Native gas-token symbol by chainId — cockpit amounts are denominated in the agent's
+ *  HOME chain currency, not the platform's. Every registered non-0G chain today is an
+ *  ETH-gas testnet, so unknown chains fall back to ETH. */
+const NATIVE_SYMBOL: Record<number, string> = {
+  [config.chainId]: '0G', // 0G Galileo (home)
+  84532: 'ETH', // Base Sepolia
+  11155111: 'ETH', // Ethereum Sepolia
+  421614: 'ETH', // Arbitrum Sepolia
+  46630: 'ETH', // Robinhood Chain testnet (Orbit L2)
+};
+
+export function nativeSymbol(chainId: number | undefined): string {
+  if (chainId === undefined) return '0G';
+  return NATIVE_SYMBOL[chainId] ?? 'ETH';
+}
+
 /** Explorer link for a tx on `chainId`, or null when no explorer is known for that chain. */
 export function networkTxUrl(chainId: number, txHash: string): string | null {
   const prefix = EXPLORER_TX_PREFIX[chainId];

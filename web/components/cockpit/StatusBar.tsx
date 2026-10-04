@@ -15,10 +15,13 @@ const STATUS_PILL: Record<AgentDetail['status'], string> = {
 export function StatusBar({
   detail,
   chainVerified,
+  currency = '0G',
 }: {
   detail: AgentDetail;
   /** GET /traces chainVerified flag — LEASH's own integrity check of the trace chain. */
   chainVerified?: boolean;
+  /** Native symbol of the agent's HOME chain (SE-7) — RH/Base/Eth/Arb agents gas in ETH. */
+  currency?: string;
 }) {
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
@@ -34,7 +37,7 @@ export function StatusBar({
       <span className="badge" data-testid="session-countdown">
         session {countdown(detail.sessionExpiry, now)}
       </span>
-      <span className="badge">{weiToOg(detail.accountBalance)} 0G in account</span>
+      <span className="badge">{weiToOg(detail.accountBalance)} {currency} in account</span>
       {/* D-B9: inert freeform capability label — display only, no taxonomy/filter/discovery. */}
       {detail.agent?.capabilityLabel ? (
         <span className="badge" data-testid="capability-label" title="What this agent is for">

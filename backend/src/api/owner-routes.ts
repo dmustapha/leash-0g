@@ -218,7 +218,8 @@ const tokenConfigSchema = z.object({
   windowCapTokenWei: weiSchema,
 });
 
-const createAgentSchema = z.object({
+// Exported for unit tests (create-input hardening: past expiry, zero-address allowlist).
+export const createAgentSchema = z.object({
   name: z.string().min(1).max(120),
   auditPubKey: z.string().regex(/^(0x)?0[23][0-9a-fA-F]{64}$|^(0x)?04[0-9a-fA-F]{128}$/),
   policy: z.object({
@@ -307,6 +308,24 @@ const createAgentSchema = z.object({
       code: z.ZodIssueCode.custom,
       message: 'goal.topUpWei must not exceed policy.perTransferCapWei',
       path: ['goal', 'topUpWei'],
+    });
+  }
+  // A past expiry would mint a born-dead account (expired on-chain from its
+  // first block) and burn the deploy gas for nothing.
+  if (v.policy.expiresAt <= Math.floor(Date.now() / 1000)) {
+    issues.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'policy.expiresAt must be in the future',
+      path: ['policy', 'expiresAt'],
+    });
+  }
+  // The zero address is never a valid recipient; it reverts deep in the deploy
+  // path and surfaces as an opaque 500.
+  if (v.allowlist.some((a) => /^0x0{40}$/.test(a))) {
+    issues.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'allowlist must not contain the zero address',
+      path: ['allowlist'],
     });
   }
 });
