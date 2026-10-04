@@ -84,6 +84,10 @@ Per-role "alive" matrix: treasury = autonomous top-up (only self-starter) · sen
 **Environment for all stages:** backend `https://leash-0g-backend-rh2.onrender.com` (branch 06b9a2d, quota 60, rate 100/h) · web `https://leash-0g-ar2wvij4l-damilolas-projects-fafdf859.vercel.app` · Telegram webhook on rh2 (restore prod by restarting prod service post-campaign) · campaign owners via headless SIWE (`backend/scripts/rh2-campaign/`, keys in gitignored `state/`) · Dami's owner 0xc211…12A5 reserved for Phase B browser work · ops RH balance ~0.0085 after faucet — watch it.
 
 ### ── TRACK 1: DEMO-CRITICAL (must finish TODAY before demo) ──
+Principle (Dami review 2026-10-04): the demo runs ENTIRELY on the branch stack (prod has no
+band lane) — so rh2 backend + preview stability are themselves demo-critical, and EVERY screen
+the camera might touch gets at least a happy-path pass tonight (breadth-shallow everywhere,
+depth on the hero lane). Environment freeze after B0: no env/deploy churn once smoke passes.
 
 **A2 — Liveness + cage core** `[backend, ~45-60 min]`
 - P2 all links × treasury (full) + band-hero on RH; P1.1–P1.4 on the campaign treasury; C4–C7 mechanical.
@@ -93,6 +97,20 @@ Per-role "alive" matrix: treasury = autonomous top-up (only self-starter) · sen
 **A5-hero — Band wall + portability spine** `[backend, ~45 min]`
 - P7.1 via API/cast on RH (in-band, PremiumBreach, StaleOracle, fail-closed probe); P6.1 (onboard camp treasury 0G→Base, act on Base); P6.5 mini (revoke once, check both chains); P1.6 revoke beats.
 - Exit: every on-chain beat of the demo proven to work headlessly, so the recorded run can't surprise us.
+
+**A2 note:** band-hero liveness runs ON RH 46630 (the demo chain), not only the 0G treasury.
+**A5-hero note:** drive the RH beats through the PRODUCT's governed path (gateway → session key
+→ _enforceAndExecute), not bare cast — the recording must show the product working.
+
+**A3-lite + C10-lite — demo-beat smoke** `[backend + phone, ~20 min]`
+- P4.1/P4.2 happy paths only (direct a running agent; status-chat answers from real work);
+  Telegram ping + ONE phone approval against rh2. These are the strongest demo moments outside
+  the band wall — never first-tried on camera.
+
+**B0 — demo-surface smoke** `[frontend/Chrome, ~30 min]`
+- Happy-path pass over EVERY screen on the preview: fleet, cockpit + live stream, inbox,
+  links/pair, networks panel, settings, digest, jobs. No 404s, no empty-state surprises;
+  characterize B-4 sig-UX stalls so the camera never meets them cold. Then FREEZE the env.
 
 **B-hero — The recorded demo rehearsal + take** `[frontend/Chrome + MetaMask, ~60-90 min]`
 - P7.3 full story as a user, screen-recorded; P2.5 (live stream visible); P3.2-lite (create via wizard on camera if B-3 chain-picker gap allows — else the documented API-create + cockpit-visible beat).
@@ -113,6 +131,14 @@ Per-role "alive" matrix: treasury = autonomous top-up (only self-starter) · sen
 
 **Fix rounds** interleave per DELIB LAW #9: build on this chat's model → independent distinct-model review → DISAGREE→fix→AGREE → commit. Current open findings F-1 (revoke watcher chunking — HIGH, demo-relevant), F-2 (per-chain session dust), F-3 (audit flush bad-point) + B-3…B-6.
 
+### Chat convention (Dami-confirmed)
+Track 1 runs in ONE chat (shared live state: campaign owners, fixtures, env, findings-in-progress;
+deadline makes handoff overhead expensive). Track 2 + every fix round follow the standard leash-0g
+pipeline-chat convention: each stage in its OWN fresh chat via the kickoff template below, Dami
+gates between stages, fix rounds per DELIB LAW #9 (build → independent distinct-model review →
+DISAGREE→fix→AGREE → commit). This doc + tasks/e2e-rh-findings.md are the rolling context; if a
+Track-1 handoff becomes unavoidable, /handoff + the template resumes cleanly.
+
 ### New-chat kickoff template
 > RH2 campaign stage <ID> — read docs/RH2-E2E-CAMPAIGN-STRUCTURE.md + docs/RH2-E2E-TEST-PLAN.md
 > on hackathon-robinhood; env + fixtures per Structure §Run-stages; execute stage <ID> exactly,
@@ -121,8 +147,10 @@ Per-role "alive" matrix: treasury = autonomous top-up (only self-starter) · sen
 > user-simulating). Present findings to Dami at stage end.
 
 ### Tonight's recommended order (deadline EOD)
-1. A2 (liveness + cage) → fix anything that blocks a visibly-alive agent.
-2. A5-hero (band + portability beats headless).
-3. B-hero (recorded demo).
-4. Then as time allows: A3/A4 → Track 2.
+1. A2 (liveness + cage, band-hero on RH) → fix anything that blocks a visibly-alive agent.
+2. A5-hero (band + portability beats, through the product's governed path).
+3. A3-lite + C10-lite (direction/status/telegram demo beats).
+4. B0 (every-screen smoke on the preview) → ENV FREEZE.
+5. B-hero (recorded demo).
+6. Then as time allows: A3-full/A4 → Track 2.
 Packaging/submission artifacts come from B-hero's recording + evidence JSONs.
