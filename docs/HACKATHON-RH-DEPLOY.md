@@ -15,14 +15,28 @@
 | MockERC20 sTSLA (18dp) | `0xB9431b3be9a56a1eeA8E728326332f8B4dD51382` |
 | MockRouter | `0x4964991514f731CB3CF252108dFF889d30036fcb` |
 | MockAggregatorV3 (8dp, TSLA=$100) | `0x8E107bAC6f430aecB8Aa11B383E9690e9a5214bE` |
-| LeashAccountV4 (governed account) | `0x4FaEe24384795358a736e9BCADd22C8d975E240f` |
-| LeashAccountV4FactoryDeterministic | `0x93Bb77c3d9458f4738501fA82d7506225d61F767` |
+| LeashAccountV4 (governed account, pre-audit wall) | `0x4FaEe24384795358a736e9BCADd22C8d975E240f` |
+| LeashAccountV4FactoryDeterministic (AUDIT-FIXED wall) | `0x85E1758d29D2F5026E8B36664E41c6C891D0fF70` |
+| LeashAccountV4 (AUDIT-FIXED wall, onboarded agent) | `0x8979C4c4291441cE51837a3be86f3443ea51F7A4` |
 
-> The deterministic factory (CREATE2 via Arachnid `0x4e59…4956C`, salt
-> `keccak256("LEASH-V4-DETERMINISTIC-FACTORY-v1")`) is what the backend `deployAndRegister`
-> wire uses to onboard a RH-home agent. It lands at a NEW address (`0x93Bb…F767`) rather than
-> the production `0x9C10…E46f` because the price-band branch changes the wall bytecode — honest:
-> it shares an address only with other chains running this branch's factory, not production.
+> The deterministic factory (CREATE2 via Arachnid `0x4e59…4956C`) is what the backend
+> `deployAndRegister` wire uses to onboard a RH-home agent. The CURRENT factory
+> `0x85E1…fF70` embeds the AUDIT-FIXED wall (H-1 `requireBandForSwap` latch, H-2 one-shot band
+> check, L-1 feed-decimals pin). The earlier `0x93Bb…F767` factory held the pre-audit wall and
+> is superseded. Addresses differ from production `0x9C10…E46f` because the price-band branch
+> changes the wall bytecode (honest: shares an address only with chains running this branch).
+
+## Security gate (the leash-0g convention)
+- `security-auditor` run on the new wall → 2 HIGH (H-1 cross-venue routing, H-2 one-shot bypass)
+  + L-1 (hardcoded decimals) + M-1 (overclaimed guarantee). All fixed; re-audited clean on the
+  confirmed-correct paths (4 fail-closed predicates, grant grammar, reentrancy, calldata shape).
+- Tests: **349/349** (forge full suite incl. adversarial/invariant/differential/symbolic) with
+  **+11 new adversarial** cases proving H-1/H-2 closure, future-timestamp, dirty-bits, trailing
+  bytes, overflow fail-closed, non-8dp-feed grant refusal.
+- SMTChecker (BMC) is intractable at this contract size (optional profile, not a blocking gate).
+- Audit-fixed hero re-proven on-chain (fresh agent `0x8979…F7A4`, chainAgentId 3):
+  `docs/evidence/rh-onboard-hero-drill.json` — onboard → approve → in-band trade → PremiumBreach
+  → StaleOracle, 5/5, with `requireBandForSwap` latched on-chain.
 
 All 7 verified on Blockscout (self-hosted, no API key). The account is granted: `approve(sUSD→router)`
 within a 5,000-sUSD budget, governed `swap(router)`, and a **5% price band** on the swap priced off the

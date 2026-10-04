@@ -32,7 +32,7 @@ for (const line of readFileSync(new URL('../.env', import.meta.url), 'utf8').spl
 
 const RPC = 'http://127.0.0.1:8899'; // relay → RH testnet
 const CHAIN_ID = 46630;
-const V4_FACTORY = getAddress('0x93Bb77c3d9458f4738501fA82d7506225d61F767'); // deterministic
+const V4_FACTORY = getAddress('0x85E1758d29D2F5026E8B36664E41c6C891D0fF70'); // deterministic (audit-fixed wall)
 const REGISTRY = getAddress('0xf2943580DABc1dd5eD417a5DC58D35110640BB2f');
 const SUSD = getAddress('0x5F6a3AbC97E421f7B3930fc504D6a0CE4eE41e06'); // 18dp quote
 const STSLA = getAddress('0xB9431b3be9a56a1eeA8E728326332f8B4dD51382'); // 18dp stock (priced asset)
@@ -119,12 +119,16 @@ async function main() {
   await send(account, encodeFunctionData({ abi: leashAccountV4Abi, functionName: 'proposeCallRule', args: [ROUTER, SWAP_SEL, 0, [], (2n ** 128n - 1n), (2n ** 128n - 1n), ('0x' + '00'.repeat(32)) as Hex] }));
   await send(account, encodeFunctionData({ abi: leashAccountV4Abi, functionName: 'applyCallRule', args: [] }));
   await send(account, encodeFunctionData({ abi: tightenBandFrag, functionName: 'tightenPriceBand', args: [ROUTER, SWAP_SEL, FEED, STSLA, 500, 3600n] }));
+  // H-1 fix: latch default-deny pricing — any unbanded swap rule now reverts BandRequired.
+  await send(account, encodeFunctionData({ abi: [{ name: 'enableRequireBandForSwap', type: 'function', inputs: [], outputs: [], stateMutability: 'nonpayable' }] as const, functionName: 'enableRequireBandForSwap', args: [] }));
 
   // (2) governed approve ACCEPTED (the enabling leg for the swap).
   const approveTx = await send(account, encodeFunctionData({ abi: leashAccountV4Abi, functionName: 'executeCall', args: [SUSD, 0n, encodeFunctionData({ abi: approveFrag, functionName: 'approve', args: [ROUTER, 2000n * E18] })] }));
   const allowance = (await pub.readContract({ address: SUSD, abi: [{ name: 'allowance', type: 'function', inputs: [{ type: 'address' }, { type: 'address' }], outputs: [{ type: 'uint256' }], stateMutability: 'view' }], functionName: 'allowance', args: [account, ROUTER] })) as bigint;
   record('governed approve ACCEPTED', allowance === 2000n * E18, `allowance=${allowance} tx=${approveTx}`);
 
+  // Refresh the feed to $100 NOW (a prior run may have left updatedAt stale).
+  await send(FEED, encodeFunctionData({ abi: setAnswerFrag, functionName: 'setAnswer', args: [10_000_000_000n] }));
   // (3) AGENT TRADES SANELY: 100 sUSD → ≥1 sTSLA, implied $100 == oracle (in band).
   const greenTx = await send(account, encodeFunctionData({ abi: leashAccountV4Abi, functionName: 'executeCall', args: [ROUTER, 0n, swapData(100n * E18, 1n * E18)] }));
   const bal = (await pub.readContract({ address: STSLA, abi: balanceFrag, functionName: 'balanceOf', args: [account] })) as bigint;

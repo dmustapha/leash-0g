@@ -46,6 +46,11 @@ contract MockAggregatorV3 {
         _updatedAt = block.timestamp - age;
     }
 
+    /// @notice Force `updatedAt` into the FUTURE (an invalid timestamp → fail closed).
+    function setFuture(uint256 ahead) external {
+        _updatedAt = block.timestamp + ahead;
+    }
+
     /// @notice Force `answeredInRound < roundId` (predicate 4 — incomplete round).
     function setRoundMismatch() external {
         _roundId += 2;
