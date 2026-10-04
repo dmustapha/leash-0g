@@ -193,4 +193,122 @@ contract LeashAccountV4PriceBandTest is Test {
         vm.expectRevert(abi.encodeWithSelector(LeashAccountV4.BandOnlyForSwap.selector, bytes4(0x095ea7b3)));
         acct.tightenPriceBand(address(router), 0x095ea7b3, address(feed), address(stsla), BAND_BPS, MAX_STALE);
     }
+
+    // ================= ADVERSARIAL (security-audit H-1/H-2/L-1 + edges) =================
+
+    /// Grant a second swap venue with NO band. Returns the router.
+    function _secondVenueNoBand() internal returns (MockRouter r2) {
+        r2 = new MockRouter();
+        stsla.mint(address(r2), 10_000e18);
+        vm.prank(address(acct));
+        susd.approve(address(r2), type(uint256).max);
+        vm.startPrank(owner);
+        acct.proposeCallRule(address(r2), SEL_SWAP, 0, new address[](0), type(uint128).max, type(uint128).max, bytes32(0));
+        acct.applyCallRule();
+        vm.stopPrank();
+    }
+
+    // H-1: without the latch, a premium lands on an unbanded second venue (the gap).
+    function test_H1_unbandedVenue_premiumLands_withoutLatch() public {
+        MockRouter r2 = _secondVenueNoBand();
+        vm.prank(session);
+        acct.executeCall(address(r2), 0, abi.encodeWithSelector(SEL_SWAP, address(susd), address(stsla), uint256(999e18), uint256(1e18), address(acct), block.timestamp + 1));
+    }
+
+    // H-1 FIX: once latched, a swap on an unbanded rule reverts BandRequired (default-deny pricing).
+    function test_H1_latch_blocksUnbandedVenue() public {
+        MockRouter r2 = _secondVenueNoBand();
+        vm.prank(owner);
+        acct.enableRequireBandForSwap();
+        vm.prank(session);
+        vm.expectRevert(abi.encodeWithSelector(LeashAccountV4.BandRequired.selector, address(r2)));
+        acct.executeCall(address(r2), 0, abi.encodeWithSelector(SEL_SWAP, address(susd), address(stsla), uint256(999e18), uint256(1e18), address(acct), block.timestamp + 1));
+    }
+
+    // H-1 FIX: the banded venue still works after latching.
+    function test_H1_latch_bandedVenueStillTrades() public {
+        vm.prank(owner);
+        acct.enableRequireBandForSwap();
+        _call(_swap(100e18, 1e18));
+        assertEq(stsla.balanceOf(address(acct)), 100e18);
+    }
+
+    function _oneShotHash(bytes memory data) internal view returns (bytes32) {
+        return keccak256(abi.encode(block.chainid, address(router), SEL_SWAP, data, uint256(0)));
+    }
+
+    // H-2 FIX: a one-shot-authorized PREMIUM swap still hits the band at execution.
+    function test_H2_oneShot_premiumSwap_blocked() public {
+        bytes memory data = _swap(130e18, 1e18);
+        vm.prank(owner);
+        acct.authorizeOnce(_oneShotHash(data), uint64(block.timestamp + 1 days));
+        vm.prank(session);
+        vm.expectRevert(abi.encodeWithSelector(LeashAccountV4.PremiumBreach.selector, uint256(130e18), uint256(105e18)));
+        acct.executeCall(address(router), 0, data);
+    }
+
+    // H-2 FIX: a one-shot authorized in-band, then the feed goes stale → fail-closed at execution.
+    function test_H2_oneShot_staleSwap_blocked() public {
+        bytes memory data = _swap(100e18, 1e18);
+        vm.prank(owner);
+        acct.authorizeOnce(_oneShotHash(data), uint64(block.timestamp + 1 days));
+        feed.setStale(2 hours);
+        vm.prank(session);
+        vm.expectRevert();
+        acct.executeCall(address(router), 0, data);
+    }
+
+    // predicate 3, future updatedAt branch (was untested).
+    function test_futureUpdatedAt_failsClosed() public {
+        feed.setFuture(100);
+        vm.prank(session);
+        vm.expectRevert();
+        acct.executeCall(address(router), 0, _swap(100e18, 1e18));
+    }
+
+    // non-canonical tokenOut (dirty upper bits) → DecodeMismatch.
+    function test_nonCanonicalTokenOut_reverts() public {
+        bytes memory data = _swap(100e18, 1e18);
+        // tokenOut word is at calldata offset 36 → bytes index 36..67; set a high byte.
+        data[36] = 0xff;
+        vm.prank(session);
+        vm.expectRevert(LeashAccountV4.DecodeMismatch.selector);
+        acct.executeCall(address(router), 0, data);
+    }
+
+    function test_trailingBytes_reverts() public {
+        bytes memory data = bytes.concat(_swap(100e18, 1e18), hex"00");
+        vm.prank(session);
+        vm.expectRevert(LeashAccountV4.DecodeMismatch.selector);
+        acct.executeCall(address(router), 0, data);
+    }
+
+    function test_amountInOverflow_failsClosed() public {
+        vm.prank(session);
+        vm.expectRevert(); // amountIn * 1e18 overflows → checked-math revert (fail closed)
+        acct.executeCall(address(router), 0, _swap(type(uint256).max, 1e18));
+    }
+
+    // L-1: a non-8dp feed is refused AT GRANT (fail-loud, not silent misprice).
+    function test_L1_feedNotEightDecimals_grantReverts() public {
+        MockAggregatorV3Dec6 bad = new MockAggregatorV3Dec6();
+        vm.prank(owner);
+        vm.expectRevert(abi.encodeWithSelector(LeashAccountV4.FeedNotEightDecimals.selector, uint8(6)));
+        acct.tightenPriceBand(address(router), SEL_SWAP, address(bad), address(stsla), BAND_BPS, MAX_STALE);
+    }
+
+    // a no-code feed address is refused at grant (decimals() call fails).
+    function test_noCodeFeed_grantReverts() public {
+        vm.prank(owner);
+        vm.expectRevert();
+        acct.tightenPriceBand(address(router), SEL_SWAP, makeAddr("eoaFeed"), address(stsla), BAND_BPS, MAX_STALE);
+    }
+}
+
+/// A feed that reports 6 decimals — used to prove the L-1 grant-time decimals pin.
+contract MockAggregatorV3Dec6 {
+    function decimals() external pure returns (uint8) { return 6; }
+    function latestRoundData() external view returns (uint80, int256, uint256, uint256, uint80) {
+        return (1, 100e8, block.timestamp, block.timestamp, 1);
+    }
 }

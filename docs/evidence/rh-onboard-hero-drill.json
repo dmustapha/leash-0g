@@ -1,27 +1,27 @@
 {
   "drill": "RH onboard + oracle-aware hero (Arbitrum Open House)",
   "chainId": 46630,
-  "factoryV4": "0x93Bb77c3d9458f4738501fA82d7506225d61F767",
-  "account": "0x4EfC4f10e2b9DD491900dD9Ff4D52cB25E0D5c1f",
-  "createTx": "0x0933ec9750fee0628d5d92f862fbd8c35d65cf08d88fd15194c4650ccaef6c96",
-  "registerTx": "0x41346bfbe7d7a021308568777b49f015ce33af7a04775c82189bae3a4ca825e2",
-  "greenTx": "0xf8ca6853a669cdcfe829fe3478d5281f4f849e99f56454caa83b437aa1af8afe",
+  "factoryV4": "0x85E1758d29D2F5026E8B36664E41c6C891D0fF70",
+  "account": "0x8979C4c4291441cE51837a3be86f3443ea51F7A4",
+  "createTx": "0xf1626f89c701c451f7e0e48d3380bfe1deb6ae32bd5b8e9da38b9ba8245b9bfc",
+  "registerTx": "0x68c50bc0cf8d1fcd6f6f4db825c545f4e52897d0d61c2e98ebedc153093177ad",
+  "greenTx": "0x47edec2d32b6e1189259a8f02576c66a5850b3ab26e326cb92e6593d3a891c82",
   "score": "5/5",
   "checks": [
     {
       "check": "production onboard → RH-home V4 agent",
       "ok": true,
-      "detail": "account=0x4EfC4f10e2b9DD491900dD9Ff4D52cB25E0D5c1f chainAgentId=1 createTx=0x0933ec9750fee0628d5d92f862fbd8c35d65cf08d88fd15194c4650ccaef6c96"
+      "detail": "account=0x8979C4c4291441cE51837a3be86f3443ea51F7A4 chainAgentId=3 createTx=0xf1626f89c701c451f7e0e48d3380bfe1deb6ae32bd5b8e9da38b9ba8245b9bfc"
     },
     {
       "check": "governed approve ACCEPTED",
       "ok": true,
-      "detail": "allowance=2000000000000000000000 tx=0x5f394a66776e3ae1151479a03334ef9c92d386a29c6143c71e7a0b4bed424514"
+      "detail": "allowance=2000000000000000000000 tx=0xb113bfb26e21b72eda3caf3e77d94d46a19f59af9263eb9715184c236d06dda2"
     },
     {
       "check": "agent trades sanely — in-band swap ACCEPTED",
       "ok": true,
-      "detail": "sTSLA=100000000000000000000 tx=0xf8ca6853a669cdcfe829fe3478d5281f4f849e99f56454caa83b437aa1af8afe"
+      "detail": "sTSLA=100000000000000000000 tx=0x47edec2d32b6e1189259a8f02576c66a5850b3ab26e326cb92e6593d3a891c82"
     },
     {
       "check": "premium trade BLOCKED (PremiumBreach)",
@@ -34,5 +34,5 @@
       "detail": "Execution reverted for an unknown reason."
     }
   ],
-  "at": "2026-10-03T16:27:26.905Z"
+  "at": "2026-10-04T08:07:58.849Z"
 }
