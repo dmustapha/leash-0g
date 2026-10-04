@@ -112,6 +112,13 @@ depth on the hero lane). Environment freeze after B0: no env/deploy churn once s
   links/pair, networks panel, settings, digest, jobs. No 404s, no empty-state surprises;
   characterize B-4 sig-UX stalls so the camera never meets them cold. Then FREEZE the env.
 
+**Recording trigger (B-hero):** `screencapture -v` rolls ONLY when: A2 alive-verdict green (or
+fix landed+reverified) · A5-hero beats proven headless on RH · A3/C10-lite rehearsed · B0 clean
++ env frozen · fleet view tidied (campaign debris revoked) · cockpit pre-loaded on the band
+agent · Dami's go on the beat list. Takes are PER-BEAT clips (create/fund · in-band ✓ ·
+PremiumBreach ✗ · StaleOracle ✗ · revoke), not one long take — feed moves happen off-camera
+between clips, retakes stay cheap.
+
 **B-hero — The recorded demo rehearsal + take** `[frontend/Chrome + MetaMask, ~60-90 min]`
 - P7.3 full story as a user, screen-recorded; P2.5 (live stream visible); P3.2-lite (create via wizard on camera if B-3 chain-picker gap allows — else the documented API-create + cockpit-visible beat).
 - Pre-flight: Zerion/Blowfish domain-safe report; MetaMask on RH; `screencapture -v` take management.
