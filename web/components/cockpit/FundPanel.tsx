@@ -20,6 +20,7 @@ export function FundPanel({
   onFunded,
   skipHref,
   idPrefix = 'fund',
+  currency = '0G',
 }: {
   accountAddr: Address;
   /** Prefilled 0G amount, e.g. 2× the window cap. */
@@ -33,6 +34,8 @@ export function FundPanel({
   /** When set, shows a "fund later" skip link (create flow). */
   skipHref?: string;
   idPrefix?: string;
+  /** Native symbol of the agent's HOME chain (SE-7) — RH/Base/Eth/Arb agents gas in ETH. */
+  currency?: string;
 }) {
   const [amount, setAmount] = useState(defaultAmountOg);
   const [busy, setBusy] = useState(false);
@@ -96,7 +99,7 @@ export function FundPanel({
         value={amount}
         onChange={(e) => setAmount(e.target.value)}
         inputMode="decimal"
-        suffix="0G"
+        suffix={currency}
         error={error}
       />
       <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
@@ -111,7 +114,7 @@ export function FundPanel({
         </button>
         {balanceWei !== null ? (
           <span className="badge" data-testid={`${idPrefix}-balance`} aria-live="polite">
-            account holds {weiToOg(balanceWei)} 0G
+            account holds {weiToOg(balanceWei)} {currency}
           </span>
         ) : null}
       </div>

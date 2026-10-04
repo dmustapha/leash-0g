@@ -93,7 +93,15 @@ export default function CreatePage() {
       } else {
         if (!wallet.address) throw new Error('Connect your wallet first.');
         const message = kekSignMessage(wallet.address, config.chainId);
-        const sig = await probeDeterministicSignature(wallet.signMessage, message);
+        // ANY wallet-layer failure (user reject, extension security interstitial killing
+        // the request) falls back to the passphrase KEK — the wizard must stay recoverable
+        // without a wallet signature.
+        let sig: string | null;
+        try {
+          sig = await probeDeterministicSignature(wallet.signMessage, message);
+        } catch {
+          sig = null;
+        }
         if (!sig) throw new PassphraseRequiredError();
         blob = await encryptWithSignature(hexToBytes(keypair.privKeyHex), sig);
       }

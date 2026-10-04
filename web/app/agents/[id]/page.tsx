@@ -58,6 +58,7 @@ import { CapabilityGrant } from '@/components/cockpit/CapabilityGrant';
 import { CapabilityDecisionCard } from '@/components/cockpit/CapabilityDecisionCard';
 import { CapabilityEnvelope } from '@/components/cockpit/CapabilityEnvelope';
 import { NetworksPanel } from '@/components/cockpit/NetworksPanel';
+import { nativeSymbol } from '@/lib/networks';
 import {
   applyCallRuleOnchain,
   authorizeOnceOnchain,
@@ -426,6 +427,9 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
   const lowBalance =
     detail !== null && BigInt(detail.accountBalance) < BigInt(detail.policy.windowCapWei);
 
+  // SE-7: amounts are denominated in the HOME chain's gas token (RH/Base/Eth/Arb = ETH).
+  const currency = nativeSymbol(agentNetworks?.homeChainId);
+
   if (!wallet.ready) {
     return <PageShell title="Cockpit"><p role="status" style={{ color: 'var(--color-ink-dim)' }}>Loading…</p></PageShell>;
   }
@@ -467,7 +471,7 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
         <>
           {/* M-02 carry: same mismatch condition GuardianPanel warns on, surfaced up top. */}
           <MigrateGuardianBanner guardian={guardian} leashGuardian={detail.leashGuardianAddr} />
-          <StatusBar detail={detail} chainVerified={chainVerified} />
+          <StatusBar detail={detail} chainVerified={chainVerified} currency={currency} />
           <AgentControls
             status={detail.status}
             onStart={async () => {
@@ -488,8 +492,8 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
               style={{ padding: '0.9rem 1rem', display: 'grid', gap: '0.7rem', borderColor: 'rgba(255,184,76,0.4)' }}
             >
               <p style={{ margin: 0, fontSize: '0.9rem' }}>
-                <strong>Running low.</strong> The agent holds {weiToOg(detail.accountBalance)} 0G —
-                less than one full budget window ({weiToOg(detail.policy.windowCapWei)} 0G). Top it
+                <strong>Running low.</strong> The agent holds {weiToOg(detail.accountBalance)} {currency} —
+                less than one full budget window ({weiToOg(detail.policy.windowCapWei)} {currency}). Top it
                 up so payments do not start failing.
               </p>
               <FundPanel
@@ -502,6 +506,7 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
                 initialBalanceWei={detail.accountBalance}
                 onFunded={() => void refresh()}
                 idPrefix="cockpit-fund"
+                currency={currency}
               />
             </section>
           ) : null}
@@ -578,6 +583,7 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
                 onApply={applyPending}
                 onWindDown={windDown}
                 onRearm={rearm}
+                currency={currency}
               />
             </div>
           ) : null}
