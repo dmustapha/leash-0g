@@ -78,3 +78,23 @@ LEASH is a work-in-progress research project. This is an honest scope boundary: 
   (2) the `EXTRA_CHAINS` `>32`-entry upper bound is enforced but untested; (3)
   `ARB_PROTOCOL_ALLOWLIST` parsing duplicates `parseAddressList` instead of reusing it.
   All three are cosmetic (no behavior/security impact) and deferred past Stage-E close.
+
+## RH slice — oracle-aware price band (Arbitrum Open House, branch `hackathon-robinhood`)
+
+- **Price-band coverage is per-`(target, SEL_SWAP)` rule; the latch scopes to the canonical
+  swap selector (F-1, INFORMATIONAL — 2nd security review).** `requireBandForSwap` makes any
+  `SEL_SWAP` call without a band revert `BandRequired`, but it does NOT price a *different*
+  router trade selector (e.g. `swapExactTokensForTokens`). Reaching such a path requires an
+  owner grant (agent cannot self-grant) and the off-chain gate must continue to default-DENY
+  non-`SEL_SWAP` router trade selectors. The on-chain guarantee holds exactly as stated: an
+  agent cannot land a premium/stale trade on a banded swap rule.
+- **The `requireBandForSwap` latch is one-way (F-2, LOW, accepted).** Irreversible by design
+  (a security tightening, matching the project-wide tighten convention). A mis-pinned/dead feed
+  can brick swaps on that rule until the owner re-points it (timelocked) or removes the rule;
+  owner-only, never agent-triggerable, owner withdraw path unaffected.
+- **Feed decimals pinned at grant, not at read.** `_assertFeedEightDecimals` asserts 8dp when a
+  band is granted. Real Chainlink aggregators have immutable `decimals()`, so this is sound; a
+  non-8dp or dead feed is refused at grant (fail-loud).
+- **Mainline gate still pending (post-deadline).** The sprint ran a full adversarial test suite
+  (349/349) + two independent security reviews (HIGH findings fixed). A clean whole-contract
+  SMTChecker pass + formal mainline merge gate are deferred; the branch stays OFF mainline.
