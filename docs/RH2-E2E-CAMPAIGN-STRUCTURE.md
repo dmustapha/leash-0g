@@ -131,6 +131,24 @@ depth on the hero lane). Environment freeze after B0: no env/deploy churn once s
 
 **Fix rounds** interleave per DELIB LAW #9: build on this chat's model → independent distinct-model review → DISAGREE→fix→AGREE → commit. Current open findings F-1 (revoke watcher chunking — HIGH, demo-relevant), F-2 (per-chain session dust), F-3 (audit flush bad-point) + B-3…B-6.
 
+### Claude-in-Chrome protocol (all B-stages)
+- **UI-only while user-simulating.** No API calls during a B-stage run — the campaign restarted
+  over exactly this. Sanctioned exception: logged between-takes stimulus with no UI (e.g. mock
+  feed price moves), announced in the findings log, never mid-take.
+- **Browser**: Dami's real Chrome via claude-in-chrome MCP. Fresh tab per session
+  (tabs_create_mcp); never reuse stale tab IDs across sessions.
+- **Wallet**: MetaMask only (Zerion uninstalled/disabled — scanner false-positive + injection
+  conflict). Testnet approvals pre-authorized: Claude approves in-page prompts itself; the
+  MetaMask OS-level popup has no tabId → unreachable → ONE-line ping to Dami per occurrence.
+- **Login**: Privy on the preview domain may need a fresh session → Dami's action (email/OTP).
+- **Known quirks**: React ignores synthetic ref-clicks sometimes → use coordinate clicks;
+  chrome:// pages unreachable; two-extension injection conflicts caused past "Waiting for
+  MetaMask" stalls.
+- **Recording (B-hero)**: `screencapture -v` from Bash (same engine as cmd+shift+5), start/stop
+  around takes; retakes cheap; Dami reviews the .mov and calls retakes.
+- **Dami touchpoints**: MetaMask OS popups · Telegram phone taps · Privy login · phase gates ·
+  any Cloudflare/OAuth wall (Claude never completes bot-checks).
+
 ### Chat convention (Dami-confirmed)
 Track 1 runs in ONE chat (shared live state: campaign owners, fixtures, env, findings-in-progress;
 deadline makes handoff overhead expensive). Track 2 + every fix round follow the standard leash-0g
