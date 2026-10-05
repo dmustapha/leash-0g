@@ -180,3 +180,66 @@ describe('buildGovernedCall — never-guess-money', () => {
     });
   });
 });
+
+// ─── FR3 (F-8): trader trade-fill — swap free args from the OWNER-TYPED goal ───
+// The swap's tokenIn/tokenOut come from the trader goal (owner-typed at create),
+// minOut/deadline are server constants. STILL never model text: the model only
+// picked (target, selector, amount). Without a trade context the swap keeps
+// refusing (treasury path unchanged).
+describe('buildGovernedCall — trader trade fill (FR3)', () => {
+  const ROUTER = '0x' + 'dd'.repeat(20);
+  const HOLD = '0x' + '11'.repeat(20);
+  const SPEND = '0x' + '22'.repeat(20);
+  const routerAbi = parseAbi([
+    'function swap(address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOutMin, address recipient, uint256 deadline)',
+  ]);
+  const trade = { tokenIn: SPEND, tokenOut: HOLD, minOutWei: 1n, deadlineSec: 1_900_000_000 };
+
+  it('builds the swap: tokens from the goal, amount from the model, recipient SELF, minOut/deadline server-set', () => {
+    const g = grantOf(rule({ target: ROUTER, selector: SEL.swap, recipientMode: 'self' }));
+    const res = buildGovernedCall({ target: ROUTER, selector: SEL.swap, amountWei: '250' }, g, SELF, trade);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    const { functionName, args } = decodeFunctionData({ abi: routerAbi, data: res.data as `0x${string}` });
+    expect(functionName).toBe('swap');
+    expect((args[0] as string).toLowerCase()).toBe(SPEND); // tokenIn = goal.spendToken
+    expect((args[1] as string).toLowerCase()).toBe(HOLD); // tokenOut = goal.holdToken
+    expect(args[2]).toBe(250n); // amountIn = model amount
+    expect(args[3]).toBe(1n); // minOut = server constant (band wall enforces)
+    expect((args[4] as string).toLowerCase()).toBe(SELF.toLowerCase()); // recipient pinned to SELF
+    expect(args[5]).toBe(1_900_000_000n); // deadline = server-derived
+    expect(res.value).toBe(0n);
+  });
+
+  it('still refuses the swap with NO trade context (treasury path unchanged)', () => {
+    const g = grantOf(rule({ target: ROUTER, selector: SEL.swap, recipientMode: 'self' }));
+    expect(buildGovernedCall({ target: ROUTER, selector: SEL.swap, amountWei: '250' }, g, SELF)).toMatchObject({
+      ok: false,
+      reason: 'not_authority_determined',
+    });
+  });
+
+  it('a trade context never loosens OTHER refusals: allowlist recipient still refuses', () => {
+    const g = grantOf(rule({ target: ROUTER, selector: SEL.swap, recipientMode: 'allowlist' }));
+    expect(buildGovernedCall({ target: ROUTER, selector: SEL.swap, amountWei: '1' }, g, SELF, trade)).toMatchObject({
+      ok: false,
+      reason: 'not_authority_determined',
+    });
+  });
+
+  it('a trade context never unlocks a non-swap free arg (setApprovalForAll bool still refuses)', () => {
+    const g = grantOf(rule({ selector: SEL.setApprovalForAll }));
+    expect(buildGovernedCall({ target: TOKEN, selector: SEL.setApprovalForAll, amountWei: '1' }, g, SELF, trade)).toMatchObject({
+      ok: false,
+      reason: 'not_authority_determined',
+    });
+  });
+
+  it('an ungranted swap still refuses with a trade context (no_grant)', () => {
+    const g = grantOf(rule({}));
+    expect(buildGovernedCall({ target: ROUTER, selector: SEL.swap, amountWei: '1' }, g, SELF, trade)).toMatchObject({
+      ok: false,
+      reason: 'no_grant',
+    });
+  });
+});

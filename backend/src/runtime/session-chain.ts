@@ -69,6 +69,10 @@ export interface RuntimeChain {
    * assuming 0G. Read once per job at originate and stored on the job row.
    */
   getErc20Meta(token: string): Promise<{ symbol: string; decimals: number }>;
+  /** FR3 (F-8): trader holdings sense — ERC-20 balance of an address. */
+  getErc20Balance(token: string, owner: string): Promise<bigint>;
+  /** FR3 (F-8): trader holdings sense — ERC-20 allowance owner→spender. */
+  getErc20Allowance(token: string, owner: string, spender: string): Promise<bigint>;
   /**
    * Stage D (D-10): live-read the on-chain governed-call envelope for the given
    * candidates and build the authoritative `GrantState` the off-chain classify +
@@ -118,6 +122,24 @@ export class SessionChain implements RuntimeChain {
     const meta = { symbol: String(symbol), decimals: Number(decimals) };
     this.metaCache.set(key, meta);
     return meta;
+  }
+
+  async getErc20Balance(token: string, owner: string): Promise<bigint> {
+    return (await this.publicClient.readContract({
+      address: token as Hex,
+      abi: erc20MetaAbi,
+      functionName: 'balanceOf',
+      args: [owner as Hex],
+    })) as bigint;
+  }
+
+  async getErc20Allowance(token: string, owner: string, spender: string): Promise<bigint> {
+    return (await this.publicClient.readContract({
+      address: token as Hex,
+      abi: erc20MetaAbi,
+      functionName: 'allowance',
+      args: [owner as Hex, spender as Hex],
+    })) as bigint;
   }
 
   async executeTransfer(input: {

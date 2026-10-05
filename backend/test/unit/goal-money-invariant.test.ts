@@ -44,3 +44,26 @@ describe('revalidateEffectiveGoal — C1 money-authority invariant', () => {
     expect(r.ok).toBe(true);
   });
 });
+
+// FR3 (F-8): the trader's token pair is owner-typed money authority — a
+// tampered/stale effective goal that re-points either token is rejected at the
+// apply boundary; the descriptive amounts may change (they flow via applyGoalPatch).
+describe('revalidateEffectiveGoal — trader token-pair invariant (FR3)', () => {
+  const TRADER: AgentGoal = {
+    type: 'trader',
+    holdToken: '0x' + '44'.repeat(20),
+    spendToken: '0x' + '55'.repeat(20),
+    targetHoldWei: '1000',
+    clipWei: '100',
+  };
+  it('accepts an unchanged trader goal (and changed descriptive amounts)', () => {
+    expect(revalidateEffectiveGoal(TRADER, TRADER).ok).toBe(true);
+    expect(revalidateEffectiveGoal(TRADER, { ...TRADER, targetHoldWei: '9000', clipWei: '50' }).ok).toBe(true);
+  });
+  it('rejects a re-pointed holdToken / spendToken', () => {
+    const h = revalidateEffectiveGoal(TRADER, { ...TRADER, holdToken: '0x' + '99'.repeat(20) });
+    expect(h.ok).toBe(false);
+    if (!h.ok) expect(h.reason).toMatch(/money-authority field \(holdToken\)/);
+    expect(revalidateEffectiveGoal(TRADER, { ...TRADER, spendToken: '0x' + '99'.repeat(20) }).ok).toBe(false);
+  });
+});

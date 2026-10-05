@@ -36,6 +36,18 @@ export type SentinelGoal = {
 /** Executor (spec §3b): acts on inbound delegations within ITS OWN caps. */
 export type ExecutorGoal = { type: 'executor'; model?: string };
 
+/** Trader (FR3/F-8): autonomous governed-swap role — accumulates holdToken by
+ *  swapping spendToken via owner-granted capabilities, one clip per cycle.
+ *  Token addresses are owner-typed at create; it never sends native funds. */
+export type TraderGoal = {
+  type: 'trader';
+  holdToken: Address;
+  spendToken: Address;
+  targetHoldWei: string; // token base units
+  clipWei: string; // token base units
+  model?: string;
+};
+
 /** Phase-4 ACP roles (spec §3b). Only the requester spends (governed ERC-20). */
 export type RequesterGoal = {
   type: 'requester';
@@ -50,7 +62,7 @@ export type RequesterGoal = {
 export type ProviderGoal = { type: 'provider'; serviceSpec: string; model?: string };
 export type EvaluatorGoal = { type: 'evaluator'; rubricRef: string; model?: string };
 
-export type AgentGoal = GoalInput | SentinelGoal | ExecutorGoal | RequesterGoal | ProviderGoal | EvaluatorGoal;
+export type AgentGoal = GoalInput | SentinelGoal | ExecutorGoal | TraderGoal | RequesterGoal | ProviderGoal | EvaluatorGoal;
 
 /** Phase-4 settlement-token config (requester only, F1): immutable token + per-token caps. */
 export type TokenConfigInput = {
@@ -97,7 +109,7 @@ export type GatewayRule = {
 };
 
 /** Fleet row from GET /api/agents (spec §4 AgentSummary). */
-export type AgentRole = 'treasury' | 'sentinel' | 'executor' | 'requester' | 'provider' | 'evaluator';
+export type AgentRole = 'treasury' | 'sentinel' | 'executor' | 'trader' | 'requester' | 'provider' | 'evaluator';
 
 export type AgentSummary = {
   agentId: string;
@@ -596,7 +608,7 @@ export type CapabilityEnvelopeView = {
   recentRequests: CapabilityRequestRow[];
 };
 
-export type CapabilityRuleAction = 'propose' | 'tighten' | 'remove';
+export type CapabilityRuleAction = 'propose' | 'tighten' | 'remove' | 'apply';
 export type CapabilityDecision = 'approve_once' | 'always_allow' | 'deny';
 
 export type JobStatus =
