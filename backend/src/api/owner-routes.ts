@@ -8,6 +8,7 @@ import { statusEvent, traceEvent } from '../sse/events.js';
 import type { ApprovalBroker } from '../approvals/broker.js';
 import { generateGatewayToken, hashTokenSecret } from '../crypto/token.js';
 import { encryptSecret } from '../crypto/keycrypt.js';
+import { isValidEciesPubkey } from '../crypto/ecies.js';
 import { appendTrace, listTraces, verifyAgentChainIncremental } from '../trace/trace-store.js';
 import {
   getAgentById,
@@ -221,7 +222,13 @@ const tokenConfigSchema = z.object({
 // Exported for unit tests (create-input hardening: past expiry, zero-address allowlist).
 export const createAgentSchema = z.object({
   name: z.string().min(1).max(120),
-  auditPubKey: z.string().regex(/^(0x)?0[23][0-9a-fA-F]{64}$|^(0x)?04[0-9a-fA-F]{128}$/),
+  auditPubKey: z
+    .string()
+    .regex(/^(0x)?0[23][0-9a-fA-F]{64}$|^(0x)?04[0-9a-fA-F]{128}$/)
+    // F-3: the regex pins the SHAPE only — a well-shaped blob that is not a
+    // point on secp256k1 would poison every later audit flush ("bad point:
+    // is not on curve"). Reject it at the door.
+    .refine(isValidEciesPubkey, { message: 'auditPubKey is not a valid secp256k1 point' }),
   policy: z.object({
     perTransferCapWei: weiSchema,
     windowCapWei: weiSchema,

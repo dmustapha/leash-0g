@@ -75,7 +75,7 @@ async function main() {
   const bandOps = registry.getChainOpsForFactory(46630, resolved!);
   const salt = keccak256(stringToHex(`RH2-D5-HERO-${Date.now()}`)) as string;
   const tuple = {
-    ownerAddr: ops.address, sessionKeyAddr: ops.address, auditPubKey: '04' + 'ef'.repeat(64),
+    ownerAddr: ops.address, sessionKeyAddr: ops.address, auditPubKey: '044f355bdcb7cc0af728ef3cceb9615d90684bb5b2ca5f859ab0f0b704075871aa385b6b1b8ead809ca67454d9683fcf2ba03456d6fe2c4abe2b07f0fbdbb2f1c1',
     name: 'rh2-d5-oracle-hero', accountVersion: 4 as const,
     policy: { perTransferCap: E18, windowCap: 10n * E18, windowSeconds: 3600, expiresAt: 2 ** 31 },
     allowlist: [] as string[], timelockDelay: 0, settlementToken: SUSD,
