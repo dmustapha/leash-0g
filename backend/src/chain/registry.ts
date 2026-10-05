@@ -45,6 +45,13 @@ export interface ChainConfig {
   /** 0G enforces a 2-gwei floor; other chains have their own. Applied at send time. */
   gasFloorWei: bigint;
   /**
+   * F-2: session-key gas dust is CHAIN-PRICED — RH (46630) gas is ~0.012 gwei,
+   * so the 0G-sized global default (0.002) is orders of magnitude oversized
+   * there and drains the ops wallet per create. Unset ⇒ the global
+   * SESSION_GAS_DUST_WEI default applies.
+   */
+  sessionGasDustWei?: bigint | undefined;
+  /**
    * Allowlisted real protocols (Uniswap/Aave/Permit2, …). SE-8 (carry #2): when
    * SET, the owner grant surface refuses call-rule/preset targets outside
    * `protocolAllowlist ∪ bridgeAllowlist ∪ canonical` — no longer dormant.

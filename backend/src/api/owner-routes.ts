@@ -96,6 +96,8 @@ export interface OwnerChainRegistry {
     protocolAllowlist?: readonly string[] | undefined;
     bridgeAllowlist?: readonly string[] | undefined;
     canonical?: { router?: string | undefined; vault?: string | undefined; settlementToken?: string | undefined } | undefined;
+    /** F-2: per-chain session-key gas dust override (unset ⇒ global default). */
+    sessionGasDustWei?: bigint | undefined;
   };
 }
 
@@ -218,6 +220,24 @@ const tokenConfigSchema = z.object({
   perTransferCapTokenWei: weiSchema,
   windowCapTokenWei: weiSchema,
 });
+
+/**
+ * F-2: recognize an ops-wallet balance failure anywhere in a viem error chain.
+ * Exported for unit tests. viem's InsufficientFundsError text ("insufficient
+ * funds for gas * price + value") and common node phrasings are both matched;
+ * anything else keeps the opaque-500 path (no detail leaks, M-01). Scope: only
+ * called around OPS-WALLET sends (deploy/register/dust) — never around calls
+ * whose revert strings user input could shape (e.g. token transfers).
+ */
+export function isInsufficientFunds(err: unknown): boolean {
+  let cur: unknown = err;
+  for (let depth = 0; depth < 8 && cur instanceof Error; depth++) {
+    const text = `${cur.name} ${cur.message} ${(cur as { details?: string }).details ?? ''}`;
+    if (/insufficient funds|insufficient balance|InsufficientFundsError/i.test(text)) return true;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return false;
+}
 
 // Exported for unit tests (create-input hardening: past expiry, zero-address allowlist).
 export const createAgentSchema = z.object({
@@ -558,32 +578,51 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       }
       createChain = deps.chainRegistry.getChainOpsForFactory(createChainId, capFactory);
     }
-    const deployed = await createChain.deployAndRegister({
-      ownerAddr,
-      sessionKeyAddr,
-      auditPubKey: input.auditPubKey,
-      name: input.name,
-      accountVersion: input.accountVersion, // SE-1: 4 (default) → V4 factory; 2 → legacy
-      policy: {
-        perTransferCap: BigInt(input.policy.perTransferCapWei),
-        windowCap: BigInt(input.policy.windowCapWei),
-        windowSeconds: input.policy.windowSeconds,
-        expiresAt: input.policy.expiresAt,
-      },
-      allowlist: input.allowlist,
-      timelockDelay: deps.settings.defaultTimelockDelay,
-      // Phase-4: token-capable ONLY for a requester (validated above); the
-      // settlement token is immutable at create (F3).
-      ...(input.tokenConfig
-        ? {
-            settlementToken: input.tokenConfig.settlementToken,
-            tokenPolicy: {
-              perTransferCapToken: BigInt(input.tokenConfig.perTransferCapTokenWei),
-              windowCapToken: BigInt(input.tokenConfig.windowCapTokenWei),
-            },
-          }
-        : {}),
-    });
+    // F-2: an underfunded OPS wallet is an operator-funding condition, not an
+    // "internal error" — surface it as a clear 4xx instead of an opaque 500.
+    const opsUnderfunded = (): void => {
+      res.status(409).json({
+        error: {
+          message: `the operator gas wallet on chain ${createChainId} is underfunded — agent creation is temporarily unavailable on this chain`,
+          reason: 'ops_wallet_underfunded',
+        },
+      });
+    };
+    let deployed;
+    try {
+      deployed = await createChain.deployAndRegister({
+        ownerAddr,
+        sessionKeyAddr,
+        auditPubKey: input.auditPubKey,
+        name: input.name,
+        accountVersion: input.accountVersion, // SE-1: 4 (default) → V4 factory; 2 → legacy
+        policy: {
+          perTransferCap: BigInt(input.policy.perTransferCapWei),
+          windowCap: BigInt(input.policy.windowCapWei),
+          windowSeconds: input.policy.windowSeconds,
+          expiresAt: input.policy.expiresAt,
+        },
+        allowlist: input.allowlist,
+        timelockDelay: deps.settings.defaultTimelockDelay,
+        // Phase-4: token-capable ONLY for a requester (validated above); the
+        // settlement token is immutable at create (F3).
+        ...(input.tokenConfig
+          ? {
+              settlementToken: input.tokenConfig.settlementToken,
+              tokenPolicy: {
+                perTransferCapToken: BigInt(input.tokenConfig.perTransferCapTokenWei),
+                windowCapToken: BigInt(input.tokenConfig.windowCapTokenWei),
+              },
+            }
+          : {}),
+      });
+    } catch (err) {
+      if (isInsufficientFunds(err)) {
+        opsUnderfunded();
+        return;
+      }
+      throw err;
+    }
 
     const token = generateGatewayToken();
     const agentId = await insertAgent(deps.pool, {
@@ -620,8 +659,39 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     await releaseReservation(deps.pool, reserved.reservationId);
 
     // Gas dust so the session key can pay execute() gas; funds stay behind the
-    // account. Funded on the CHAIN the account was minted on (SE-7).
-    await createChain.fundSessionKey(sessionKeyAddr, deps.settings.sessionGasDustWei);
+    // account. Funded on the CHAIN the account was minted on (SE-7). F-2: dust
+    // is chain-priced — a per-chain override (EXTRA_CHAINS sessionGasDustWei)
+    // beats the 0G-sized global default.
+    const dustWei =
+      (createChainId !== deps.settings.defaultChainId
+        ? deps.chainRegistry?.getChainConfig(createChainId).sessionGasDustWei
+        : undefined) ?? deps.settings.sessionGasDustWei;
+    try {
+      await createChain.fundSessionKey(sessionKeyAddr, dustWei);
+    } catch (err) {
+      // The ops wallet ran dry BETWEEN deploy and dust-funding (narrow, but
+      // observed on RH). The agent EXISTS (minted + registered + inserted,
+      // quota slot consumed) — a 409 here would orphan it with no agentId
+      // returned. Answer 201 with the full create payload + a warning so the
+      // owner can fund/retry; the one-shot gatewayToken must not be lost.
+      if (isInsufficientFunds(err)) {
+        console.error(`agent ${agentId} created but session key unfunded: ops wallet dry on chain ${createChainId}`);
+        res.status(201).json({
+          agentId,
+          accountAddr: deployed.accountAddr,
+          sessionKeyAddr,
+          chainAgentId: deployed.chainAgentId.toString(),
+          gatewayToken: token.token,
+          txHashes: [deployed.createTx, deployed.registerTx],
+          warning: {
+            code: 'session_key_unfunded',
+            message: `the operator gas wallet on chain ${createChainId} ran dry before gas-dust funding — the agent was created but its session key has no gas yet`,
+          },
+        });
+        return;
+      }
+      throw err;
+    }
 
     // F-5: spend-incapable roles go live immediately — an unfunded spender
     // would burn an LLM cycle + error trace every 30s, so treasury/executor/
