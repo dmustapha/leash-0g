@@ -16,6 +16,7 @@ function digest(over: Partial<Digest>): Digest {
     since: new Date(Date.now() - 86_400_000).toISOString(),
     agents: [],
     links: [],
+    lifecycle: { created: [], onboarded: [], linksCreated: [] },
     totals: { spendWei: '0', actions: 0, decisions: 0, jobFees: { count: 0, byToken: {} } },
     empty: false,
     ...over,
@@ -119,5 +120,32 @@ describe('DigestService.renderText', () => {
     );
     expect(out).toMatch(/Worth a look:/);
     expect(out).toContain('3 requests blocked');
+  });
+
+  // B-6: creates, onboards and new links were invisible in the digest.
+  it('surfaces created agents, chain onboards and new links (B-6)', () => {
+    const out = svc.renderText(
+      digest({
+        agents: [
+          agent({ agentId: 'a1', name: 'Treasury' }),
+          agent({ agentId: 'a2', name: 'Band Hero' }),
+        ],
+        lifecycle: {
+          created: [{ agentId: 'a2', name: 'Band Hero' }],
+          onboarded: [{ agentId: 'a1', name: 'Treasury', chainId: 84532 }],
+          linksCreated: [{ linkId: 'l1', fromAgentId: 'a1', toAgentId: 'a2' }],
+        },
+      }),
+    );
+    expect(out).toContain('New: Band Hero');
+    expect(out).toContain('Treasury onboarded onto chain 84532');
+    expect(out).toContain('New links between your agents:');
+    expect(out).toContain('🔗 Treasury → Band Hero');
+  });
+
+  it('tolerates persisted pre-B-6 digests without a lifecycle field', () => {
+    const legacy = digest({});
+    delete (legacy as Partial<Digest>).lifecycle;
+    expect(() => svc.renderText(legacy)).not.toThrow();
   });
 });
