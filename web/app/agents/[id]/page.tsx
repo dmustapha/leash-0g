@@ -170,12 +170,12 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
       // live chain); a transient RPC failure keeps the last known values.
       if (!config.e2eMode) {
         try {
-          setPending(await readPendingEtas(d.addresses.account));
+          setPending(await readPendingEtas(d.addresses.account, agentNetworks?.homeChainId));
         } catch {
           /* keep last known pending etas */
         }
         try {
-          setGuardian(await readGuardian(d.addresses.account));
+          setGuardian(await readGuardian(d.addresses.account, agentNetworks?.homeChainId));
         } catch {
           /* keep last known guardian */
         }
@@ -183,7 +183,7 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
     } catch (e) {
       setLoadError(e instanceof Error ? e.message : 'Could not load your agent.');
     }
-  }, [api, id]);
+  }, [api, id, agentNetworks?.homeChainId]);
 
   useEffect(() => {
     void refresh();
@@ -233,10 +233,10 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
   const revokeFallback = useCallback(async () => {
     if (!detail || !wallet.address) throw new Error('Connect your wallet first.');
     const provider = await wallet.getProvider();
-    const tx = await revokeOnchain(provider, wallet.address as Address, detail.addresses.account);
+    const tx = await revokeOnchain(provider, wallet.address as Address, detail.addresses.account, agentNetworks?.homeChainId);
     await refresh();
     return tx;
-  }, [detail, wallet, refresh]);
+  }, [detail, wallet, refresh, agentNetworks?.homeChainId]);
 
   const submitPolicy = useCallback(
     async (
@@ -252,10 +252,10 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
         expiresAt: BigInt(p.expiresAt),
       };
       const fn = loosening ? proposePolicyOnchain : tightenPolicyOnchain;
-      await fn(provider, wallet.address as Address, detail.addresses.account, policy);
+      await fn(provider, wallet.address as Address, detail.addresses.account, policy, agentNetworks?.homeChainId);
       await refresh();
     },
-    [detail, wallet, refresh],
+    [detail, wallet, refresh, agentNetworks?.homeChainId],
   );
 
   const applyPending = useCallback(
@@ -263,39 +263,39 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
       if (!detail || !wallet.address) throw new Error('Connect your wallet first.');
       const provider = await wallet.getProvider();
       const fn = { policy: applyPolicyOnchain, allowlist: applyAllowlistOnchain, withdraw: applyWithdrawOnchain }[kind];
-      await fn(provider, wallet.address as Address, detail.addresses.account);
+      await fn(provider, wallet.address as Address, detail.addresses.account, agentNetworks?.homeChainId);
       setPending((prev) => ({ ...prev, [kind]: 0 }));
       await refresh();
     },
-    [detail, wallet, refresh],
+    [detail, wallet, refresh, agentNetworks?.homeChainId],
   );
 
   const rearm = useCallback(async () => {
     if (!detail || !wallet.address) throw new Error('Connect your wallet first.');
     const provider = await wallet.getProvider();
-    const tx = await rearmOnchain(provider, wallet.address as Address, detail.addresses.account);
+    const tx = await rearmOnchain(provider, wallet.address as Address, detail.addresses.account, agentNetworks?.homeChainId);
     await refresh();
     return tx;
-  }, [detail, wallet, refresh]);
+  }, [detail, wallet, refresh, agentNetworks?.homeChainId]);
 
   const setGuardianTx = useCallback(
     async (newGuardian: Address) => {
       if (!detail || !wallet.address) throw new Error('Connect your wallet first.');
       const provider = await wallet.getProvider();
-      const tx = await setGuardianOnchain(provider, wallet.address as Address, detail.addresses.account, newGuardian);
+      const tx = await setGuardianOnchain(provider, wallet.address as Address, detail.addresses.account, newGuardian, agentNetworks?.homeChainId);
       // Security-critical display (gate M-03): never show the change before it
       // is mined — wait for the receipt, then read the truth back from chain.
       // (e2eMode short-circuits this — Playwright has no live chain; the
       // never-show-unmined property is pinned by this non-e2e branch.)
       if (!config.e2eMode) {
-        await waitForTx(tx as Hex);
-        setGuardian(await readGuardian(detail.addresses.account));
+        await waitForTx(tx as Hex, agentNetworks?.homeChainId);
+        setGuardian(await readGuardian(detail.addresses.account, agentNetworks?.homeChainId));
       } else {
         setGuardian(newGuardian);
       }
       return tx;
     },
-    [detail, wallet],
+    [detail, wallet, agentNetworks?.homeChainId],
   );
 
   const windDown = useCallback(async () => {
@@ -315,16 +315,22 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
     async (valueWei: bigint) => {
       if (!detail || !wallet.address) throw new Error('Connect your wallet first.');
       const provider = await wallet.getProvider();
-      return sendNativeOnchain(provider, wallet.address as Address, detail.addresses.account, valueWei);
+      return sendNativeOnchain(provider, wallet.address as Address, detail.addresses.account, valueWei, agentNetworks?.homeChainId);
     },
-    [detail, wallet],
+    [detail, wallet, agentNetworks?.homeChainId],
   );
 
   // ── Stage D: capability grant handlers (owner-signed, client-side) ──
   const requireProvider = useCallback(async () => {
     if (!detail || !wallet.address) throw new Error('Connect your wallet first.');
-    return { provider: await wallet.getProvider(), owner: wallet.address as Address, account: detail.addresses.account };
-  }, [detail, wallet]);
+    return {
+      provider: await wallet.getProvider(),
+      owner: wallet.address as Address,
+      account: detail.addresses.account,
+      // F-11: owner writes must land on the AGENT'S chain, not the platform default.
+      chainId: agentNetworks?.homeChainId,
+    };
+  }, [detail, wallet, agentNetworks?.homeChainId]);
 
   const toChainRule = (r: CallRule): CallRuleInput => ({
     target: r.target,
@@ -343,15 +349,15 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
 
   const grantPresetRule = useCallback(
     async (rule: CallRule): Promise<string> => {
-      const { provider, owner, account } = await requireProvider();
-      return proposeCallRuleOnchain(provider, owner, account, toChainRule(rule));
+      const { provider, owner, account, chainId } = await requireProvider();
+      return proposeCallRuleOnchain(provider, owner, account, toChainRule(rule), chainId);
     },
     [requireProvider],
   );
 
   const applyCallRule = useCallback(async () => {
-    const { provider, owner, account } = await requireProvider();
-    await applyCallRuleOnchain(provider, owner, account);
+    const { provider, owner, account, chainId } = await requireProvider();
+    await applyCallRuleOnchain(provider, owner, account, chainId);
     await loadCapabilities();
   }, [requireProvider, loadCapabilities]);
 
@@ -365,19 +371,19 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
 
   const customRule = useCallback(
     async (action: CapabilityRuleAction, rule: CallRule) => {
-      const { provider, owner, account } = await requireProvider();
+      const { provider, owner, account, chainId } = await requireProvider();
       let txHash: string | undefined;
       if (action === 'propose') {
-        txHash = await proposeCallRuleOnchain(provider, owner, account, toChainRule(rule));
+        txHash = await proposeCallRuleOnchain(provider, owner, account, toChainRule(rule), chainId);
       } else if (action === 'tighten') {
         txHash = await tightenCallRuleOnchain(provider, owner, account, {
           target: rule.target,
           selector: rule.selector,
           perCallCap: rule.perCallCap,
           windowCapCall: rule.windowCapCall,
-        });
+        }, chainId);
       } else {
-        txHash = await removeCallSelectorOnchain(provider, owner, account, rule.target, rule.selector);
+        txHash = await removeCallSelectorOnchain(provider, owner, account, rule.target, rule.selector, chainId);
       }
       await api.capabilityRule(id, { action, rule, txHash });
       await loadCapabilities();
@@ -388,27 +394,27 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
   // FR3 (F-8b): owner-signed per-token spend budget — propose (timelocked) + apply.
   const proposeBudget = useCallback(
     async (token: string, windowCap: string) => {
-      const { provider, owner, account } = await requireProvider();
-      await proposeSpendBudgetOnchain(provider, owner, account, token as Address, windowCap);
+      const { provider, owner, account, chainId } = await requireProvider();
+      await proposeSpendBudgetOnchain(provider, owner, account, token as Address, windowCap, chainId);
     },
     [requireProvider],
   );
 
   const applyBudget = useCallback(async () => {
-    const { provider, owner, account } = await requireProvider();
-    await applySpendBudgetOnchain(provider, owner, account);
+    const { provider, owner, account, chainId } = await requireProvider();
+    await applySpendBudgetOnchain(provider, owner, account, chainId);
   }, [requireProvider]);
 
   // FR3 (F-8c): apply a matured PROPOSED rule from the envelope (the custom-rule
   // flow's missing second half) — sign applyCallRule, then record proposed→active.
   const applyGrant = useCallback(
     async (grant: CapabilityGrantRow) => {
-      const { provider, owner, account } = await requireProvider();
+      const { provider, owner, account, chainId } = await requireProvider();
       // Review fix: the contract holds ONE pending-rule slot and applyCallRule()
       // is argless — a later proposal overwrites the slot. Verify the slot IS
       // this row before signing, or the wrong rule activates while the mirror
       // records this one as active.
-      const pending = await readPendingCallRule(account);
+      const pending = await readPendingCallRule(account, chainId);
       if (pending.eta === 0) {
         throw new Error('Nothing is pending on-chain for this agent — this rule may already be applied.');
       }
@@ -420,7 +426,7 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
           'The pending rule on-chain is a different one (a later proposal replaced this slot). Apply that rule first, then re-propose this one.',
         );
       }
-      const txHash = await applyCallRuleOnchain(provider, owner, account);
+      const txHash = await applyCallRuleOnchain(provider, owner, account, chainId);
       await api.capabilityRule(id, {
         action: 'apply',
         rule: {
@@ -442,9 +448,9 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
   // JIT decision handlers — the request row carries its own approvalId + callHash.
   const jitApproveOnce = useCallback(
     async (approvalId: string, callHash: Hex) => {
-      const { provider, owner, account } = await requireProvider();
+      const { provider, owner, account, chainId } = await requireProvider();
       const expiry = Math.floor(Date.now() / 1000) + 15 * 60; // ~15 min JIT window
-      const txHash = await authorizeOnceOnchain(provider, owner, account, callHash, expiry);
+      const txHash = await authorizeOnceOnchain(provider, owner, account, callHash, expiry, chainId);
       await api.decideCapability(approvalId, { decision: 'approve_once', txHash });
       await loadCapabilities();
     },
@@ -453,8 +459,8 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
 
   const jitAlwaysAllow = useCallback(
     async (approvalId: string, rule: CallRule) => {
-      const { provider, owner, account } = await requireProvider();
-      const txHash = await proposeCallRuleOnchain(provider, owner, account, toChainRule(rule));
+      const { provider, owner, account, chainId } = await requireProvider();
+      const txHash = await proposeCallRuleOnchain(provider, owner, account, toChainRule(rule), chainId);
       await api.decideCapability(approvalId, { decision: 'always_allow', txHash, rule });
       await loadCapabilities();
     },
@@ -555,6 +561,7 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
                 up so payments do not start failing.
               </p>
               <FundPanel
+                chainId={agentNetworks?.homeChainId}
                 accountAddr={detail.addresses.account}
                 defaultAmountOg={weiToOg(2n * BigInt(detail.policy.windowCapWei))}
                 onSend={wallet.address ? fundAgent : undefined}
@@ -629,7 +636,7 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
       ) : null}
 
       <div style={{ display: 'grid', gap: '1rem', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 340px), 1fr))', alignItems: 'start' }}>
-        <StreamFeed items={items} connection={connection} />
+        <StreamFeed items={items} connection={connection} chainId={agentNetworks?.homeChainId} />
         <div style={{ display: 'grid', gap: '1rem' }}>
           {detail ? (
             // Anchor for the inbox limit_hit "Adjust policy" deep-link (spec §3c).

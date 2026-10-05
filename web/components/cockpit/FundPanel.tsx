@@ -8,6 +8,7 @@ import { useCallback, useEffect, useState } from 'react';
 import type { Address } from 'viem';
 import { isValidOgAmount, ogToWei, weiToOg } from '@/lib/format';
 import { txUrl } from '@/lib/chain';
+import { networkTxUrl } from '@/lib/networks';
 import type { Hex } from '@/lib/types';
 import { Field } from '@/components/ui/Field';
 
@@ -21,6 +22,7 @@ export function FundPanel({
   skipHref,
   idPrefix = 'fund',
   currency = '0G',
+  chainId,
 }: {
   accountAddr: Address;
   /** Prefilled 0G amount, e.g. 2× the window cap. */
@@ -36,6 +38,8 @@ export function FundPanel({
   idPrefix?: string;
   /** Native symbol of the agent's HOME chain (SE-7) — RH/Base/Eth/Arb agents gas in ETH. */
   currency?: string;
+  /** F-11: the agent's chain — the sent-tx explorer link must point at ITS explorer. */
+  chainId?: number;
 }) {
   const [amount, setAmount] = useState(defaultAmountOg);
   const [busy, setBusy] = useState(false);
@@ -121,7 +125,7 @@ export function FundPanel({
       {tx ? (
         <p role="status" style={{ fontSize: '0.82rem', color: 'var(--color-ink-dim)', margin: 0 }}>
           Sent.{' '}
-          <a href={txUrl(tx)} target="_blank" rel="noreferrer" className="nav-link">
+          <a href={(chainId !== undefined ? networkTxUrl(chainId, tx) : null) ?? txUrl(tx)} target="_blank" rel="noreferrer" className="nav-link">
             View the transaction →
           </a>
         </p>
