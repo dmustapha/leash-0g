@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from
 import type { Server } from 'node:http';
 import request from 'supertest';
 import nock from 'nock';
+import { PrivateKey as EciesPrivateKey } from 'eciesjs';
 import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import { createTestDb, seedAgent, type TestDb } from '../helpers/db.js';
 import { buildTestApp, ownerAuth, TEST_KEK, UPSTREAM, type TestApp } from '../helpers/app.js';
@@ -499,7 +500,8 @@ describe('executor (inbound channel)', () => {
 });
 
 describe('goal-union create route (spec §3c compatibility)', () => {
-  const auditPubKey = '04' + 'cd'.repeat(64);
+  // Must be a REAL secp256k1 point: create validates the curve (F-3).
+  const auditPubKey = new EciesPrivateKey().publicKey.toHex();
   const base = {
     name: 'role-create',
     auditPubKey,

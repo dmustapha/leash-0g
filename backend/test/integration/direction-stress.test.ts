@@ -76,11 +76,14 @@ describe('STRESS: route input abuse', () => {
     await request(t.app).post(`/api/agents/${id}/direct`).set('authorization', ownerAuth(OWNER)).send({ intent: 'x', answers: Array(10).fill('a') }).expect(200);
     await request(t.app).post(`/api/agents/${id}/direct`).set('authorization', ownerAuth(OWNER)).send({ intent: 'x', answers: Array(11).fill('a') }).expect(400);
   });
-  it('/status q: empty → 400; 501 chars → 200 (sliced); array → 400', async () => {
+  it('/status q: empty → 400; 500 ok, 501 chars → 400 (C14 wall, no silent slice); array → 400', async () => {
     const id = await seedT();
     modelReplyPersistent('a bounded answer', 3);
     await request(t.app).get(`/api/agents/${id}/status`).query({ q: '' }).set('authorization', ownerAuth(OWNER)).expect(400);
-    await request(t.app).get(`/api/agents/${id}/status`).query({ q: 'x'.repeat(501) }).set('authorization', ownerAuth(OWNER)).expect(200);
+    // C14: the 500-char cap is a WALL — a silently sliced question would get
+    // an answer to a different question. 500 passes, 501 is refused.
+    await request(t.app).get(`/api/agents/${id}/status`).query({ q: 'x'.repeat(500) }).set('authorization', ownerAuth(OWNER)).expect(200);
+    await request(t.app).get(`/api/agents/${id}/status`).query({ q: 'x'.repeat(501) }).set('authorization', ownerAuth(OWNER)).expect(400);
     await request(t.app).get(`/api/agents/${id}/status?q[]=a&q[]=b`).set('authorization', ownerAuth(OWNER)).expect(400);
   });
   it('confirm acceptancePatch on a NON-requester → 400 acceptance_requires_job_agent', async () => {
