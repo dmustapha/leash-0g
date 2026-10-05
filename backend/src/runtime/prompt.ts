@@ -294,8 +294,12 @@ const decisionSchema = z
     reason: z.string().max(1000).default(''),
     // Stage D (D-10): present only for action 'call'. Strict shape — the decide
     // node re-derives every authority arg from on-chain grant state regardless.
-    target: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
-    selector: z.string().regex(/^0x[0-9a-fA-F]{8}$/).optional(),
+    // FR3b: the DECISION_CONTRACT template shows the target/selector keys, so
+    // reasoning models dutifully emit them EMPTY on stand_down — treat ""/null
+    // as absent instead of failing the whole decision (observed live on RH:
+    // every polite stand-down parsed as a miss, burning cycles as F-4 noise).
+    target: z.preprocess((v) => (v === '' || v === null ? undefined : v), z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional()),
+    selector: z.preprocess((v) => (v === '' || v === null ? undefined : v), z.string().regex(/^0x[0-9a-fA-F]{8}$/).optional()),
   })
   .superRefine((d, ctx) => {
     // A 'call' with no target/selector is malformed → reject (falls back to a

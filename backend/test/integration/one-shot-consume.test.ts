@@ -79,6 +79,9 @@ class FakeChain implements RuntimeChain {
   async getErc20Allowance(): Promise<bigint> {
     return 0n;
   }
+  async getSwapBandPrice18(): Promise<bigint | null> {
+    return null;
+  }
   async getErc20Meta(): Promise<{ symbol: string; decimals: number }> {
     return { symbol: '0G', decimals: 18 };
   }

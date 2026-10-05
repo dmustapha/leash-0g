@@ -56,11 +56,19 @@ const FIXTURES: Array<{ name: string; args: unknown[] }> = [
   { name: 'CodehashMismatch', args: [] },
   { name: 'OneShotExpired', args: [] },
   { name: 'EmptyCodeTarget', args: ['0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1'] },
+  // FR3b: RH band wall (oracle price-sanity) errors — plain language in the cockpit.
+  { name: 'PremiumBreach', args: [110_000_000_000_000_000_000n, 105_000_000_000_000_000_000n] },
+  { name: 'StaleOracle', args: [1_700_000_000n, 3600n] },
+  { name: 'OracleCallFailed', args: [] },
+  { name: 'OraclePriceInvalid', args: [] },
+  { name: 'BandRequired', args: ['0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1'] },
+  { name: 'BandOnlyForSwap', args: ['0x095ea7b3'] },
+  { name: 'PriceBandAssetMismatch', args: ['0xa1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1', '0xb2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2b2'] },
 ];
 
-describe('P3C-6(ii) — decodeLeashError over all 37 errors', () => {
-  it('the fixture list covers exactly the contract error set (pin: 37 = 22 v1/v3 + 15 Stage-D V4)', () => {
-    expect(LEASH_ERROR_NAMES).toHaveLength(37);
+describe('P3C-6(ii) — decodeLeashError over all 44 errors', () => {
+  it('the fixture list covers exactly the contract error set (pin: 44 = 22 v1/v3 + 15 Stage-D V4 + 7 RH band)', () => {
+    expect(LEASH_ERROR_NAMES).toHaveLength(44);
     expect([...FIXTURES.map((f) => f.name)].sort()).toEqual([...LEASH_ERROR_NAMES].sort());
   });
 

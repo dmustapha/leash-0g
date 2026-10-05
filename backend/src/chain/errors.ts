@@ -98,6 +98,21 @@ export function plainLeashError(errorName: string, args: Json): string {
       return 'That one-time approval has expired — ask the owner to approve it again.';
     case 'EmptyCodeTarget':
       return 'That target has no contract code — the account refuses to call an empty address.';
+    // RH band wall (FR3b): plain-language copy for oracle price-sanity refusals.
+    case 'PremiumBreach':
+      return 'The price band wall refused this trade — it would pay more than the live oracle price allows.';
+    case 'StaleOracle':
+      return 'The price band wall refused this trade — the oracle price is stale, so trading is paused until it updates.';
+    case 'OracleCallFailed':
+      return 'The price band wall refused this trade — the price oracle could not be read.';
+    case 'OraclePriceInvalid':
+      return 'The price band wall refused this trade — the oracle returned an invalid price.';
+    case 'BandRequired':
+      return 'Swaps on this account require a price band — the owner has not set one for this contract yet.';
+    case 'BandOnlyForSwap':
+      return 'A price band only governs swap calls.';
+    case 'PriceBandAssetMismatch':
+      return 'The price band wall refused this trade — it buys a different token than the band prices.';
     default:
       return 'The account contract refused this action.';
   }

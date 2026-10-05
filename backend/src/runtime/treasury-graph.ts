@@ -75,6 +75,14 @@ const TreasuryState = Annotation.Root({
   capabilities: Annotation<CapabilityView[]>,
   /** FR3 (F-8): the trader role's sensed token holdings (null for every other role). */
   holdings: Annotation<TraderHoldings | null>,
+  /**
+   * FR3b: the band-feed price (18dp decimal string) sensed for the trader's swap
+   * rule this cycle, or null (no band / unreadable). Read at SENSE time so the
+   * wall re-checks a price that is one reasoning-step old — exactly the gap the
+   * on-chain band exists to close (a feed move mid-cycle reverts PremiumBreach).
+   * Never shown to the model; only the minOut derivation consumes it.
+   */
+  bandPrice18: Annotation<string | null>,
   reasoning: Annotation<string>,
   decision: Annotation<AgentDecision>,
   route: Annotation<Route>,
@@ -312,18 +320,24 @@ export function buildTreasuryGraph(
         g.spenderSet.length === 1,
     );
     const spender = approveGrant?.spenderSet[0];
-    const [account, policy, holdBalance, spendBalance, allowance] = await Promise.all([
+    // FR3b: the granted swap rule (if any) — its band feed prices this cycle's minOut.
+    const swapGrant = grants.find((g) => SELECTORS.get(g.selector.toLowerCase())?.swapArgs);
+    const [account, policy, holdBalance, spendBalance, allowance, bandPrice] = await Promise.all([
       deps.chain.getBalance(ctx.accountAddr),
       deps.chain.getPolicyView(ctx.accountAddr, []),
       deps.chain.getErc20Balance(goal.holdToken, ctx.accountAddr),
       deps.chain.getErc20Balance(goal.spendToken, ctx.accountAddr),
       spender ? deps.chain.getErc20Allowance(goal.spendToken, ctx.accountAddr, spender) : Promise.resolve(0n),
+      swapGrant
+        ? deps.chain.getSwapBandPrice18(ctx.accountAddr, swapGrant.target, swapGrant.selector)
+        : Promise.resolve(null),
     ]);
     return {
       beneficiaryBalanceWei: '0',
       accountBalanceWei: account.toString(),
       effectiveBeneficiary: '',
       capabilities,
+      bandPrice18: bandPrice !== null ? bandPrice.toString() : null,
       holdings: {
         holdBalanceWei: holdBalance.toString(),
         spendBalanceWei: spendBalance.toString(),
@@ -345,6 +359,7 @@ export function buildTreasuryGraph(
         effectiveBeneficiary: '',
         capabilities: [],
         holdings: null,
+        bandPrice18: null,
         policy: {
           perTransferCapWei: '0',
           windowCapWei: '0',
@@ -377,6 +392,7 @@ export function buildTreasuryGraph(
       effectiveBeneficiary: beneficiary,
       capabilities,
       holdings: null,
+      bandPrice18: null,
       // P3C-6(i): window observability with the contract's OWN lazy-rollover
       // math (LeashAccount.execute) — past the boundary the window has
       // logically reset even though storage updates on the next spend.
@@ -629,18 +645,29 @@ export function buildTreasuryGraph(
       return standDownResult('session expired since sense — not submitting a doomed governed call');
     }
     const grant = await loadGrantState(deps.pool, deps.chain, ctx.agentId, self, deps.bridge?.targets);
-    // FR3 (F-8): the trader's swap free args resolve from its OWNER-TYPED goal
-    // tokens + server constants (minOut=1 testnet-honest — the band wall is the
-    // enforcement guarantee; deadline now+600). Never model text.
-    const trade: TradeFill | undefined =
-      ctx.goal.type === 'trader'
-        ? {
-            tokenIn: ctx.goal.spendToken,
-            tokenOut: ctx.goal.holdToken,
-            minOutWei: 1n,
-            deadlineSec: Math.floor(Date.now() / 1000) + 600,
-          }
-        : undefined;
+    // FR3 (F-8/FR3b): the trader's swap free args resolve from its OWNER-TYPED
+    // goal tokens + SERVER-READ on-chain state — never model text. minOut derives
+    // from the band feed price sensed THIS cycle (implied price == oracle →
+    // dead-center in-band); with no band it falls back to 1 (unguarded testnet
+    // mock). The wall re-reads the feed at submit, so a feed move between sense
+    // and submit reverts PremiumBreach/StaleOracle — the refusal the demo shows.
+    let trade: TradeFill | undefined;
+    if (ctx.goal.type === 'trader') {
+      let minOutWei = 1n;
+      if (state.bandPrice18) {
+        const price = BigInt(state.bandPrice18);
+        if (price > 0n) {
+          const derived = (BigInt(decision.amountWei) * 10n ** 18n) / price;
+          if (derived > 0n) minOutWei = derived;
+        }
+      }
+      trade = {
+        tokenIn: ctx.goal.spendToken,
+        tokenOut: ctx.goal.holdToken,
+        minOutWei,
+        deadlineSec: Math.floor(Date.now() / 1000) + 600,
+      };
+    }
     const built = buildGovernedCall(
       { target: decision.target ?? '', selector: decision.selector ?? '', amountWei: decision.amountWei },
       grant,
