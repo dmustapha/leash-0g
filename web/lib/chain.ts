@@ -8,7 +8,9 @@ import {
   createWalletClient,
   custom,
   defineChain,
+  encodePacked,
   http,
+  keccak256,
   type Address,
   type Chain,
   type EIP1193Provider,
@@ -395,6 +397,60 @@ export function proposeSpendBudgetOnchain(
   chainId?: number,
 ) {
   return writeAccountV4(provider, owner, account, 'proposeSpendBudget', [token, BigInt(windowCap)], chainId);
+}
+
+/** FR4 (F-9): the band wall only ever governs the router's swap selector.
+ *  Verify: `cast sig "swap(address,address,uint256,uint256,address,uint256)"` → 0x9908fc8b. */
+export const BAND_SWAP_SELECTOR = '0x9908fc8b' as Hex;
+
+/** Arm (or tighten) the price band on the canonical router's swap — INSTANT. */
+export function tightenPriceBandOnchain(
+  provider: EIP1193Provider,
+  owner: Address,
+  account: Address,
+  band: { target: Address; feed: Address; asset: Address; maxDeviationBps: number; maxStalenessSec: number },
+  chainId?: number,
+) {
+  return writeAccountV4(provider, owner, account, 'tightenPriceBand', [
+    band.target,
+    BAND_SWAP_SELECTOR,
+    band.feed,
+    band.asset,
+    band.maxDeviationBps,
+    BigInt(band.maxStalenessSec),
+  ], chainId);
+}
+
+/** Latch band-required-for-every-swap — one-way owner opt-in (fail-closed). */
+export function enableRequireBandForSwapOnchain(
+  provider: EIP1193Provider,
+  owner: Address,
+  account: Address,
+  chainId?: number,
+) {
+  return writeAccountV4(provider, owner, account, 'enableRequireBandForSwap', [], chainId);
+}
+
+/** FR4 (review fix): is a band ALREADY SET for router.swap on this account? Read on-chain
+ *  so the two-step arm UI survives remounts (ruleKey = keccak256(target ++ selector)). */
+export async function readPriceBandSet(account: Address, target: Address, chainId?: number): Promise<boolean> {
+  const ruleKey = keccak256(encodePacked(['address', 'bytes4'], [target, BAND_SWAP_SELECTOR]));
+  const r = (await publicClientFor(chainId).readContract({
+    address: account,
+    abi: LEASH_ACCOUNT_V4_ABI,
+    functionName: 'priceBand',
+    args: [ruleKey],
+  })) as readonly unknown[];
+  return Boolean(r[0]);
+}
+
+/** Live on-chain armed state — the panel shows THIS, never a cached mirror. */
+export async function readRequireBandForSwap(account: Address, chainId?: number): Promise<boolean> {
+  return (await publicClientFor(chainId).readContract({
+    address: account,
+    abi: LEASH_ACCOUNT_V4_ABI,
+    functionName: 'requireBandForSwap',
+  })) as boolean;
 }
 
 /** Apply the pending spend budget once its eta has passed. */
