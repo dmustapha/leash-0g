@@ -704,6 +704,10 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       } catch (err) {
         // Create already succeeded — a start hiccup must not fail the response;
         // the owner still has the manual Start CTA.
+        // F-6: on a non-holder instance this is RuntimeLeaseNotHeldError — the
+        // agent is born active in the DB but unlooped until the holder (or a
+        // lease handover) picks it up; the manual Start CTA routes through
+        // whichever instance answers then. Known LOW-severity liveness gap.
         console.error(`auto-start failed for agent ${agentId}`, err);
       }
     }
@@ -1352,7 +1356,16 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       res.status(409).json({ error: { message: 'agent is revoked' } });
       return;
     }
-    await deps.runtime.start(agent.id);
+    try {
+      await deps.runtime.start(agent.id);
+    } catch (err) {
+      // F-6: a non-holder instance must refuse loudly, not 500 opaquely.
+      if (err instanceof Error && err.name === 'RuntimeLeaseNotHeldError') {
+        res.status(503).json({ error: { message: err.message, reason: 'runtime_lease_not_held' } });
+        return;
+      }
+      throw err;
+    }
     deps.hub.emit(agent.id, 'status', statusEvent('running'));
     res.json({ ok: true, running: true });
   }));

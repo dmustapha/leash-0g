@@ -17,6 +17,7 @@ import { viemRevokedLogSource } from './chain/log-source.js';
 import { AuditBatcher, StreamBatcher, ownerStreamSource } from './audit/batcher.js';
 import { ZeroGStorage } from './audit/storage.js';
 import { LeashRuntimeManager } from './runtime/manager.js';
+import { RuntimeLease } from './runtime/lease.js';
 import { backfillLegacyGuardian } from './store/agents.js';
 import { sweepStaleReservations } from './store/reservations.js';
 import { pruneAllStaleDraftDirections } from './store/directions.js';
@@ -145,12 +146,22 @@ async function main(): Promise<void> {
     opsPrivateKey: cfg.OPS_PRIVATE_KEY,
   });
 
+  // F-6: DB-level runtime lease — two backends sharing one DB (branch deploy +
+  // stray local boot, incident 2026-10-04) must never both loop agents. Only
+  // the holder starts loops/watchers; losing the lease connection exits the
+  // process (fail-safe: the lock died with it, another instance may now hold).
+  const lease = new RuntimeLease(pool, (err) => {
+    console.error('runtime lease connection lost — exiting so the supervisor restarts into the retry path', err);
+    process.exit(1);
+  });
+
   const runtime = new LeashRuntimeManager({
     pool,
     hub,
     broker,
     alerts,
     uploader,
+    lease,
     chain: chainRegistry.getSessionChain(defaultChainId),
     // SE-7 (carry #2): per-chain runtime client resolution — a one-shot on a
     // non-home chain submits through THAT chain's client (default-deny beyond
@@ -180,6 +191,7 @@ async function main(): Promise<void> {
   // never delays the listener past Render's cold-start deadline; the periodic
   // timer (cadence = the one-shot TTL) re-drives resumable one-shots regardless.
   const oneShotSweepTimer = setInterval(() => {
+    if (!lease.held()) return; // F-6: chain re-drives are the holder's job
     void runtime.sweepResumableOneShots().catch((err: unknown) =>
       console.error('one-shot consume sweep tick failed', err),
     );
@@ -328,11 +340,9 @@ async function main(): Promise<void> {
   phase('listening — ports bound');
 
   const batcher = new AuditBatcher({ pool, uploader });
-  batcher.start();
   // §3d: the owner-stream batcher — same machinery, second source. Defers
   // per owner until the stream pubkey exists, then drains the full backlog.
   const ownerBatcher = new StreamBatcher({ pool, uploader }, ownerStreamSource);
-  ownerBatcher.start();
 
   // Digest scheduler tick (spec §3b): 5-min cadence with a catch-up window —
   // fires when the owner's hour has passed and nothing was sent today.
@@ -351,20 +361,29 @@ async function main(): Promise<void> {
     transport: http(cfg.ZERO_G_RPC),
   });
   const watcher = new RevokeWatcher({ pool, hub, runtime, coordinator, alerts, source: viemRevokedLogSource(publicClient) });
-  watcher.start();
-  // Expiry point B: 60s periodic sweeper for stale delegations.
-  coordinator.startSweeper();
 
-  // L-01: deferred one-shot boot re-drive (moved off the pre-listen path). A
-  // chain round-trip here no longer gates the port; the periodic timer above
-  // still re-drives on its cadence if this is slow.
-  runtime
-    .sweepResumableOneShots()
-    .then((n) => {
-      if (n > 0) console.error(`re-drove ${n} resumable one-shot consume(s) on boot`);
-      phase('background init complete');
+  // F-6: runtime-adjacent services (batchers, revoke watcher, delegation
+  // sweeper, one-shot re-drive) start ONLY once this instance holds the
+  // runtime lease. The API is already listening regardless — a non-holder
+  // serves reads and refuses agent starts (RuntimeLeaseNotHeldError → 503).
+  // L-01 posture kept: nothing here gates the port; acquire() polls forever.
+  void lease
+    .acquire()
+    .then(() => {
+      phase('runtime lease acquired — starting runtime services');
+      batcher.start();
+      ownerBatcher.start();
+      watcher.start();
+      // Expiry point B: 60s periodic sweeper for stale delegations.
+      coordinator.startSweeper();
+      // L-01: deferred one-shot boot re-drive (off the pre-listen path). The
+      // periodic timer above still re-drives on its cadence if this is slow.
+      return runtime.sweepResumableOneShots().then((n) => {
+        if (n > 0) console.error(`re-drove ${n} resumable one-shot consume(s) on boot`);
+        phase('background init complete');
+      });
     })
-    .catch((err: unknown) => console.error('one-shot boot re-drive failed', err));
+    .catch((err: unknown) => console.error('runtime lease acquisition / boot re-drive failed', err));
 
   const shutdown = (signal: string): void => {
     console.error(`${signal} received — shutting down`);
@@ -373,6 +392,7 @@ async function main(): Promise<void> {
     ownerBatcher.stop();
     clearInterval(digestTimer);
     coordinator.stopSweeper();
+    lease.release();
     clearInterval(reservationSweepTimer);
     broker.cancelAll();
     gatewayServer.close();
