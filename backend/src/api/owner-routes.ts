@@ -1900,9 +1900,15 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       return;
     }
     const qRaw = req.query['q'];
-    const q = (typeof qRaw === 'string' ? qRaw : '').trim().slice(0, 500);
+    const q = (typeof qRaw === 'string' ? qRaw : '').trim();
     if (!q) {
       res.status(400).json({ error: { message: 'q is required' } });
+      return;
+    }
+    // C14: the 500-char cap is a WALL, not a silent truncation — a trimmed-
+    // behind-your-back question would get an answer to a different question.
+    if (q.length > 500) {
+      res.status(400).json({ error: { message: 'q is too long (max 500 characters)' } });
       return;
     }
     const answer = await answerStatus(
