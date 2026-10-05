@@ -56,6 +56,7 @@ import { RulesEditor } from '@/components/cockpit/RulesEditor';
 import { DirectBox } from '@/components/cockpit/DirectBox';
 import { StatusChat } from '@/components/cockpit/StatusChat';
 import { CapabilityGrant } from '@/components/cockpit/CapabilityGrant';
+import { PriceBandPanel } from '@/components/cockpit/PriceBandPanel';
 import { CapabilityDecisionCard } from '@/components/cockpit/CapabilityDecisionCard';
 import { CapabilityEnvelope } from '@/components/cockpit/CapabilityEnvelope';
 import { NetworksPanel } from '@/components/cockpit/NetworksPanel';
@@ -63,6 +64,10 @@ import { nativeSymbol } from '@/lib/networks';
 import {
   applyCallRuleOnchain,
   applySpendBudgetOnchain,
+  enableRequireBandForSwapOnchain,
+  readPriceBandSet,
+  readRequireBandForSwap,
+  tightenPriceBandOnchain,
   readPendingCallRule,
   authorizeOnceOnchain,
   proposeCallRuleOnchain,
@@ -99,6 +104,9 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
   // that is the delegation graph above).
   const [networks, setNetworks] = useState<NetworkChain[]>([]);
   const [agentNetworks, setAgentNetworks] = useState<AgentNetworksView | null>(null);
+  // FR4 (F-9): live requireBandForSwap() for the band-arm panel (null = not read yet).
+  const [bandArmed, setBandArmed] = useState<boolean | null>(null);
+  const [bandSet, setBandSet] = useState<boolean>(false);
   // Deep-link focus: /agents/<id>?jit=<requestId> highlights & scrolls to that JIT card.
   const searchParams = useSearchParams();
   const focusJitId = searchParams.get('jit');
@@ -405,6 +413,73 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
     await applySpendBudgetOnchain(provider, owner, account, chainId);
   }, [requireProvider]);
 
+  // FR4 (F-9): arm the band wall in-product — two owner txs on the agent's chain.
+  const homeNetwork = useMemo(
+    () => networks.find((n) => n.chainId === agentNetworks?.homeChainId),
+    [networks, agentNetworks?.homeChainId],
+  );
+  const traderGoal = detail?.agent?.goal;
+  const bandCapable = useMemo(
+    () =>
+      (homeNetwork?.capabilities ?? []).includes('oracleBand') &&
+      traderGoal?.type === 'trader' &&
+      typeof homeNetwork?.router === 'string',
+    [homeNetwork, traderGoal?.type],
+  );
+  useEffect(() => {
+    if (!bandCapable || !detail || config.e2eMode) return;
+    let cancelled = false;
+    const account = detail.addresses.account;
+    const chainId = agentNetworks?.homeChainId;
+    void Promise.all([
+      readRequireBandForSwap(account, chainId),
+      typeof homeNetwork?.router === 'string'
+        ? readPriceBandSet(account, homeNetwork.router as Address, chainId)
+        : Promise.resolve(false),
+    ])
+      .then(([armed, set]) => {
+        if (cancelled) return;
+        setBandArmed(armed);
+        setBandSet(set);
+      })
+      .catch(() => {
+        /* keep last known band state */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [bandCapable, detail, agentNetworks?.homeChainId, homeNetwork]);
+
+  const bandTighten = useCallback(
+    async (band: { feed: string; asset: string; maxDeviationBps: number; maxStalenessSec: number }) => {
+      const { provider, owner, account, chainId } = await requireProvider();
+      if (typeof homeNetwork?.router !== 'string') throw new Error('This network has no canonical router configured.');
+      const tx = await tightenPriceBandOnchain(
+        provider,
+        owner,
+        account,
+        {
+          target: homeNetwork.router as Address,
+          feed: band.feed as Address,
+          asset: band.asset as Address,
+          maxDeviationBps: band.maxDeviationBps,
+          maxStalenessSec: band.maxStalenessSec,
+        },
+        chainId,
+      );
+      await waitForTx(tx as Hex, chainId);
+      setBandSet(true);
+    },
+    [requireProvider, homeNetwork?.router],
+  );
+
+  const bandEnable = useCallback(async () => {
+    const { provider, owner, account, chainId } = await requireProvider();
+    const tx = await enableRequireBandForSwapOnchain(provider, owner, account, chainId);
+    await waitForTx(tx as Hex, chainId);
+    setBandArmed(await readRequireBandForSwap(account, chainId));
+  }, [requireProvider]);
+
   // FR3 (F-8c): apply a matured PROPOSED rule from the envelope (the custom-rule
   // flow's missing second half) — sign applyCallRule, then record proposed→active.
   const applyGrant = useCallback(
@@ -672,6 +747,16 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
             }}
           />
 
+          {detail && detail.status !== 'revoked' && bandCapable && traderGoal?.type === 'trader' ? (
+            <PriceBandPanel
+              routerAddr={homeNetwork?.router ?? ''}
+              defaultAsset={traderGoal.holdToken}
+              armed={bandArmed === true}
+              bandSet={bandSet}
+              onTighten={bandTighten}
+              onEnable={bandEnable}
+            />
+          ) : null}
           {detail && detail.status !== 'revoked' ? (
             <div id="capability-grant">
               <CapabilityGrant

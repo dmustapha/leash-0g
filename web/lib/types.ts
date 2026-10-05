@@ -632,6 +632,8 @@ export type NetworkChain = {
   name: string;
   /** RH2: named wall-capability keys this chain can mint through (e.g. `oracleBand`). */
   capabilities: string[];
+  /** FR4 (F-9): the chain's canonical swap router (band-arm target), when configured. */
+  router?: string | null;
 };
 
 /** One per-chain presence row for an agent — SAME accountAddr on every chain. */

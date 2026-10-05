@@ -85,7 +85,13 @@ import { listRequestsByChainAndAccount } from '../store/capabilities.js';
 /** SE-7: the registry surface the owner routes need (structural — tests fake it). */
 export interface OwnerChainRegistry {
   has(chainId: number): boolean;
-  listChains(): Array<{ chainId: number; name: string; capabilityFactories?: Readonly<Record<string, string>> | undefined }>;
+  listChains(): Array<{
+    chainId: number;
+    name: string;
+    capabilityFactories?: Readonly<Record<string, string>> | undefined;
+    // FR4 (F-9): canonical per-chain addresses (band-arm target = canonical.router).
+    canonical?: { router?: string | undefined } | undefined;
+  }>;
   getChainOps(chainId: number): OnboardChainOps;
   /** RH2 (two-factory): resolve a NAMED wall-capability factory for a chain, or undefined. */
   getCapabilityFactory?(chainId: number, capability: string): string | undefined;
@@ -2094,6 +2100,9 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
         // through (e.g. `oracleBand`). The FE surfaces an opt-in only when present;
         // an empty list means the default V4 factory is the only path.
         capabilities: Object.keys(c.capabilityFactories ?? {}),
+        // FR4 (F-9): the chain's canonical swap router — the band-arm surface
+        // pins the band to THIS target (config truth, never user/model text).
+        router: c.canonical?.router ?? null,
       })),
     });
   }));
