@@ -17,10 +17,14 @@
 <button onclick="go('propose')">1. proposeSpendBudget(sUSD, 5000)</button>
 <button onclick="go('applyBudget')">2. applySpendBudget() — after ~15 min</button>
 <button onclick="go('applyRule')">applyCallRule() — after a rule's safety delay</button>
+<button onclick="go('tighten')">A. tightenPriceBand(router.swap, feed, sTSLA, 5%, 1h)</button>
+<button onclick="go('enable')">B. enableRequireBandForSwap()</button>
 <div id="log"></div>
 <script>
 const SUSD_BUDGET_CALLDATA='0xc28764550000000000000000000000005f6a3abc97e421f7b3930fc504d6a0ce4ee41e0600000000000000000000000000000000000000000000010f0cf064dd59200000';
-const DATA={propose:SUSD_BUDGET_CALLDATA, applyBudget:'0x9d3a2e7f', applyRule:'0xee1d92bd'};
+const DATA={propose:SUSD_BUDGET_CALLDATA, applyBudget:'0x9d3a2e7f', applyRule:'0xee1d92bd',
+tighten:'0x8771a2030000000000000000000000004964991514f731cb3cf252108dff889d30036fcb9908fc8b000000000000000000000000000000000000000000000000000000000000000000000000000000008e107bac6f430aecb8aa11b383e9690e9a5214be000000000000000000000000b9431b3be9a56a1eea8e728326332f8b4dd5138200000000000000000000000000000000000000000000000000000000000001f40000000000000000000000000000000000000000000000000000000000000e10',
+enable:'0xbb760e62'};
 const CHAIN='0xb626'; // 46630
 function log(m,c){const d=document.createElement('div');if(c)d.className=c;d.textContent=new Date().toISOString().slice(11,19)+' '+m;document.getElementById('log').prepend(d)}
 async function go(k){
