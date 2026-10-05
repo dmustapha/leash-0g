@@ -42,7 +42,7 @@ export type WizardInput = {
 const ORACLE_BAND = 'oracleBand';
 
 /** Role variant chooser (spec §3c/§3b): ONE plain-language choice on the goal step. */
-export type AgentRole = 'treasury' | 'sentinel' | 'executor' | 'requester' | 'provider' | 'evaluator';
+export type AgentRole = 'treasury' | 'sentinel' | 'executor' | 'trader' | 'requester' | 'provider' | 'evaluator';
 
 /** A pickable existing agent (for the requester's provider/evaluator links). */
 export type JobAgentOption = { id: string; name: string };
@@ -111,6 +111,10 @@ const STEP_ORDERS: Record<AgentRole, Step[]> = {
   treasury: ['name', 'goal', 'transfer-cap', 'budget', 'allowlist', 'expiry', 'review'],
   sentinel: ['name', 'goal', 'sentinel-policy', 'expiry', 'review'],
   executor: ['name', 'goal', 'transfer-cap', 'budget', 'allowlist', 'expiry', 'review'],
+  // FR3 (F-8): the trader never moves native funds (zero native caps, empty
+  // allowlist) — its spending power comes from governed-call grants + per-token
+  // budgets the owner adds in the cockpit AFTER create. No policy steps.
+  trader: ['name', 'goal', 'expiry', 'review'],
   // Phase-4 ACP roles (spec §3b). Provider/evaluator are spend-incapable (no
   // policy steps, like the sentinel); the requester is the sole governed
   // spender, so it gets the settlement-token config step.
@@ -137,6 +141,11 @@ const ROLE_OPTIONS: Array<{ value: AgentRole; label: string; explain: string }> 
     value: 'executor',
     label: 'Act on requests from another agent',
     explain: 'It waits for requests over a link you create, checks them against its own limits, then pays.',
+  },
+  {
+    value: 'trader',
+    label: 'Trade toward a holding target',
+    explain: 'It swaps one token for another from its own loop, one bounded clip at a time, until it holds your target. Grants, budgets, and the price band wall every trade on-chain.',
   },
   {
     value: 'provider',
@@ -200,6 +209,8 @@ function entryStepFor(role: AgentRole, fields: Partial<Record<string, string>>):
       return !has('beneficiary') ? 'goal' : !has('payee') ? 'allowlist' : 'review';
     case 'executor':
       return has('payee') ? 'review' : 'allowlist';
+    case 'trader':
+      return has('holdToken') && has('spendToken') ? 'review' : 'goal';
     case 'requester':
       return has('jobSpecSource') && has('providerAgentId') && has('evaluatorAgentId') &&
         has('feeToken') && has('feeRecipient') && has('feeCapPerJob') &&
@@ -232,6 +243,12 @@ function seedFromPrefill(p: WizardPrefill): {
     fields['feeToken'] = g.feeToken;
     fields['feeRecipient'] = g.feeRecipient;
     fields['feeCapPerJob'] = g.feeCapPerJobWei;
+  }
+  if (role === 'trader' && 'holdToken' in g) {
+    fields['holdToken'] = g.holdToken;
+    fields['spendToken'] = g.spendToken;
+    fields['targetHold'] = weiToOg(g.targetHoldWei);
+    fields['clip'] = weiToOg(g.clipWei);
   }
   if ((role === 'treasury' || role === 'sentinel') && 'beneficiary' in g) {
     fields['beneficiary'] = g.beneficiary;
@@ -279,6 +296,11 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
   const [passphrase, setPassphrase] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<WizardResult | null>(null);
+  // FR3 trader fields (token amounts entered in whole-token units, 18-decimals).
+  const [holdToken, setHoldToken] = useState(seed?.fields['holdToken'] ?? '');
+  const [spendToken, setSpendToken] = useState(seed?.fields['spendToken'] ?? '');
+  const [targetHold, setTargetHold] = useState(seed?.fields['targetHold'] ?? '1');
+  const [clip, setClip] = useState(seed?.fields['clip'] ?? '100');
   // Phase-4 job-role fields.
   const [serviceSpec, setServiceSpec] = useState(seed?.fields['serviceSpec'] ?? '');
   const [rubricRef, setRubricRef] = useState(seed?.fields['rubricRef'] ?? '');
@@ -350,6 +372,37 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
       };
     }
 
+    // FR3 (F-8) trader: zero native caps + empty allowlist — its ONLY spending
+    // power is governed-call grants + per-token budgets added in the cockpit.
+    // Token addresses are owner-typed HERE (never model text, never patchable).
+    // TODO(review WARNING): ogToWei assumes 18-decimal tokens (true for the RH
+    // mocks). A 6-decimal token (USDC/USDT) would store a semantically wrong
+    // clip/target — resolve token decimals from chain before shipping beyond
+    // 18dp testnet tokens. The on-chain caps/budgets bound the spend regardless.
+    if (role === 'trader') {
+      if (
+        !isAddress(holdToken) ||
+        !isAddress(spendToken) ||
+        holdToken.toLowerCase() === spendToken.toLowerCase() ||
+        !isValidOgAmount(targetHold) ||
+        !isValidOgAmount(clip)
+      ) {
+        return null;
+      }
+      return {
+        name: name.trim(),
+        policy: zeroCaps,
+        allowlist: [],
+        goal: {
+          type: 'trader',
+          holdToken,
+          spendToken,
+          targetHoldWei: ogToWei(targetHold),
+          clipWei: ogToWei(clip),
+        },
+      };
+    }
+
     if (role === 'sentinel') {
       // Spend-incapable preset (spec §3c): zero caps, empty allowlist. The goal amounts
       // are what it ASKS the executor to send — its own caps never bound them.
@@ -407,7 +460,7 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
   }, [
     role, name, beneficiary, targetBalance, topUp, perTransfer, windowAmount, windowHours, payee, expiryDays,
     serviceSpec, rubricRef, jobSpecSource, providerAgentId, evaluatorAgentId, feeToken, feeRecipient, feeCapPerJob,
-    tokenPerTransfer, tokenWindow,
+    tokenPerTransfer, tokenWindow, holdToken, spendToken, targetHold, clip,
   ]);
 
   // SE-7 / RH2: the chosen chain and whether it can mint band-walled agents. An empty
@@ -582,8 +635,16 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
           stepOrder[stepOrder.indexOf('goal') + 1] ?? 'review',
           role === 'executor' ||
             isJobRole(role) ||
-            (isAddress(beneficiary) && isValidOgAmount(targetBalance) && isValidOgAmount(topUp)),
-          'Enter a valid wallet address and amounts greater than zero, like 0.1.',
+            (role === 'trader'
+              ? isAddress(holdToken) &&
+                isAddress(spendToken) &&
+                holdToken.toLowerCase() !== spendToken.toLowerCase() &&
+                isValidOgAmount(targetHold) &&
+                isValidOgAmount(clip)
+              : isAddress(beneficiary) && isValidOgAmount(targetBalance) && isValidOgAmount(topUp)),
+          role === 'trader'
+            ? 'Enter two different valid token addresses and amounts greater than zero.'
+            : 'Enter a valid wallet address and amounts greater than zero, like 0.1.',
           <>
             <h1 style={{ fontSize: 'var(--text-h1)' }}>What should this agent do?</h1>
             <fieldset style={{ border: 0, margin: 0, padding: 0, display: 'grid', gap: '0.5rem' }} data-testid="role-chooser">
@@ -667,6 +728,51 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
                 </div>
               )}
             </div>
+
+            {role === 'trader' ? (
+              <>
+                <Field
+                  id="goal-hold-token"
+                  label="Token to accumulate"
+                  hint="The ERC-20 it buys and holds (e.g. the tokenized stock). Type the exact contract address."
+                  value={holdToken}
+                  onChange={(e) => setHoldToken(e.target.value)}
+                  placeholder="0x…"
+                />
+                <Field
+                  id="goal-spend-token"
+                  label="Token to spend"
+                  hint="The ERC-20 it pays with (e.g. the test dollar). Type the exact contract address."
+                  value={spendToken}
+                  onChange={(e) => setSpendToken(e.target.value)}
+                  placeholder="0x…"
+                />
+                <Field
+                  id="goal-target-hold"
+                  label="Hold target"
+                  hint="It stops trading once it holds this much of the accumulate token. Amounts assume an 18-decimal token."
+                  value={targetHold}
+                  onChange={(e) => setTargetHold(e.target.value)}
+                  inputMode="decimal"
+                  suffix="tokens"
+                />
+                <Field
+                  id="goal-clip"
+                  label="Spend at most, per trade"
+                  hint="Each swap spends at most this much of the spend token. On-chain caps and budgets bound it again."
+                  value={clip}
+                  onChange={(e) => setClip(e.target.value)}
+                  inputMode="decimal"
+                  suffix="tokens"
+                />
+                <Disclosure label="How does it actually get to trade?">
+                  Creating the agent gives it NO trading power. After create, you grant it the
+                  exact contract calls (approve + swap), a per-token spending budget, and — on a
+                  band-wall chain — every trade is checked against the live oracle price band
+                  on-chain. Each grant waits a short safety delay before it takes effect.
+                </Disclosure>
+              </>
+            ) : null}
 
             {isTopUpRole(role) ? (
               <>
@@ -1051,11 +1157,13 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
                     ? 'watches and requests top-ups (never pays)'
                     : role === 'executor'
                       ? 'acts on requests from a linked agent'
-                      : role === 'provider'
-                        ? 'does jobs (spend-incapable)'
-                        : role === 'evaluator'
-                          ? 'judges work — skeptic (spend-incapable)'
-                          : 'orders jobs and pays for good work',
+                      : role === 'trader'
+                        ? 'trades toward a holding target (governed swaps only)'
+                        : role === 'provider'
+                          ? 'does jobs (spend-incapable)'
+                          : role === 'evaluator'
+                            ? 'judges work — skeptic (spend-incapable)'
+                            : 'orders jobs and pays for good work',
               ],
               // treasury/sentinel top-up rows
               ...(isTopUpRole(role)
@@ -1063,6 +1171,15 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
                     [role === 'sentinel' ? 'Watches' : 'Keeps topped up', beneficiary],
                     ['Keep them at', `${targetBalance} 0G`],
                     [role === 'sentinel' ? 'Asks for, per top-up' : 'Per top-up', `${topUp} 0G max`],
+                  ]
+                : []),
+              // FR3 trader rows
+              ...(role === 'trader'
+                ? [
+                    ['Accumulates', holdToken],
+                    ['Spends', spendToken],
+                    ['Hold target', `${targetHold} tokens`],
+                    ['Per trade', `${clip} tokens max`],
                   ]
                 : []),
               // Phase-4 job-role rows
@@ -1084,7 +1201,9 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
                     ['Per payment', 'nothing — it can never pay'],
                     ['Can pay', 'nobody (empty allowlist)'],
                   ]
-                : isJobRole(role)
+                : role === 'trader'
+                  ? [['Moves native funds', 'no — trades only via grants you add after create']]
+                  : isJobRole(role)
                   ? [['Moves native funds', role === 'requester' ? 'no — settles ERC-20 only' : 'no — spend-incapable']]
                   : [
                       ['Per payment', `${weiToOg(input?.policy.perTransferCapWei ?? '0')} 0G max`],

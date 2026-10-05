@@ -5,6 +5,7 @@
 // rendered as PLAIN TEXT, labeled UNVERIFIED (never markup) — mirroring ApprovalCard.
 'use client';
 
+import { useState } from 'react';
 import type { CapabilityEnvelopeView, CapabilityGrantRow, CapabilityRequestRow } from '@/lib/types';
 import { shortAddr } from '@/lib/format';
 import { noveltyReason, PRESET_CATALOG, recipientModeLabel } from '@/lib/capabilities';
@@ -25,7 +26,15 @@ function presetName(key: string): string {
   return PRESET_CATALOG.find((p) => p.key === key)?.name ?? key;
 }
 
-export function CapabilityEnvelope({ envelope }: { envelope: CapabilityEnvelopeView }) {
+export function CapabilityEnvelope({
+  envelope,
+  onApplyGrant,
+}: {
+  envelope: CapabilityEnvelopeView;
+  /** FR3 (F-8c): owner signs applyCallRule for a matured proposed rule, then the
+   *  read-model flips it active. Absent ⇒ read-only (legacy surfaces/tests). */
+  onApplyGrant?: (grant: CapabilityGrantRow) => Promise<void>;
+}) {
   const { grants, presets, recentRequests } = envelope;
   const activeGrants = grants.filter((g) => g.status !== 'removed');
   const isEmpty = activeGrants.length === 0 && presets.length === 0;
@@ -62,7 +71,7 @@ export function CapabilityEnvelope({ envelope }: { envelope: CapabilityEnvelopeV
           {activeGrants.length > 0 ? (
             <div style={{ display: 'grid', gap: '0.5rem' }}>
               <h3 className="label" style={{ margin: 0 }}>Standing permissions</h3>
-              {activeGrants.map((g) => <GrantRow key={g.id} grant={g} />)}
+              {activeGrants.map((g) => <GrantRow key={g.id} grant={g} {...(onApplyGrant ? { onApply: onApplyGrant } : {})} />)}
             </div>
           ) : null}
         </>
@@ -82,7 +91,23 @@ export function CapabilityEnvelope({ envelope }: { envelope: CapabilityEnvelopeV
   );
 }
 
-function GrantRow({ grant }: { grant: CapabilityGrantRow }) {
+function GrantRow({ grant, onApply }: { grant: CapabilityGrantRow; onApply?: (g: CapabilityGrantRow) => Promise<void> }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function apply() {
+    if (!onApply) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await onApply(grant);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'The wallet transaction failed.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div
       className="panel"
@@ -105,6 +130,25 @@ function GrantRow({ grant }: { grant: CapabilityGrantRow }) {
           <div>source: {grant.source}</div>
         </dl>
       </Disclosure>
+      {grant.status === 'proposed' && onApply ? (
+        // FR3 (F-8c): a proposed rule matures after the on-chain safety delay —
+        // this is the missing affordance that finishes the custom-rule flow.
+        // Applying before the delay passes is simply refused by the contract.
+        <div style={{ display: 'grid', gap: '0.3rem' }}>
+          {error ? <p role="alert" style={{ color: 'var(--color-deny)', fontSize: '0.8rem', margin: 0 }}>{error}</p> : null}
+          <div>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              data-testid={`grant-apply-${grant.id}`}
+              disabled={busy}
+              onClick={() => void apply()}
+            >
+              {busy ? 'Waiting for wallet…' : 'Apply now (after the safety delay)'}
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

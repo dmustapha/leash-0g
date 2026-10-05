@@ -320,6 +320,27 @@ export function applySpendBudgetOnchain(provider: EIP1193Provider, owner: Addres
   return writeAccountV4(provider, owner, account, 'applySpendBudget');
 }
 
+/**
+ * FR3 (F-8c, review fix): the account has ONE pending-rule slot and
+ * `applyCallRule()` is argless — read the slot so the apply affordance can
+ * verify it matches the row the owner clicked (a later proposal overwrites the
+ * slot; applying blindly would activate the WRONG rule and corrupt the mirror).
+ */
+export async function readPendingCallRule(
+  account: Address,
+): Promise<{ target: string; selector: string; eta: number }> {
+  const r = (await publicClient.readContract({
+    address: account,
+    abi: LEASH_ACCOUNT_V4_ABI,
+    functionName: 'pendingCallRule',
+  })) as readonly unknown[];
+  return {
+    target: String(r[0]).toLowerCase(),
+    selector: String(r[1]).toLowerCase(),
+    eta: Number(r[6] as bigint),
+  };
+}
+
 /** Read the pending call-rule eta (unix s); 0 = nothing pending. */
 export async function readPendingCallRuleEta(account: Address): Promise<number> {
   const r = (await publicClient.readContract({

@@ -43,6 +43,21 @@ export type BuildGovernedCallResult =
       reason: 'unknown_selector' | 'no_grant' | 'not_authority_determined' | 'bad_amount';
     };
 
+/**
+ * FR3 (F-8): the trader role's server-resolved swap context. `tokenIn`/`tokenOut`
+ * come from the OWNER-TYPED goal (holdToken/spendToken at create); `minOutWei`
+ * and `deadlineSec` are server-derived constants. NEVER model text — the model
+ * still contributes only (target, selector, amount). On testnet minOut is an
+ * honest 1 (no price feed-derived slippage guard); the on-chain band wall is
+ * the enforcement guarantee regardless.
+ */
+export interface TradeFill {
+  tokenIn: string;
+  tokenOut: string;
+  minOutWei: bigint;
+  deadlineSec: number;
+}
+
 export interface GovernedCallIntent {
   /** the granted contract the model chose (owner-allowlisted). */
   target: string;
@@ -63,6 +78,7 @@ export function buildGovernedCall(
   intent: GovernedCallIntent,
   grant: GrantState,
   self: string,
+  trade?: TradeFill,
 ): BuildGovernedCallResult {
   const target = normHex(intent.target);
   const selector = normHex(intent.selector);
@@ -120,6 +136,27 @@ export function buildGovernedCall(
       if (spender === null) return { ok: false, reason: 'not_authority_determined' };
       words.push({ type, value: spender as Hex });
       continue;
+    }
+    // FR3 (F-8): a swap's free args ARE resolvable when the caller supplies a
+    // trader-goal trade context — owner-typed tokens + server constants, never
+    // model text. Only the positions the spec names; everything else still refuses.
+    if (trade && spec.swapArgs) {
+      if (type === 'address' && i === spec.swapArgs.tokenIn) {
+        words.push({ type, value: trade.tokenIn.toLowerCase() as Hex });
+        continue;
+      }
+      if (type === 'address' && i === spec.swapArgs.tokenOut) {
+        words.push({ type, value: trade.tokenOut.toLowerCase() as Hex });
+        continue;
+      }
+      if (type === 'uint256' && i === spec.swapArgs.minOut) {
+        words.push({ type, value: trade.minOutWei });
+        continue;
+      }
+      if (type === 'uint256' && i === spec.swapArgs.deadline) {
+        words.push({ type, value: BigInt(trade.deadlineSec) });
+        continue;
+      }
     }
     // Any remaining arg is a non-authority free value the grammar cannot resolve
     // server-side (router route/minOut/deadline, an approvedBool, an ignored

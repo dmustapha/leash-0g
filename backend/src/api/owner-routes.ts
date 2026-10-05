@@ -54,7 +54,7 @@ import {
   setGrantStatus,
   getCapabilityRequest,
 } from '../store/capabilities.js';
-import { presetKeys, type CallRule, type PresetKey } from '../governed-call/index.js';
+import { presetKeys, type CallRule, type PresetKey, type TargetCatalog } from '../governed-call/index.js';
 import { applyRevokeFanout } from '../agents/revoke-fanout.js';
 import {
   createLink,
@@ -176,6 +176,19 @@ const executorGoalSchema = z.object({
   model: z.string().min(1).optional(),
 });
 
+// FR3 (F-8): the trader — autonomous governed-swap role. Token addresses are
+// OWNER-TYPED here at create (never model text, never chat-patchable); the
+// decide loop's per-trade spend is bounded by clipWei, the call-rule caps +
+// spend budget on-chain, and the band wall regardless.
+const traderGoalSchema = z.object({
+  type: z.literal('trader'),
+  holdToken: addressSchema,
+  spendToken: addressSchema,
+  targetHoldWei: weiSchema,
+  clipWei: weiSchema,
+  model: z.string().min(1).optional(),
+});
+
 // Phase-4 ACP roles (spec §3b). Requester is the sole governed spender; provider
 // and evaluator are spend-incapable. jobSpecSource/rubricRef are opaque server
 // handles; the fee amount is NEVER trusted from these — it comes from the
@@ -206,6 +219,7 @@ const evaluatorGoalSchema = z.object({
 const goalSchema = z.union([
   sentinelGoalSchema,
   executorGoalSchema,
+  traderGoalSchema,
   requesterGoalSchema,
   providerGoalSchema,
   evaluatorGoalSchema,
@@ -345,6 +359,15 @@ export const createAgentSchema = z.object({
       path: ['goal', 'topUpWei'],
     });
   }
+  // FR3 (F-8): a trader must trade BETWEEN two distinct tokens, and spends only
+  // via governed calls — no native allowlist target is required (unlike treasury).
+  if (v.goal.type === 'trader' && v.goal.holdToken.toLowerCase() === v.goal.spendToken.toLowerCase()) {
+    issues.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'goal.holdToken and goal.spendToken must differ',
+      path: ['goal', 'holdToken'],
+    });
+  }
   // A past expiry would mint a born-dead account (expired on-chain from its
   // first block) and burn the deploy gas for nothing.
   if (v.policy.expiresAt <= Math.floor(Date.now() / 1000)) {
@@ -388,7 +411,9 @@ const presetApplySchema = z.object({
   txHash: z.string().regex(/^0x[0-9a-fA-F]{64}$/).optional(),
 });
 const capabilityRuleSchema = z.object({
-  action: z.enum(['propose', 'tighten', 'remove']),
+  // FR3 (F-8c): 'apply' — the owner signed applyCallRule for a matured proposed
+  // rule; flips the read-model grant proposed→active (on-chain stays authoritative).
+  action: z.enum(['propose', 'tighten', 'remove', 'apply']),
   rule: callRuleSchema,
   txHash: z.string().regex(/^0x[0-9a-fA-F]{64}$/).optional(),
 });
@@ -820,6 +845,26 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       throw new Error(`agent home chain ${a.chainId} requires the multichain registry (not configured)`);
     }
     return deps.chainRegistry.getChainOps(a.chainId);
+  }
+
+  /**
+   * FR3 (SE-8 carry, F-8a): resolve the preset TargetCatalog from the AGENT'S
+   * chain — the registered chain's `canonical` targets — instead of only the
+   * global CAP_* env (which describes the default chain). A non-default chain
+   * with no canonical config resolves to an empty catalog → resolvePreset
+   * answers `unresolvable_target` legibly (default-deny, never the WRONG
+   * chain's addresses). The default chain keeps the existing env-built catalog.
+   */
+  function catalogForAgent(agent: { chainId: number }): TargetCatalog {
+    if (agent.chainId === deps.settings.defaultChainId || !deps.chainRegistry) {
+      return deps.settings.capabilityCatalog;
+    }
+    const canonical = deps.chainRegistry.getChainConfig(agent.chainId).canonical;
+    return {
+      ...(canonical?.router ? { router: canonical.router.toLowerCase() } : {}),
+      ...(canonical?.vault ? { vault: canonical.vault.toLowerCase() } : {}),
+      ...(canonical?.settlementToken ? { settlement_token: canonical.settlementToken.toLowerCase() } : {}),
+    };
   }
 
   /**
@@ -1952,7 +1997,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       res.status(400).json({ error: { message: 'unknown preset' } });
       return;
     }
-    const resolved = resolvePreset(parsed.data.presetKey as PresetKey, deps.settings.capabilityCatalog);
+    const resolved = resolvePreset(parsed.data.presetKey as PresetKey, catalogForAgent(agent));
     if (!resolved.ok) {
       res.status(422).json({ error: { message: resolved.reason } });
       return;
@@ -1985,7 +2030,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       return;
     }
     const rule = toCallRule(parsed.data.rule);
-    if (parsed.data.action !== 'remove' && !targetGrantable(agent, rule.target)) {
+    if (parsed.data.action !== 'remove' && parsed.data.action !== 'apply' && !targetGrantable(agent, rule.target)) {
       res.status(422).json({
         error: { message: `rule target ${rule.target} is outside this chain's protocol allowlist` },
       });
@@ -1994,6 +2039,14 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     if (parsed.data.action === 'remove') {
       await setGrantStatus(deps.pool, agent.id, rule.target, rule.selector, 'removed');
       res.json({ ok: true, action: 'remove' });
+      return;
+    }
+    // FR3 (F-8c): a matured proposed rule the owner applied on-chain — flip the
+    // read-model to active. No allowlist re-check: the target was checked at
+    // propose, and the on-chain timelock/apply is the enforcement regardless.
+    if (parsed.data.action === 'apply') {
+      await setGrantStatus(deps.pool, agent.id, rule.target, rule.selector, 'active');
+      res.json({ ok: true, action: 'apply' });
       return;
     }
     if (parsed.data.txHash) {

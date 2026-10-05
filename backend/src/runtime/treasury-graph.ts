@@ -7,7 +7,7 @@ import { createApproval } from '../store/approvals.js';
 import { appendTrace } from '../trace/trace-store.js';
 import { approvalEvent, reasoningEvent, traceEvent } from '../sse/events.js';
 import type { Json } from '../crypto/canonical.js';
-import type { AgentGoal, AgentRow, SentinelGoal, TreasuryGoal } from '../types.js';
+import type { AgentGoal, AgentRow, SentinelGoal, TraderGoal, TreasuryGoal } from '../types.js';
 import { CoordinationError, type DelegationCoordinator } from '../coordination/coordinator.js';
 import type { AlertService } from '../alerts/service.js';
 import { BoundaryRegistry, policyFingerprint, DAMPABLE_ERRORS, type DampableError } from './boundary.js';
@@ -20,6 +20,8 @@ import type { DecodedLeashError } from '../types.js';
 import type { RuntimeChain } from './session-chain.js';
 import { loadGrantState } from './grant-state.js';
 import { buildGovernedCall, BRIDGE_SELECTORS, SELECTORS } from '../governed-call/index.js';
+import { SELECTOR_APPROVE } from '../governed-call/selectors.js';
+import type { TradeFill } from '../governed-call/call-builder.js';
 import { classifyIntendedCall } from '../gateway/call-gate.js';
 import { raiseCapabilityRequest, type CapabilityDeps } from '../capabilities/service.js';
 import { listGrants } from '../store/capabilities.js';
@@ -31,6 +33,7 @@ import {
   type CapabilityView,
   type InboundDelegationInput,
   type PolicySnapshot,
+  type TraderHoldings,
 } from './prompt.js';
 
 /**
@@ -70,6 +73,8 @@ const TreasuryState = Annotation.Root({
   policy: Annotation<PolicySnapshot>,
   /** Stage D (D-10): the governed calls this agent may make this cycle (serializable). */
   capabilities: Annotation<CapabilityView[]>,
+  /** FR3 (F-8): the trader role's sensed token holdings (null for every other role). */
+  holdings: Annotation<TraderHoldings | null>,
   reasoning: Annotation<string>,
   decision: Annotation<AgentDecision>,
   route: Annotation<Route>,
@@ -185,7 +190,7 @@ type ChainHandoff = z.infer<typeof chainHandoffSchema>;
  *   reason, no reasoning, no act.
  */
 type CycleMode =
-  | { mode: 'autonomous'; goal: TreasuryGoal | SentinelGoal }
+  | { mode: 'autonomous'; goal: TreasuryGoal | SentinelGoal | TraderGoal }
   | { mode: 'executor_idle' }
   | { mode: 'inbound_transfer'; request: TransferRequest }
   // Phase 5.6: a chain hop the downstream re-reasons on under its OWN goal — the
@@ -200,7 +205,11 @@ function classifyCycle(goal: AgentGoal, inbound: InboundDelegationInput | null |
   const isLegacyAutonomous = role === 'treasury' || role === 'sentinel';
   if (!inbound) {
     if (role === 'executor') return { mode: 'executor_idle' };
-    if (isLegacyAutonomous) return { mode: 'autonomous', goal: goal as TreasuryGoal | SentinelGoal };
+    // FR3 (F-8): the trader is autonomous like treasury — its decide loop is the
+    // first surface a granted swap capability can ADVANCE (it never sends native).
+    if (isLegacyAutonomous || role === 'trader') {
+      return { mode: 'autonomous', goal: goal as TreasuryGoal | SentinelGoal | TraderGoal };
+    }
     return { mode: 'inbound_reject', reason: 'unsupported kind' };
   }
   // Phase 5.6 chain hop: a goal-bearing (treasury/sentinel) downstream
@@ -225,7 +234,7 @@ function classifyCycle(goal: AgentGoal, inbound: InboundDelegationInput | null |
 }
 
 /** The autonomous goal a cycle re-reasons under (Phase 5.6 folds inbound_chain in). */
-function autonomousGoalOf(mode: CycleMode): TreasuryGoal | SentinelGoal | null {
+function autonomousGoalOf(mode: CycleMode): TreasuryGoal | SentinelGoal | TraderGoal | null {
   if (mode.mode === 'autonomous' || mode.mode === 'inbound_chain') return mode.goal;
   return null;
 }
@@ -249,7 +258,9 @@ export function buildTreasuryGraph(
    */
   async function senseCapabilities(mode: CycleMode): Promise<CapabilityView[]> {
     const role = ctx.goal.type ?? 'treasury';
-    if (role !== 'treasury') return [];
+    // FR3 (F-8): the trader acts on governed calls too — it is the role a swap
+    // capability exists FOR (sentinel delegates, executor is inbound-driven).
+    if (role !== 'treasury' && role !== 'trader') return [];
     if (mode.mode !== 'autonomous' && mode.mode !== 'inbound_chain') return [];
     const grants = await listGrants(deps.pool, ctx.agentId);
     return grants.map((g) => ({
@@ -258,6 +269,68 @@ export function buildTreasuryGraph(
       signature: SELECTORS.get(g.selector.toLowerCase())?.signature ?? null,
       perCallCap: g.perCallCap,
     }));
+  }
+
+  /** P3C-6(i): snapshot a PolicyView with the contract's own lazy window-rollover math. */
+  function toPolicySnapshot(policy: Awaited<ReturnType<RuntimeChain['getPolicyView']>>): PolicySnapshot {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const resetsAt = policy.windowStart + policy.windowSeconds;
+    const rolled = policy.windowSeconds > 0 && nowSec >= resetsAt;
+    const spent = rolled ? 0n : policy.spentInWindow;
+    const remaining = policy.windowCap > spent ? policy.windowCap - spent : 0n;
+    return {
+      perTransferCapWei: policy.perTransferCap.toString(),
+      windowCapWei: policy.windowCap.toString(),
+      windowSeconds: policy.windowSeconds,
+      expiresAt: policy.expiresAt,
+      allowlist: policy.allowlist.map((a) => a.toLowerCase()),
+      revoked: policy.revoked,
+      spentInWindowWei: spent.toString(),
+      remainingWindowWei: remaining.toString(),
+      windowResetsAtUnix: rolled ? nowSec : resetsAt,
+    };
+  }
+
+  /**
+   * FR3 (F-8): trader sense — on-chain token holdings instead of a beneficiary
+   * balance. The allowance is read against the SINGLE granted approve-spender on
+   * the spend token (the router, from owner grant state — never model text);
+   * with no such grant the allowance reads 0 and the ladder stands down.
+   */
+  async function senseTrader(goal: TraderGoal): Promise<Partial<State>> {
+    const grants = await listGrants(deps.pool, ctx.agentId);
+    const capabilities: CapabilityView[] = grants.map((g) => ({
+      target: g.target,
+      selector: g.selector,
+      signature: SELECTORS.get(g.selector.toLowerCase())?.signature ?? null,
+      perCallCap: g.perCallCap,
+    }));
+    const approveGrant = grants.find(
+      (g) =>
+        g.selector.toLowerCase() === SELECTOR_APPROVE &&
+        g.target.toLowerCase() === goal.spendToken.toLowerCase() &&
+        g.spenderSet.length === 1,
+    );
+    const spender = approveGrant?.spenderSet[0];
+    const [account, policy, holdBalance, spendBalance, allowance] = await Promise.all([
+      deps.chain.getBalance(ctx.accountAddr),
+      deps.chain.getPolicyView(ctx.accountAddr, []),
+      deps.chain.getErc20Balance(goal.holdToken, ctx.accountAddr),
+      deps.chain.getErc20Balance(goal.spendToken, ctx.accountAddr),
+      spender ? deps.chain.getErc20Allowance(goal.spendToken, ctx.accountAddr, spender) : Promise.resolve(0n),
+    ]);
+    return {
+      beneficiaryBalanceWei: '0',
+      accountBalanceWei: account.toString(),
+      effectiveBeneficiary: '',
+      capabilities,
+      holdings: {
+        holdBalanceWei: holdBalance.toString(),
+        spendBalanceWei: spendBalance.toString(),
+        routerAllowanceWei: allowance.toString(),
+      },
+      policy: toPolicySnapshot(policy),
+    };
   }
 
   async function sense(state: State): Promise<Partial<State>> {
@@ -271,6 +344,7 @@ export function buildTreasuryGraph(
         accountBalanceWei: '0',
         effectiveBeneficiary: '',
         capabilities: [],
+        holdings: null,
         policy: {
           perTransferCapWei: '0',
           windowCapWei: '0',
@@ -285,39 +359,28 @@ export function buildTreasuryGraph(
       };
     }
     const autoGoal = autonomousGoalOf(mode);
-    const beneficiary = mode.mode === 'inbound_transfer' ? mode.request.beneficiary : (autoGoal?.beneficiary ?? '');
+    // FR3 (F-8): the trader watches token holdings, not a beneficiary balance.
+    if (autoGoal !== null && autoGoal.type === 'trader') return senseTrader(autoGoal);
+    const beneficiary =
+      mode.mode === 'inbound_transfer'
+        ? mode.request.beneficiary
+        : (autoGoal !== null && 'beneficiary' in autoGoal ? autoGoal.beneficiary : '');
     const [beneficiaryBalance, account, policy, capabilities] = await Promise.all([
       deps.chain.getBalance(beneficiary),
       deps.chain.getBalance(ctx.accountAddr),
       deps.chain.getPolicyView(ctx.accountAddr, [beneficiary]),
       senseCapabilities(mode),
     ]);
-    // P3C-6(i): window observability with the contract's OWN lazy-rollover
-    // math (LeashAccount.execute) — past the boundary the window has
-    // logically reset even though storage updates on the next spend.
-    const nowSec = Math.floor(Date.now() / 1000);
-    const resetsAt = policy.windowStart + policy.windowSeconds;
-    const rolled = policy.windowSeconds > 0 && nowSec >= resetsAt;
-    const spent = rolled ? 0n : policy.spentInWindow;
-    const remaining = policy.windowCap > spent ? policy.windowCap - spent : 0n;
     return {
       beneficiaryBalanceWei: beneficiaryBalance.toString(),
       accountBalanceWei: account.toString(),
       effectiveBeneficiary: beneficiary,
       capabilities,
-      policy: {
-        perTransferCapWei: policy.perTransferCap.toString(),
-        windowCapWei: policy.windowCap.toString(),
-        windowSeconds: policy.windowSeconds,
-        expiresAt: policy.expiresAt,
-        allowlist: policy.allowlist.map((a) => a.toLowerCase()),
-        revoked: policy.revoked,
-        spentInWindowWei: spent.toString(),
-        remainingWindowWei: remaining.toString(),
-        // After a logical reset the NEXT window starts at the next spend —
-        // report the boundary that already passed (FE copy clamps to "now").
-        windowResetsAtUnix: rolled ? nowSec : resetsAt,
-      },
+      holdings: null,
+      // P3C-6(i): window observability with the contract's OWN lazy-rollover
+      // math (LeashAccount.execute) — past the boundary the window has
+      // logically reset even though storage updates on the next spend.
+      policy: toPolicySnapshot(policy),
     };
   }
 
@@ -337,6 +400,8 @@ export function buildTreasuryGraph(
       accountBalanceWei: state.accountBalanceWei,
       policy: state.policy,
       nowSec: Math.floor(Date.now() / 1000),
+      // FR3 (F-8): the trader's sensed token holdings (absent for other roles).
+      ...(state.holdings ? { holdings: state.holdings } : {}),
       // Stage D (D-10): the governed-call envelope the model may act on this cycle.
       ...(state.capabilities && state.capabilities.length > 0 ? { capabilities: state.capabilities } : {}),
       // Inbound delegation rides the observation as LABELED UNTRUSTED input
@@ -427,7 +492,9 @@ export function buildTreasuryGraph(
       const autoGoal = autonomousGoalOf(mode);
       const wantsTransfer =
         mode.mode === 'inbound_transfer' ||
-        (autoGoal !== null && BigInt(state.beneficiaryBalanceWei) < BigInt(autoGoal.targetBalanceWei));
+        (autoGoal !== null &&
+          'targetBalanceWei' in autoGoal && // trader never wants a native transfer
+          BigInt(state.beneficiaryBalanceWei) < BigInt(autoGoal.targetBalanceWei));
       if (
         wantsTransfer &&
         BigInt(state.policy.windowCapWei) > 0n &&
@@ -562,10 +629,23 @@ export function buildTreasuryGraph(
       return standDownResult('session expired since sense — not submitting a doomed governed call');
     }
     const grant = await loadGrantState(deps.pool, deps.chain, ctx.agentId, self, deps.bridge?.targets);
+    // FR3 (F-8): the trader's swap free args resolve from its OWNER-TYPED goal
+    // tokens + server constants (minOut=1 testnet-honest — the band wall is the
+    // enforcement guarantee; deadline now+600). Never model text.
+    const trade: TradeFill | undefined =
+      ctx.goal.type === 'trader'
+        ? {
+            tokenIn: ctx.goal.spendToken,
+            tokenOut: ctx.goal.holdToken,
+            minOutWei: 1n,
+            deadlineSec: Math.floor(Date.now() / 1000) + 600,
+          }
+        : undefined;
     const built = buildGovernedCall(
       { target: decision.target ?? '', selector: decision.selector ?? '', amountWei: decision.amountWei },
       grant,
       self,
+      trade,
     );
     if (!built.ok) {
       // An authority arg couldn't be pinned from grant state (no grant, ambiguous
@@ -971,12 +1051,29 @@ function evaluateDecision(
   // grant-state classify + never-guess-money build happens in the decide node.
   if (parsed.action === 'call') {
     const role = ctx.goal.type ?? 'treasury';
-    if (role !== 'treasury') return stand('governed calls are only for the treasury role');
+    if (role !== 'treasury' && role !== 'trader') {
+      return stand('governed calls are only for the treasury and trader roles');
+    }
     if (!parsed.target || !parsed.selector) return stand('call decision missing target/selector');
     if (state.policy.revoked) return stand('account is revoked');
     if (state.policy.expiresAt <= Math.floor(Date.now() / 1000)) return stand('session expired');
+    // FR3 (F-8): deterministic trader bounds — the model's ladder is advisory;
+    // target-met and the per-trade clip are re-checked here (never-guess-money:
+    // the clip is the owner-typed goal bound, on-chain caps bound again).
+    if (ctx.goal.type === 'trader') {
+      if (state.holdings && BigInt(state.holdings.holdBalanceWei) >= BigInt(ctx.goal.targetHoldWei)) {
+        return stand('hold-token target already met');
+      }
+      if (BigInt(parsed.amountWei) > BigInt(ctx.goal.clipWei)) {
+        return stand('proposed amount exceeds the per-trade clip');
+      }
+    }
     return { decision: parsed, route: 'call' };
   }
+
+  // FR3 (F-8): the trader NEVER sends native transfers — a 'send' from it is a
+  // model error (or an injected instruction); refuse deterministically.
+  if (ctx.goal.type === 'trader') return stand('trader never sends native transfers');
 
   const amount = BigInt(parsed.amountWei);
   if (amount <= 0n) return stand('non-positive transfer amount');
@@ -999,10 +1096,10 @@ function evaluateDecision(
     return stand('beneficiary is not allowlisted');
   }
   const autoGoal = autonomousGoalOf(mode);
-  if (autoGoal) {
+  if (autoGoal && 'targetBalanceWei' in autoGoal) {
     // Treasury/sentinel (incl. a re-reasoned chain hop) target check — an
     // inbound transfer.request has no goal target; the executor honours the
-    // request bounded by its policy instead.
+    // request bounded by its policy instead. (Trader already returned above.)
     if (BigInt(state.beneficiaryBalanceWei) >= BigInt(autoGoal.targetBalanceWei)) {
       return stand('target balance already met');
     }

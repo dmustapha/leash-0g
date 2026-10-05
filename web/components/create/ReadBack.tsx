@@ -29,6 +29,7 @@ const ROLE_LABEL: Record<AgentRole, string> = {
   treasury: 'Manages an allowance itself',
   sentinel: 'Watches and requests top-ups',
   executor: 'Acts on requests from another agent',
+  trader: 'Trades toward a holding target',
   requester: 'Orders a job and pays for good work',
   provider: 'Does a job for others',
   evaluator: 'Judges others’ work',
@@ -36,7 +37,7 @@ const ROLE_LABEL: Record<AgentRole, string> = {
 
 /** Roles that can move money — drives which leash inputs the owner must complete. */
 function roleMovesMoney(role: AgentRole): boolean {
-  return role === 'treasury' || role === 'executor' || role === 'requester';
+  return role === 'treasury' || role === 'executor' || role === 'requester' || role === 'trader';
 }
 
 function unsure(draft: ElevationDraft, path: string): boolean {

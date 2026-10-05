@@ -27,7 +27,14 @@ export function CapabilityGrant({
   onApplyCallRule,
   onRecordPreset,
   onCustomRule,
+  onProposeBudget,
+  onApplyBudget,
 }: {
+  /** FR3 (F-8b): owner signs proposeSpendBudget(token, windowCap) — timelocked. */
+  onProposeBudget?: (token: string, windowCap: string) => Promise<void>;
+  /** FR3 (F-8b): owner signs applySpendBudget once the pending budget's eta passed. */
+  onApplyBudget?: () => Promise<void>;
+} & {
   /** Preview a preset's resolved rules (no signing). */
   onResolvePreset: (key: PresetKey) => Promise<ResolvedPreset>;
   /** Owner signs proposeCallRule for one rule of the preset; resolves to the txHash. */
@@ -54,7 +61,93 @@ export function CapabilityGrant({
         onRecordPreset={onRecordPreset}
       />
       <CustomRuleForm onCustomRule={onCustomRule} />
+      {onProposeBudget && onApplyBudget ? (
+        <SpendBudgetForm onProposeBudget={onProposeBudget} onApplyBudget={onApplyBudget} />
+      ) : null}
     </section>
+  );
+}
+
+// ─── Token spending budget (FR3, F-8b) ────────────────────────────────────────
+// Governed ERC-20 calls are FAIL-CLOSED without a per-token budget (BudgetNotSet)
+// — this is the missing owner surface that sets one. Propose is timelocked
+// (~15 min safety delay) like any loosen; apply flips it live after the eta.
+
+function SpendBudgetForm({
+  onProposeBudget,
+  onApplyBudget,
+}: {
+  onProposeBudget: (token: string, windowCap: string) => Promise<void>;
+  onApplyBudget: () => Promise<void>;
+}) {
+  const [token, setToken] = useState('');
+  const [windowCap, setWindowCap] = useState('');
+  const [phase, setPhase] = useState<Phase>('propose');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function propose(e: React.FormEvent) {
+    e.preventDefault();
+    if (!ADDR_RE.test(token.trim())) return setError('Enter a valid token address (0x…, 40 hex).');
+    if (!/^\d+$/.test(windowCap.trim())) return setError('Enter the budget as a whole base-unit number.');
+    setBusy(true);
+    setError(null);
+    try {
+      await onProposeBudget(token.trim(), windowCap.trim());
+      setPhase('apply');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'The wallet transaction failed.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function apply() {
+    setBusy(true);
+    setError(null);
+    try {
+      await onApplyBudget();
+      setToken('');
+      setWindowCap('');
+      setPhase('propose');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'The wallet transaction failed.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form onSubmit={(e) => void propose(e)} data-testid="spend-budget-form" style={{ display: 'grid', gap: '0.6rem' }}>
+      <h3 className="label" style={{ margin: 0 }}>Set a token spending budget</h3>
+      <p style={{ margin: 0, fontSize: '0.84rem', color: 'var(--color-ink-dim)' }}>
+        Contract calls that move an ERC-20 are refused on-chain until the token has a budget. The
+        budget is the most it can flow out, cumulatively, per window.
+      </p>
+      <label className="label" htmlFor="budget-token">Token</label>
+      <input id="budget-token" className="field" data-testid="budget-token" value={token} onChange={(e) => setToken(e.target.value)} placeholder="0x…" disabled={busy || phase === 'apply'} />
+      <label className="label" htmlFor="budget-cap">Budget (base units)</label>
+      <input id="budget-cap" className="field" data-testid="budget-cap" inputMode="numeric" value={windowCap} onChange={(e) => setWindowCap(e.target.value)} placeholder="5000000000000000000000" disabled={busy || phase === 'apply'} />
+      {error ? <p role="alert" style={{ color: 'var(--color-deny)', fontSize: '0.84rem', margin: 0 }}>{error}</p> : null}
+      {phase === 'propose' ? (
+        <div>
+          <button type="submit" className="btn btn-primary btn-sm" data-testid="budget-propose" disabled={busy}>
+            {busy ? 'Waiting for wallet…' : 'Propose budget'}
+          </button>
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gap: '0.4rem' }}>
+          <p style={{ margin: 0, fontSize: '0.82rem', color: 'var(--color-accent)' }}>
+            Signed — this takes effect in ~15 min. Come back and apply it.
+          </p>
+          <div>
+            <button type="button" className="btn btn-primary btn-sm" data-testid="budget-apply" disabled={busy} onClick={() => void apply()}>
+              {busy ? 'Waiting for wallet…' : 'Apply budget'}
+            </button>
+          </div>
+        </div>
+      )}
+    </form>
   );
 }
 

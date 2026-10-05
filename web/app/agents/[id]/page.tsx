@@ -16,6 +16,7 @@ import type {
   NetworkChain,
   CallRule,
   CapabilityEnvelopeView,
+  CapabilityGrantRow,
   CapabilityRuleAction,
   Chain,
   Delegation,
@@ -61,8 +62,11 @@ import { NetworksPanel } from '@/components/cockpit/NetworksPanel';
 import { nativeSymbol } from '@/lib/networks';
 import {
   applyCallRuleOnchain,
+  applySpendBudgetOnchain,
+  readPendingCallRule,
   authorizeOnceOnchain,
   proposeCallRuleOnchain,
+  proposeSpendBudgetOnchain,
   removeCallSelectorOnchain,
   tightenCallRuleOnchain,
   type CallRuleInput,
@@ -381,6 +385,60 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
     [requireProvider, api, id, loadCapabilities],
   );
 
+  // FR3 (F-8b): owner-signed per-token spend budget — propose (timelocked) + apply.
+  const proposeBudget = useCallback(
+    async (token: string, windowCap: string) => {
+      const { provider, owner, account } = await requireProvider();
+      await proposeSpendBudgetOnchain(provider, owner, account, token as Address, windowCap);
+    },
+    [requireProvider],
+  );
+
+  const applyBudget = useCallback(async () => {
+    const { provider, owner, account } = await requireProvider();
+    await applySpendBudgetOnchain(provider, owner, account);
+  }, [requireProvider]);
+
+  // FR3 (F-8c): apply a matured PROPOSED rule from the envelope (the custom-rule
+  // flow's missing second half) — sign applyCallRule, then record proposed→active.
+  const applyGrant = useCallback(
+    async (grant: CapabilityGrantRow) => {
+      const { provider, owner, account } = await requireProvider();
+      // Review fix: the contract holds ONE pending-rule slot and applyCallRule()
+      // is argless — a later proposal overwrites the slot. Verify the slot IS
+      // this row before signing, or the wrong rule activates while the mirror
+      // records this one as active.
+      const pending = await readPendingCallRule(account);
+      if (pending.eta === 0) {
+        throw new Error('Nothing is pending on-chain for this agent — this rule may already be applied.');
+      }
+      if (
+        pending.target !== grant.target.toLowerCase() ||
+        pending.selector !== grant.selector.toLowerCase()
+      ) {
+        throw new Error(
+          'The pending rule on-chain is a different one (a later proposal replaced this slot). Apply that rule first, then re-propose this one.',
+        );
+      }
+      const txHash = await applyCallRuleOnchain(provider, owner, account);
+      await api.capabilityRule(id, {
+        action: 'apply',
+        rule: {
+          target: grant.target,
+          selector: grant.selector,
+          recipientMode: grant.recipientMode,
+          spenderSet: grant.spenderSet,
+          perCallCap: grant.perCallCap,
+          windowCapCall: grant.windowCapCall,
+          ...(grant.codehash ? { codehash: grant.codehash as Hex } : {}),
+        },
+        ...(txHash ? { txHash } : {}),
+      });
+      await loadCapabilities();
+    },
+    [requireProvider, api, id, loadCapabilities],
+  );
+
   // JIT decision handlers — the request row carries its own approvalId + callHash.
   const jitApproveOnce = useCallback(
     async (approvalId: string, callHash: Hex) => {
@@ -615,10 +673,12 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
                 onApplyCallRule={applyCallRule}
                 onRecordPreset={recordPreset}
                 onCustomRule={customRule}
+                onProposeBudget={proposeBudget}
+                onApplyBudget={applyBudget}
               />
             </div>
           ) : null}
-          {capabilities ? <CapabilityEnvelope envelope={capabilities} /> : null}
+          {capabilities ? <CapabilityEnvelope envelope={capabilities} onApplyGrant={applyGrant} /> : null}
           <RevokeButton
             revoked={detail?.status === 'revoked'}
             onRevoke={revokeGuardian}
