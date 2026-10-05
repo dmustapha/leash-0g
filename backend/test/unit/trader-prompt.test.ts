@@ -84,3 +84,25 @@ describe('trader reason request (FR3)', () => {
     expect(obs.goal.beneficiary).toBeDefined();
   });
 });
+
+// FR3b: reasoning models emit the DECISION_CONTRACT's target/selector keys EMPTY
+// on stand_down (observed live on RH) — ""/null must parse as absent, not fail.
+describe('parseDecision — empty target/selector tolerance (FR3b)', () => {
+  it('parses a stand_down carrying "target":"" and "selector":""', async () => {
+    const { parseDecision } = await import('../../src/runtime/prompt.js');
+    const d = parseDecision('{"action":"stand_down","amountWei":"0","reason":"Target met.","target":"","selector":""}');
+    expect(d).not.toBeNull();
+    expect(d?.action).toBe('stand_down');
+    expect(d?.target).toBeUndefined();
+  });
+  it('still rejects a CALL with empty target/selector (malformed)', async () => {
+    const { parseDecision } = await import('../../src/runtime/prompt.js');
+    expect(parseDecision('{"action":"call","amountWei":"5","reason":"x","target":"","selector":""}')).toBeNull();
+  });
+  it('still parses a well-formed call', async () => {
+    const { parseDecision } = await import('../../src/runtime/prompt.js');
+    const d = parseDecision(`{"action":"call","amountWei":"5","reason":"x","target":"0x${'aa'.repeat(20)}","selector":"0x095ea7b3"}`);
+    expect(d?.action).toBe('call');
+    expect(d?.target).toBeDefined();
+  });
+});

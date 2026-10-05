@@ -1,6 +1,6 @@
 import { createPublicClient, createWalletClient, encodePacked, http, keccak256, type Hex, type PublicClient } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { leashAccountAbi, leashAccountV4Abi, erc20MetaAbi } from '../chain/abis.js';
+import { aggregatorV3Abi, leashAccountAbi, leashAccountV4Abi, erc20MetaAbi } from '../chain/abis.js';
 import { readPolicyView, zeroGChain } from '../chain/ops.js';
 import type { PolicyView } from '../types.js';
 import { waitReceipt } from '../chain/wait-receipt.js';
@@ -74,6 +74,14 @@ export interface RuntimeChain {
   /** FR3 (F-8): trader holdings sense — ERC-20 allowance owner→spender. */
   getErc20Allowance(token: string, owner: string, spender: string): Promise<bigint>;
   /**
+   * FR3b: the account's live band-feed price for a (target, selector) swap rule,
+   * 18dp — or null when no band is set / the feed is unreadable. The runtime
+   * derives the swap's minOut from THIS server-read on-chain value (never model
+   * text), so an armed band sees implied price == oracle (dead-center in-band);
+   * the wall's own staleness/deviation predicates remain the enforcement.
+   */
+  getSwapBandPrice18(accountAddr: string, target: string, selector: string): Promise<bigint | null>;
+  /**
    * Stage D (D-10): live-read the on-chain governed-call envelope for the given
    * candidates and build the authoritative `GrantState` the off-chain classify +
    * call-builder consult. The read-model has no per-token budget, so budgets are
@@ -140,6 +148,36 @@ export class SessionChain implements RuntimeChain {
       functionName: 'allowance',
       args: [owner as Hex, spender as Hex],
     })) as bigint;
+  }
+
+  async getSwapBandPrice18(accountAddr: string, target: string, selector: string): Promise<bigint | null> {
+    // bytes4 is unforgiving: a short/odd selector would be silently right-padded
+    // into a WRONG ruleKey (band invisible → minOut 1 → armed band reverts).
+    if (!/^0x[0-9a-fA-F]{8}$/.test(selector) || !/^0x[0-9a-fA-F]{40}$/.test(target)) return null;
+    try {
+      // on-chain ruleKey = keccak256(abi.encodePacked(target, selector)).
+      const key = keccak256(encodePacked(['address', 'bytes4'], [target.toLowerCase() as Hex, selector.toLowerCase() as Hex]));
+      const band = (await this.publicClient.readContract({
+        address: accountAddr as Hex,
+        abi: leashAccountV4Abi,
+        functionName: 'priceBand',
+        args: [key],
+      })) as readonly [boolean, Hex, Hex, number, bigint];
+      if (!band[0]) return null;
+      const [, answer] = (await this.publicClient.readContract({
+        address: band[1],
+        abi: aggregatorV3Abi,
+        functionName: 'latestRoundData',
+      })) as readonly [bigint, bigint, bigint, bigint, bigint];
+      if (answer <= 0n) return null;
+      return answer * 10n ** 10n; // 8dp oracle → 18dp
+    } catch (err) {
+      // No band / legacy account / feed unreadable — minOut falls back to 1 and
+      // the on-chain wall (if any) remains the enforcement guarantee. Logged so a
+      // misconfigured account/feed is visible in service logs without killing the cycle.
+      console.warn(`band price read failed for ${accountAddr} ${target}:${selector}: ${err instanceof Error ? err.message : err}`);
+      return null;
+    }
   }
 
   async executeTransfer(input: {
