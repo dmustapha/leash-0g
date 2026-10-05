@@ -354,6 +354,12 @@ export type Digest = {
   since: string | null;
   agents: AgentDigest[];
   links: LinkDigest[];
+  /** B-6: fleet lifecycle since the mark (optional: pre-B-6 records lack it). */
+  lifecycle?: {
+    created: Array<{ agentId: string; name: string }>;
+    onboarded: Array<{ agentId: string; name: string; chainId: number }>;
+    linksCreated: Array<{ linkId: string; fromAgentId: string; toAgentId: string }>;
+  };
   totals: { spendWei: string; actions: number; decisions: number; jobFees?: { count: number; byToken: Record<string, string>; feeLabel?: string } };
   empty: boolean;
 };

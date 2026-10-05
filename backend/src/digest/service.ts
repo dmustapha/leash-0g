@@ -54,11 +54,25 @@ export interface LinkDigest {
   byStatus: Record<string, number>;
 }
 
+/**
+ * B-6: fleet lifecycle events since the mark — creates, chain onboards and
+ * new links were invisible in the digest (delegation events were covered,
+ * their SOURCES were not). Row-sourced (created_at vs the cursor ts, like
+ * the link figures); empty on the FIRST digest (no baseline — listing every
+ * agent ever created would be noise, mirroring balanceChangeWei: null).
+ */
+export interface LifecycleDigest {
+  created: Array<{ agentId: string; name: string }>;
+  onboarded: Array<{ agentId: string; name: string; chainId: number }>;
+  linksCreated: Array<{ linkId: string; fromAgentId: string; toAgentId: string }>;
+}
+
 export interface Digest {
   generatedAt: string;
   since: string | null;
   agents: AgentDigest[];
   links: LinkDigest[];
+  lifecycle: LifecycleDigest;
   totals: { spendWei: string; actions: number; decisions: number; jobFees: { count: number; byToken: Record<string, string>; feeLabel?: string } };
   empty: boolean;
 }
@@ -264,6 +278,37 @@ export class DigestService {
       entry.byStatus[r.status] = Number(r.n);
     }
 
+    // B-6: lifecycle events since the mark. Skipped on the first digest
+    // (cursor null = no baseline, same honesty rule as balanceChangeWei).
+    const lifecycle: LifecycleDigest = { created: [], onboarded: [], linksCreated: [] };
+    if (cursor?.ts) {
+      const createdRows = await this.deps.pool.query<{ id: string; name: string }>(
+        `SELECT id, name FROM agents WHERE owner_addr = $1 AND created_at > $2 ORDER BY created_at ASC`,
+        [owner, cursor.ts],
+      );
+      lifecycle.created = createdRows.rows.map((r) => ({ agentId: r.id, name: r.name }));
+      const onboardRows = await this.deps.pool.query<{ agent_id: string; name: string; chain_id: number }>(
+        `SELECT d.agent_id, a.name, d.chain_id
+         FROM agent_chain_deployments d JOIN agents a ON a.id = d.agent_id
+         WHERE a.owner_addr = $1 AND d.created_at > $2 ORDER BY d.created_at ASC`,
+        [owner, cursor.ts],
+      );
+      lifecycle.onboarded = onboardRows.rows.map((r) => ({
+        agentId: r.agent_id,
+        name: r.name,
+        chainId: Number(r.chain_id),
+      }));
+      const newLinkRows = await this.deps.pool.query<{ id: string; from_agent_id: string; to_agent_id: string }>(
+        `SELECT id, from_agent_id, to_agent_id FROM links WHERE owner_addr = $1 AND created_at > $2 ORDER BY created_at ASC`,
+        [owner, cursor.ts],
+      );
+      lifecycle.linksCreated = newLinkRows.rows.map((r) => ({
+        linkId: r.id,
+        fromAgentId: r.from_agent_id,
+        toAgentId: r.to_agent_id,
+      }));
+    }
+
     const generatedAt = new Date().toISOString();
     const totalsFeeLabel = buildFeeLabel(totalJobFeeByToken, feeTokenMeta);
     const links = [...linkMap.values()];
@@ -271,6 +316,9 @@ export class DigestService {
       totalActions > 0 ||
       totalDecisions > 0 ||
       links.length > 0 ||
+      lifecycle.created.length > 0 ||
+      lifecycle.onboarded.length > 0 ||
+      lifecycle.linksCreated.length > 0 ||
       perAgent.some(
         (a) =>
           a.blocks > 0 ||
@@ -285,6 +333,7 @@ export class DigestService {
         since: cursor?.ts ?? null,
         agents: perAgent,
         links,
+        lifecycle,
         totals: {
           spendWei: totalSpend.toString(),
           actions: totalActions,
@@ -411,6 +460,18 @@ export class DigestService {
       if (bits.length > 0) lines.push(`🐕 ${a.name} — ${bits.join(' · ')}`);
     }
 
+    // B-6: fleet lifecycle since the mark (defensive ?. — old persisted digest
+    // records predate the field).
+    const lc = digest.lifecycle;
+    const lifecycleLines: string[] = [];
+    if (lc?.created.length) {
+      lifecycleLines.push(`✨ New: ${lc.created.map((c) => c.name).join(', ')}`);
+    }
+    for (const o of lc?.onboarded ?? []) {
+      lifecycleLines.push(`🌐 ${o.name} onboarded onto chain ${o.chainId}`);
+    }
+    if (lifecycleLines.length > 0) lines.push('', ...lifecycleLines);
+
     // Cross-agent handoffs, named and directional (row-sourced links) — a
     // fleet's coordination is invisible without WHO handed off to WHOM.
     if (digest.links.length > 0) {
@@ -422,6 +483,20 @@ export class DigestService {
           .map(([status, n]) => `${n} ${status === 'completed' ? 'completed' : status}`)
           .join(', ');
         lines.push(`↪ ${from} → ${to}: ${parts}`);
+      }
+    }
+
+    // B-6: links wired since the mark (direction matters; names over ids). A
+    // link that ALSO decided a delegation this period already shows under
+    // "Handoffs" — don't print the same pair twice.
+    const handoffLinkIds = new Set(digest.links.map((l) => l.linkId));
+    const freshLinks = (lc?.linksCreated ?? []).filter((l) => !handoffLinkIds.has(l.linkId));
+    if (freshLinks.length > 0) {
+      lines.push('', 'New links between your agents:');
+      for (const l of freshLinks) {
+        const from = nameOf.get(l.fromAgentId) ?? 'an agent';
+        const to = nameOf.get(l.toAgentId) ?? 'an agent';
+        lines.push(`🔗 ${from} → ${to}`);
       }
     }
 
