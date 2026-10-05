@@ -73,10 +73,10 @@ describe('owner auth', () => {
     }
   });
 
-  it("403 when the authed wallet does not match the agent's owner_addr", async () => {
+  it("404 when the authed wallet does not match the agent's owner_addr", async () => {
     const a = await createAgent();
     const res = await request(t.app).get(`/api/agents/${a.id}`).set('authorization', ownerAuth(OTHER_OWNER));
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(404);
   });
 });
 
@@ -322,7 +322,7 @@ describe('agent lifecycle routes', () => {
     const denied = await request(t.app)
       .get(`/api/agents/${a.id}/traces`)
       .set('authorization', ownerAuth(OTHER_OWNER));
-    expect(denied.status).toBe(403);
+    expect(denied.status).toBe(404);
   });
 
   it('GET audit lists batches as a bare array with ciphertext URLs', async () => {

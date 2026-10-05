@@ -20,7 +20,8 @@ function agent(id: string, name: string, over: Partial<AgentSummary> = {}): Agen
 }
 
 describe('FleetList', () => {
-  it('renders one row per agent with name, status, and 0G balance', () => {
+  it('renders one row per agent with name, status, and 0G balance; revoked behind toggle', async () => {
+    const user = userEvent.setup();
     render(
       <FleetList
         agents={[agent('a1', 'Treasury helper'), agent('a2', 'Watcher', { status: 'revoked', accountBalanceWei: '0' })]}
@@ -33,6 +34,9 @@ describe('FleetList', () => {
     expect(row1).toHaveTextContent('active');
     expect(row1).toHaveTextContent('0.25 0G');
     expect(row1).toHaveAttribute('href', '/agents/a1');
+    // Revoked agents are hidden by default; the toggle reveals them.
+    expect(screen.queryByTestId('fleet-row-a2')).not.toBeInTheDocument();
+    await user.click(screen.getByTestId('fleet-toggle-revoked'));
     const row2 = screen.getByTestId('fleet-row-a2');
     expect(row2).toHaveTextContent('revoked');
     expect(row2).toHaveTextContent('0 0G');

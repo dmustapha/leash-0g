@@ -9,8 +9,8 @@ import type { AgentNetworksView, NetworkChain } from '@/lib/types';
 const ACCOUNT = '0x1111111111111111111111111111111111111111' as const;
 
 const NETWORKS: NetworkChain[] = [
-  { chainId: 16602, name: '0G Galileo' },
-  { chainId: 84532, name: 'Base Sepolia' },
+  { chainId: 16602, name: '0G Galileo', capabilities: [] },
+  { chainId: 84532, name: 'Base Sepolia', capabilities: [] },
 ];
 
 const VIEW: AgentNetworksView = {

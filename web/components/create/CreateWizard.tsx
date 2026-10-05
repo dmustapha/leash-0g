@@ -8,8 +8,9 @@ import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { isAddress, type Address } from 'viem';
 import { ApiError } from '@/lib/api';
+import { config } from '@/lib/config';
 import { isValidOgAmount, ogToWei, weiToOg } from '@/lib/format';
-import type { AgentGoal, CreateAgentResponse, Hex, JobSpecSummary, PolicyInput, TokenConfigInput } from '@/lib/types';
+import type { AgentGoal, CreateAgentResponse, Hex, JobSpecSummary, NetworkChain, PolicyInput, TokenConfigInput } from '@/lib/types';
 import { Disclosure } from '@/components/ui/Disclosure';
 import { Field } from '@/components/ui/Field';
 import { CopyButton } from '@/components/ui/CopyButton';
@@ -31,7 +32,14 @@ export type WizardInput = {
   tokenConfig?: TokenConfigInput;
   /** Phase-5 (D-B9): optional freeform capability label (elevation-suggested, owner-edited). */
   capabilityLabel?: string;
+  /** SE-7: the chain this agent mints on. Omitted = the home 0G chain (backend default). */
+  chainId?: number;
+  /** RH2 (two-factory): the named wall-capability to mint through (e.g. `oracleBand`). */
+  capability?: string;
 };
+
+/** The band-wall capability key a chain advertises when it can mint price-band-walled agents. */
+const ORACLE_BAND = 'oracleBand';
 
 /** Role variant chooser (spec §3c/§3b): ONE plain-language choice on the goal step. */
 export type AgentRole = 'treasury' | 'sentinel' | 'executor' | 'requester' | 'provider' | 'evaluator';
@@ -61,6 +69,12 @@ export type CreateWizardProps = {
   jobAgents?: { providers: JobAgentOption[]; evaluators: JobAgentOption[] };
   /** Phase-5 (D-A2): the owner's saved job specs, for the requester job-handle picker. */
   jobSpecs?: JobSpecSummary[];
+  /**
+   * SE-7: the registered chain table (GET /api/networks), for the network picker.
+   * Omitted/empty ⇒ the picker is hidden and the agent mints on the backend default
+   * (the home 0G chain) — the Phase-1 behavior.
+   */
+  networks?: NetworkChain[];
   /** Phase-5 (D-B3): seed all fields from a confirmed read-back draft and jump to `review`. */
   prefill?: WizardPrefill;
   /** Phase-5 (D-A1): CTA when the requester's advanced-door prerequisites are unmet. */
@@ -201,6 +215,8 @@ function seedFromPrefill(p: WizardPrefill): {
   entryStep: Step;
   fields: Partial<Record<string, string>>;
   allowlist: Address[];
+  chainId?: number;
+  capability?: string;
 } {
   const g = p.goal;
   const role: AgentRole =
@@ -231,10 +247,10 @@ function seedFromPrefill(p: WizardPrefill): {
     fields['tokenWindow'] = p.tokenConfig.windowCapTokenWei;
   }
   if (p.allowlist[0]) fields['payee'] = p.allowlist[0];
-  return { role, entryStep: entryStepFor(role, fields), fields, allowlist: p.allowlist };
+  return { role, entryStep: entryStepFor(role, fields), fields, allowlist: p.allowlist, chainId: p.chainId, capability: p.capability };
 }
 
-export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs, prefill, onStartAgent, startCreatedAgent }: CreateWizardProps) {
+export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs, networks, prefill, onStartAgent, startCreatedAgent }: CreateWizardProps) {
   const seed = prefill ? seedFromPrefill(prefill) : null;
   const [step, setStep] = useState<Step>(seed?.entryStep ?? 'name');
   const [role, setRole] = useState<AgentRole>(seed?.role ?? 'treasury');
@@ -245,6 +261,13 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
     (jobAgents?.evaluators.length ?? 0) >= 1 &&
     (jobSpecs?.length ?? 0) >= 1;
   const [name, setName] = useState(seed?.fields['name'] ?? '');
+  // SE-7: the chain to mint on. Defaults to the home 0G chain; the picker appears only
+  // when the networks table carries more than the home chain.
+  const [chainId, setChainId] = useState<number>(seed?.chainId ?? config.chainId);
+  // RH2: opt-in to the price-band wall when the selected chain advertises `oracleBand`.
+  // A prefill carrying the band capability seeds the checkbox on; the chainSupportsBand
+  // guard still gates whether it reaches the POST.
+  const [bandWall, setBandWall] = useState(seed?.capability === ORACLE_BAND);
   const [beneficiary, setBeneficiary] = useState(seed?.fields['beneficiary'] ?? '');
   const [targetBalance, setTargetBalance] = useState(seed?.fields['targetBalance'] ?? '0.1');
   const [topUp, setTopUp] = useState(seed?.fields['topUp'] ?? '0.01');
@@ -387,10 +410,30 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
     tokenPerTransfer, tokenWindow,
   ]);
 
+  // SE-7 / RH2: the chosen chain and whether it can mint band-walled agents. An empty
+  // networks table (unit tests, multichain disabled) means the home chain only, no picker.
+  const selectedChain = useMemo(
+    () => networks?.find((c) => c.chainId === chainId),
+    [networks, chainId],
+  );
+  const chainSupportsBand = !!selectedChain?.capabilities.includes(ORACLE_BAND);
+  // The band-wall opt-in only applies on a chain that advertises it — guard the flag so a
+  // stale `true` from switching chains never leaks into the POST.
+  const bandWallOn = chainSupportsBand && bandWall;
+
   // D-B9: attach the freeform capability label (inert) without touching the per-role builders.
+  // SE-7/RH2 additively carry the chosen chain + band-wall capability into the create POST.
   const input = useMemo<WizardInput | null>(
-    () => (baseInput ? { ...baseInput, ...(capabilityLabel.trim() ? { capabilityLabel: capabilityLabel.trim() } : {}) } : null),
-    [baseInput, capabilityLabel],
+    () =>
+      baseInput
+        ? {
+            ...baseInput,
+            ...(capabilityLabel.trim() ? { capabilityLabel: capabilityLabel.trim() } : {}),
+            chainId,
+            ...(bandWallOn ? { capability: ORACLE_BAND } : {}),
+          }
+        : null,
+    [baseInput, capabilityLabel, chainId, bandWallOn],
   );
 
   // Reviewed constraint (TREASURY only): a single top-up is one payment, so it can never
@@ -487,6 +530,50 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
               placeholder="e.g. Treasury helper"
               autoFocus
             />
+            {(networks?.length ?? 0) > 1 ? (
+              <label className="label" style={{ color: 'var(--color-ink)', display: 'grid', gap: '0.35rem' }}>
+                Network
+                <select
+                  className="field"
+                  data-testid="network-select"
+                  value={chainId}
+                  onChange={(e) => {
+                    setChainId(Number(e.target.value));
+                    setBandWall(false); // reset the opt-in when the chain changes
+                  }}
+                >
+                  {(networks ?? []).map((c) => (
+                    <option key={c.chainId} value={c.chainId}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+                <span style={{ fontSize: '0.82rem', color: 'var(--color-ink-dim)' }}>
+                  The blockchain your agent&apos;s account is created on. Defaults to 0G.
+                </span>
+              </label>
+            ) : null}
+            {chainSupportsBand ? (
+              <label
+                className="panel"
+                data-testid="band-wall-optin"
+                style={{ display: 'flex', gap: '0.65rem', alignItems: 'flex-start', padding: '0.8rem 0.9rem', cursor: 'pointer' }}
+              >
+                <input
+                  type="checkbox"
+                  checked={bandWall}
+                  onChange={(e) => setBandWall(e.target.checked)}
+                  style={{ marginTop: '0.2rem' }}
+                />
+                <span style={{ display: 'grid', gap: '0.25rem' }}>
+                  <span style={{ fontWeight: 600 }}>Band-walled trading agent</span>
+                  <span style={{ fontSize: '0.84rem', color: 'var(--color-ink-dim)' }}>
+                    Every trade is checked against the live oracle price band on-chain — trades
+                    outside the band are refused by the contract.
+                  </span>
+                </span>
+              </label>
+            ) : null}
           </>,
         )}
 
@@ -954,6 +1041,8 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
           <dl style={{ display: 'grid', gap: '0.55rem', margin: 0 }} data-testid="review-summary">
             {[
               ['Name', name.trim()],
+              ['Network', selectedChain?.name ?? (chainId !== config.chainId ? 'Loading…' : '0G Galileo Testnet')],
+              ...(bandWallOn ? [['Band wall', 'on — trades outside the oracle band are refused on-chain']] : []),
               [
                 'Job',
                 role === 'treasury'
@@ -1035,7 +1124,10 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
             <button
               type="button"
               className="btn btn-primary"
-              disabled={!walletReady || !input || topUpExceedsCap}
+              // A prefill can seed a non-home chain before the networks table resolves; creating
+              // in that window would silently drop the band-wall capability (bandWallOn is
+              // derived from the not-yet-loaded chain entry), so wait for the chain to resolve.
+              disabled={!walletReady || !input || topUpExceedsCap || (chainId !== config.chainId && selectedChain === undefined)}
               onClick={() => void submit()}
               data-testid="create-agent"
             >

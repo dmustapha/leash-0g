@@ -85,7 +85,7 @@ import { listRequestsByChainAndAccount } from '../store/capabilities.js';
 /** SE-7: the registry surface the owner routes need (structural — tests fake it). */
 export interface OwnerChainRegistry {
   has(chainId: number): boolean;
-  listChains(): Array<{ chainId: number; name: string }>;
+  listChains(): Array<{ chainId: number; name: string; capabilityFactories?: Readonly<Record<string, string>> | undefined }>;
   getChainOps(chainId: number): OnboardChainOps;
   /** RH2 (two-factory): resolve a NAMED wall-capability factory for a chain, or undefined. */
   getCapabilityFactory?(chainId: number, capability: string): string | undefined;
@@ -469,16 +469,17 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       .catch(() => res.status(401).json({ error: { message: 'unauthorized' } }));
   });
 
-  /** Load the agent and enforce owner match; responds 403/404 itself. */
+  /**
+   * Load the agent and enforce owner match; responds 404 itself.
+   * Foreign-owned answers 404, NOT 403: a 403 is an enumeration oracle — it
+   * confirms to a stranger that the agent ID exists. Real-but-not-yours must
+   * be indistinguishable from never-existed (matches the alerts surface).
+   */
   async function requireOwnedAgent(req: OwnerRequest, res: Response): Promise<AgentRow | null> {
     const id = req.params['id'] ?? '';
     const agent = await getAgentById(deps.pool, id);
-    if (!agent) {
+    if (!agent || agent.ownerAddr !== req.ownerAddr) {
       res.status(404).json({ error: { message: 'not found' } });
-      return null;
-    }
-    if (agent.ownerAddr !== req.ownerAddr) {
-      res.status(403).json({ error: { message: 'forbidden' } });
       return null;
     }
     return agent;
@@ -1004,7 +1005,8 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     }
     const agent = await getAgentById(deps.pool, approval.agentId);
     if (!agent || agent.ownerAddr !== req.ownerAddr) {
-      res.status(403).json({ error: { message: 'forbidden' } });
+      // 404, not 403 — same enumeration-oracle rule as requireOwnedAgent.
+      res.status(404).json({ error: { message: 'not found' } });
       return;
     }
     const ref = approval.requestRef;
@@ -1205,25 +1207,18 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       res.status(400).json({ error: { message: 'agentId or linkId required' } });
       return;
     }
+    // 404 for foreign-owned, same enumeration-oracle rule as requireOwnedAgent.
     if (agentId !== undefined) {
       const agent = await getAgentById(deps.pool, agentId);
-      if (!agent) {
+      if (!agent || agent.ownerAddr !== req.ownerAddr) {
         res.status(404).json({ error: { message: 'not found' } });
-        return;
-      }
-      if (agent.ownerAddr !== req.ownerAddr) {
-        res.status(403).json({ error: { message: 'forbidden' } });
         return;
       }
     }
     if (linkId !== undefined) {
       const link = await getLink(deps.pool, linkId);
-      if (!link) {
+      if (!link || link.ownerAddr !== req.ownerAddr) {
         res.status(404).json({ error: { message: 'not found' } });
-        return;
-      }
-      if (link.ownerAddr !== req.ownerAddr) {
-        res.status(403).json({ error: { message: 'forbidden' } });
         return;
       }
     }
@@ -2038,7 +2033,16 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       res.status(503).json({ error: { message: 'multichain_unavailable' } });
       return;
     }
-    res.json({ chains: deps.chainRegistry.listChains().map((c) => ({ chainId: c.chainId, name: c.name })) });
+    res.json({
+      chains: deps.chainRegistry.listChains().map((c) => ({
+        chainId: c.chainId,
+        name: c.name,
+        // RH2 (two-factory): the named wall-capability keys this chain can mint
+        // through (e.g. `oracleBand`). The FE surfaces an opt-in only when present;
+        // an empty list means the default V4 factory is the only path.
+        capabilities: Object.keys(c.capabilityFactories ?? {}),
+      })),
+    });
   }));
 
   // GET /api/agents/:id/networks — the agent's per-chain presence: home chain +
