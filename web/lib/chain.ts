@@ -10,10 +10,12 @@ import {
   defineChain,
   http,
   type Address,
+  type Chain,
   type EIP1193Provider,
   type Hex,
 } from 'viem';
 import { config } from './config';
+import { chainDisplayName, nativeSymbol, rpcUrlFor } from './networks';
 import leashAccountAbi from './abi/LeashAccount.json';
 import { LEASH_ACCOUNT_V4_ABI } from './abi/leashAccountV4';
 
@@ -30,6 +32,71 @@ export const zeroGGalileo = defineChain({
 
 export const publicClient = createPublicClient({ chain: zeroGGalileo, transport: http() });
 
+// ─── F-11: per-chain clients ─────────────────────────────────────────────────
+// Every owner write/read below accepts an optional trailing `chainId` and binds its
+// clients to THAT chain (the agent's home chain), never silently to the platform
+// default. Omitted chainId keeps the historical single-chain behavior byte-identical.
+
+const chainCache = new Map<number, Chain>();
+
+/** The viem chain object for a registered chainId (default chain when omitted). */
+export function chainFor(chainId: number = config.chainId): Chain {
+  if (chainId === config.chainId) return zeroGGalileo;
+  let c = chainCache.get(chainId);
+  if (c === undefined) {
+    const symbol = nativeSymbol(chainId);
+    c = defineChain({
+      id: chainId,
+      name: chainDisplayName(chainId),
+      nativeCurrency: { name: symbol, symbol, decimals: 18 },
+      rpcUrls: { default: { http: [rpcUrlFor(chainId)] } },
+      testnet: true,
+    });
+    chainCache.set(chainId, c);
+  }
+  return c;
+}
+
+const publicClientCache = new Map<number, ReturnType<typeof createPublicClient>>();
+
+export function publicClientFor(chainId: number = config.chainId) {
+  if (chainId === config.chainId) return publicClient;
+  let c = publicClientCache.get(chainId);
+  if (c === undefined) {
+    c = createPublicClient({ chain: chainFor(chainId), transport: http() });
+    publicClientCache.set(chainId, c);
+  }
+  return c;
+}
+
+/** Ask the wallet to sit on `chainId` before an owner write: switch, adding the chain
+ *  first when the wallet does not know it (EIP-3085/3326). No-op when already there. */
+async function ensureWalletChain(provider: EIP1193Provider, chainId: number): Promise<void> {
+  const hexId = `0x${chainId.toString(16)}`;
+  const current = (await provider.request({ method: 'eth_chainId' })) as string;
+  // Some embedded wallets return a DECIMAL chain-id string despite EIP-1193 — parse both.
+  const currentId = current.startsWith('0x') ? parseInt(current, 16) : parseInt(current, 10);
+  if (currentId === chainId) return;
+  try {
+    await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: hexId }] });
+  } catch (err) {
+    if ((err as { code?: number }).code !== 4902) throw err;
+    const c = chainFor(chainId);
+    await provider.request({
+      method: 'wallet_addEthereumChain',
+      params: [
+        {
+          chainId: hexId,
+          chainName: c.name,
+          rpcUrls: c.rpcUrls.default.http,
+          nativeCurrency: c.nativeCurrency,
+        },
+      ],
+    });
+    await provider.request({ method: 'wallet_switchEthereumChain', params: [{ chainId: hexId }] });
+  }
+}
+
 export const LEASH_ACCOUNT_ABI = leashAccountAbi;
 
 export type OnchainPolicy = {
@@ -39,8 +106,8 @@ export type OnchainPolicy = {
   expiresAt: bigint;
 };
 
-function walletClientFor(provider: EIP1193Provider, account: Address) {
-  return createWalletClient({ chain: zeroGGalileo, transport: custom(provider), account });
+function walletClientFor(provider: EIP1193Provider, account: Address, chainId?: number) {
+  return createWalletClient({ chain: chainFor(chainId), transport: custom(provider), account });
 }
 
 async function writeAccount(
@@ -49,9 +116,11 @@ async function writeAccount(
   accountAddr: Address,
   functionName: string,
   args: readonly unknown[] = [],
+  chainId?: number,
 ): Promise<Hex> {
-  const wallet = walletClientFor(provider, owner);
-  const { request } = await publicClient.simulateContract({
+  await ensureWalletChain(provider, chainId ?? config.chainId);
+  const wallet = walletClientFor(provider, owner, chainId);
+  const { request } = await publicClientFor(chainId).simulateContract({
     address: accountAddr,
     abi: LEASH_ACCOUNT_ABI,
     functionName,
@@ -62,12 +131,12 @@ async function writeAccount(
 }
 
 /** Owner-wallet direct revoke — the LEASH-independent escape hatch. */
-export function revokeOnchain(provider: EIP1193Provider, owner: Address, account: Address) {
-  return writeAccount(provider, owner, account, 'revoke');
+export function revokeOnchain(provider: EIP1193Provider, owner: Address, account: Address, chainId?: number) {
+  return writeAccount(provider, owner, account, 'revoke', [], chainId);
 }
 
-export function rearmOnchain(provider: EIP1193Provider, owner: Address, account: Address) {
-  return writeAccount(provider, owner, account, 'rearm');
+export function rearmOnchain(provider: EIP1193Provider, owner: Address, account: Address, chainId?: number) {
+  return writeAccount(provider, owner, account, 'rearm', [], chainId);
 }
 
 /** Tightening is instant. */
@@ -76,8 +145,9 @@ export function tightenPolicyOnchain(
   owner: Address,
   account: Address,
   policy: OnchainPolicy,
+  chainId?: number,
 ) {
-  return writeAccount(provider, owner, account, 'tightenPolicy', [policy]);
+  return writeAccount(provider, owner, account, 'tightenPolicy', [policy], chainId);
 }
 
 /** Loosening goes through the timelock queue; returns the propose tx. */
@@ -86,63 +156,64 @@ export function proposePolicyOnchain(
   owner: Address,
   account: Address,
   policy: OnchainPolicy,
+  chainId?: number,
 ) {
-  return writeAccount(provider, owner, account, 'proposePolicy', [policy]);
+  return writeAccount(provider, owner, account, 'proposePolicy', [policy], chainId);
 }
 
 /** Apply a queued (timelocked) change once its eta has passed. */
-export function applyPolicyOnchain(provider: EIP1193Provider, owner: Address, account: Address) {
-  return writeAccount(provider, owner, account, 'applyPolicy');
+export function applyPolicyOnchain(provider: EIP1193Provider, owner: Address, account: Address, chainId?: number) {
+  return writeAccount(provider, owner, account, 'applyPolicy', [], chainId);
 }
 
-export function applyAllowlistOnchain(provider: EIP1193Provider, owner: Address, account: Address) {
-  return writeAccount(provider, owner, account, 'applyAllowlist');
+export function applyAllowlistOnchain(provider: EIP1193Provider, owner: Address, account: Address, chainId?: number) {
+  return writeAccount(provider, owner, account, 'applyAllowlist', [], chainId);
 }
 
-export function applyWithdrawOnchain(provider: EIP1193Provider, owner: Address, account: Address) {
-  return writeAccount(provider, owner, account, 'applyWithdraw');
+export function applyWithdrawOnchain(provider: EIP1193Provider, owner: Address, account: Address, chainId?: number) {
+  return writeAccount(provider, owner, account, 'applyWithdraw', [], chainId);
 }
 
-async function readEta(account: Address, functionName: string): Promise<bigint> {
-  return (await publicClient.readContract({
+async function readEta(account: Address, functionName: string, chainId?: number): Promise<bigint> {
+  return (await publicClientFor(chainId).readContract({
     address: account,
     abi: LEASH_ACCOUNT_ABI,
     functionName,
   })) as bigint;
 }
 
-export function readPendingPolicyEta(account: Address): Promise<bigint> {
-  return readEta(account, 'pendingPolicyEta');
+export function readPendingPolicyEta(account: Address, chainId?: number): Promise<bigint> {
+  return readEta(account, 'pendingPolicyEta', chainId);
 }
 
-export function readPendingAllowlistEta(account: Address): Promise<bigint> {
-  return readEta(account, 'pendingAllowlistEta');
+export function readPendingAllowlistEta(account: Address, chainId?: number): Promise<bigint> {
+  return readEta(account, 'pendingAllowlistEta', chainId);
 }
 
-export function readPendingWithdrawEta(account: Address): Promise<bigint> {
-  return readEta(account, 'pendingWithdrawEta');
+export function readPendingWithdrawEta(account: Address, chainId?: number): Promise<bigint> {
+  return readEta(account, 'pendingWithdrawEta', chainId);
 }
 
 /** Unix-seconds etas for the three timelock queues; 0 = nothing pending. */
 export type PendingEtas = { policy: number; allowlist: number; withdraw: number };
 
-export async function readPendingEtas(account: Address): Promise<PendingEtas> {
+export async function readPendingEtas(account: Address, chainId?: number): Promise<PendingEtas> {
   const [policy, allowlist, withdraw] = await Promise.all([
-    readPendingPolicyEta(account),
-    readPendingAllowlistEta(account),
-    readPendingWithdrawEta(account),
+    readPendingPolicyEta(account, chainId),
+    readPendingAllowlistEta(account, chainId),
+    readPendingWithdrawEta(account, chainId),
   ]);
   return { policy: Number(policy), allowlist: Number(allowlist), withdraw: Number(withdraw) };
 }
 
 /** Wait until a tx is mined (security-critical UI must not display unmined state). */
-export async function waitForTx(hash: Hex): Promise<void> {
-  await publicClient.waitForTransactionReceipt({ hash });
+export async function waitForTx(hash: Hex, chainId?: number): Promise<void> {
+  await publicClientFor(chainId).waitForTransactionReceipt({ hash });
 }
 
 /** Current guardian address on the account; the zero address means "no guardian". */
-export async function readGuardian(account: Address): Promise<Address> {
-  return (await publicClient.readContract({
+export async function readGuardian(account: Address, chainId?: number): Promise<Address> {
+  return (await publicClientFor(chainId).readContract({
     address: account,
     abi: LEASH_ACCOUNT_ABI,
     functionName: 'guardian',
@@ -158,8 +229,9 @@ export function setGuardianOnchain(
   owner: Address,
   account: Address,
   newGuardian: Address,
+  chainId?: number,
 ) {
-  return writeAccount(provider, owner, account, 'setGuardian', [newGuardian]);
+  return writeAccount(provider, owner, account, 'setGuardian', [newGuardian], chainId);
 }
 
 /** Plain native transfer from the owner wallet — used to fund the agent's account. */
@@ -168,13 +240,15 @@ export async function sendNativeOnchain(
   owner: Address,
   to: Address,
   valueWei: bigint,
+  chainId?: number,
 ): Promise<Hex> {
-  const wallet = walletClientFor(provider, owner);
+  await ensureWalletChain(provider, chainId ?? config.chainId);
+  const wallet = walletClientFor(provider, owner, chainId);
   return wallet.sendTransaction({ to, value: valueWei });
 }
 
-export function readAccountBalance(account: Address): Promise<bigint> {
-  return publicClient.getBalance({ address: account });
+export function readAccountBalance(account: Address, chainId?: number): Promise<bigint> {
+  return publicClientFor(chainId).getBalance({ address: account });
 }
 
 export function txUrl(hash: Hex): string {
@@ -210,9 +284,11 @@ async function writeAccountV4(
   accountAddr: Address,
   functionName: string,
   args: readonly unknown[] = [],
+  chainId?: number,
 ): Promise<Hex> {
-  const wallet = walletClientFor(provider, owner);
-  const { request } = await publicClient.simulateContract({
+  await ensureWalletChain(provider, chainId ?? config.chainId);
+  const wallet = walletClientFor(provider, owner, chainId);
+  const { request } = await publicClientFor(chainId).simulateContract({
     address: accountAddr,
     abi: V4_ABI_LOOSE,
     functionName,
@@ -240,6 +316,7 @@ export function proposeCallRuleOnchain(
   owner: Address,
   account: Address,
   rule: CallRuleInput,
+  chainId?: number,
 ) {
   return writeAccountV4(provider, owner, account, 'proposeCallRule', [
     rule.target,
@@ -249,12 +326,12 @@ export function proposeCallRuleOnchain(
     BigInt(rule.perCallCap),
     BigInt(rule.windowCapCall),
     rule.codehash ?? ZERO_CODEHASH,
-  ]);
+  ], chainId);
 }
 
 /** Apply the single pending call-rule once its eta has passed. */
-export function applyCallRuleOnchain(provider: EIP1193Provider, owner: Address, account: Address) {
-  return writeAccountV4(provider, owner, account, 'applyCallRule');
+export function applyCallRuleOnchain(provider: EIP1193Provider, owner: Address, account: Address, chainId?: number) {
+  return writeAccountV4(provider, owner, account, 'applyCallRule', [], chainId);
 }
 
 /** Tighten a (target,selector) rule's caps. INSTANT. */
@@ -263,13 +340,14 @@ export function tightenCallRuleOnchain(
   owner: Address,
   account: Address,
   args: { target: Address; selector: Hex; perCallCap: string; windowCapCall: string },
+  chainId?: number,
 ) {
   return writeAccountV4(provider, owner, account, 'tightenCallRule', [
     args.target,
     args.selector,
     BigInt(args.perCallCap),
     BigInt(args.windowCapCall),
-  ]);
+  ], chainId);
 }
 
 /** Remove one selector under a target. INSTANT. */
@@ -279,8 +357,9 @@ export function removeCallSelectorOnchain(
   account: Address,
   target: Address,
   selector: Hex,
+  chainId?: number,
 ) {
-  return writeAccountV4(provider, owner, account, 'removeCallSelector', [target, selector]);
+  return writeAccountV4(provider, owner, account, 'removeCallSelector', [target, selector], chainId);
 }
 
 /** Remove an entire target (all its selectors). INSTANT. */
@@ -289,8 +368,9 @@ export function removeCallTargetOnchain(
   owner: Address,
   account: Address,
   target: Address,
+  chainId?: number,
 ) {
-  return writeAccountV4(provider, owner, account, 'removeCallTarget', [target]);
+  return writeAccountV4(provider, owner, account, 'removeCallTarget', [target], chainId);
 }
 
 /** One-shot JIT approve-once for a specific decoded call hash. INSTANT. */
@@ -300,8 +380,9 @@ export function authorizeOnceOnchain(
   account: Address,
   callHash: Hex,
   expiryUnixSec: number,
+  chainId?: number,
 ) {
-  return writeAccountV4(provider, owner, account, 'authorizeOnce', [callHash, BigInt(expiryUnixSec)]);
+  return writeAccountV4(provider, owner, account, 'authorizeOnce', [callHash, BigInt(expiryUnixSec)], chainId);
 }
 
 /** Propose a per-token cumulative outflow budget. TIMELOCKED — apply after its eta. */
@@ -311,13 +392,14 @@ export function proposeSpendBudgetOnchain(
   account: Address,
   token: Address,
   windowCap: string,
+  chainId?: number,
 ) {
-  return writeAccountV4(provider, owner, account, 'proposeSpendBudget', [token, BigInt(windowCap)]);
+  return writeAccountV4(provider, owner, account, 'proposeSpendBudget', [token, BigInt(windowCap)], chainId);
 }
 
 /** Apply the pending spend budget once its eta has passed. */
-export function applySpendBudgetOnchain(provider: EIP1193Provider, owner: Address, account: Address) {
-  return writeAccountV4(provider, owner, account, 'applySpendBudget');
+export function applySpendBudgetOnchain(provider: EIP1193Provider, owner: Address, account: Address, chainId?: number) {
+  return writeAccountV4(provider, owner, account, 'applySpendBudget', [], chainId);
 }
 
 /**
@@ -328,8 +410,9 @@ export function applySpendBudgetOnchain(provider: EIP1193Provider, owner: Addres
  */
 export async function readPendingCallRule(
   account: Address,
+  chainId?: number,
 ): Promise<{ target: string; selector: string; eta: number }> {
-  const r = (await publicClient.readContract({
+  const r = (await publicClientFor(chainId).readContract({
     address: account,
     abi: LEASH_ACCOUNT_V4_ABI,
     functionName: 'pendingCallRule',
@@ -342,8 +425,8 @@ export async function readPendingCallRule(
 }
 
 /** Read the pending call-rule eta (unix s); 0 = nothing pending. */
-export async function readPendingCallRuleEta(account: Address): Promise<number> {
-  const r = (await publicClient.readContract({
+export async function readPendingCallRuleEta(account: Address, chainId?: number): Promise<number> {
+  const r = (await publicClientFor(chainId).readContract({
     address: account,
     abi: LEASH_ACCOUNT_V4_ABI,
     functionName: 'pendingCallRule',
@@ -352,9 +435,9 @@ export async function readPendingCallRuleEta(account: Address): Promise<number> 
 }
 
 /** Read the pending spend-budget eta (unix s); 0 = nothing pending. */
-export async function readPendingBudgetEta(account: Address): Promise<number> {
+export async function readPendingBudgetEta(account: Address, chainId?: number): Promise<number> {
   return Number(
-    (await publicClient.readContract({
+    (await publicClientFor(chainId).readContract({
       address: account,
       abi: LEASH_ACCOUNT_V4_ABI,
       functionName: 'pendingBudgetEta',

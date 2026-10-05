@@ -48,6 +48,8 @@ type Screen = 'funnel' | 'readback' | 'wizard';
 export default function CreatePage() {
   const wallet = useOwnerWallet();
   const { setAgentId } = useAgentId();
+  // F-11: the chain the agent was minted on (undefined = platform default).
+  const [createdChainId, setCreatedChainId] = useState<number | undefined>(undefined);
   const api = useMemo(() => makeApi(wallet.getToken), [wallet.getToken]);
 
   const [screen, setScreen] = useState<Screen>('funnel');
@@ -111,6 +113,9 @@ export default function CreatePage() {
         blob = await encryptWithSignature(hexToBytes(keypair.privKeyHex), sig);
       }
 
+      // F-11 (review fix): clear any PRIOR create's chain before this one — a default-chain
+      // create passes undefined and must not inherit a previous non-default choice.
+      setCreatedChainId(undefined);
       // 3. Create via backend — server stores the encrypted blob blind.
       const response = await api.createAgent({
         name: input.name,
@@ -127,6 +132,8 @@ export default function CreatePage() {
         ...(input.capability ? { capability: input.capability } : {}),
       });
       setAgentId(response.agentId);
+      // F-11: remember the minted chain so the fund step sends on the AGENT'S chain.
+      setCreatedChainId(input.chainId);
 
       return {
         response,
@@ -146,11 +153,11 @@ export default function CreatePage() {
       send: async (to: Address, valueWei: bigint) => {
         if (!wallet.address) throw new Error('Connect your wallet first.');
         const provider = await wallet.getProvider();
-        return sendNativeOnchain(provider, wallet.address, to, valueWei);
+        return sendNativeOnchain(provider, wallet.address, to, valueWei, createdChainId);
       },
-      ...(config.e2eMode ? {} : { getBalance: (account: Address) => readAccountBalance(account) }),
+      ...(config.e2eMode ? {} : { getBalance: (account: Address) => readAccountBalance(account, createdChainId) }),
     }),
-    [wallet],
+    [wallet, createdChainId],
   );
 
   // — Funnel transitions —

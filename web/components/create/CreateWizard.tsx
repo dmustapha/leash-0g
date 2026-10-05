@@ -1355,6 +1355,7 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
                 it can actually pay when the time comes.
               </p>
               <FundPanel
+                chainId={chainId}
                 accountAddr={result.response.accountAddr}
                 defaultAmountOg={weiToOg(2n * BigInt(input?.policy.windowCapWei ?? ogToWei(windowAmount)))}
                 onSend={fund ? (valueWei) => fund.send(result.response.accountAddr, valueWei) : undefined}
