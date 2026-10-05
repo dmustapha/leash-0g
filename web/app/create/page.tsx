@@ -32,7 +32,7 @@ import {
 import { FunnelEntry } from '@/components/create/FunnelEntry';
 import { ReadBack } from '@/components/create/ReadBack';
 import { draftToPrefill } from '@/components/create/draft-to-prefill';
-import type { ElevationDraft, JobSpecSummary } from '@/lib/types';
+import type { ElevationDraft, JobSpecSummary, NetworkChain } from '@/lib/types';
 
 function download(filename: string, contents: string) {
   const url = URL.createObjectURL(new Blob([contents], { type: 'application/json' }));
@@ -61,12 +61,16 @@ export default function CreatePage() {
   });
   // Phase-5 (D-A2): the owner's saved job specs, for the requester job-handle picker.
   const [jobSpecs, setJobSpecs] = useState<JobSpecSummary[]>([]);
+  // SE-7: the registered chain table, for the wizard's network picker. Empty when
+  // multichain is unavailable (503) — the picker stays hidden, home-chain default.
+  const [networks, setNetworks] = useState<NetworkChain[]>([]);
   useEffect(() => {
     void (async () => {
       try {
-        const [{ agents }, specs] = await Promise.all([
+        const [{ agents }, specs, nets] = await Promise.all([
           api.listAgents(),
           api.listJobSpecs().catch(() => ({ specs: [] as JobSpecSummary[] })),
+          api.listNetworks().catch(() => ({ chains: [] as NetworkChain[] })),
         ]);
         const active = agents.filter((a) => a.status === 'active');
         setJobAgents({
@@ -74,6 +78,7 @@ export default function CreatePage() {
           evaluators: active.filter((a) => a.role === 'evaluator').map((a) => ({ id: a.agentId, name: a.name })),
         });
         setJobSpecs(specs.specs);
+        setNetworks(nets.chains);
       } catch {
         /* the pickers just show empty — non-fatal */
       }
@@ -117,6 +122,9 @@ export default function CreatePage() {
         ...(input.tokenConfig ? { tokenConfig: input.tokenConfig } : {}),
         // Phase-5 (D-B9): thread the freeform capability label (inert display field).
         ...(input.capabilityLabel ? { capabilityLabel: input.capabilityLabel } : {}),
+        // SE-7 / RH2: the chosen chain + optional band-wall capability (default-deny beyond).
+        ...(input.chainId !== undefined ? { chainId: input.chainId } : {}),
+        ...(input.capability ? { capability: input.capability } : {}),
       });
       setAgentId(response.agentId);
 
@@ -180,6 +188,7 @@ export default function CreatePage() {
           fund={fund}
           jobAgents={jobAgents}
           jobSpecs={jobSpecs}
+          networks={networks}
           {...(prefill ? { prefill } : {})}
           onStartAgent={onManual}
           startCreatedAgent={(agentId) => api.start(agentId)}

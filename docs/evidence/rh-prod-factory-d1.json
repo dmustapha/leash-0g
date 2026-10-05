@@ -6,7 +6,7 @@
   "expectedCodehash": "0x4771f0574001ae3435299d296f76e60546fe5de413940aab18e8a6faf904f325",
   "actualCodehash": "0x4771f0574001ae3435299d296f76e60546fe5de413940aab18e8a6faf904f325",
   "codehashMatch": true,
-  "deployTx": "0x169696d23194c75c03edd944c27e55f3e92ed679a3cadb138f05ad6c372a18dd",
+  "deployTx": "already-deployed",
   "ops": "0xc211C942946011859ca634F22400d80570ED12A5",
   "score": "3/3",
   "checks": [
@@ -26,5 +26,5 @@
       "detail": "0x4771f0574001ae3435299d296f76e60546fe5de413940aab18e8a6faf904f325 MATCH ✓"
     }
   ],
-  "at": "2026-10-04T09:24:54.163Z"
+  "at": "2026-10-04T10:50:35.671Z"
 }

@@ -71,6 +71,10 @@ export type CreateAgentRequest = {
   tokenConfig?: TokenConfigInput;
   /** Phase-5 (D-B9): optional freeform capability label (elevation-suggested, owner-edited). Inert. */
   capabilityLabel?: string;
+  /** SE-7: which registered chain to mint on. Default = home 0G chain when omitted. */
+  chainId?: number;
+  /** RH2 (two-factory): mint through a named wall-capability factory (e.g. `oracleBand`). */
+  capability?: string;
 };
 
 export type CreateAgentResponse = {
@@ -611,7 +615,12 @@ export type JobStatus =
 // agent-chaining delegation graph — a different concept entirely.
 
 /** A registered blockchain network (GET /api/networks). */
-export type NetworkChain = { chainId: number; name: string };
+export type NetworkChain = {
+  chainId: number;
+  name: string;
+  /** RH2: named wall-capability keys this chain can mint through (e.g. `oracleBand`). */
+  capabilities: string[];
+};
 
 /** One per-chain presence row for an agent — SAME accountAddr on every chain. */
 export type AgentNetworkRow = {

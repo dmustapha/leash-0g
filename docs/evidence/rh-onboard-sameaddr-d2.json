@@ -14,9 +14,9 @@
       "detail": "RH=0x40a79a46e8f43852b91ecb9ba7c5fb28eefe37b7 Base=0x40a79a46e8f43852b91ecb9ba7c5fb28eefe37b7"
     },
     {
-      "check": "D2b replay-onboard mints AT prediction on RH",
+      "check": "D2b account already present on RH at prediction (idempotent)",
       "ok": true,
-      "detail": "minted=0x40a79a46e8f43852b91ecb9ba7c5fb28eefe37b7 prediction=0x40a79a46e8f43852b91ecb9ba7c5fb28eefe37b7 createTx=0x090437f5d35daa438560830a0f06f36d4461940ce4e24cd782bb8b72bd1b4246 codehash=0x73528755822a7c79adcdc95845345352e42a6164b4467a0b74eaa59247d97a1a"
+      "detail": "codehash 0x73528755822a7c79adcdc95845345352e42a6164b4467a0b74eaa59247d97a1a at 0x40a79a46e8f43852b91ecb9ba7c5fb28eefe37b7"
     },
     {
       "check": "D2c mutated tuple (expiry+1) predicts a DIFFERENT address → refusal-first gate fires",
@@ -24,5 +24,5 @@
       "detail": "mutated=0xcda2ad6cae4a8aca022183cb566e86e0f66cfbca != 0x40a79a46e8f43852b91ecb9ba7c5fb28eefe37b7"
     }
   ],
-  "at": "2026-10-04T09:32:27.968Z"
+  "at": "2026-10-04T10:50:42.293Z"
 }
