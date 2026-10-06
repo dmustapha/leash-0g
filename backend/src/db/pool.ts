@@ -9,7 +9,7 @@ import pg from 'pg';
  * event-based SET is still race-free because pg serializes queries per
  * connection — the SET is queued on the client before any checkout query.
  */
-export function createPool(databaseUrl: string, schema?: string): pg.Pool {
+export function createPool(databaseUrl: string, schema?: string, max = 10): pg.Pool {
   if (schema && !/^[a-z_][a-z0-9_]*$/.test(schema)) throw new Error('invalid schema name');
   // Session-level SET search_path is unreliable through Neon's pgbouncer
   // (transaction pooling can hand each tx a different backend session), so a
@@ -17,7 +17,7 @@ export function createPool(databaseUrl: string, schema?: string): pg.Pool {
   const connectionString = schema ? databaseUrl.replace('-pooler.', '.') : databaseUrl;
   const pool = new pg.Pool({
     connectionString,
-    max: 10,
+    max,
     idleTimeoutMillis: 30_000,
     connectionTimeoutMillis: 15_000,
   });
@@ -30,4 +30,18 @@ export function createPool(databaseUrl: string, schema?: string): pg.Pool {
     });
   }
   return pool;
+}
+
+/**
+ * F-16: a SMALL pool pinned to the DIRECT (unpooled) Neon endpoint, for the
+ * runtime lease's session-scoped advisory lock. A session advisory lock — like
+ * `SET search_path` above — is unreliable through Neon's pgbouncer: in
+ * transaction pooling the lock lands on a pooler server-connection that detaches
+ * from the backend, so the lock shows "held" (as a `::1` server conn) while no
+ * backend actually loops, and killing the holder just lets another pooled conn
+ * take it. Forcing the direct endpoint makes the lock a true session lock tied
+ * to THIS process's connection (dies with it — the fail-safe the lease needs).
+ */
+export function createDirectPool(databaseUrl: string, max = 2): pg.Pool {
+  return createPool(databaseUrl.replace('-pooler.', '.'), undefined, max);
 }
