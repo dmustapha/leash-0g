@@ -4,7 +4,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import { loadConfig, buildChainConfigs } from './config.js';
 import { ChainRegistry } from './chain/registry.js';
-import { createPool } from './db/pool.js';
+import { createPool, createDirectPool } from './db/pool.js';
 import { migrate } from './db/migrate.js';
 import { createOwnerApp, createGatewayApp } from './server.js';
 import { ComputeQueue } from './gateway/compute-queue.js';
@@ -150,7 +150,12 @@ async function main(): Promise<void> {
   // stray local boot, incident 2026-10-04) must never both loop agents. Only
   // the holder starts loops/watchers; losing the lease connection exits the
   // process (fail-safe: the lock died with it, another instance may now hold).
-  const lease = new RuntimeLease(pool, (err) => {
+  // F-16: the lease MUST hold its advisory lock on a DIRECT (unpooled) Neon
+  // connection. Through the pgbouncer pooler the session lock detaches from the
+  // backend and shows "held" by a phantom ::1 conn while no process actually
+  // loops — the lease could never reliably acquire. A tiny direct pool fixes it.
+  const leasePool = createDirectPool(cfg.DATABASE_URL);
+  const lease = new RuntimeLease(leasePool, (err) => {
     console.error('runtime lease connection lost — exiting so the supervisor restarts into the retry path', err);
     process.exit(1);
   });
@@ -397,7 +402,7 @@ async function main(): Promise<void> {
     broker.cancelAll();
     gatewayServer.close();
     server.close(() => {
-      void pool.end().finally(() => process.exit(0));
+      void Promise.allSettled([pool.end(), leasePool.end()]).finally(() => process.exit(0));
     });
     setTimeout(() => process.exit(1), 10_000).unref();
   };
