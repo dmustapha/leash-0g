@@ -128,6 +128,12 @@ export function originOf(url: string): string | null {
  * allowlist origin unless explicitly opted in) AND on model-supplied `url`-role
  * args (which can never silently fetch an internal host). Fail-closed: an
  * unparseable/empty host is treated as internal.
+ *
+ * INVARIANT (SD-F7 re-audit LOW): callers MUST pass a URL-NORMALIZED hostname
+ * (i.e. `new URL(x).hostname`), never a raw user string. WHATWG URL
+ * canonicalizes octal/decimal/0x/mixed-case IP encodings to dotted-quad before
+ * this predicate sees them; all current callers (isInternalUrl, egress config
+ * parse) do. A future caller passing a raw host would reopen those encodings.
  */
 export function isInternalHost(host: string): boolean {
   if (!host) return true;
