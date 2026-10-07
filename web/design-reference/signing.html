@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>LEASH · Governed Signing</title>
+<script>try{if(localStorage.getItem('leash-theme')==='light')document.documentElement.setAttribute('data-theme','light')}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://api.fontshare.com/v2/css?f[]=clash-display@500,600,700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./tokens.css">
+<style>
+/* ===== SIGNING SURFACE (PROFILE = PRODUCT-APP) — restrained motion, the decode is the show.
+   F′ FP-2 / SD-F8 design-reference. Three owner surfaces for governed EIP-712 signing:
+   (1) the signing-intent-policy editor, (2) decoded JIT cards (UNVERIFIED until on-chain),
+   (3) per-protocol signing presence + the armed-intent read-model (stale after a tighten).
+   All color/type comes from tokens.css; this block is page-specific LAYOUT only. ===== */
+body { max-width: 1120px; margin: 0 auto; padding: var(--s-6) var(--s-5) var(--s-9); }
+
+header.top { position: sticky; top:0; z-index:20; display:flex; align-items:center; gap:var(--s-4);
+  justify-content:space-between; padding: var(--s-4) var(--s-5); margin: calc(-1 * var(--s-6)) calc(-1 * var(--s-5)) var(--s-6);
+  border-bottom:1px solid var(--border); background: var(--glass-bg-strong);
+  backdrop-filter: blur(var(--glass-blur)); -webkit-backdrop-filter: blur(var(--glass-blur)); box-shadow: var(--glass-hi); }
+.top .brand { display:flex; align-items:center; gap:9px; font-family:var(--font-display); font-weight:600; font-size:16px; }
+.top .crumb { display:flex; align-items:baseline; gap:10px; min-width:0; }
+.top h1 { font-family: var(--font-display); font-weight:500; font-size:1.1rem; margin:0; letter-spacing:-0.01em; }
+.top .sub { font-family:var(--font-mono); font-size:11px; color:var(--ink-faint); }
+.top .right { display:flex; align-items:center; gap:var(--s-3); flex:none; }
+.theme-toggle { display:grid; place-items:center; width:32px; height:32px; border-radius:var(--r-full);
+  border:1px solid var(--border-strong); background:var(--surface-1); color:var(--ink-dim); cursor:pointer; }
+
+.tabs { display:flex; gap:var(--s-2); flex-wrap:wrap; margin-bottom: var(--s-6); }
+.tab { font-family:var(--font-mono); font-size:11px; color:var(--ink-dim); padding:7px 14px;
+  border:1px solid var(--border-strong); border-radius:var(--r-full); background:transparent; cursor:pointer;
+  transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast); }
+.tab:hover { color:var(--ink); border-color:var(--ink-24); }
+.tab[aria-selected="true"] { background: var(--accent-12); color: var(--ink); border-color: var(--accent-24); }
+
+.surface[hidden] { display:none; }
+.section-title { font-family:var(--font-mono); font-size:11px; text-transform:uppercase;
+  letter-spacing:.16em; color:var(--ink-faint); margin: 0 0 var(--s-4); display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.lede { font-size:var(--t-small); color:var(--ink-dim); max-width: 66ch; margin: 0 0 var(--s-5); line-height:1.6; }
+.lede b { color: var(--ink); font-weight:600; }
+
+.panel { background: var(--surface-1); border:1px solid var(--border); border-radius:var(--r-md); padding: var(--s-5); margin-bottom: var(--s-4); }
+.panel > .p-title { font-family:var(--font-mono); font-size:10px; text-transform:uppercase; letter-spacing:.14em;
+  color:var(--ink-faint); margin:0 0 var(--s-4); display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+.panel-hi { border-color: var(--accent-24); box-shadow: inset 3px 0 0 var(--accent); }
+.mono { font-family:var(--font-mono); }
+.row-btns { display:flex; gap:var(--s-3); flex-wrap:wrap; }
+.btn { font-family:var(--font-mono); font-size:12px; padding:8px 14px; border-radius:var(--r-sm);
+  border:1px solid var(--border-strong); background:var(--surface-2); color:var(--ink); cursor:pointer; }
+.btn.primary { background: var(--accent-12); border-color: var(--accent-24); }
+.btn.danger { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
+.btn.sm { padding:6px 12px; font-size:11px; }
+
+/* descriptor / policy rows */
+.grid { display:grid; grid-template-columns: 1fr; gap: var(--s-3); }
+.field { display:flex; flex-direction:column; gap:6px; }
+.field label { font-family:var(--font-mono); font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--ink-faint); }
+.field input, .field select { font-family:var(--font-mono); font-size:12px; padding:8px 10px; border-radius:var(--r-sm);
+  border:1px solid var(--border-strong); background:var(--surface-2); color:var(--ink); }
+.two { display:grid; grid-template-columns: 1fr 1fr; gap: var(--s-3); }
+
+/* JIT card — the decode is the hero. NEVER a raw blob (00 §9). */
+.card { border:1px solid var(--accent-24); border-radius:var(--r-md); padding: var(--s-5); margin-bottom: var(--s-4);
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface-1)); }
+.card .unverified { display:inline-flex; align-items:center; gap:6px; font-family:var(--font-mono); font-size:10px;
+  letter-spacing:.12em; text-transform:uppercase; color: var(--warn, #c98a00); border:1px solid color-mix(in srgb, var(--warn,#c98a00) 40%, transparent);
+  padding:3px 8px; border-radius:var(--r-full); margin-bottom: var(--s-3); }
+.card .decode { font-size:15px; line-height:1.5; color:var(--ink); margin: 0 0 var(--s-3); }
+.card .decode b { color: var(--accent); }
+.kv { display:grid; grid-template-columns: max-content 1fr; gap: 4px var(--s-4); font-family:var(--font-mono); font-size:11px; color:var(--ink-dim); margin-bottom: var(--s-4); }
+.kv .k { color: var(--ink-faint); text-transform:uppercase; letter-spacing:.1em; }
+
+/* arm read-model */
+.arm { display:flex; align-items:center; justify-content:space-between; gap: var(--s-4); padding: var(--s-3) var(--s-4);
+  border:1px solid var(--border); border-radius:var(--r-sm); margin-bottom: var(--s-2); font-family:var(--font-mono); font-size:12px; }
+.pill { font-size:10px; letter-spacing:.1em; text-transform:uppercase; padding:3px 8px; border-radius:var(--r-full); border:1px solid var(--border-strong); }
+.pill.armed { color: var(--ok, #2f9e44); border-color: color-mix(in srgb, var(--ok,#2f9e44) 40%, transparent); }
+.pill.stale { color: var(--ink-faint); }
+.hint { font-size: var(--t-small); color: var(--ink-faint); line-height:1.6; margin-top: var(--s-3); }
+.hint code { font-family:var(--font-mono); color:var(--ink-dim); }
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="crumb">
+    <span class="brand">⬡ LEASH</span>
+    <h1>Governed Signing</h1>
+    <span class="sub">agent · 0x3153…33b2 · ERC-1271</span>
+  </div>
+  <div class="right"><button class="theme-toggle" aria-label="theme">◐</button></div>
+</header>
+
+<nav class="tabs" role="tablist">
+  <button class="tab" role="tab" aria-selected="true" data-surface="policy">Signing policy</button>
+  <button class="tab" role="tab" aria-selected="false" data-surface="jit">Approvals</button>
+  <button class="tab" role="tab" aria-selected="false" data-surface="presence">Protocols &amp; arms</button>
+</nav>
+
+<!-- ===== SURFACE 1 — SIGNING-INTENT-POLICY EDITOR ===== -->
+<section class="surface" data-surface="policy">
+  <p class="section-title">Signing-intent policy</p>
+  <p class="lede">Grant your agent the right to sign <b>off-chain</b> permit/intent messages for a reviewed protocol — bounded by the
+    <b>same per-token budget</b> as any on-chain move (<span class="mono">signing ≤ calling</span>). Every signable protocol is a
+    <b>reviewed descriptor</b>; a typed-data with no descriptor is refused, never guessed. The grant is signed on-chain with the
+    engine-computed <span class="mono">domainSeparator</span> + <span class="mono">typeHash</span>, so what you approve and what the wall enforces are identical.</p>
+
+  <div class="panel panel-hi">
+    <div class="p-title"><span>Grant a descriptor</span><span class="mono">POST /signing/rule</span></div>
+    <div class="grid">
+      <div class="field">
+        <label>Protocol descriptor</label>
+        <select><option>ERC-2612 token permit — erc2612.permit (#1)</option></select>
+      </div>
+      <div class="two">
+        <div class="field"><label>Per-intent cap (base units)</label><input value="1000000000" class="mono"/></div>
+        <div class="field"><label>Deadline window (sec)</label><input value="1800" class="mono"/></div>
+      </div>
+      <div class="field"><label>Spender set (one per line — the parties you authorize)</label><input value="0x1111111111111111111111111111111111111111" class="mono"/></div>
+      <div class="field"><label>Budget token</label><input value="0x…0a11 (USDC)" class="mono"/></div>
+    </div>
+    <div class="row-btns" style="margin-top:var(--s-4)">
+      <button class="btn primary">Sign grant on-chain</button>
+      <button class="btn danger">Remove descriptor</button>
+    </div>
+    <p class="hint">N-01/N-02 run at review time: the domain must bind <code>chainId</code> + <code>verifyingContract</code>, and every field must be a static 32-byte word. A mis-authored descriptor is a loud error here — never a silent on-chain “never-validates”.</p>
+  </div>
+
+  <div class="panel">
+    <div class="p-title"><span>Standing grants</span></div>
+    <div class="arm"><span>ERC-2612 permit · spender 0x1111…1111</span><span class="mono">cap 1,000 · window 30m</span></div>
+  </div>
+</section>
+
+<!-- ===== SURFACE 2 — DECODED JIT CARDS (UNVERIFIED until on-chain) ===== -->
+<section class="surface" data-surface="jit" hidden>
+  <p class="section-title">Signing approvals <span class="mono">(L2 · sensitive always-asks)</span></p>
+  <p class="lede">A <b>sensitive</b> signing always asks you first (00 §6c) — the agent cannot arm it until you consent. You see a
+    <b>human decode of exactly what would be signed</b>, never a raw hash.</p>
+
+  <div class="card">
+    <span class="unverified">● UNVERIFIED — not yet armed on-chain</span>
+    <p class="decode">Sign a <b>ERC-2612 Permit</b>: authorize <b>100 USDC</b> to the CoW settler <b>0x9008…d9f4</b>, expires in <b>~30 min</b>.</p>
+    <div class="kv">
+      <span class="k">Descriptor</span><span>erc2612.permit (#1)</span>
+      <span class="k">Spender</span><span>0x9008…d9f4 (granted)</span>
+      <span class="k">Amount</span><span>100000000 base units · ≤ cap 1,000,000,000</span>
+      <span class="k">Deadline</span><span>server-pinned · now + 1800s</span>
+      <span class="k">Budget</span><span>debits USDC per-token budget (signing ≤ calling)</span>
+    </div>
+    <div class="row-btns">
+      <button class="btn primary">Approve once</button>
+      <button class="btn">Always allow</button>
+      <button class="btn danger">Deny</button>
+    </div>
+    <p class="hint">Approving records consent on the tamper-evident trace; the agent then arms the digest on-chain. “Always allow” keeps this descriptor always-ask because it is sensitive — it can never be blanket-suppressed.</p>
+  </div>
+</section>
+
+<!-- ===== SURFACE 3 — PER-PROTOCOL PRESENCE + ARMED-INTENT READ-MODEL ===== -->
+<section class="surface" data-surface="presence" hidden>
+  <p class="section-title">Protocols &amp; armed intents</p>
+  <p class="lede">Which protocols this agent can sign for, and the intents it has armed. After you <b>tighten or remove</b> a grant, the
+    on-chain signing epoch advances and every in-flight arm is <b>invalidated</b> — the UI flags it <span class="mono">stale</span> so a dead arm never looks live.</p>
+
+  <div class="panel">
+    <div class="p-title"><span>Signable protocols</span></div>
+    <div class="arm"><span>ERC-2612 Permit <span class="pill armed">granted</span></span><span class="mono">1 spender · cap 1,000</span></div>
+    <div class="arm"><span>CoW order <span class="pill stale">not granted</span></span><span class="mono">descriptor reviewed · no grant</span></div>
+  </div>
+
+  <div class="panel">
+    <div class="p-title"><span>Armed intents</span><span class="mono">GET /signing · arms[]</span></div>
+    <div class="arm"><span>permit → 0x9008…d9f4 · 100 USDC</span><span class="pill armed">armed · epoch 4</span></div>
+    <div class="arm"><span>permit → 0x1111…1111 · 50 USDC</span><span class="pill stale">stale · epoch 3 (tightened)</span></div>
+    <p class="hint">Stale arms are read-model only — the on-chain <code>isValidSignature</code> already returns invalid for them (the epoch check). Reconcile runs whenever a grant is tightened or removed.</p>
+  </div>
+</section>
+
+<script>
+document.querySelectorAll('.tab').forEach(function(tab){
+  tab.addEventListener('click', function(){
+    var sel = tab.getAttribute('data-surface');
+    document.querySelectorAll('.tab').forEach(function(t){ t.setAttribute('aria-selected', String(t === tab)); });
+    document.querySelectorAll('.surface').forEach(function(s){ s.hidden = s.getAttribute('data-surface') !== sel; });
+  });
+});
+document.querySelector('.theme-toggle').addEventListener('click', function(){
+  var cur = document.documentElement.getAttribute('data-theme') === 'light';
+  document.documentElement.setAttribute('data-theme', cur ? 'dark' : 'light');
+  try { localStorage.setItem('leash-theme', cur ? 'dark' : 'light'); } catch(e){}
+});
+</script>
+</body>
+</html>
