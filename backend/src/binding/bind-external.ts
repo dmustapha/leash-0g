@@ -91,25 +91,44 @@ export async function bindExternalAgent(deps: BindExternalDeps, input: BindExter
   // agents.chain_id is NOT NULL: 0 = off-chain bound (no home chain), else the
   // referenced account's chain.
   const chainId = input.chainId ?? 0;
-  const agentId = await insertBoundAgentRow(deps.pool, {
-    ownerAddr: input.ownerAddr,
-    name: input.name,
-    tokenId: token.tokenId,
-    tokenHash: tHash,
-    chainId,
-    // 'observe' ⇒ no standing block/modify rules; traffic is observed + governed
-    // (sensitive tools still ALWAYS require approval regardless of rules, 00 §6c).
-    gatewayRules: [],
-  });
-  await insertBoundAgent(deps.pool, {
-    agentId,
-    leashedAccountAddr: input.leashedAccountAddr ?? null,
-    chainId: input.chainId ?? null,
-    gatewayTokenHash: tHash,
-    mcpScope: toolAllowlist,
-    tenantKey: tnt,
-    interactionMode,
-  });
+
+  // Atomic bind (code-review WARNING): the agents row carries a LIVE gateway
+  // token the caller is about to receive — if the bound_agents insert failed
+  // (tenant_key collision, blip) we'd leave a half-bound agent that authenticates
+  // but has no Tier-2 scope. BEGIN/COMMIT both inserts; the token is returned
+  // only after commit.
+  const client = await deps.pool.connect();
+  let agentId: string;
+  try {
+    await client.query('BEGIN');
+    agentId = await insertBoundAgentRow(client, {
+      ownerAddr: input.ownerAddr,
+      name: input.name,
+      tokenId: token.tokenId,
+      tokenHash: tHash,
+      chainId,
+      // 'observe' ⇒ no standing block/modify rules; traffic is observed + governed
+      // (sensitive tools still ALWAYS require approval regardless of rules, 00 §6c).
+      gatewayRules: [],
+    });
+    await insertBoundAgent(client, {
+      agentId,
+      leashedAccountAddr: input.leashedAccountAddr ?? null,
+      // Keep chain_id consistent with the agents row (derive from one value) so a
+      // referenced account never records a NULL chain on the bound side-table.
+      chainId: input.chainId ?? null,
+      gatewayTokenHash: tHash,
+      mcpScope: toolAllowlist,
+      tenantKey: tnt,
+      interactionMode,
+    });
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 
   const base = deps.publicBaseUrl.replace(/\/$/, '');
   return {

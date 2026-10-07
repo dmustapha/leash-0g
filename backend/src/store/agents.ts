@@ -1,4 +1,4 @@
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import type { AgentRow, AgentStatus, GatewayRule, AgentGoal } from '../types.js';
 
 interface DbAgentRow {
@@ -187,7 +187,7 @@ export interface InsertBoundAgentRowInput {
  * it; account_version defaults to the (inert) legacy 2. The runtime can never
  * start it (no session key → F-2b), so no decrypt path ever touches the nulls.
  */
-export async function insertBoundAgentRow(pool: Pool, input: InsertBoundAgentRowInput): Promise<string> {
+export async function insertBoundAgentRow(pool: Pool | PoolClient, input: InsertBoundAgentRowInput): Promise<string> {
   const res = await pool.query<{ id: string }>(
     `INSERT INTO agents (chain_id, owner_addr, token_id, token_hash, name, gateway_rules, goal, bind_mode)
      VALUES ($1,$2,$3,$4,$5,$6,'{}'::jsonb,'external') RETURNING id`,
