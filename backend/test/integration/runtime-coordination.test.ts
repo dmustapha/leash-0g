@@ -454,11 +454,21 @@ describe('executor (inbound channel)', () => {
     await waitFor(async () => (await getDelegation(db.pool, delegationId))?.status === 'pending');
     await manager.settle(executor.id);
 
-    manager.nudge(executor.id);
-    await waitFor(async () => (await getDelegation(db.pool, delegationId))?.status === 'completed');
-    await manager.settle(executor.id);
+    // Cycle 2 re-picks the requeued 'pending' envelope and consumes it. Drive it
+    // with a settle loop (NOT a DB-polling waitFor): polling getDelegation every
+    // 100ms starves the small test pool of the connections cycle 2 needs, so the
+    // cycle can't finish while we poll for it. nudge schedules on a later tick, so
+    // keep nudging+settling until the envelope reaches a terminal state.
+    for (let i = 0; i < 50; i++) {
+      manager.nudge(executor.id);
+      await manager.settle(executor.id);
+      const s = (await getDelegation(db.pool, delegationId))?.status;
+      if (s === 'completed' || s === 'failed') break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
 
     const row = await getDelegation(db.pool, delegationId);
+    expect(row?.status).toBe('completed');
     expect(row?.result).toEqual({ txHash: '0x' + 'ee'.repeat(32) });
     expect(fakeChain.executed).toEqual([{ to: BENEFICIARY, valueWei: CAP / 2n }]);
   });

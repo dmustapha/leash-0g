@@ -98,3 +98,15 @@ LEASH is a work-in-progress research project. This is an honest scope boundary: 
 - **Mainline gate still pending (post-deadline).** The sprint ran a full adversarial test suite
   (349/349) + two independent security reviews (HIGH findings fixed). A clean whole-contract
   SMTChecker pass + formal mainline merge gate are deferred; the branch stays OFF mainline.
+
+## L-RH2-1 — Trader swap size is bounded off-chain only (V4), fixed in V5 (F′)
+The `trader` role's per-trade clip (dollar-cost-averaging bound) is enforced in the backend runtime
+(`backend/src/runtime/treasury-graph.ts` clip check), NOT on-chain: `swap` is a non-structured
+governed call, so `LeashAccountV4`'s per-call cap / per-token budget / window cap do not debit the
+swap input leg (the band wall gates swap PRICE, not SIZE). Fund safety is intact on V4 — the swap
+recipient is pinned to the agent's own account (no exfil), the price stays inside the oracle band,
+and the total approve budget caps aggregate size — so a compromised session key could at worst force
+a fair-price conversion of the agent's own spend-token into its hold-token, in its own account (a
+risk-parameter bypass, not theft). Proven by the §10 trader adversarial pass (2026-10-06, 4 red-teams,
+spine CLOSED). FIX: `LeashAccountV5` (Stage F′) makes swap structured so the per-call cap + per-token
+budget bound `amountIn` on-chain — see `~/0g-fleet/docs/phases/STAGE-F-PRIME.md` FP-CARRY-1.
