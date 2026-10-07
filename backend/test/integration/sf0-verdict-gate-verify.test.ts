@@ -79,6 +79,15 @@ class FakeChain implements RuntimeChain {
   async readCallGrantState(): Promise<GrantState> {
     return { rules: new Map(), budgets: new Map(), allowlist: new Set() };
   }
+  async getErc20Balance(): Promise<bigint> {
+    return 0n;
+  }
+  async getErc20Allowance(): Promise<bigint> {
+    return 0n;
+  }
+  async getSwapBandPrice18(): Promise<bigint | null> {
+    return null;
+  }
 }
 
 class FakeUploader implements StorageUploader {

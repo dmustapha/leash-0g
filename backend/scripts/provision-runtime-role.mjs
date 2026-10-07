@@ -55,8 +55,12 @@ async function main() {
     await client.query(`GRANT USAGE ON SCHEMA ${schema} TO ${ROLE}`); // usage, NOT create → no DDL
     await client.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA ${schema} TO ${ROLE}`);
     await client.query(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA ${schema} TO ${ROLE}`);
-    // trace_records: append-only for the app role at the GRANT layer too
-    await client.query(`REVOKE UPDATE, DELETE, TRUNCATE ON trace_records FROM ${ROLE}`);
+    // trace_records: append-only for the app role at the GRANT layer too.
+    // Schema-qualified: a bare name resolves via search_path (→ public), which
+    // silently applies the REVOKE to the WRONG table (or fails) against a
+    // non-public schema — the append-only GRANT-layer defense must bind to the
+    // target schema's table, not whatever public happens to hold.
+    await client.query(`REVOKE UPDATE, DELETE, TRUNCATE ON ${schema}.trace_records FROM ${ROLE}`);
     // owner_records (Phase 3): same append-only discipline. Guarded so the
     // script still runs against a pre-008 schema.
     const ownerRecordsExists = await client.query(
@@ -64,7 +68,7 @@ async function main() {
       [schema],
     );
     if (ownerRecordsExists.rowCount) {
-      await client.query(`REVOKE UPDATE, DELETE, TRUNCATE ON owner_records FROM ${ROLE}`);
+      await client.query(`REVOKE UPDATE, DELETE, TRUNCATE ON ${schema}.owner_records FROM ${ROLE}`);
     }
     // future tables created by admin-run migrations inherit app grants.
     // CAUTION: this blanket default grants UPDATE/DELETE on FUTURE tables too.

@@ -78,7 +78,7 @@ describe('trader reason request (FR3)', () => {
     const body = buildReasonRequest('m', {
       ...ctx({ holdings: undefined as never }),
       goal: { beneficiary: '0x' + '11'.repeat(20), targetBalanceWei: '1', topUpWei: '1' },
-    } as ReasonContext) as { messages: Array<{ role: string; content: string }> };
+    }) as { messages: Array<{ role: string; content: string }> };
     const obs = JSON.parse((body.messages[1]?.content ?? '').replace(/^Observation:\n/, ''));
     expect(obs.holdings).toBeUndefined();
     expect(obs.goal.beneficiary).toBeDefined();
