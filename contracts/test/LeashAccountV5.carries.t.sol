@@ -6,7 +6,6 @@ import {LeashAccountV5} from "../src/LeashAccountV5.sol";
 import {DecodeLib} from "../src/DecodeLib.sol";
 import {SigningLib} from "../src/SigningLib.sol";
 import {LeashAccountV4} from "../src/LeashAccountV4.sol";
-import {LeashAccountV5FactoryDeterministic} from "../src/LeashAccountV5FactoryDeterministic.sol";
 import {MockERC20} from "../src/MockERC20.sol";
 import {MockRouter} from "../src/MockRouter.sol";
 import {MockAggregatorV3} from "../src/MockAggregatorV3.sol";
@@ -202,30 +201,9 @@ contract LeashAccountV5CarriesTest is Test {
         assertEq(acct.pendingBudgetEta(), 0, "revoke clears pending budget");
     }
 
-    // ============ FP-g: CREATE2 same-address + version-selected factory; V4 untouched ============
-
-    function test_FPg_factoryDeterministicSameAddress() public {
-        LeashAccountV5FactoryDeterministic f = new LeashAccountV5FactoryDeterministic(address(new SigningLib()), address(new DecodeLib()));
-        address[] memory list = new address[](0);
-        bytes32 salt = keccak256("owner-salt");
-        address predicted = f.predictAccountV5(
-            owner, guardian, session, _policy(), list, DELAY, address(usd), LeashAccountV5.TokenPolicy(0, 0), salt
-        );
-        address created = f.createAccountV5(
-            owner, guardian, session, _policy(), list, DELAY, address(usd), LeashAccountV5.TokenPolicy(0, 0), salt
-        );
-        assertEq(created, predicted, "CREATE2 deploy must land at the predicted address");
-        assertEq(f.ACCOUNT_VERSION_V5(), 5, "version constant must be 5");
-    }
-
-    function test_FPg_factoryRedeploy_reverts() public {
-        LeashAccountV5FactoryDeterministic f = new LeashAccountV5FactoryDeterministic(address(new SigningLib()), address(new DecodeLib()));
-        address[] memory list = new address[](0);
-        bytes32 salt = keccak256("owner-salt");
-        f.createAccountV5(owner, guardian, session, _policy(), list, DELAY, address(usd), LeashAccountV5.TokenPolicy(0, 0), salt);
-        vm.expectRevert();
-        f.createAccountV5(owner, guardian, session, _policy(), list, DELAY, address(usd), LeashAccountV5.TokenPolicy(0, 0), salt);
-    }
+    // ============ FP-g: V4 untouched ============
+    // NOTE (FP-4 P1): the CREATE2 same-address + redeploy tests moved to Create2Deployer.t.sol —
+    // the embedding LeashAccountV5FactoryDeterministic was retired (EIP-170) for the generic deployer.
 
     function test_FPg_v4BytecodeUntouched() public {
         // V4 must NOT implement ERC-1271 (closed by construction, Stage-D invariant);

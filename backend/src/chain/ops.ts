@@ -14,8 +14,16 @@ import {
 import { waitReceipt } from './wait-receipt.js';
 import { randomBytes } from 'node:crypto';
 import { privateKeyToAccount } from 'viem/accounts';
-import { factoryAbi, factoryV4DeterministicAbi, registryAbi, leashAccountAbi } from './abis.js';
-import type { ChainOps } from '../server.js';
+import {
+  factoryAbi,
+  factoryV4DeterministicAbi,
+  registryAbi,
+  leashAccountAbi,
+  create2DeployerAbi,
+  leashAccountV5ReadAbi,
+} from './abis.js';
+import { buildV5Initcode, ownerScopedSalt, predictCreate2Address } from './v5-initcode.js';
+import type { AccountCreateTuple, ChainOps } from '../server.js';
 import type { PolicyView } from '../types.js';
 
 export interface LeashChainOptions {
@@ -36,6 +44,16 @@ export interface LeashChainOptions {
    * Optional so legacy-only setups (v2 accounts) still boot.
    */
   factoryV4Addr?: string;
+  /**
+   * Stage F′ (FP-4 P1): the generic CREATE2 deployer address. V5 creates mint
+   * through it with backend-assembled initcode. Optional so legacy/V4-only setups
+   * boot; a V5 create with this unset throws loudly (default-deny).
+   */
+  create2DeployerAddr?: string;
+  /** Stage F′ (RULING-B): canonical SigningLib singleton baked into V5 initcode + read-back-asserted. */
+  signingHelperAddr?: string;
+  /** Stage F′ (RULING-B): canonical DecodeLib singleton baked into V5 initcode + read-back-asserted. */
+  decodeHelperAddr?: string;
   registryAddr: string;
   /** Test seam: inject fake clients instead of dialing an RPC. */
   clients?: {
@@ -123,6 +141,12 @@ export class LeashChainOps implements ChainOps {
   }
 
   async deployAndRegister(input: Parameters<ChainOps['deployAndRegister']>[0]): ReturnType<ChainOps['deployAndRegister']> {
+    // Stage F′ (FP-4 P1): V5 mints through the generic CREATE2 deployer with
+    // backend-assembled initcode — a wholly different create path than the typed
+    // V4/legacy factories, so it has its own method (both share the registry write).
+    if (input.accountVersion === 5) {
+      return this.serializeOps(() => this.deployAndRegisterV5(input));
+    }
     return this.serializeOps(async () => {
       // SE-1 (SD-E7): select factory address + fn/event by account version.
       // SE-6: the V4 factory is the DETERMINISTIC (CREATE2) one — the wire gains
@@ -275,11 +299,294 @@ export class LeashChainOps implements ChainOps {
               },
             }
           : null,
+        // Stage F′ (RULING-A): V4/legacy predict is factory-side, not an off-chain
+        // initcode — no persisted initcode hash (null; V5 carries the real value).
+        initCodeHash: null,
         // SE-6 (security M-02): true when a pre-existing deterministic deploy at
         // the predicted address was adopted (no mint tx; createTx is the zero hash).
         adopted,
       };
     });
+  }
+
+  /**
+   * Stage F′ (FP-4 P1) — mint a V5 account through the generic `Create2Deployer`.
+   * Mirrors the V4 deterministic pattern (predict → adopt-or-deploy → bind event →
+   * refuse-on-mismatch) but the initcode is assembled OFF-CHAIN from the committed
+   * creationCode + the ctor args, and the three singletons come from ChainConfig,
+   * NOT the request (RULING-B). RULING-A: the EXACT initcode's keccak is returned
+   * (persisted) so cross-chain verification compares a fixed hash. Serialized by
+   * the ops mutex (its one caller wraps it in `serializeOps`).
+   */
+  private async deployAndRegisterV5(
+    input: Parameters<ChainOps['deployAndRegister']>[0],
+  ): ReturnType<ChainOps['deployAndRegister']> {
+    const built = await this.buildV5Deploy(input);
+    const { accountAddr, createHash, adopted, initcode, accountSalt } = built;
+    // RULING-B: read the account's immutables back BEFORE registering/returning —
+    // owner + the two helpers MUST equal the input owner + the canonical config
+    // helpers, or funds would route to an account whose authority we never proved.
+    await this.assertV5ReadBack(accountAddr, input.ownerAddr);
+    const register = await this.registerAgent(input, accountAddr);
+    return {
+      accountAddr,
+      chainAgentId: register.chainAgentId,
+      createTx: createHash,
+      registerTx: register.registerTx,
+      guardianAddr: this.guardianAccount.address,
+      accountVersion: 5,
+      accountSalt,
+      accountCreateTuple: this.v5CreateTuple(input),
+      // RULING-A: the fixed hash of the exact deployed initcode (cross-chain anchor).
+      initCodeHash: keccak256(initcode),
+      adopted,
+    };
+  }
+
+  /**
+   * Build the V5 initcode + owner-scoped salt, predict the address off-chain,
+   * cross-check the on-chain `predict`, then adopt-existing or deploy via the
+   * generic deployer (binding the address-filtered `Deployed` event, refusing on
+   * any mismatch — the V4 address-spoof guard, ported to the generic path).
+   */
+  private async buildV5Deploy(input: Parameters<ChainOps['deployAndRegister']>[0]): Promise<{
+    accountAddr: Hex;
+    createHash: Hex;
+    adopted: boolean;
+    initcode: Hex;
+    accountSalt: Hex;
+  }> {
+    const deployerAddr = this.opts.create2DeployerAddr;
+    const signingHelperAddr = this.opts.signingHelperAddr;
+    const decodeHelperAddr = this.opts.decodeHelperAddr;
+    if (!deployerAddr || !signingHelperAddr || !decodeHelperAddr) {
+      // Default-deny: a half-wired V5 chain must refuse, never mint off a zero helper.
+      throw new Error(
+        `accountVersion=5 requested but chain ${this.opts.chainId} is missing a V5 singleton (deployer/signingHelper/decodeHelper)`,
+      );
+    }
+    const agentSalt = (input.accountSalt ?? `0x${randomBytes(32).toString('hex')}`) as Hex;
+    const salt = ownerScopedSalt(input.ownerAddr, agentSalt);
+    const initcode = buildV5Initcode({
+      ownerAddr: input.ownerAddr,
+      guardianAddr: this.guardianAccount.address,
+      sessionKeyAddr: input.sessionKeyAddr,
+      policy: input.policy,
+      allowlist: input.allowlist,
+      timelockDelay: input.timelockDelay,
+      ...(input.settlementToken !== undefined ? { settlementToken: input.settlementToken } : {}),
+      ...(input.tokenPolicy !== undefined ? { tokenPolicy: input.tokenPolicy } : {}),
+      signingHelperAddr,
+      decodeHelperAddr,
+    });
+    const predicted = predictCreate2Address(deployerAddr, salt, initcode);
+    await this.crossCheckOnChainPredict(deployerAddr as Hex, salt, keccak256(initcode), predicted);
+    const deploy = await this.adoptOrDeployV5(deployerAddr as Hex, salt, initcode, predicted);
+    return { accountAddr: predicted, initcode, accountSalt: agentSalt, ...deploy };
+  }
+
+  /**
+   * Stage F′ (FP-4 P1): the V5 analogue of `predictAccountV4` — a PURE off-chain
+   * CREATE2 derivation from the persisted construction tuple + salt, used by
+   * `assertSameAddress`. No eth_call: `f(deployer, ownerScopedSalt(owner, agentSalt),
+   * keccak256(initcode))`. The deployer + helpers come from this lane's ChainConfig.
+   */
+  predictAccountV5(input: {
+    ownerAddr: string;
+    guardianAddr: string;
+    sessionKeyAddr: string;
+    policy: { perTransferCap: bigint; windowCap: bigint; windowSeconds: number; expiresAt: number };
+    allowlist: string[];
+    timelockDelay: number;
+    settlementToken?: string;
+    tokenPolicy?: { perTransferCapToken: bigint; windowCapToken: bigint };
+    accountSalt: string;
+  }): string {
+    const deployerAddr = this.opts.create2DeployerAddr;
+    const signingHelperAddr = this.opts.signingHelperAddr;
+    const decodeHelperAddr = this.opts.decodeHelperAddr;
+    if (!deployerAddr || !signingHelperAddr || !decodeHelperAddr) {
+      throw new Error(`predictAccountV5: chain ${this.opts.chainId} is missing a V5 singleton`);
+    }
+    const initcode = buildV5Initcode({
+      ownerAddr: input.ownerAddr,
+      guardianAddr: input.guardianAddr,
+      sessionKeyAddr: input.sessionKeyAddr,
+      policy: input.policy,
+      allowlist: input.allowlist,
+      timelockDelay: input.timelockDelay,
+      ...(input.settlementToken !== undefined ? { settlementToken: input.settlementToken } : {}),
+      ...(input.tokenPolicy !== undefined ? { tokenPolicy: input.tokenPolicy } : {}),
+      signingHelperAddr,
+      decodeHelperAddr,
+    });
+    const salt = ownerScopedSalt(input.ownerAddr, input.accountSalt);
+    return predictCreate2Address(deployerAddr, salt, initcode);
+  }
+
+  /**
+   * RULING-A active anchor (Gate-② W-02): the keccak256 of the V5 initcode this lane would build for
+   * `input`. `assertSameAddress` compares it to the PERSISTED `agents.init_code_hash` so a construction
+   * tuple mutated AFTER mint (independent of the stored hash) is refused — the hash stops being a mere
+   * audit artifact and becomes a tuple-drift-immune check. Same build as `predictAccountV5`.
+   */
+  v5InitCodeHash(input: Parameters<LeashChainOps['predictAccountV5']>[0]): Hex {
+    const signingHelperAddr = this.opts.signingHelperAddr;
+    const decodeHelperAddr = this.opts.decodeHelperAddr;
+    if (!signingHelperAddr || !decodeHelperAddr) {
+      throw new Error(`v5InitCodeHash: chain ${this.opts.chainId} is missing a V5 helper singleton`);
+    }
+    return keccak256(buildV5Initcode({
+      ownerAddr: input.ownerAddr,
+      guardianAddr: input.guardianAddr,
+      sessionKeyAddr: input.sessionKeyAddr,
+      policy: input.policy,
+      allowlist: input.allowlist,
+      timelockDelay: input.timelockDelay,
+      ...(input.settlementToken !== undefined ? { settlementToken: input.settlementToken } : {}),
+      ...(input.tokenPolicy !== undefined ? { tokenPolicy: input.tokenPolicy } : {}),
+      signingHelperAddr,
+      decodeHelperAddr,
+    }));
+  }
+
+  /** The configured V5 singletons (null when the chain is not V5-enabled). */
+  get v5Singletons(): { create2DeployerAddr: string; signingHelperAddr: string; decodeHelperAddr: string } | null {
+    const { create2DeployerAddr, signingHelperAddr, decodeHelperAddr } = this.opts;
+    if (!create2DeployerAddr || !signingHelperAddr || !decodeHelperAddr) return null;
+    return { create2DeployerAddr, signingHelperAddr, decodeHelperAddr };
+  }
+
+  /** Cross-check: the on-chain deployer.predict must agree with our off-chain CREATE2. */
+  private async crossCheckOnChainPredict(deployerAddr: Hex, salt: Hex, initCodeHash: Hex, predicted: Hex): Promise<void> {
+    const onchain = (await this.publicClient.readContract({
+      address: deployerAddr,
+      abi: create2DeployerAbi,
+      functionName: 'predict',
+      args: [salt, initCodeHash],
+    })) as string;
+    if (onchain.toLowerCase() !== predicted.toLowerCase()) {
+      throw new Error(`V5 CREATE2 prediction mismatch: off-chain ${predicted} != deployer.predict ${onchain}`);
+    }
+  }
+
+  /**
+   * Adopt a pre-existing deterministic deploy (same initcode → harmless front-run,
+   * zero createTx) or deploy via the generic deployer. The `Deployed` event is
+   * address-filtered to the deployer and its `account` MUST equal the prediction.
+   */
+  private async adoptOrDeployV5(
+    deployerAddr: Hex,
+    salt: Hex,
+    initcode: Hex,
+    predicted: Hex,
+  ): Promise<{ createHash: Hex; adopted: boolean }> {
+    const preExisting = await this.publicClient.getCode({ address: predicted });
+    if (preExisting && preExisting !== '0x') {
+      return { createHash: `0x${'0'.repeat(64)}`, adopted: true };
+    }
+    const createHash = await this.opsWallet.writeContract({
+      chain: this.opsWallet.chain,
+      account: this.opsAccount,
+      address: deployerAddr,
+      abi: create2DeployerAbi,
+      functionName: 'deploy',
+      args: [salt, initcode],
+    });
+    const receipt = await waitReceipt(this.publicClient, createHash);
+    const logs = receipt.logs.filter((l) => l.address.toLowerCase() === deployerAddr.toLowerCase());
+    const deployed = parseEventLogs({ abi: create2DeployerAbi, logs, eventName: 'Deployed' })[0];
+    if (!deployed) throw new Error('Create2Deployer.deploy emitted no Deployed event');
+    if (deployed.args.account.toLowerCase() !== predicted.toLowerCase()) {
+      throw new Error(`V5 deploy mismatch: Deployed.account ${deployed.args.account} != prediction ${predicted}`);
+    }
+    return { createHash, adopted: false };
+  }
+
+  /**
+   * RULING-B post-deploy read-back: `owner()` == the input owner and the two helper
+   * immutables == the canonical ChainConfig helpers. Refuses (throws) legibly on any
+   * divergence — restores the correctness guarantee the typed factory gave for free.
+   */
+  /** Retry a read that can transiently return empty/0x on a load-balanced RPC just after a deploy.
+   * Returns a non-empty address once available; returns the last (possibly empty) value after N tries
+   * so the caller's equality check still fails-closed on a genuinely empty/divergent read. */
+  private async retryRead(read: () => Promise<Hex>, tries = 4, delayMs = 1000): Promise<Hex> {
+    let last: Hex = '0x';
+    for (let i = 0; i < tries; i++) {
+      try {
+        last = await read();
+        if (last && last.length === 42 && last !== '0x') return last;
+      } catch {
+        /* zero-data / transient from a lagging replica — retry */
+      }
+      if (i < tries - 1) await new Promise((r) => setTimeout(r, delayMs));
+    }
+    return last;
+  }
+
+  private async assertV5ReadBack(accountAddr: Hex, ownerAddr: string): Promise<void> {
+    // Read each immutable with a short retry: a load-balanced RPC (Base drpc) can route a read to a
+    // replica that has not yet indexed the just-mined deploy and return 0x — a spurious hard-fail of a
+    // VALID deploy. Retry closes that liveness gap; it never relaxes the check (a real divergence still
+    // throws below, and a persistently-empty read stays empty → still throws). Fail-closed throughout.
+    const read = (fn: 'owner' | 'signingHelper' | 'decodeHelper') =>
+      this.retryRead(() => this.publicClient.readContract({ address: accountAddr, abi: leashAccountV5ReadAbi, functionName: fn }));
+    const [owner, signingHelper, decodeHelper] = await Promise.all([read('owner'), read('signingHelper'), read('decodeHelper')]);
+    const want: Array<[string, string, string | undefined]> = [
+      ['owner', owner, ownerAddr],
+      ['signingHelper', signingHelper, this.opts.signingHelperAddr],
+      ['decodeHelper', decodeHelper, this.opts.decodeHelperAddr],
+    ];
+    for (const [field, got, expected] of want) {
+      if (!expected || got.toLowerCase() !== expected.toLowerCase()) {
+        throw new Error(`V5 read-back REFUSED: account ${accountAddr} ${field} ${got} != canonical ${expected ?? 'unset'}`);
+      }
+    }
+  }
+
+  /** The serializable V5 construction tuple (canonical, bigints→strings) — RULING-A persistence. */
+  private v5CreateTuple(input: Parameters<ChainOps['deployAndRegister']>[0]): AccountCreateTuple {
+    return {
+      ownerAddr: input.ownerAddr.toLowerCase(),
+      guardianAddr: this.guardianAccount.address.toLowerCase(),
+      sessionKeyAddr: input.sessionKeyAddr.toLowerCase(),
+      policy: {
+        perTransferCap: input.policy.perTransferCap.toString(),
+        windowCap: input.policy.windowCap.toString(),
+        windowSeconds: input.policy.windowSeconds,
+        expiresAt: input.policy.expiresAt,
+      },
+      allowlist: input.allowlist.map((a) => a.toLowerCase()),
+      timelockDelay: input.timelockDelay,
+      settlementToken: (input.settlementToken ?? '0x0000000000000000000000000000000000000000').toLowerCase(),
+      tokenPolicy: {
+        perTransferCapToken: (input.tokenPolicy?.perTransferCapToken ?? 0n).toString(),
+        windowCapToken: (input.tokenPolicy?.windowCapToken ?? 0n).toString(),
+      },
+    };
+  }
+
+  /** Register the (account, sessionKey, auditPubKey, name) on the chain registry — shared V4/V5. */
+  private async registerAgent(
+    input: Parameters<ChainOps['deployAndRegister']>[0],
+    accountAddr: Hex,
+  ): Promise<{ chainAgentId: bigint; registerTx: Hex }> {
+    const auditPubKeyHex = (
+      input.auditPubKey.startsWith('0x') ? input.auditPubKey : `0x${input.auditPubKey}`
+    ) as Hex;
+    const registerTx = await this.opsWallet.writeContract({
+      chain: this.opsWallet.chain,
+      account: this.opsAccount,
+      address: this.opts.registryAddr as Hex,
+      abi: registryAbi,
+      functionName: 'register',
+      args: [accountAddr, input.sessionKeyAddr as Hex, auditPubKeyHex, input.name],
+    });
+    const receipt = await waitReceipt(this.publicClient, registerTx);
+    const registered = parseEventLogs({ abi: registryAbi, logs: receipt.logs, eventName: 'AgentRegistered' })[0];
+    if (!registered) throw new Error('registry register emitted no AgentRegistered event');
+    return { chainAgentId: registered.args.agentId, registerTx };
   }
 
   /** SE-6: the configured deterministic V4 factory address (null = not configured). */

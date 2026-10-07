@@ -52,7 +52,7 @@ export class FakeChainOps implements ChainOps {
   async deployAndRegister(input: {
     ownerAddr?: string;
     sessionKeyAddr: string;
-    accountVersion?: 2 | 4;
+    accountVersion?: 2 | 4 | 5;
     accountSalt?: string;
   }): Promise<{
     accountAddr: string;
@@ -60,12 +60,16 @@ export class FakeChainOps implements ChainOps {
     createTx: string;
     registerTx: string;
     guardianAddr: string;
-    accountVersion: 2 | 4;
+    accountVersion: 2 | 4 | 5;
     accountSalt: string | null;
     accountCreateTuple: import('../../src/server.js').AccountCreateTuple | null;
+    initCodeHash: string | null;
     adopted: boolean;
   }> {
     const accountVersion = input.accountVersion ?? 4;
+    // SE-6/FP-4: deterministic mints (V4 governed-calldata, V5 governed-signing)
+    // carry a salt + the canonical construction tuple; legacy v2 carries neither.
+    const deterministic = accountVersion === 4 || accountVersion === 5;
     this.createdVersions.push(accountVersion);
     // SE-6 pre-req: minted addresses must be GLOBALLY unique across FakeChainOps
     // instances — a per-instance counter re-mints the same address when a test
@@ -82,9 +86,8 @@ export class FakeChainOps implements ChainOps {
       accountVersion,
       // SE-6 mirror of the ops layer: a V4 mint carries its CREATE2 salt + the
       // exact canonical construction tuple it was minted with.
-      accountSalt: accountVersion === 4 ? (input.accountSalt ?? '0x' + 'a5'.repeat(32)) : null,
-      accountCreateTuple:
-        accountVersion === 4
+      accountSalt: deterministic ? (input.accountSalt ?? '0x' + 'a5'.repeat(32)) : null,
+      accountCreateTuple: deterministic
           ? {
               ownerAddr: (input.ownerAddr ?? '0x' + 'a1'.repeat(20)).toLowerCase(),
               guardianAddr: FAKE_GUARDIAN_ADDR.toLowerCase(),
@@ -96,6 +99,8 @@ export class FakeChainOps implements ChainOps {
               tokenPolicy: { perTransferCapToken: '0', windowCapToken: '0' },
             }
           : null,
+      // FP-4 (RULING-A): V5 carries a fixed initcode hash; V4/legacy do not.
+      initCodeHash: accountVersion === 5 ? '0x' + 'e5'.repeat(32) : null,
       adopted: false,
     };
   }

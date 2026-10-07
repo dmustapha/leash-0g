@@ -43,6 +43,34 @@ export const factoryV4DeterministicAbi = parseAbi([
   'error AccountAlreadyDeployed(address account)',
 ]);
 
+/**
+ * Stage F′ (FP-4 P1): the generic `Create2Deployer` — an account-agnostic CREATE2
+ * dispatcher (contracts/src/Create2Deployer.sol). `deploy(salt, initcode)` runs the
+ * backend-assembled V5 initcode; `predict(salt, initCodeHash)` is the on-chain
+ * cross-check of the off-chain CREATE2 derivation. The `Deployed(account, salt)`
+ * event is address-filtered to the deployer before binding. Hand-derived from the
+ * contract source.
+ */
+export const create2DeployerAbi = parseAbi([
+  'function deploy(bytes32 salt, bytes initcode) returns (address account)',
+  'function predict(bytes32 salt, bytes32 initCodeHash) view returns (address)',
+  'event Deployed(address indexed account, bytes32 indexed salt)',
+  'error DeployFailed()',
+  'error EmptyAccount()',
+]);
+
+/**
+ * Stage F′ (FP-4 P1): the V5 account IMMUTABLE getters the RULING-B post-deploy
+ * read-back asserts — `owner()`, `signingHelper()`, `decodeHelper()` must equal the
+ * input owner + the canonical ChainConfig helpers BEFORE funds route (restores the
+ * correctness the typed factory gave for free). Hand-derived from LeashAccountV5.
+ */
+export const leashAccountV5ReadAbi = parseAbi([
+  'function owner() view returns (address)',
+  'function signingHelper() view returns (address)',
+  'function decodeHelper() view returns (address)',
+]);
+
 /** Minimal ERC-20 metadata reads — to detect + label the settlement asset. */
 export const erc20MetaAbi = parseAbi([
   'function decimals() view returns (uint8)',

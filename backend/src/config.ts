@@ -29,6 +29,16 @@ const envSchema = z.object({
   // rather than silently minting a legacy account. BR-1: swapping in the SE-6
   // deterministic CREATE2 factory is a change to this address alone.
   LEASH_FACTORY_V4_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  // Stage F′ (FP-4 P1): the V5 onboarding singletons — per-chain, operator-set,
+  // lowercase-normalized (same posture as LEASH_FACTORY_V4_ADDR). The generic
+  // CREATE2 deployer + the two helper contracts baked into the V5 account initcode
+  // (SigningLib / DecodeLib). RULING-B: these are the canonical helper addresses
+  // the post-deploy read-back asserts — NEVER request/model input. All three
+  // optional so legacy/V4-only setups still boot; a V5 create with ANY of the
+  // three unset on a chain is DEFAULT-DENIED (refused loudly, never half-wired).
+  LEASH_CREATE2_DEPLOYER_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  LEASH_SIGNING_HELPER_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  LEASH_DECODE_HELPER_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
   PORT: z.coerce.number().int().positive().default(8080),
   HOST: z.string().min(1).default('127.0.0.1'), // M-01 dev bind; Render sets 0.0.0.0
   // M-01: the gateway listens on its OWN server, always bound to 127.0.0.1 —
@@ -259,6 +269,12 @@ const extraChainSchema = z.object({
   rpcUrl: z.string().url(),
   registryAddr: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
   factoryV4Addr: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  // Stage F′ (FP-4 P1): per-chain V5 singletons. Unset ⇒ inherit the global
+  // LEASH_* defaults (same address everywhere). A V5 create on a chain missing
+  // any of the three is default-denied downstream.
+  create2DeployerAddr: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  signingHelperAddr: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  decodeHelperAddr: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
   protocolAllowlist: z.array(z.string().regex(/^0x[0-9a-fA-F]{40}$/)).optional(),
   bridgeAllowlist: z.string().optional(), // "addr:destChainId" comma-list (same grammar as the per-chain vars)
   canonical: z
@@ -283,7 +299,31 @@ const extraChainSchema = z.object({
  * accountVersion is always 4. Fail-loud (L-03): a malformed blob FAILS startup.
  * The registry's `assertTestnetOnly` + duplicate-chain guard still apply downstream.
  */
-export function parseExtraChains(raw: string, defaultFactoryV4?: string): ChainConfig[] {
+/**
+ * Stage F′ (FP-4 P1): the global V5 singletons (CREATE2 deployer + the two helper
+ * contracts baked into the V5 account initcode). Lowercase-normalized, inherited by
+ * every chain entry unless the EXTRA_CHAINS entry overrides. Only emits a field when
+ * the global env is set — a chain missing any of the three default-denies V5 creates.
+ */
+interface V5Singletons {
+  create2DeployerAddr?: string;
+  signingHelperAddr?: string;
+  decodeHelperAddr?: string;
+}
+
+function globalV5Singletons(cfg: Config): V5Singletons {
+  return {
+    ...(cfg.LEASH_CREATE2_DEPLOYER_ADDR ? { create2DeployerAddr: cfg.LEASH_CREATE2_DEPLOYER_ADDR.toLowerCase() } : {}),
+    ...(cfg.LEASH_SIGNING_HELPER_ADDR ? { signingHelperAddr: cfg.LEASH_SIGNING_HELPER_ADDR.toLowerCase() } : {}),
+    ...(cfg.LEASH_DECODE_HELPER_ADDR ? { decodeHelperAddr: cfg.LEASH_DECODE_HELPER_ADDR.toLowerCase() } : {}),
+  };
+}
+
+export function parseExtraChains(
+  raw: string,
+  defaultFactoryV4?: string,
+  defaultV5?: V5Singletons,
+): ChainConfig[] {
   let parsed: unknown;
   try {
     parsed = JSON.parse(raw);
@@ -312,6 +352,16 @@ export function parseExtraChains(raw: string, defaultFactoryV4?: string): ChainC
       factoryV4Addr: factoryV4Addr.toLowerCase(),
       registryAddr: e.registryAddr,
       accountVersion: 4,
+      // Stage F′: per-entry V5 singletons override the global defaults; else inherit.
+      ...(e.create2DeployerAddr ?? defaultV5?.create2DeployerAddr
+        ? { create2DeployerAddr: (e.create2DeployerAddr ?? defaultV5?.create2DeployerAddr)?.toLowerCase() }
+        : {}),
+      ...(e.signingHelperAddr ?? defaultV5?.signingHelperAddr
+        ? { signingHelperAddr: (e.signingHelperAddr ?? defaultV5?.signingHelperAddr)?.toLowerCase() }
+        : {}),
+      ...(e.decodeHelperAddr ?? defaultV5?.decodeHelperAddr
+        ? { decodeHelperAddr: (e.decodeHelperAddr ?? defaultV5?.decodeHelperAddr)?.toLowerCase() }
+        : {}),
       gasFloorWei: e.gasFloorWei ? BigInt(e.gasFloorWei) : 0n,
       ...(e.sessionGasDustWei ? { sessionGasDustWei: BigInt(e.sessionGasDustWei) } : {}),
       ...(e.canonical
@@ -342,6 +392,9 @@ export function parseExtraChains(raw: string, defaultFactoryV4?: string): ChainC
 }
 
 export function buildChainConfigs(cfg: Config): ChainConfig[] {
+  // Stage F′ (FP-4 P1): the global V5 singletons, inherited by every chain (they
+  // are the SAME address on every chain). A chain missing any default-denies V5.
+  const v5 = globalV5Singletons(cfg);
   const chains: ChainConfig[] = [
     {
       chainId: cfg.ZERO_G_CHAIN_ID,
@@ -349,6 +402,7 @@ export function buildChainConfigs(cfg: Config): ChainConfig[] {
       rpcUrl: cfg.ZERO_G_RPC,
       factoryAddr: cfg.LEASH_FACTORY_ADDR,
       factoryV4Addr: cfg.LEASH_FACTORY_V4_ADDR,
+      ...v5,
       registryAddr: cfg.AGENT_REGISTRY_ADDR,
       accountVersion: 4, // SD-E7: governed calldata is the create default
       canonical: {
@@ -368,6 +422,7 @@ export function buildChainConfigs(cfg: Config): ChainConfig[] {
       rpcUrl: cfg.BASE_SEPOLIA_RPC,
       // No legacy v2 factory on Base — a legacy create there fails loudly.
       factoryV4Addr: cfg.LEASH_FACTORY_V4_ADDR,
+      ...v5,
       registryAddr: cfg.AGENT_REGISTRY_BASE_ADDR,
       accountVersion: 4,
       canonical: {
@@ -403,6 +458,7 @@ export function buildChainConfigs(cfg: Config): ChainConfig[] {
       name: 'Ethereum Sepolia',
       rpcUrl: cfg.ETHEREUM_SEPOLIA_RPC,
       factoryV4Addr: cfg.LEASH_FACTORY_V4_ADDR,
+      ...v5,
       registryAddr: cfg.AGENT_REGISTRY_SEPOLIA_ADDR,
       accountVersion: 4,
       gasFloorWei: 0n,
@@ -434,6 +490,7 @@ export function buildChainConfigs(cfg: Config): ChainConfig[] {
       name: 'Arbitrum Sepolia',
       rpcUrl: cfg.ARBITRUM_SEPOLIA_RPC,
       factoryV4Addr: cfg.LEASH_FACTORY_V4_ADDR,
+      ...v5,
       registryAddr: cfg.AGENT_REGISTRY_ARBITRUM_ADDR,
       accountVersion: 4,
       canonical: {
@@ -459,7 +516,7 @@ export function buildChainConfigs(cfg: Config): ChainConfig[] {
   // "adding a chain is config-only" promise: any JSON entry below becomes a full
   // governed chain with the same wall + registry + default-deny guarantees.
   if (cfg.EXTRA_CHAINS) {
-    chains.push(...parseExtraChains(cfg.EXTRA_CHAINS, cfg.LEASH_FACTORY_V4_ADDR));
+    chains.push(...parseExtraChains(cfg.EXTRA_CHAINS, cfg.LEASH_FACTORY_V4_ADDR, v5));
   }
   return chains;
 }
