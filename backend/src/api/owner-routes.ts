@@ -75,6 +75,23 @@ import {
   listRecentToolRequests,
   getToolRequest,
 } from '../store/tools.js';
+import { decideSigningRequest, type SigningServiceDeps } from '../signing/signing-service.js';
+import {
+  defaultSigningRegistry,
+  assertDescriptor,
+  onChainGrantParams,
+  DescriptorError,
+  type SigningRule as SigningRuleType,
+} from '../signing/index.js';
+import {
+  upsertSigningRule,
+  setSigningRuleStatus,
+  listSigningRules,
+  listRecentSigningRequests,
+  listSigningArms,
+  getSigningRequest,
+  reconcileSigningArms,
+} from '../store/signing.js';
 import { applyRevokeFanout } from '../agents/revoke-fanout.js';
 import {
   createLink,
@@ -492,6 +509,24 @@ const toolRuleApplySchema = z.object({
 });
 const toolDecisionSchema = z.object({ decision: z.enum(['approve_once', 'always_allow', 'deny']) });
 
+// F′ FP-2 (STAGE-F-PRIME §4) — governed-signing grant surfaces. A signing rule
+// mirrors a `SigningRule`; the JIT decision rides the SAME `POST /api/approvals/:id`
+// rail, branched on `requestRef.type === 'signing'`. The owner's client signs the
+// on-chain `proposeSigningGrant` with the engine-computed params; this route
+// records the read-model mirror + the reconcile.
+const signingRuleSchema = z.object({
+  descriptorId: z.number().int().nonnegative(),
+  spenderSet: z.array(z.string().regex(/^0x[0-9a-fA-F]{40}$/)).max(64),
+  perIntentCap: z.string().regex(/^\d{1,40}$/),
+  maxDeadlineWindow: z.number().int().nonnegative().max(31_536_000), // ≤ 1 year
+  token: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
+});
+const signingRuleApplySchema = z.object({
+  action: z.enum(['set', 'remove']),
+  rule: signingRuleSchema,
+});
+const signingDecisionSchema = z.object({ decision: z.enum(['approve_once', 'always_allow', 'deny']) });
+
 /** Normalize a validated rule into the CallRule shape (lowercased, no partials). */
 function toCallRule(r: z.infer<typeof callRuleSchema>): CallRule {
   return {
@@ -902,6 +937,14 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     registry: defaultToolRegistry,
     jitTtlMs: deps.settings.jitTtlMs,
   };
+  // F′ FP-2: the governed-signing JIT rail deps (same approval rail, off-chain decisions).
+  const signingServiceDeps: SigningServiceDeps = {
+    pool: deps.pool,
+    hub: deps.hub,
+    broker: deps.broker,
+    alerts: deps.alerts,
+    jitTtlMs: deps.settings.jitTtlMs,
+  };
 
   // H-01 (round-2 red-team): the per-owner limiters above are bypassable by
   // rotating fresh wallet addresses (each new owner gets a fresh bucket), which
@@ -1191,6 +1234,49 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
         return;
       }
       const outcome = await decideToolRequest(toolServiceDeps, agent, request, parsedTool.data.decision, {
+        channel: 'app',
+      });
+      if (!outcome.ok) {
+        res.status(outcome.reason === 'already_decided' ? 409 : 400).json({ error: { message: outcome.reason } });
+        return;
+      }
+      res.json({ ok: true, request: { id: request.id, status: outcome.status } });
+      return;
+    }
+
+    // F′ FP-2: a signing JIT decision (off-chain consent) — approve-once / always-allow / deny.
+    if (refType === 'signing') {
+      const parsedSig = signingDecisionSchema.safeParse(req.body);
+      if (!parsedSig.success) {
+        res.status(400).json({ error: { message: 'invalid request body' } });
+        return;
+      }
+      const requestId = (ref as Record<string, unknown>)['requestId'];
+      const request = typeof requestId === 'string' ? await getSigningRequest(deps.pool, requestId) : null;
+      if (!request) {
+        res.status(404).json({ error: { message: 'not found' } });
+        return;
+      }
+      // Mirror C-SF3-2: assert the request belongs to THIS agent (same enumeration-
+      // oracle discipline as requireOwnedAgent) before any state write.
+      if (request.agentId !== agent.id) {
+        res.status(404).json({ error: { message: 'not found' } });
+        return;
+      }
+      // On `always_allow` we record the standing grant from the descriptor + the
+      // request's decoded spender/amount — a SENSITIVE descriptor nonetheless stays
+      // always-ask (00 §6c; the engine re-classifies L2 next time).
+      const descriptor = defaultSigningRegistry.get(request.descriptorId);
+      const decoded = request.decoded as Record<string, unknown>;
+      const grantOnAlways = {
+        descriptorId: request.descriptorId,
+        descriptorKey: descriptor?.key ?? `descriptor:${request.descriptorId}`,
+        spenderSet: typeof decoded['spender'] === 'string' ? [decoded['spender']] : [],
+        perIntentCap: typeof decoded['amountWei'] === 'string' ? decoded['amountWei'] : '0',
+        maxDeadlineWindow: 0,
+        token: '0x0000000000000000000000000000000000000000',
+      };
+      const outcome = await decideSigningRequest(signingServiceDeps, agent, request, parsedSig.data.decision, grantOnAlways, {
         channel: 'app',
       });
       if (!outcome.ok) {
@@ -2418,6 +2504,98 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     res.json({ rules, presets, recentRequests, available: defaultToolRegistry.list() });
   }));
 
+  // ── F′ FP-2: governed-signing grant surfaces (STAGE-F-PRIME §4) ────────────
+  // Set or remove a single signing rule (owner-authored signing-intent-policy
+  // editor). The descriptor MUST be a reviewed registry entry that passes the
+  // N-01/N-02 engine assertions (fail-closed, never a silent on-chain
+  // never-validates); the response returns the on-chain grant params the owner's
+  // client signs (`proposeSigningGrant`) so the engine's domainSeparator/typeHash
+  // and the wall's stored values are byte-identical. This route records ONLY the
+  // read-model mirror — the on-chain policy row is the authority.
+  router.post('/api/agents/:id/signing/rule', asyncRoute(async (req: OwnerRequest, res) => {
+    if (!capabilitiesRateOk(req.ownerAddr ?? '')) {
+      res.status(429).json({ error: { message: 'rate limited' } });
+      return;
+    }
+    const agent = await requireOwnedAgent(req, res);
+    if (!agent) return;
+    const parsed = signingRuleApplySchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: { message: 'invalid request body' } });
+      return;
+    }
+    const descriptorId = parsed.data.rule.descriptorId;
+    // A descriptor outside the reviewed registry is never grantable (default-deny,
+    // never inferred — 00 §9). This is the off-chain floor the engine enforces.
+    const descriptor = defaultSigningRegistry.get(descriptorId);
+    if (!descriptor) {
+      res.status(422).json({ error: { message: `unknown descriptor ${descriptorId}` } });
+      return;
+    }
+    // N-01/N-02 re-assertion at grant time (loud reviewer error, never silent).
+    try {
+      assertDescriptor(descriptor);
+    } catch (e) {
+      if (e instanceof DescriptorError) {
+        res.status(422).json({ error: { message: e.message, code: e.code } });
+        return;
+      }
+      throw e;
+    }
+    if (parsed.data.action === 'remove') {
+      await setSigningRuleStatus(deps.pool, agent.id, descriptorId, 'removed');
+      // FP-CARRY-4/5: removing a descriptor is a signing-relevant tighten → the
+      // on-chain epoch bumps; reconcile the read-model so stale arms show stale.
+      // (The owner's on-chain `removeSigningDescriptor` tx does the actual bump;
+      // here we advance the read-model best-effort by the current rule count.)
+      await reconcileSigningArms(deps.pool, agent.id, Number.MAX_SAFE_INTEGER);
+      res.json({ ok: true, action: 'remove' });
+      return;
+    }
+    const rule: SigningRuleType = {
+      descriptorId,
+      spenderSet: parsed.data.rule.spenderSet.map((s) => s.toLowerCase()),
+      perIntentCap: parsed.data.rule.perIntentCap,
+      maxDeadlineWindow: parsed.data.rule.maxDeadlineWindow,
+      token: parsed.data.rule.token.toLowerCase(),
+      active: true,
+    };
+    await upsertSigningRule(deps.pool, {
+      agentId: agent.id,
+      ownerAddr: agent.ownerAddr,
+      descriptorKey: descriptor.key,
+      rule,
+      source: 'custom',
+      status: 'active',
+    });
+    res.json({ ok: true, action: 'set', rule, onChainGrant: onChainGrantParams(descriptor) });
+  }));
+
+  // Read-only signing envelope: granted rules + reviewed descriptors + recent JIT
+  // decisions + the armed-intent read-model (arms flagged `stale` after a tighten).
+  router.get('/api/agents/:id/signing', asyncRoute(async (req: OwnerRequest, res) => {
+    const agent = await requireOwnedAgent(req, res);
+    if (!agent) return;
+    const [rules, recentRequests, arms] = await Promise.all([
+      listSigningRules(deps.pool, agent.id),
+      listRecentSigningRequests(deps.pool, agent.id, 20),
+      listSigningArms(deps.pool, agent.id, 50),
+    ]);
+    res.json({
+      rules,
+      recentRequests,
+      arms,
+      available: defaultSigningRegistry.list().map((d) => ({
+        descriptorId: d.descriptorId,
+        key: d.key,
+        label: d.label,
+        protocol: d.protocol,
+        sensitive: d.sensitive,
+        onChainGrant: onChainGrantParams(d),
+      })),
+    });
+  }));
+
   // ── SE-7: multichain owner surfaces ────────────────────────────────────────
   // Namespaced /api/networks — "/api/chains" is the Phase-5.6 AGENT-CHAIN
   // (delegation graph) surface; blockchain networks are a different concept.
@@ -2448,6 +2626,13 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
   router.get('/api/agents/:id/networks', asyncRoute(async (req: OwnerRequest, res) => {
     const agent = await requireOwnedAgent(req, res);
     if (!agent) return;
+    // SF-2 carry (Gate-② WARNING): an EXTERNAL-bound agent has no on-chain account
+    // (account_addr null, chain_id=0 sentinel). Return an explicit external
+    // presence rather than a null/zero home-chain card the FE would mis-render.
+    if (agent.bindMode === 'external') {
+      res.json({ accountAddr: null, onboardable: false, homeChainId: null, bindMode: 'external', chains: [] });
+      return;
+    }
     const deployments = await listChainDeployments(deps.pool, agent.id);
     res.json({
       accountAddr: agent.accountAddr,

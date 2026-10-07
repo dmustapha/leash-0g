@@ -465,6 +465,7 @@ export type AlertKind =
   | 'approval_required' // decision — actionable approve/deny on both channels
   | 'capability_request' // decision (Stage D L2 JIT) — a novel governed call needs an owner grant; deep-links into the app to sign on-chain
   | 'tool_request' // decision (SF-3 L2 JIT) — an off-chain tool call needs an owner grant (approve-once / always-allow / deny)
+  | 'signing_request' // decision (F′ FP-2 L2 JIT) — a sensitive off-chain signing needs owner consent (approve-once / always-allow / deny)
   | 'limit_hit' // decision — NOT approvable (the contract reverts regardless); adjust/dismiss
   | 'revoked' // info
   | 'revoke_failed' // info — actionable steer to owner-wallet fallback

@@ -43,6 +43,10 @@ const MAX_ANSWER = 4000;
  */
 export function sanitizeStatusAnswer(text: string): string {
   const stripped = text
+    // SF-2 carry (nit): NFC-normalize first so canonical-equivalent sequences
+    // (decomposed combining marks / compatibility forms) can't smuggle a visually
+    // distinct readout past the strippers below. Defense-in-depth; inert anyway.
+    .normalize('NFC')
     // Strip C0/C1 control chars EXCEPT tab (\u0009) and newline (\u000A).
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/g, ' ')
     // Strip Unicode bidi/isolate overrides (round-2 red-team): a poisoned memory
