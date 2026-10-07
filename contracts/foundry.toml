@@ -5,6 +5,13 @@ libs = ["lib"]
 solc_version = "0.8.30"
 evm_version = "cancun"
 optimizer = true
+# FP-3 (EIP-170): LeashAccountV5 was already 878B over the 24,576 runtime limit at FP-1 (never live-
+# deployable; Foundry's VM doesn't enforce the limit, so it went unnoticed). FP-3 moved the signing
+# fold + grant validation (SigningLib) and the governed-call decode (DecodeLib) into DEPLOYED stateless
+# helper CONTRACTS called via STATICCALL (NOT Solidity libraries — those compile to DELEGATECALL, which
+# violates the C-03 no-delegatecall wall invariant) + wraps the repeated owner/session preambles. Kept
+# at runs=200: runs=1 (size-bias) makes solc emit a DELEGATECALL in V4, breaking C-03 — so the gas
+# bias stays and the deploy headroom comes from extraction, not the optimizer.
 optimizer_runs = 200
 # SE-9 (SD-E12): the Arbitrum bridge decoder family + the L-01 remote-token pin
 # grew the account/factory past the EIP-170 24576-byte limit under the legacy

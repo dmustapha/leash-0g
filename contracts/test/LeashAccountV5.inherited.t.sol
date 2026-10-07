@@ -3,6 +3,8 @@ pragma solidity 0.8.30;
 
 import {Test} from "forge-std/Test.sol";
 import {LeashAccountV5} from "../src/LeashAccountV5.sol";
+import {DecodeLib} from "../src/DecodeLib.sol";
+import {SigningLib} from "../src/SigningLib.sol";
 import {MockERC20} from "../src/MockERC20.sol";
 
 /// A target that re-enters executeCall during its own call (H-06).
@@ -63,7 +65,7 @@ contract LeashAccountV5InheritedTest is Test {
         usd = new MockERC20("Test USD", "TUSD", 6);
         address[] memory list = new address[](1);
         list[0] = makeAddr("beneficiary");
-        acct = new LeashAccountV5(owner, guardian, session, _policy(), list, DELAY, address(usd), LeashAccountV5.TokenPolicy(100e6, 250e6));
+        acct = new LeashAccountV5(owner, guardian, session, _policy(), list, DELAY, address(usd), LeashAccountV5.TokenPolicy(100e6, 250e6), address(new SigningLib()), address(new DecodeLib()));
         usd.mint(address(acct), 1_000e6);
         vm.deal(address(acct), 100 ether);
     }

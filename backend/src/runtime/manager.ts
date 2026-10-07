@@ -35,6 +35,8 @@ import { consumeOneShot } from './one-shot-consume.js';
 import type { CapabilityDeps } from '../capabilities/service.js';
 import { defaultToolRegistry } from '../tool-use/index.js';
 import { createDbGrantLoader } from '../gateway/mcp/governed-provider.js';
+import { defaultSigningRegistry } from '../signing/index.js';
+import { listSigningRules, getSigningRequest, recordSigningArm } from '../store/signing.js';
 import { createHttpMcpEgressClient, parseEgressConfigFromEnv } from '../gateway/mcp/egress.js';
 import { buildJobGraph, type JobGraph } from '../jobs/graph.js';
 import type { StorageUploader } from '../audit/batcher.js';
@@ -190,6 +192,53 @@ export class LeashRuntimeManager implements RuntimeManager {
   }
 
   /**
+   * FP-3: the governed signing rail deps. Only wired when the alert engine is present (the JIT rail
+   * `raiseSigningRequest` needs it). `loadGrant` live-reads the owner's signing-rule mirror from the
+   * read-model (the on-chain wall stays authoritative; `signingEpoch` is unused in the decide path —
+   * the arm tx reads the real epoch for the read-model record). Absent ⇒ a `sign` stands down.
+   */
+  private signingRailDeps(): import('./treasury-graph.js').SigningRail | undefined {
+    const alerts = this.deps.alerts;
+    if (!alerts) return undefined;
+    return {
+      registry: defaultSigningRegistry,
+      loadGrant: async (agentId: string) => {
+        const rows = await listSigningRules(this.deps.pool, agentId);
+        const rules = new Map<number, import('../signing/index.js').SigningRule>();
+        for (const r of rows) {
+          if (r.status !== 'active') continue;
+          rules.set(r.descriptorId, {
+            descriptorId: r.descriptorId,
+            spenderSet: r.spenderSet,
+            perIntentCap: r.perIntentCap,
+            maxDeadlineWindow: r.maxDeadlineWindow,
+            token: r.token,
+            active: true,
+          });
+        }
+        return { rules, signingEpoch: 0 };
+      },
+      resolvePins: async ({ agentId, descriptorId }) => {
+        // Server-held pins for non-role leaves. `token` = the granted budget token (Permit2's `token`
+        // leaf). `nonce` defaults to 0 — our wall never validates the permit nonce (the downstream
+        // protocol does); the live drill reads the real nonce when a specific protocol requires it.
+        const rows = await listSigningRules(this.deps.pool, agentId);
+        const rule = rows.find((r) => r.descriptorId === descriptorId && r.status === 'active');
+        const pins: Record<string, string | number | bigint | boolean> = { nonce: 0 };
+        if (rule) pins['token'] = rule.token;
+        return pins;
+      },
+      service: {
+        pool: this.deps.pool,
+        hub: this.deps.hub,
+        broker: this.deps.broker,
+        alerts,
+        jitTtlMs: this.deps.settings.jitTtlMs ?? 600_000,
+      },
+    };
+  }
+
+  /**
    * SE-8: the treasury graph's bridge-lane deps for one agent — the chain's
    * bridge allowlist (classify enforcement) + the HARD pre-routing gate
    * (`assertBridgeRoutable` → `ChainRegistry.assertSameAddress`, carry #1).
@@ -275,6 +324,8 @@ export class LeashRuntimeManager implements RuntimeManager {
             ...(this.capabilityDeps() ? { capabilities: this.capabilityDeps() } : {}),
             // SF-3: the governed tool-use rail (optional; absent ⇒ tool_call stands down).
             ...(this.toolRailDeps() ? { toolRail: this.toolRailDeps() } : {}),
+            // FP-3: the governed signing rail (optional; absent ⇒ sign stands down).
+            ...(this.signingRailDeps() ? { signingRail: this.signingRailDeps() } : {}),
             // SE-8: the governed-bridging lane — only when the registry knows the
             // agent's chain AND that chain has an owner-configured bridge allowlist.
             // Absent = fail-closed (a bridge call classifies forbidden / stands down).
@@ -357,6 +408,49 @@ export class LeashRuntimeManager implements RuntimeManager {
           await new Promise((r) => setTimeout(r, ONE_SHOT_CONSUME_RETRY_MS).unref?.());
         }
       }
+    } catch (err) {
+      await this.recordFailure(agentId, err);
+    }
+  }
+
+  /**
+   * FP-3 (L2 consent → arm): after the owner APPROVES a sensitive signing request (approve_once /
+   * always_allow), submit the on-chain arm via the agent's scoped session key using the server-held
+   * intent (fields + digest quarantined at raise time) and record it in `signing_arms`. The symmetric
+   * analogue of `consumeApprovedOneShot` for the signing rail. Fire-and-forget (never blocks the HTTP
+   * response); the on-chain wall re-validates + debits regardless (a revert = traced failure, never a
+   * phantom arm). Idempotent against a re-trigger: a still-live digest reverts `AlreadyArmed` → traced.
+   */
+  async armApprovedSigning(agentId: string, requestId: string): Promise<void> {
+    try {
+      const agent = await getAgentById(this.deps.pool, agentId);
+      if (!agent || agent.status !== 'active') return;
+      assertNativeAgent(agent);
+      const chain = this.deps.resolveChain?.(agent.chainId) ?? this.deps.chain;
+      if (!chain.authorizeSigningIntent) return; // runtime chain cannot arm (e.g. a read-only fake)
+      const request = await getSigningRequest(this.deps.pool, requestId);
+      if (!request || request.agentId !== agent.id) return;
+      if (request.status !== 'approved_once' && request.status !== 'always_allowed') return;
+      const intent = request.intent as { descriptorId?: number; fields?: string[]; digest?: string } | null;
+      if (!intent || intent.descriptorId === undefined || !intent.fields || !intent.digest) return;
+      const sessionPrivateKey = decryptSecret(agent.sessionKeyEnc, this.deps.settings.keyEncryptionSecret);
+      const armed = await chain.authorizeSigningIntent({
+        sessionPrivateKey,
+        accountAddr: agent.accountAddr,
+        descriptorId: intent.descriptorId,
+        fields: intent.fields,
+        digest: intent.digest,
+      });
+      const decoded = request.decoded as Record<string, unknown>;
+      await recordSigningArm(this.deps.pool, {
+        agentId: agent.id,
+        descriptorId: intent.descriptorId,
+        digest: armed.digest,
+        spender: typeof decoded['spender'] === 'string' ? decoded['spender'] : '',
+        amount: typeof decoded['amountWei'] === 'string' ? decoded['amountWei'] : '0',
+        deadline: typeof decoded['deadlineSec'] === 'number' ? decoded['deadlineSec'] : 0,
+        epoch: armed.epoch,
+      });
     } catch (err) {
       await this.recordFailure(agentId, err);
     }

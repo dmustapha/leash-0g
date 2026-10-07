@@ -1303,6 +1303,11 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
         res.status(outcome.reason === 'already_decided' ? 409 : 400).json({ error: { message: outcome.reason } });
         return;
       }
+      // FP-3 (L2 consent → arm): on an approving decision, fire-and-forget the on-chain arm via the
+      // agent's session key (never blocks the HTTP response; the runtime re-validates + records).
+      if (parsedSig.data.decision !== 'deny') {
+        void deps.runtime?.armApprovedSigning?.(agent.id, request.id);
+      }
       res.json({ ok: true, request: { id: request.id, status: outcome.status } });
       return;
     }

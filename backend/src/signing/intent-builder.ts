@@ -1,6 +1,12 @@
 import { encodeAbiParameters, keccak256, concat, type Hex } from 'viem';
 import type { Eip712Field, SigningDescriptor, SigningRule } from './types.js';
-import { toViemDomain, descriptorTypeHash, descriptorDomainSeparator } from './intent-registry.js';
+import {
+  toViemDomain,
+  descriptorTypeHash,
+  descriptorDomainSeparator,
+  descriptorLeaves,
+  foldSpec,
+} from './intent-registry.js';
 import { parseSigningAmount } from './amount.js';
 
 /**
@@ -88,15 +94,22 @@ export function buildIntent(descriptor: SigningDescriptor, rule: SigningRule | u
   const self = input.ctx.self.toLowerCase();
   const deadlineSec = input.ctx.nowSec + input.ctx.windowSec;
 
-  // Build the message field-by-field, pinning each from server state. Anything
-  // not positively resolvable server-side stands the build down (never model text).
-  const message: Record<string, unknown> = {};
+  // Build the LEAF words (what the session key submits + the wall indexes), pinning each from server
+  // state — anything not positively resolvable server-side stands the build down (never model text).
+  // The nested member (if any) is expanded in place, so `leaves` is the flat pre-order leaf list.
+  const leaves = descriptorLeaves(descriptor);
+  const fold = foldSpec(descriptor);
+  const coercedByName: Record<string, string | bigint | boolean> = {};
   const words: Hex[] = [];
-  for (const f of descriptor.fields) {
+  for (const f of leaves) {
     let value: string | number | bigint | boolean;
     if (f.name === descriptor.roles.amount) {
       value = amount;
     } else if (f.name === descriptor.roles.deadline) {
+      value = BigInt(deadlineSec);
+    } else if (descriptor.expiryRole !== undefined && f.name === descriptor.expiryRole) {
+      // FP-3 (R-2): the secondary expiry (Permit2 `expiration`) is SERVER-pinned to the same
+      // deadline the owner window bounds — never model text, never farther than the signature.
       value = BigInt(deadlineSec);
     } else if (f.name === descriptor.roles.spender) {
       value = spender;
@@ -110,24 +123,35 @@ export function buildIntent(descriptor: SigningDescriptor, rule: SigningRule | u
     }
     const coerced = coerce(f.type, value);
     if (coerced === null) return { ok: false, reason: 'bad_pin' };
-    message[f.name] = coerced;
-    // the 32-byte EIP-712 word for this static field (encodeAbiParameters emits
-    // exactly one word for a static type → the on-chain `fields[i]`).
+    coercedByName[f.name] = coerced;
     words.push(encodeAbiParameters([{ type: f.type }], [coerced]));
   }
 
   const domain = toViemDomain(descriptor.domain);
-  const types: Record<string, Eip712Field[]> = { [descriptor.primaryType]: descriptor.fields.map((f) => ({ ...f })) };
-  // digest = keccak256(0x1901 ‖ domainSeparator ‖ keccak256(typeHash ‖ fields)) —
-  // the EXACT on-chain reconstruction (N-02 static struct ⇒ EIP-712 encodeData is
-  // the flat concatenation of the per-field words we just built).
-  const structHash = keccak256(concat([descriptorTypeHash(descriptor), ...words]));
+  // digest reconstruction — EXACTLY the on-chain `_signingStructHash`:
+  //   FLAT:   keccak256(typeHash ‖ leaves)
+  //   NESTED: fold the sub-struct run into one word, then keccak256(typeHash ‖ top members).
+  const typeHash = descriptorTypeHash(descriptor);
+  let structHash: Hex;
+  if (fold.nestedLeafCount === 0) {
+    structHash = keccak256(concat([typeHash, ...words]));
+  } else {
+    const nestedTypeHash = fold.nestedTypeHash;
+    const nestedWords = words.slice(fold.nestedLeafStart, fold.nestedLeafStart + fold.nestedLeafCount);
+    const nestedHash = keccak256(concat([nestedTypeHash, ...nestedWords]));
+    const top: Hex[] = [
+      ...words.slice(0, fold.nestedLeafStart),
+      nestedHash,
+      ...words.slice(fold.nestedLeafStart + fold.nestedLeafCount),
+    ];
+    structHash = keccak256(concat([typeHash, ...top]));
+  }
   const digest = keccak256(concat(['0x1901', descriptorDomainSeparator(descriptor), structHash]));
 
   return {
     ok: true,
     descriptorId: descriptor.descriptorId,
-    typedData: { domain, types, primaryType: descriptor.primaryType, message },
+    typedData: { domain, types: buildViemTypes(descriptor), primaryType: descriptor.primaryType, message: buildMessage(descriptor, coercedByName) },
     fields: words,
     digest,
     spender,
@@ -135,6 +159,34 @@ export function buildIntent(descriptor: SigningDescriptor, rule: SigningRule | u
     deadlineSec,
     humanReadable: decodeForHuman(descriptor, spender, amount, deadlineSec, input.ctx.nowSec, rule.token),
   };
+}
+
+/** The viem `types` map for a descriptor — primary (nested member referencing the sub-struct) +
+ * the sub-struct entry when nested. Used for the display payload + the viem `hashTypedData` oracle. */
+function buildViemTypes(descriptor: SigningDescriptor): Record<string, Eip712Field[]> {
+  const types: Record<string, Eip712Field[]> = {
+    [descriptor.primaryType]: descriptor.fields.map((f) => ({ ...f })),
+  };
+  if (descriptor.nested) types[descriptor.nested.structType] = descriptor.nested.subFields.map((f) => ({ ...f }));
+  return types;
+}
+
+/** The EIP-712 message object — nesting the sub-struct's leaves under its member name when nested. */
+function buildMessage(
+  descriptor: SigningDescriptor,
+  coercedByName: Record<string, string | bigint | boolean>,
+): Record<string, unknown> {
+  const message: Record<string, unknown> = {};
+  for (const f of descriptor.fields) {
+    if (descriptor.nested && f.name === descriptor.nested.memberName) {
+      const sub: Record<string, unknown> = {};
+      for (const s of descriptor.nested.subFields) sub[s.name] = coercedByName[s.name];
+      message[f.name] = sub;
+    } else {
+      message[f.name] = coercedByName[f.name];
+    }
+  }
+  return message;
 }
 
 /**

@@ -5,6 +5,8 @@ import {Test} from "forge-std/Test.sol";
 import {StdInvariant} from "forge-std/StdInvariant.sol";
 import {Vm} from "forge-std/Vm.sol";
 import {LeashAccountV5} from "../src/LeashAccountV5.sol";
+import {DecodeLib} from "../src/DecodeLib.sol";
+import {SigningLib} from "../src/SigningLib.sol";
 import {MockERC20} from "../src/MockERC20.sol";
 
 /// Fuzzes valid-signature signing-intent arming + re-arming + time warps against the wall.
@@ -128,6 +130,19 @@ contract SigningHandler is Test {
 }
 
 contract LeashAccountV5SigningInvariantTest is StdInvariant, Test {
+
+    // FP-3: the flat `proposeSigningGrant` was removed (owners use the nested fn with a zeroed fold).
+    // This helper preserves the FP-1 call convention, exercising the identical flat on-chain path.
+    function _proposeFlat(
+        uint256 id, bytes32 ds, bytes32 th, uint8 nf, uint8 si, uint8 ai, uint8 di,
+        address token, uint128 cap, uint64 win, address[] memory sp
+    ) internal {
+        acct.proposeSigningGrantNested(
+            SigningLib.SigningGrantParams(id, ds, th, nf, si, ai, di, type(uint8).max, bytes32(0), 0, 0, token, cap, win),
+            sp
+        );
+    }
+
     LeashAccountV5 internal acct;
     MockERC20 internal usd;
     SigningHandler internal handler;
@@ -146,7 +161,7 @@ contract LeashAccountV5SigningInvariantTest is StdInvariant, Test {
         acct = new LeashAccountV5(
             owner, makeAddr("guardian"), session,
             LeashAccountV5.Policy(1 ether, 3 ether, NON_RESETTING_WINDOW, uint64(block.timestamp + 3650 days)),
-            list, 0, address(usd), LeashAccountV5.TokenPolicy(0, 0)
+            list, 0, address(usd), LeashAccountV5.TokenPolicy(0, 0), address(new SigningLib()), address(new DecodeLib())
         );
         usd.mint(address(acct), 1_000_000 ether);
 
@@ -166,7 +181,7 @@ contract LeashAccountV5SigningInvariantTest is StdInvariant, Test {
         address[] memory sp = new address[](1);
         sp[0] = spender;
         vm.prank(owner);
-        acct.proposeSigningGrant(DESCRIPTOR_ID, domainSep, typeHash, 5, 1, 2, 4, address(usd), 100 ether, 1 hours, sp);
+        _proposeFlat(DESCRIPTOR_ID, domainSep, typeHash, 5, 1, 2, 4, address(usd), 100 ether, 1 hours, sp);
         vm.prank(owner);
         acct.applySigningGrant();
 

@@ -1,5 +1,6 @@
 import { keccak256, toBytes, concat, encodeAbiParameters, getTypesForEIP712Domain, type Hex } from 'viem';
 import type { Eip712Domain, Eip712Field, SigningDescriptor } from './types.js';
+import { FP3_DESCRIPTORS } from './descriptors.js';
 
 /**
  * Reviewed signing descriptor registry (FP-2, SD-F6/F9) — the authority surface
@@ -76,61 +77,138 @@ export function assertDescriptor(d: SigningDescriptor): void {
       'domain.verifyingContract must be a nonzero 0x address (N-01)',
     );
   }
-  // numFields bounds mirror the on-chain `proposeSigningGrant` (1..32).
-  if (d.fields.length === 0) throw new DescriptorError(d.key, 'no_fields', 'descriptor has no fields');
-  if (d.fields.length > 32) throw new DescriptorError(d.key, 'too_many_fields', 'descriptor exceeds 32 fields');
-  // N-02: every field is a static 32-byte word (no dynamic/nested/array).
-  for (const f of d.fields) {
-    if (!isStaticWordType(f.type)) {
-      throw new DescriptorError(
-        d.key,
-        'dynamic_field',
-        `field "${f.name}" type "${f.type}" is not a static 32-byte word (N-02)`,
-      );
+  if (d.fields.length === 0) throw new DescriptorError(d.key, 'no_fields', 'descriptor has no top-level fields');
+
+  // FP-3 (R-6/S3): N-02 recurses into the single nested group — every LEAF (the nested member's
+  // subFields + every other top member) must be a static 32-byte word; the nested member itself is
+  // the sub-struct (its `type` names the sub-struct, validated via subFields, never a leaf).
+  if (d.nested) {
+    const nested = d.nested;
+    const topPos = d.fields.findIndex((f) => f.name === nested.memberName);
+    if (topPos < 0) {
+      throw new DescriptorError(d.key, 'unknown_role_field', `nested member "${nested.memberName}" absent from fields`);
+    }
+    if (nested.subFields.length === 0) {
+      throw new DescriptorError(d.key, 'no_fields', 'nested group has no subFields');
+    }
+    for (const sub of nested.subFields) {
+      if (!isStaticWordType(sub.type)) {
+        throw new DescriptorError(d.key, 'dynamic_field', `nested leaf "${sub.name}" type "${sub.type}" is not a static 32-byte word (N-02)`);
+      }
+    }
+    for (const f of d.fields) {
+      if (f.name === nested.memberName) continue; // the sub-struct member, validated above
+      if (!isStaticWordType(f.type)) {
+        throw new DescriptorError(d.key, 'dynamic_field', `field "${f.name}" type "${f.type}" is not a static 32-byte word (N-02)`);
+      }
+    }
+  } else {
+    for (const f of d.fields) {
+      if (!isStaticWordType(f.type)) {
+        throw new DescriptorError(d.key, 'dynamic_field', `field "${f.name}" type "${f.type}" is not a static 32-byte word (N-02)`);
+      }
     }
   }
-  // Role fields must exist and carry the right static type.
-  const si = fieldIndex(d, d.roles.spender);
-  const ai = fieldIndex(d, d.roles.amount);
-  const di = fieldIndex(d, d.roles.deadline);
-  if (si < 0) throw new DescriptorError(d.key, 'unknown_role_field', `spender role field "${d.roles.spender}" absent`);
-  if (ai < 0) throw new DescriptorError(d.key, 'unknown_role_field', `amount role field "${d.roles.amount}" absent`);
-  if (di < 0) throw new DescriptorError(d.key, 'unknown_role_field', `deadline role field "${d.roles.deadline}" absent`);
-  const spenderType = d.fields[si]?.type;
-  const amountType = d.fields[ai]?.type;
-  const deadlineType = d.fields[di]?.type;
-  if (spenderType !== 'address') {
-    throw new DescriptorError(d.key, 'role_type_mismatch', `spender role field must be address`);
+
+  // Bounds mirror the on-chain `_stageSigningGrant` (1..32 LEAVES).
+  const leaves = descriptorLeaves(d);
+  if (leaves.length > 32) throw new DescriptorError(d.key, 'too_many_fields', 'descriptor exceeds 32 leaves');
+
+  // Role fields resolve to LEAF indices + carry the right static type.
+  const si = leaves.findIndex((f) => f.name === d.roles.spender);
+  const ai = leaves.findIndex((f) => f.name === d.roles.amount);
+  const di = leaves.findIndex((f) => f.name === d.roles.deadline);
+  if (si < 0) throw new DescriptorError(d.key, 'unknown_role_field', `spender role leaf "${d.roles.spender}" absent`);
+  if (ai < 0) throw new DescriptorError(d.key, 'unknown_role_field', `amount role leaf "${d.roles.amount}" absent`);
+  if (di < 0) throw new DescriptorError(d.key, 'unknown_role_field', `deadline role leaf "${d.roles.deadline}" absent`);
+  if (leaves[si]?.type !== 'address') {
+    throw new DescriptorError(d.key, 'role_type_mismatch', `spender role leaf must be address`);
   }
-  if (!amountType || !/^uint\d+$/.test(amountType)) {
-    throw new DescriptorError(d.key, 'role_type_mismatch', `amount role field must be uintN`);
+  if (!/^uint\d+$/.test(leaves[ai]?.type ?? '')) {
+    throw new DescriptorError(d.key, 'role_type_mismatch', `amount role leaf must be uintN`);
   }
-  if (!deadlineType || !/^uint\d+$/.test(deadlineType)) {
-    throw new DescriptorError(d.key, 'role_type_mismatch', `deadline role field must be uintN`);
+  if (!/^uint\d+$/.test(leaves[di]?.type ?? '')) {
+    throw new DescriptorError(d.key, 'role_type_mismatch', `deadline role leaf must be uintN`);
   }
-  // Role indices pairwise distinct — mirror the on-chain index-aliasing guard
-  // (`proposeSigningGrant` reverts InvalidPolicy): a single word read as two roles
-  // (a deadline decoded as the amount) would mis-bound the signature.
   if (si === ai || si === di || ai === di) {
-    throw new DescriptorError(d.key, 'role_index_alias', 'spender/amount/deadline must map to distinct fields');
+    throw new DescriptorError(d.key, 'role_index_alias', 'spender/amount/deadline must map to distinct leaves');
+  }
+  // FP-3 (R-2): the optional secondary-expiry leaf must exist, be uintN, and be distinct from roles.
+  if (d.expiryRole !== undefined) {
+    const ei = leaves.findIndex((f) => f.name === d.expiryRole);
+    if (ei < 0) throw new DescriptorError(d.key, 'unknown_role_field', `expiry role leaf "${d.expiryRole}" absent`);
+    if (!/^uint\d+$/.test(leaves[ei]?.type ?? '')) {
+      throw new DescriptorError(d.key, 'role_type_mismatch', `expiry role leaf must be uintN`);
+    }
+    if (ei === si || ei === ai || ei === di) {
+      throw new DescriptorError(d.key, 'role_index_alias', 'expiry must map to a leaf distinct from the roles');
+    }
   }
 }
 
-function fieldIndex(d: SigningDescriptor, name: string): number {
-  return d.fields.findIndex((f) => f.name === name);
+/** Index of a role in the flat LEAF list (the index the on-chain policy stores). */
+function leafIndex(d: SigningDescriptor, name: string): number {
+  return descriptorLeaves(d).findIndex((f) => f.name === name);
 }
 
 /**
- * The EIP-712 `encodeType` string for a descriptor's flat struct. N-02 guarantees
- * no referenced sub-types, so this is the complete canonical type string.
+ * The EIP-712 `encodeType` fragment for ONE struct: `Primary(type name,type name,…)`. For a nested
+ * descriptor the top-level fragment renders the nested member as `SubType memberName`.
  */
 export function encodeType(primaryType: string, fields: readonly Eip712Field[]): string {
   return `${primaryType}(${fields.map((f) => `${f.type} ${f.name}`).join(',')})`;
 }
 
-/** `typeHash = keccak256(encodeType)` — the value the on-chain policy stores. */
+/**
+ * FP-3: the flat LEAF fields of a descriptor in EIP-712 pre-order. FLAT ⇒ `fields` verbatim (FP-1).
+ * NESTED ⇒ the one nested member is expanded in place to its `subFields` (every other member is a
+ * single leaf), so the leaf list is exactly what the session key submits + what the wall indexes.
+ */
+export function descriptorLeaves(d: SigningDescriptor): Eip712Field[] {
+  if (!d.nested) return [...d.fields];
+  const out: Eip712Field[] = [];
+  for (const f of d.fields) {
+    if (f.name === d.nested.memberName) out.push(...d.nested.subFields);
+    else out.push(f);
+  }
+  return out;
+}
+
+/** The on-chain fold spec (leaf-space) a descriptor maps to — mirror of the pending-grant fields. */
+export interface FoldSpec {
+  numTopFields: number;
+  nestedTypeHash: Hex; // ZERO_WORD when flat
+  nestedLeafStart: number; // 0 when flat
+  nestedLeafCount: number; // 0 when flat
+}
+
+export function foldSpec(d: SigningDescriptor): FoldSpec {
+  if (!d.nested) {
+    return { numTopFields: d.fields.length, nestedTypeHash: ZERO_WORD, nestedLeafStart: 0, nestedLeafCount: 0 };
+  }
+  // The nested member's TOP position == the number of leaves before it (all prior top members are
+  // single leaves, since there is exactly one nested group) — so it also equals nestedLeafStart.
+  const nested = d.nested;
+  const topPos = d.fields.findIndex((f) => f.name === nested.memberName);
+  if (topPos < 0) {
+    throw new DescriptorError(d.key, 'unknown_role_field', `nested member "${nested.memberName}" absent from fields`);
+  }
+  return {
+    numTopFields: d.fields.length,
+    nestedTypeHash: keccak256(toBytes(encodeType(nested.structType, nested.subFields))),
+    nestedLeafStart: topPos,
+    nestedLeafCount: nested.subFields.length,
+  };
+}
+
+/** `typeHash = keccak256(encodeType)` — the value the on-chain policy stores (VERBATIM). For a nested
+ * descriptor the referenced sub-type string is appended (one sub-type ⇒ trivial alphabetical order),
+ * reproducing the PROTOCOL's real combined type string (FP-3 review R-6). */
 export function descriptorTypeHash(d: SigningDescriptor): Hex {
-  return keccak256(toBytes(encodeType(d.primaryType, d.fields)));
+  const primary = encodeType(d.primaryType, d.fields);
+  if (!d.nested) return keccak256(toBytes(primary));
+  const sub = encodeType(d.nested.structType, d.nested.subFields);
+  return keccak256(toBytes(primary + sub));
 }
 
 /**
@@ -190,21 +268,36 @@ export interface OnChainGrantParams {
   descriptorId: number;
   domainSeparator: Hex;
   typeHash: Hex;
+  /** TOP-LEVEL member count (the on-chain `numFields`). */
   numFields: number;
+  /** LEAF-space role indices (what the wall reads from the submitted leaf array). */
   spenderIndex: number;
   amountIndex: number;
   deadlineIndex: number;
+  /** FP-3: the on-chain fold spec (0 / ZERO_WORD when flat). */
+  nestedTypeHash: Hex;
+  nestedLeafStart: number;
+  nestedLeafCount: number;
+  /** FP-3 (R-2): secondary-expiry leaf index, or 255 (0xFF) sentinel when none. */
+  expiryLeafIndex: number;
 }
 
+const NO_EXPIRY_LEAF = 255; // 0xFF sentinel — mirrors the on-chain `type(uint8).max`.
+
 export function onChainGrantParams(d: SigningDescriptor): OnChainGrantParams {
+  const fold = foldSpec(d);
   return {
     descriptorId: d.descriptorId,
     domainSeparator: descriptorDomainSeparator(d),
     typeHash: descriptorTypeHash(d),
-    numFields: d.fields.length,
-    spenderIndex: fieldIndex(d, d.roles.spender),
-    amountIndex: fieldIndex(d, d.roles.amount),
-    deadlineIndex: fieldIndex(d, d.roles.deadline),
+    numFields: fold.numTopFields,
+    spenderIndex: leafIndex(d, d.roles.spender),
+    amountIndex: leafIndex(d, d.roles.amount),
+    deadlineIndex: leafIndex(d, d.roles.deadline),
+    nestedTypeHash: fold.nestedTypeHash,
+    nestedLeafStart: fold.nestedLeafStart,
+    nestedLeafCount: fold.nestedLeafCount,
+    expiryLeafIndex: d.expiryRole !== undefined ? leafIndex(d, d.expiryRole) : NO_EXPIRY_LEAF,
   };
 }
 
@@ -236,10 +329,11 @@ export function createSigningRegistry(descriptors: readonly SigningDescriptor[] 
 }
 
 /**
- * The v1 built-in descriptor set (FP-2). A deliberately SMALL, canonical seed — the
- * BROAD protocol seeding (Permit2 nested-struct flattening, CoW, Hyperliquid) is
- * FP-3. `verifyingContract` here is a per-chain placeholder; FP-3 wires the real
- * deployed addresses per chain. ERC-2612 is the canonical flat permit.
+ * The built-in descriptor set. Descriptor 1 is the FP-2 canonical ERC-2612 seed (a per-chain
+ * placeholder verifyingContract; kept stable — FP-2 tests + the read-model reference it). FP-3
+ * APPENDS the REAL per-chain descriptors (`FP3_DESCRIPTORS`): real Circle USDC ERC-2612 (flat,
+ * Base/Arb/Eth) + Permit2 `PermitSingle` (one-level nested, all 4 chains). Each is asserted
+ * (N-01/N-02) at construction; adding a protocol is a descriptor + grant, never a code change (FP-e).
  */
 export const BUILT_IN: readonly SigningDescriptor[] = [
   {
@@ -265,6 +359,7 @@ export const BUILT_IN: readonly SigningDescriptor[] = [
     roles: { spender: 'spender', amount: 'value', deadline: 'deadline' },
     sensitive: false,
   },
+  ...FP3_DESCRIPTORS,
 ];
 
 export const defaultSigningRegistry: SigningRegistry = createSigningRegistry();

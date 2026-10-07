@@ -114,6 +114,11 @@ export interface RuntimeManager {
    * HTTP response; freshness re-check + fail-safe live in the runtime path.
    */
   consumeApprovedOneShot(agentId: string, requestId: string): Promise<void>;
+  /**
+   * FP-3: after the owner approves a sensitive L2 signing request, arm the held intent on-chain via
+   * the agent's session key (the signing analogue of `consumeApprovedOneShot`). Fire-and-forget.
+   */
+  armApprovedSigning?(agentId: string, requestId: string): Promise<void>;
 }
 
 export interface Settings {
