@@ -223,6 +223,7 @@ export function testSettings(overrides: Partial<AppDeps['settings']> = {}): AppD
     },
     jitTtlMs: 600_000,
     defaultChainId: 16602,
+    publicBaseUrl: 'https://leash-test.local',
     ...overrides,
   };
 }

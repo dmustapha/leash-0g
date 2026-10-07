@@ -148,6 +148,12 @@ export interface Settings {
   jitTtlMs: number;
   /** SE-5 (Stage E): the chain new agents are created on (the (chainId, account) anchor). */
   defaultChainId: number;
+  /**
+   * SF-2: LEASH's own public base URL (e.g. https://leash-0g-backend.onrender.com).
+   * Used to build the gateway + MCP endpoints an external bound agent swaps its
+   * base_url to. Empty string in dev ⇒ the bind response returns path-only hints.
+   */
+  publicBaseUrl: string;
 }
 
 export interface AppDeps {

@@ -722,7 +722,7 @@ describe('POST /api/agents/revoke-batch', () => {
   it('partial failure is honest: failed agent gets C-2 shape, NOT marked revoked, runtime halted, error traced', async () => {
     const a = await seedFullAgent();
     const b = await seedFullAgent();
-    t.chain.revokeErrorFor.add(a.accountAddr.toLowerCase());
+    t.chain.revokeErrorFor.add(a.accountAddr!.toLowerCase());
     const res = await request(t.app)
       .post('/api/agents/revoke-batch')
       .set('authorization', ownerAuth(OWNER))
@@ -820,7 +820,7 @@ describe('GET /api/agents', () => {
 
   it('returns the AgentSummary shape with live balances', async () => {
     const agent = await seedFullAgent(FLEET_OWNER, 'balance-check');
-    t.chain.balances.set(agent.accountAddr.toLowerCase(), 12_345n);
+    t.chain.balances.set(agent.accountAddr!.toLowerCase(), 12_345n);
     const res = await request(t.app).get('/api/agents').set('authorization', ownerAuth(FLEET_OWNER));
     const agents = res.body.agents as Array<Record<string, unknown>>;
     const summary = agents.find((a) => a['agentId'] === agent.id);

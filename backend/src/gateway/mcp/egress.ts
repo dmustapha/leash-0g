@@ -2,6 +2,7 @@ import type { Json } from '../../crypto/canonical.js';
 import type { McpCallResult } from './provider.js';
 import type { McpEgressClient } from './governed-provider.js';
 import type { EgressConfig } from './governed-provider.js';
+import { originOf, isInternalHost } from '../../tool-use/tool-classify.js';
 
 /**
  * SF-3 egress leg — the mediating proxy's forward to a real external MCP server.
@@ -69,6 +70,10 @@ export function createHttpMcpEgressClient(timeoutMs = DEFAULT_TIMEOUT_MS): McpEg
  *
  * `MCP_SERVER_ENDPOINTS` = JSON `{ "<server>": "<url>", ... }`.
  * `MCP_EGRESS_ALLOWLIST` = comma-separated origins (`scheme://host[:port]`).
+ * `MCP_EGRESS_ALLOW_INTERNAL` = `true` opts IN to internal/loopback/metadata
+ *   egress origins (dev/[DEPLOY] echo servers). Default off: a config that lists
+ *   an internal origin (127.0.0.1, 169.254.169.254, 10.x, …) throws at BOOT
+ *   (C-SF3-1 — config-time egress-origin validation, fail-loud not fail-silent).
  */
 export function parseEgressConfigFromEnv(env: NodeJS.ProcessEnv = process.env): EgressConfig {
   let serverEndpoints: Record<string, string> = {};
@@ -89,5 +94,35 @@ export function parseEgressConfigFromEnv(env: NodeJS.ProcessEnv = process.env): 
     .split(',')
     .map((o) => o.trim())
     .filter((o) => o.length > 0);
+
+  // C-SF3-1: reject an internal/loopback/metadata/private egress origin at boot
+  // unless explicitly opted in. These are the SSRF targets the mediating proxy
+  // must never reach; surfacing a misconfig loudly beats silently proxying to
+  // 169.254.169.254. Validate BOTH the allowlist and the configured endpoints.
+  const allowInternal = (env['MCP_EGRESS_ALLOW_INTERNAL'] ?? '').toLowerCase() === 'true';
+  if (!allowInternal) {
+    for (const o of egressAllowlist) {
+      const host = (() => {
+        try {
+          return new URL(o).hostname;
+        } catch {
+          return o;
+        }
+      })();
+      if (isInternalHost(host)) {
+        throw new Error(
+          `MCP_EGRESS_ALLOWLIST contains an internal/loopback/metadata origin '${o}' — set MCP_EGRESS_ALLOW_INTERNAL=true to opt in (C-SF3-1 SSRF guard)`,
+        );
+      }
+    }
+    for (const [server, url] of Object.entries(serverEndpoints)) {
+      const origin = originOf(url);
+      if (origin === null || isInternalHost(new URL(url).hostname)) {
+        throw new Error(
+          `MCP_SERVER_ENDPOINTS['${server}'] resolves to an internal/unparseable origin '${url}' — set MCP_EGRESS_ALLOW_INTERNAL=true to opt in (C-SF3-1 SSRF guard)`,
+        );
+      }
+    }
+  }
   return { serverEndpoints, egressAllowlist };
 }

@@ -116,7 +116,7 @@ export type ToolJitDecision = 'approve_once' | 'always_allow' | 'deny';
 
 export type DecideToolResult =
   | { ok: true; status: ToolRequestRow['status'] }
-  | { ok: false; reason: 'already_decided' | 'no_approval' };
+  | { ok: false; reason: 'already_decided' | 'no_approval' | 'agent_mismatch' };
 
 /**
  * Owner decision on a JIT tool request. Mirrors `decideCapabilityRequest` but is
@@ -136,9 +136,18 @@ export async function decideToolRequest(
   decision: ToolJitDecision,
   opts: { channel?: 'app' | 'telegram' } = {},
 ): Promise<DecideToolResult> {
+  // C-SF3-2 (defense-in-depth): the caller resolves `agent` and `request`
+  // separately; never decide a request that belongs to a different agent, even
+  // if a route forgets the upstream check. Fail closed before any state write.
+  if (request.agentId !== agent.id) return { ok: false, reason: 'agent_mismatch' };
   if (!request.approvalId) return { ok: false, reason: 'no_approval' };
 
   const status = decision === 'approve_once' ? 'approved_once' : decision === 'always_allow' ? 'always_allowed' : 'denied';
+  // C-SF3-5: setToolRequestDecision is a CAS on status='pending'. This closes the
+  // decide↔timeout race: if the synchronous JIT hold already expired the request
+  // (status='expired') the owner's late decision loses the CAS → already_decided,
+  // and crucially no second forward happens (the held call already failed closed
+  // on timeout). First writer wins; a stale decision can never re-open a call.
   const decided = await setToolRequestDecision(deps.pool, request.id, status);
   if (!decided) return { ok: false, reason: 'already_decided' };
 

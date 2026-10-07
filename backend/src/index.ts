@@ -312,6 +312,10 @@ async function main(): Promise<void> {
       },
       jitTtlMs: cfg.JIT_TTL_MS,
       defaultChainId,
+      // SF-2: LEASH's own public base URL — the external agent points its
+      // base_url here (gateway) + /mcp (tools) after a bind. Falls back to a
+      // relative hint when unset (dev); prod sets PUBLIC_BASE_URL.
+      publicBaseUrl: cfg.PUBLIC_BASE_URL ?? '',
     },
     // SE-7: the owner chain routes (list + second-chain onboarding) resolve
     // per-chain ops through the SAME registry the runtime uses (default-deny).

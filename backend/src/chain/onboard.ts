@@ -1,5 +1,5 @@
 import type { Pool } from 'pg';
-import type { AgentRow } from '../types.js';
+import { type AgentRow, assertNativeAgent } from '../types.js';
 import type { ChainOps } from '../server.js';
 import {
   insertChainDeployment,
@@ -104,6 +104,9 @@ export async function onboardAgentToChain(
   agent: AgentRow,
   targetChainId: number,
 ): Promise<{ deployment: ChainDeploymentRow; adopted: boolean; alreadyOnboarded: boolean }> {
+  // SF-2: second-chain onboard is a native-only operation (a bound agent has no
+  // on-chain account to replicate at a CREATE2 address).
+  assertNativeAgent(agent);
   if (agent.accountVersion !== 4 || !agent.accountSalt) {
     throw new OnboardRefusedError('not_v4', 'only deterministic V4 accounts (with a persisted salt) can onboard to another chain');
   }

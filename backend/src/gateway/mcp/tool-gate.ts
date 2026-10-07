@@ -2,6 +2,7 @@ import type { Json } from '../../crypto/canonical.js';
 import {
   classifyTool,
   guardToolArgs,
+  resolveEgressEndpoint,
   type ToolClassification,
   type ToolDescriptor,
   type ToolGrantState,
@@ -61,9 +62,14 @@ export function gateToolCall(
   const classification = classifyTool({ toolId: id, args: guarded.value }, descriptor, grant);
 
   // (4) resolve the owner-configured egress endpoint for a non-forbidden call.
+  // C-SF3-4: go through the SHARED resolveEgressEndpoint (the single source of
+  // truth) rather than reading serverEndpoints directly — the bare map read
+  // skipped the origin-on-allowlist check, so a tool could be classified
+  // non-forbidden yet forwarded to an off-allowlist origin. The shared resolver
+  // (and its C-SF3-1 internal-host guard) is the one gate.
   const endpoint =
     classification.lane !== 'forbidden' && descriptor
-      ? grant.serverEndpoints.get(descriptor.server)
+      ? (resolveEgressEndpoint(descriptor, grant) ?? undefined)
       : undefined;
 
   return { toolId: id, descriptor, guardedArgs: guarded.value, classification, endpoint };

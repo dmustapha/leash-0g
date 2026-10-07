@@ -12,7 +12,7 @@ import { signWithSessionKey, verdictMessage } from '../../src/jobs/poa.js';
 import type { RuntimeChain } from '../../src/runtime/session-chain.js';
 import type { StorageUploader } from '../../src/audit/batcher.js';
 import type { GrantState } from '../../src/governed-call/index.js';
-import type { PolicyView, AgentGoal } from '../../src/types.js';
+import { type PolicyView, type AgentGoal, assertNativeAgent } from '../../src/types.js';
 
 /**
  * SF-0 / L-01 closure — D-12 on the verdict surface (F-0a/F-0b/F-0c).
@@ -173,6 +173,7 @@ async function evaluatingJob(): Promise<string> {
 async function buildRequesterGraph() {
   const reqRow = await getAgentById(db.pool, requesterId);
   if (!reqRow) throw new Error('requester row missing');
+  assertNativeAgent(reqRow); // SF-2: job roles are native
   chain = new FakeChain();
   const deps: JobGraphDeps = {
     pool: db.pool,

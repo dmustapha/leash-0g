@@ -6,10 +6,10 @@ interface DbAgentRow {
   chain_agent_id: string | null;
   chain_id: string;
   owner_addr: string;
-  account_addr: string;
-  session_key_addr: string;
-  session_key_enc: string;
-  audit_pubkey: string;
+  account_addr: string | null;
+  session_key_addr: string | null;
+  session_key_enc: string | null;
+  audit_pubkey: string | null;
   token_id: string;
   token_hash: string;
   name: string;
@@ -23,6 +23,7 @@ interface DbAgentRow {
   account_version: number;
   account_salt: string | null;
   account_create_tuple: Record<string, unknown> | null;
+  bind_mode: 'external' | null;
   created_at: Date;
 }
 
@@ -49,13 +50,15 @@ function mapRow(r: DbAgentRow): AgentRow {
     accountVersion: r.account_version,
     accountSalt: r.account_salt,
     accountCreateTuple: r.account_create_tuple,
+    bindMode: r.bind_mode,
     createdAt: r.created_at.toISOString(),
   };
 }
 
 const COLS = `id, chain_agent_id, chain_id, owner_addr, account_addr, session_key_addr, session_key_enc,
   audit_pubkey, token_id, token_hash, name, status, gateway_rules, goal, encrypted_audit_key,
-  gateway_token_enc, guardian_addr, capability_label, account_version, account_salt, account_create_tuple, created_at`;
+  gateway_token_enc, guardian_addr, capability_label, account_version, account_salt, account_create_tuple,
+  bind_mode, created_at`;
 
 export async function getAgentById(pool: Pool, id: string): Promise<AgentRow | null> {
   if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
@@ -167,6 +170,34 @@ export async function insertAgent(pool: Pool, input: InsertAgentInput): Promise<
   return row.id;
 }
 
+export interface InsertBoundAgentRowInput {
+  ownerAddr: string;
+  name: string;
+  tokenId: string;
+  tokenHash: string;
+  /** agents.chain_id is NOT NULL; 0 = off-chain bound (no home chain), else the referenced account's chain. */
+  chainId: number;
+  gatewayRules: GatewayRule[];
+}
+
+/**
+ * SF-2: insert an EXTERNAL bound agent's `agents` row — the same spine row a
+ * native agent gets, minus the on-chain authority columns it legitimately lacks
+ * (session key, audit key, chain-agent id, account). bind_mode='external' marks
+ * it; account_version defaults to the (inert) legacy 2. The runtime can never
+ * start it (no session key → F-2b), so no decrypt path ever touches the nulls.
+ */
+export async function insertBoundAgentRow(pool: Pool, input: InsertBoundAgentRowInput): Promise<string> {
+  const res = await pool.query<{ id: string }>(
+    `INSERT INTO agents (chain_id, owner_addr, token_id, token_hash, name, gateway_rules, goal, bind_mode)
+     VALUES ($1,$2,$3,$4,$5,$6,'{}'::jsonb,'external') RETURNING id`,
+    [input.chainId, input.ownerAddr.toLowerCase(), input.tokenId, input.tokenHash, input.name, JSON.stringify(input.gatewayRules)],
+  );
+  const row = res.rows[0];
+  if (!row) throw new Error('bound agent insert failed');
+  return row.id;
+}
+
 export async function setAgentStatus(pool: Pool, id: string, status: AgentStatus): Promise<void> {
   await pool.query(`UPDATE agents SET status = $2 WHERE id = $1`, [id, status]);
 }
@@ -187,7 +218,12 @@ export async function rotateAgentToken(
 }
 
 export async function listActiveAgents(pool: Pool): Promise<AgentRow[]> {
-  const res = await pool.query<DbAgentRow>(`SELECT ${COLS} FROM agents WHERE status = 'active'`);
+  // SF-2 (F-2b): the runtime only ever runs NATIVE agents. An external bound
+  // agent has no session key, so it has no sense→decide→act loop to run —
+  // exclude it here by construction (belt-and-braces with POST /start's reject).
+  const res = await pool.query<DbAgentRow>(
+    `SELECT ${COLS} FROM agents WHERE status = 'active' AND bind_mode IS DISTINCT FROM 'external'`,
+  );
   return res.rows.map(mapRow);
 }
 
