@@ -1,4 +1,4 @@
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 
 /**
  * SF-2: the Tier-2-only side-table for an external bound agent. The bound agent
@@ -52,7 +52,7 @@ export interface InsertBoundAgentInput {
   interactionMode: InteractionMode;
 }
 
-export async function insertBoundAgent(pool: Pool, input: InsertBoundAgentInput): Promise<void> {
+export async function insertBoundAgent(pool: Pool | PoolClient, input: InsertBoundAgentInput): Promise<void> {
   await pool.query(
     `INSERT INTO bound_agents
        (agent_id, leashed_account_addr, chain_id, gateway_token_hash, mcp_scope, tenant_key, interaction_mode)

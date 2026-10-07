@@ -1,0 +1,604 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>LEASH · Bind an External Agent</title>
+<script>try{if(localStorage.getItem('leash-theme')==='light')document.documentElement.setAttribute('data-theme','light')}catch(e){}</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://api.fontshare.com/v2/css?f[]=clash-display@500,600,700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./tokens.css">
+<style>
+/* ===== BIND SURFACE (PROFILE = PRODUCT-APP) — restrained motion, the swap is the show.
+   SF-2 / SD-F8 design-reference. Bind an agent that already runs elsewhere — no rewrite,
+   only its base_url swaps to LEASH. Three owner surfaces: guided bind, bound-agent
+   presence + revoke, allowlist reuse-note.
+   All color/type comes from tokens.css; this block is page-specific LAYOUT only. ===== */
+body { max-width: 1120px; margin: 0 auto; padding: var(--s-6) var(--s-5) var(--s-9); }
+
+/* page header (glass) */
+header.top { position: sticky; top:0; z-index:20; display:flex; align-items:center; gap:var(--s-4);
+  justify-content:space-between; padding: var(--s-4) var(--s-5); margin: calc(-1 * var(--s-6)) calc(-1 * var(--s-5)) var(--s-6);
+  border-bottom:1px solid var(--border); background: var(--glass-bg-strong);
+  backdrop-filter: blur(var(--glass-blur)); -webkit-backdrop-filter: blur(var(--glass-blur)); box-shadow: var(--glass-hi); }
+.top .brand { display:flex; align-items:center; gap:9px; font-family:var(--font-display); font-weight:600; font-size:16px; }
+.top .crumb { display:flex; align-items:baseline; gap:10px; min-width:0; }
+.top h1 { font-family: var(--font-display); font-weight:500; font-size:1.1rem; margin:0; letter-spacing:-0.01em; }
+.top .sub { font-family:var(--font-mono); font-size:11px; color:var(--ink-faint); }
+.top .right { display:flex; align-items:center; gap:var(--s-3); flex:none; }
+.theme-toggle { display:grid; place-items:center; width:32px; height:32px; border-radius:var(--r-full);
+  border:1px solid var(--border-strong); background:var(--surface-1); color:var(--ink-dim); cursor:pointer;
+  transition: border-color var(--t-fast), color var(--t-fast), background var(--t-fast); }
+.theme-toggle:hover { border-color:var(--ink-24); color:var(--ink); background:var(--hover-fill); }
+.theme-toggle svg { width:15px; height:15px; }
+
+/* in-page section tabs */
+.tabs { display:flex; gap:var(--s-2); flex-wrap:wrap; margin-bottom: var(--s-6); }
+.tab { font-family:var(--font-mono); font-size:11px; color:var(--ink-dim); padding:7px 14px;
+  border:1px solid var(--border-strong); border-radius:var(--r-full); background:transparent; cursor:pointer;
+  transition: background var(--t-fast), color var(--t-fast), border-color var(--t-fast); }
+.tab:hover { color:var(--ink); border-color:var(--ink-24); }
+.tab[aria-selected="true"] { background: var(--accent-12); color: var(--ink); border-color: var(--accent-24); }
+
+/* section scaffold (console idioms) */
+.surface[hidden] { display:none; }
+.section-title { font-family:var(--font-mono); font-size:11px; text-transform:uppercase;
+  letter-spacing:.16em; color:var(--ink-faint); margin: 0 0 var(--s-4); display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.section-title .n { color: var(--ink-dim); }
+.lede { font-size:var(--t-small); color:var(--ink-dim); max-width: 64ch; margin: 0 0 var(--s-5); line-height:1.6; }
+.lede b { color: var(--ink); font-weight:600; }
+
+.panel { background: var(--surface-1); border:1px solid var(--border); border-radius:var(--r-md);
+  padding: var(--s-5); margin-bottom: var(--s-4); }
+.panel > .p-title { font-family:var(--font-mono); font-size:10px; text-transform:uppercase; letter-spacing:.14em;
+  color:var(--ink-faint); margin:0 0 var(--s-4); display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+.panel-hi { border-color: var(--accent-24); box-shadow: inset 3px 0 0 var(--accent); }
+.row-btns { display:flex; gap:var(--s-3); flex-wrap:wrap; }
+.btn-sm { padding:6px 12px; font-size:11px; }
+.mono { font-family:var(--font-mono); }
+
+/* ===== SHARED FORM FIELDS (same idiom as tools.html allowlist fields) ===== */
+.field { margin-bottom: var(--s-4); }
+.field:last-child { margin-bottom:0; }
+.fk { font-family:var(--font-mono); font-size:10px; text-transform:uppercase; letter-spacing:.1em; color:var(--ink-faint);
+  margin-bottom:7px; display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.fk .req { color:var(--accent-ink); }
+.fk .opt { color:var(--ink-faint); font-weight:400; text-transform:none; letter-spacing:0; }
+.inp { width:100%; background:var(--surface-2); border:1px solid var(--border-strong); border-radius:var(--r-sm);
+  color:var(--ink); font-family:var(--font-mono); font-size:12px; padding:9px var(--s-3); }
+.inp:focus { outline:none; border-color:var(--accent-24); }
+.fhint { font-family:var(--font-sans); font-size:11px; color:var(--ink-faint); margin-top:6px; line-height:1.5; }
+.deny-default { font-family:var(--font-mono); font-size:10px; color:var(--ember); display:inline-flex; align-items:center; gap:7px;
+  border:1px dashed var(--ember-24); border-radius:var(--r-sm); padding:5px 10px; margin-top:8px; }
+.deny-default svg { width:12px; height:12px; flex:none; }
+
+/* ===== GROUP CHOOSER (platform vs code) ===== */
+.chooser { display:grid; grid-template-columns:1fr 1fr; gap:var(--s-3); }
+@media (max-width:640px){ .chooser{ grid-template-columns:1fr; } }
+.choice { text-align:left; background:var(--surface-2); border:1px solid var(--border); border-radius:var(--r-md);
+  padding:var(--s-4); cursor:pointer; font-family:var(--font-sans); color:var(--ink-dim);
+  transition: border-color var(--t-fast), background var(--t-fast); }
+.choice:hover { border-color:var(--ink-24); }
+.choice[aria-pressed="true"] { border-color:var(--accent-24); background:var(--accent-08); box-shadow: inset 2px 0 0 var(--accent); }
+.choice .cg { font-family:var(--font-mono); font-size:9px; text-transform:uppercase; letter-spacing:.1em; color:var(--ink-faint); margin-bottom:5px; }
+.choice .cn { font-family:var(--font-display); font-weight:500; font-size:1rem; color:var(--ink); margin-bottom:5px; }
+.choice .cd { font-size:12px; line-height:1.5; }
+
+/* ===== INTERACTION-MODE CARDS (honest-caveat: only observe is live) ===== */
+.modes { display:grid; grid-template-columns: repeat(3,1fr); gap:var(--s-3); }
+@media (max-width:760px){ .modes{ grid-template-columns:1fr; } }
+.mode { text-align:left; position:relative; background:var(--surface-2); border:1px solid var(--border); border-radius:var(--r-md);
+  padding:var(--s-4); font-family:var(--font-sans); color:var(--ink-dim); cursor:pointer;
+  transition: border-color var(--t-fast), background var(--t-fast); display:flex; flex-direction:column; }
+.mode:hover:not([aria-disabled="true"]) { border-color:var(--ink-24); }
+.mode[aria-pressed="true"] { border-color:var(--accent-24); background:var(--accent-08); box-shadow: inset 2px 0 0 var(--accent); }
+.mode[aria-disabled="true"] { cursor:not-allowed; opacity:.72; }
+.mode .mhead { display:flex; align-items:center; gap:9px; margin-bottom:7px; }
+.mode .mname { font-family:var(--font-mono); font-size:13px; font-weight:600; color:var(--ink); }
+.mode .mdesc { font-size:12px; line-height:1.5; margin-bottom:var(--s-3); flex:1; }
+/* status tag — live = jade dot, deferred = ember ring */
+.mtag { font-family:var(--font-mono); font-size:9px; text-transform:uppercase; letter-spacing:.06em; font-weight:600;
+  padding:3px 9px; border-radius:4px; display:inline-flex; align-items:center; gap:6px; white-space:nowrap; }
+.mtag::before { content:""; width:6px; height:6px; flex:none; }
+.mtag.live { color:var(--allow); background:var(--allow-14); } .mtag.live::before { border-radius:var(--r-full); background:var(--allow); }
+.mtag.deferred { color:var(--ember); background:var(--ember-16); } .mtag.deferred::before { border-radius:var(--r-full); border:1.5px solid var(--ember); }
+.mode .mcost { font-family:var(--font-mono); font-size:10px; color:var(--ember); line-height:1.5;
+  border-top:1px dashed var(--ember-24); padding-top:10px; margin-top:auto; display:flex; gap:8px; align-items:flex-start; }
+.mode .mcost svg { width:12px; height:12px; flex:none; color:var(--ember); margin-top:1px; }
+
+/* ===== PASTE RECIPES (Group B platform library) ===== */
+.recipes { display:flex; flex-direction:column; gap:1px; background:var(--border); border:1px solid var(--border); border-radius:var(--r-md); overflow:hidden; }
+.recipe { background:var(--surface-1); padding:var(--s-4) var(--s-5); }
+.recipe .rhead { display:flex; align-items:center; gap:var(--s-3); flex-wrap:wrap; }
+.recipe .rname { font-family:var(--font-mono); font-size:13px; color:var(--ink); font-weight:500; }
+.recipe .rgrow { flex:1; }
+.recipe .rsteps { font-family:var(--font-sans); font-size:12px; color:var(--ink-dim); line-height:1.6; margin-top:8px; }
+.recipe .rsteps code { font-family:var(--font-mono); font-size:11px; color:var(--accent-ink); background:var(--accent-08); padding:1px 5px; border-radius:4px; }
+.cover-chip { font-family:var(--font-mono); font-size:9px; letter-spacing:.06em; text-transform:uppercase; font-weight:600;
+  padding:3px 8px; border-radius:4px; display:inline-flex; align-items:center; gap:5px; }
+.cover-chip.ok { color:var(--allow); background:var(--allow-14); }
+.cover-chip.partial { color:var(--accent-ink); background:var(--accent-12); }
+.cover-chip.no { color:var(--deny); background:var(--deny-14); }
+.recipe.blocked { opacity:.78; }
+.recipe .rblock { font-family:var(--font-sans); font-size:12px; color:var(--deny); line-height:1.5; margin-top:8px;
+  display:flex; gap:9px; align-items:flex-start; }
+.recipe .rblock svg { width:14px; height:14px; flex:none; margin-top:1px; }
+
+/* ===== RESULT PANEL (post-bind) ===== */
+.kv { display:grid; grid-template-columns: 150px 1fr; gap:10px var(--s-4); font-family:var(--font-mono); font-size:12px; }
+@media (max-width:560px){ .kv{ grid-template-columns:1fr; gap:4px var(--s-4); } .kv .kvk{ margin-top:var(--s-3); } }
+.kv .kvk { color:var(--ink-faint); font-size:10px; text-transform:uppercase; letter-spacing:.1em; align-self:center; }
+.kv .kvv { color:var(--ink); word-break:break-all; display:flex; align-items:center; gap:var(--s-3); flex-wrap:wrap; }
+.copy { all:unset; cursor:pointer; font-family:var(--font-mono); font-size:10px; letter-spacing:.06em; text-transform:uppercase;
+  color:var(--accent-ink); border:1px solid var(--accent-24); background:var(--accent-08); border-radius:var(--r-full);
+  padding:3px 10px; transition: background var(--t-fast), border-color var(--t-fast); }
+.copy:hover { background:var(--accent-12); border-color:var(--accent-40); }
+.copy:focus-visible { outline:2px solid var(--focus-ring); outline-offset:2px; }
+.token-box { background:var(--surface-2); border:1px solid var(--ember-24); border-radius:var(--r-sm);
+  padding:11px var(--s-4); font-family:var(--font-mono); font-size:12px; color:var(--ink); word-break:break-all;
+  display:flex; align-items:center; gap:var(--s-3); flex-wrap:wrap; }
+.once-warn { font-family:var(--font-sans); font-size:12px; color:var(--ink-dim); line-height:1.5;
+  display:flex; gap:10px; align-items:flex-start; margin-top:var(--s-3); }
+.once-warn svg { width:16px; height:16px; color:var(--ember); flex:none; margin-top:1px; }
+.once-warn b { color:var(--ember); font-weight:600; }
+/* base_url swap: from -> to */
+.swap { display:grid; grid-template-columns: 1fr 28px 1fr; align-items:center; gap:var(--s-3); margin-top:var(--s-3); }
+@media (max-width:560px){ .swap{ grid-template-columns:1fr; } .swap .arrow{ transform:rotate(90deg); justify-self:start; } }
+.swap-cell { background:var(--surface-2); border:1px solid var(--border-strong); border-radius:var(--r-sm); padding:10px var(--s-4); }
+.swap-cell .sl { font-family:var(--font-mono); font-size:9px; text-transform:uppercase; letter-spacing:.1em; color:var(--ink-faint); margin-bottom:5px; }
+.swap-cell.from .sv { font-family:var(--font-mono); font-size:12px; color:var(--ink-dim); text-decoration:line-through; text-decoration-color:var(--deny-40); word-break:break-all; }
+.swap-cell.to { border-color:var(--accent-24); }
+.swap-cell.to .sv { font-family:var(--font-mono); font-size:12px; color:var(--ink); word-break:break-all; }
+.swap .arrow { display:grid; place-items:center; color:var(--accent); }
+.swap .arrow svg { width:20px; height:20px; }
+
+/* ===== SURFACE 2 — bound-agent cards + revoke ===== */
+/* status pill — reused verbatim from console.html */
+.spill { display:inline-flex; align-items:center; gap:7px; font-family:var(--font-mono); font-size:11px; font-weight:600;
+  padding:4px 11px; border-radius:var(--r-full); text-transform:uppercase; letter-spacing:.06em; }
+.spill::before { content:""; width:6px; height:6px; border-radius:var(--r-full); }
+.spill.active { color:var(--allow); background:var(--allow-14); border:1px solid var(--allow-24); }
+.spill.active::before { background:var(--allow); }
+.spill.revoked { color:var(--deny); background:var(--deny-14); border:1px solid var(--deny-24); }
+.spill.revoked::before { background:var(--deny); }
+.bound { display:flex; flex-direction:column; gap:var(--s-3); }
+.bcard { background:var(--surface-1); border:1px solid var(--border); border-radius:var(--r-md); padding:var(--s-5); }
+.bcard.gone { opacity:.6; }
+.bcard .brow1 { display:flex; align-items:flex-start; justify-content:space-between; gap:var(--s-4); flex-wrap:wrap; }
+.bcard .bname { font-family:var(--font-display); font-weight:500; font-size:1.1rem; color:var(--ink); }
+.bcard .baddr { font-family:var(--font-mono); font-size:11px; color:var(--ink-faint); margin-top:3px; }
+.bmeta { display:flex; gap:var(--s-5); flex-wrap:wrap; margin-top:var(--s-4); }
+.bmeta .m { }
+.bmeta .mk { font-family:var(--font-mono); font-size:9px; text-transform:uppercase; letter-spacing:.1em; color:var(--ink-faint); margin-bottom:4px; }
+.bmeta .mv { font-family:var(--font-mono); font-size:13px; color:var(--ink); }
+.bmeta .mv small { color:var(--ink-faint); font-size:11px; }
+.bfoot { display:flex; align-items:center; justify-content:space-between; gap:var(--s-4); flex-wrap:wrap;
+  border-top:1px solid var(--border); padding-top:var(--s-4); margin-top:var(--s-4); }
+.revoke-note { font-family:var(--font-sans); font-size:11px; color:var(--ink-faint); line-height:1.5; max-width:48ch; }
+
+/* ===== SURFACE 3 — allowlist reuse note ===== */
+.reuse { display:flex; gap:var(--s-5); align-items:flex-start; flex-wrap:wrap; }
+.reuse .rtext { flex:1; min-width:240px; }
+.reuse .rtext p { font-size:var(--t-small); color:var(--ink-dim); line-height:1.6; margin:0 0 var(--s-3); }
+.reuse .rtext p b { color:var(--ink); font-weight:600; }
+.reuse code { font-family:var(--font-mono); font-size:11px; color:var(--accent-ink); background:var(--accent-08); padding:1px 5px; border-radius:4px; }
+.xlink { display:inline-flex; align-items:center; gap:8px; font-family:var(--font-mono); font-size:11px; color:var(--accent-ink);
+  border:1px solid var(--accent-24); background:var(--accent-08); border-radius:var(--r-full); padding:7px 14px; text-decoration:none;
+  transition: background var(--t-fast), border-color var(--t-fast); }
+.xlink:hover { background:var(--accent-12); border-color:var(--accent-40); }
+.xlink svg { width:13px; height:13px; }
+
+/* chooser/recipe visibility */
+[data-group]:not([data-active="true"]) { display:none; }
+
+/* footnote */
+.foot { font-family:var(--font-mono); font-size:10px; color:var(--ink-faint); margin-top:var(--s-6); padding-top:var(--s-4);
+  border-top:1px solid var(--border); line-height:1.7; }
+.foot b { color:var(--ink-dim); }
+.foot code { color:var(--accent-ink); }
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="crumb">
+    <span class="brand">
+      <svg width="20" height="20" viewBox="0 0 26 26" aria-hidden="true">
+        <circle cx="8" cy="13" r="5" fill="none" stroke="var(--accent)" stroke-width="2"/>
+        <path d="M13 13 H24 M24 9 v8" stroke="var(--accent)" stroke-width="2" stroke-linecap="round"/></svg>
+      LEASH
+    </span>
+    <h1>Bind an external agent</h1>
+    <span class="sub">no rewrite · SF-2</span>
+  </div>
+  <div class="right">
+    <button class="theme-toggle" id="themeToggle" aria-label="Toggle light or dark theme" title="Toggle theme"></button>
+  </div>
+</header>
+
+<div class="tabs" role="tablist" aria-label="Bind surfaces">
+  <button class="tab" role="tab" aria-selected="true" aria-controls="s-bind" id="t-bind" data-surface="bind">Bind an agent</button>
+  <button class="tab" role="tab" aria-selected="false" aria-controls="s-bound" id="t-bound" data-surface="bound">Bound agents &amp; revoke</button>
+  <button class="tab" role="tab" aria-selected="false" aria-controls="s-tools" id="t-tools" data-surface="tools">Tool allowlist</button>
+</div>
+
+<!-- ============ SURFACE 1 — BIND THE EXTERNAL AGENT ============ -->
+<section class="surface" id="s-bind" role="tabpanel" aria-labelledby="t-bind">
+  <p class="section-title">Bind an external agent · <span class="n">guided</span></p>
+  <p class="lede">Your agent already runs somewhere else. Binding it to LEASH means <b>one change only — its <code class="mono">base_url</code> swaps to the gateway below.</b>
+    You don't rewrite the agent. LEASH then sees every inference and tool call, and you can govern, approve, and revoke it.</p>
+
+  <!-- 1 · who runs the agent -->
+  <div class="panel">
+    <p class="p-title">1 · Where does your agent run?</p>
+    <div class="chooser" role="group" aria-label="How you run your agent">
+      <button class="choice" aria-pressed="true" data-choice="code">
+        <div class="cg">Group A · developers &amp; operators</div>
+        <div class="cn">I run my own code</div>
+        <div class="cd">Your agent calls an OpenAI-compatible SDK. You control the <code style="font-family:var(--font-mono)">base_url</code> — swap it directly.</div>
+      </button>
+      <button class="choice" aria-pressed="false" data-choice="platform">
+        <div class="cg">Group B · no-code platforms</div>
+        <div class="cn">I use a no-code platform</div>
+        <div class="cd">Your platform exposes a <b style="color:var(--ink)">custom OpenAI-compatible endpoint + key</b> field. Paste the gateway there.</div>
+      </button>
+    </div>
+  </div>
+
+  <!-- 2 · minimal inputs -->
+  <div class="panel">
+    <p class="p-title">2 · Name &amp; scope</p>
+    <div class="field">
+      <div class="fk">name <span class="req">· required</span></div>
+      <input class="inp" value="support-triage" aria-label="Agent name (required)"/>
+      <div class="fhint">A label for this bound agent. Shown across the console and revoke list.</div>
+    </div>
+    <div class="field">
+      <div class="fk">tool allowlist <span class="opt">· optional, default-deny</span></div>
+      <input class="inp" placeholder="empty — add tools later in the allowlist editor" aria-label="Tool allowlist (optional)"/>
+      <div class="deny-default">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="7" width="10" height="7" rx="1.5"/><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2"/></svg>
+        Starts empty · no tools until you add them. Default-deny — the agent can't call a tool you didn't grant.
+      </div>
+    </div>
+    <div class="field">
+      <div class="fk">LeashAccount <span class="opt">· optional — most binds have none</span></div>
+      <input class="inp" placeholder="0x… on-chain LeashAccount (leave blank if you don't have one)" aria-label="On-chain LeashAccount (optional)"/>
+      <div class="fhint">If you already hold an on-chain LeashAccount, reference it to tie spend limits on-chain. Optional — observe-mode binds usually skip it.</div>
+    </div>
+  </div>
+
+  <!-- 3 · interaction mode (honest-caveat) -->
+  <div class="panel">
+    <p class="p-title">
+      <span>3 · Interaction mode</span>
+      <span class="mono" style="color:var(--ink-faint);font-size:10px">the key decision</span>
+    </p>
+    <p class="lede" style="margin-bottom:var(--s-4)">How deeply LEASH acts on the agent. <b>Only <code class="mono">observe</code> is live in SF-2</b> — it needs no change to your agent beyond the base_url swap.
+      The other two are <b>declared, not yet live</b>: each carries a cost that would break no-rewrite, so they're deferred.</p>
+    <div class="modes" role="radiogroup" aria-label="Interaction mode">
+
+      <button class="mode" aria-pressed="true" role="radio" aria-checked="true" data-mode="observe">
+        <div class="mhead">
+          <span class="mname">observe</span>
+          <span class="mtag live">Active · SF-2</span>
+        </div>
+        <div class="mdesc">See every inference + tool call, govern policy, approve held calls, and revoke in one move. No change to your agent.</div>
+        <div class="mcost" style="border-top-color:var(--allow-24);color:var(--allow)">
+          <svg viewBox="0 0 16 16" fill="none" stroke="var(--allow)" stroke-width="1.5"><path d="M3 8.5 6.5 12 13 4.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          Costs nothing beyond the base_url swap.
+        </div>
+      </button>
+
+      <button class="mode" aria-pressed="false" role="radio" aria-checked="false" aria-disabled="true" data-mode="passive" disabled>
+        <div class="mhead">
+          <span class="mname">passive</span>
+          <span class="mtag deferred">Declared · SF-2′</span>
+        </div>
+        <div class="mdesc">LEASH injects owner directives the agent carries forward — steer behaviour without stopping it.</div>
+        <div class="mcost">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6.5"/><path d="M8 5v3.5" stroke-linecap="round"/><circle cx="8" cy="11" r=".6" fill="currentColor" stroke="none"/></svg>
+          Coming in SF-2′ · requires your agent's next outbound call to carry the owner directive.
+        </div>
+      </button>
+
+      <button class="mode" aria-pressed="false" role="radio" aria-checked="false" aria-disabled="true" data-mode="active" disabled>
+        <div class="mhead">
+          <span class="mname">active</span>
+          <span class="mtag deferred">Declared · SF-2′</span>
+        </div>
+        <div class="mdesc">LEASH can hold, block, or inject at runtime — the fullest grip over the agent's actions.</div>
+        <div class="mcost">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6.5"/><path d="M8 5v3.5" stroke-linecap="round"/><circle cx="8" cy="11" r=".6" fill="currentColor" stroke="none"/></svg>
+          Coming in SF-2′ · requires adding a LEASH listener to your agent — breaks no-rewrite.
+        </div>
+      </button>
+    </div>
+  </div>
+
+  <!-- 4 · paste recipe (Group B only) -->
+  <div class="panel" data-group="platform" data-active="false">
+    <p class="p-title">
+      <span>4 · Where to paste it</span>
+      <span class="mono" style="color:var(--ink-faint);font-size:10px">per-platform · partial coverage</span>
+    </p>
+    <p class="lede" style="margin-bottom:var(--s-4)">Paste the gateway URL + token into your platform's <b>custom OpenAI-compatible endpoint</b> field.
+      Coverage is platform-dependent — these are representative stubs, not every platform.</p>
+    <div class="recipes">
+      <div class="recipe">
+        <div class="rhead">
+          <span class="rname">OpenAI-compatible base_url</span>
+          <span class="rgrow"></span>
+          <span class="cover-chip ok">Generic · works anywhere</span>
+        </div>
+        <div class="rsteps">Set <code>base_url</code> → the gateway URL, and <code>api_key</code> → your gateway token. Any client that lets you override both will route through LEASH.</div>
+      </div>
+      <div class="recipe">
+        <div class="rhead">
+          <span class="rname">Flowise / LangFlow</span>
+          <span class="rgrow"></span>
+          <span class="cover-chip partial">Field: Base Path</span>
+        </div>
+        <div class="rsteps">In the ChatOpenAI node → <code>BasePath</code> = gateway URL, <code>OpenAI API Key</code> = gateway token.</div>
+      </div>
+      <div class="recipe">
+        <div class="rhead">
+          <span class="rname">Custom GPT platforms (self-host)</span>
+          <span class="rgrow"></span>
+          <span class="cover-chip partial">Field: API Base URL</span>
+        </div>
+        <div class="rsteps">Under model settings → <code>API Base URL</code> = gateway URL, <code>API Key</code> = gateway token. Supported only where the platform exposes both fields.</div>
+      </div>
+      <div class="recipe blocked">
+        <div class="rhead">
+          <span class="rname">Chat-only tools — claude.ai, ChatGPT app</span>
+          <span class="rgrow"></span>
+          <span class="cover-chip no">Not bindable</span>
+        </div>
+        <div class="rblock">
+          <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="6.5"/><path d="M4 4l8 8" stroke-linecap="round"/></svg>
+          <span>These don't let you set a <code style="font-family:var(--font-mono);color:var(--deny)">base_url</code> — there's nothing to redirect. A hosted chat UI can't be bound; bind the agent that calls the model, not the chat window.</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row-btns" style="margin-top:var(--s-5)">
+    <button class="btn btn-primary press" id="doBind">Bind agent</button>
+    <button class="btn btn-ghost press">Cancel</button>
+  </div>
+
+  <!-- RESULT PANEL (post-bind) -->
+  <div id="resultPanel" hidden style="margin-top:var(--s-6)">
+    <p class="section-title">Bound · <span class="n">support-triage</span> · swap the base_url to finish</p>
+    <div class="panel panel-hi">
+      <p class="p-title">
+        <span>Gateway endpoints</span>
+        <span class="spill active" style="padding:3px 9px">observe · live</span>
+      </p>
+      <div class="kv">
+        <span class="kvk">Gateway URL</span>
+        <span class="kvv"><span id="gwUrl">https://leash-0g-backend.onrender.com/v1</span>
+          <button class="copy" data-copy="https://leash-0g-backend.onrender.com/v1">Copy</button></span>
+        <span class="kvk">MCP endpoint</span>
+        <span class="kvv"><span>https://leash-0g-backend.onrender.com/mcp</span>
+          <button class="copy" data-copy="https://leash-0g-backend.onrender.com/mcp">Copy</button></span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <p class="p-title">Gateway token · shown once</p>
+      <div class="token-box">
+        <span class="mono">leash_sk_live_9f2c7a41b8e0d35f6c1a4b2e8d7f09c3</span>
+        <button class="copy" data-copy="leash_sk_live_9f2c7a41b8e0d35f6c1a4b2e8d7f09c3">Copy token</button>
+      </div>
+      <div class="once-warn">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M8 1.5 1 14h14L8 1.5Z" stroke-linejoin="round"/><path d="M8 6.5v3.5" stroke-linecap="round"/><circle cx="8" cy="12" r=".6" fill="currentColor" stroke="none"/></svg>
+        <span><b>You won't see this again.</b> Copy it now and paste it as your <code class="mono" style="font-family:var(--font-mono)">api_key</code>. If you lose it, revoke and re-bind to issue a new one.</span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <p class="p-title">base_url swap · the only change your agent needs</p>
+      <div class="swap">
+        <div class="swap-cell from">
+          <div class="sl">from · your provider</div>
+          <div class="sv">https://api.openai.com/v1</div>
+        </div>
+        <div class="arrow" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12h15M14 6l6 6-6 6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </div>
+        <div class="swap-cell to">
+          <div class="sl">to · LEASH gateway</div>
+          <div class="sv">https://leash-0g-backend.onrender.com/v1</div>
+        </div>
+      </div>
+      <div class="fhint" style="margin-top:var(--s-3)">Keep your model name and request shape exactly as they are. Only the <code style="font-family:var(--font-mono);color:var(--accent-ink)">base_url</code> and <code style="font-family:var(--font-mono);color:var(--accent-ink)">api_key</code> change.</div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ SURFACE 2 — BOUND AGENTS & REVOKE ============ -->
+<section class="surface" id="s-bound" role="tabpanel" aria-labelledby="t-bound" hidden>
+  <p class="section-title">Bound agents · <span class="n">presence &amp; revoke</span></p>
+  <p class="lede">Every agent you've bound. The presence chip reuses the console's status idiom.
+    <b>Revoke closes inference AND tools in one move — no on-chain tx needed.</b> The gateway stops routing immediately.</p>
+
+  <div class="bound">
+    <!-- active -->
+    <div class="bcard">
+      <div class="brow1">
+        <div>
+          <div class="bname">support-triage</div>
+          <div class="baddr">bound 2026-10-06 14:11 · OpenAI-compatible · group A</div>
+        </div>
+        <span class="spill active">Active</span>
+      </div>
+      <div class="bmeta">
+        <div class="m"><div class="mk">Interaction mode</div><div class="mv">observe</div></div>
+        <div class="m"><div class="mk">MCP tool scope</div><div class="mv">3 <small>tools granted</small></div></div>
+        <div class="m"><div class="mk">Gateway</div><div class="mv">…onrender.com/v1</div></div>
+      </div>
+      <div class="bfoot">
+        <span class="revoke-note">Revoke closes inference and tools together — one move, no on-chain transaction.</span>
+        <button class="btn btn-danger btn-sm press" aria-label="Revoke support-triage — closes inference and tools">Revoke</button>
+      </div>
+    </div>
+
+    <!-- active, no tools -->
+    <div class="bcard">
+      <div class="brow1">
+        <div>
+          <div class="bname">research-agent</div>
+          <div class="baddr">bound 2026-10-04 09:30 · Flowise · group B</div>
+        </div>
+        <span class="spill active">Active</span>
+      </div>
+      <div class="bmeta">
+        <div class="m"><div class="mk">Interaction mode</div><div class="mv">observe</div></div>
+        <div class="m"><div class="mk">MCP tool scope</div><div class="mv">0 <small>default-deny</small></div></div>
+        <div class="m"><div class="mk">Gateway</div><div class="mv">…onrender.com/v1</div></div>
+      </div>
+      <div class="bfoot">
+        <span class="revoke-note">Revoke closes inference and tools together — one move, no on-chain transaction.</span>
+        <button class="btn btn-danger btn-sm press" aria-label="Revoke research-agent — closes inference and tools">Revoke</button>
+      </div>
+    </div>
+
+    <!-- revoked -->
+    <div class="bcard gone">
+      <div class="brow1">
+        <div>
+          <div class="bname">scraper-agent</div>
+          <div class="baddr">bound 2026-09-28 · revoked 2026-10-05 14:22</div>
+        </div>
+        <span class="spill revoked">Revoked</span>
+      </div>
+      <div class="bmeta">
+        <div class="m"><div class="mk">Interaction mode</div><div class="mv">observe</div></div>
+        <div class="m"><div class="mk">MCP tool scope</div><div class="mv">0 <small>closed</small></div></div>
+        <div class="m"><div class="mk">Gateway</div><div class="mv"><span style="color:var(--deny)">routing stopped</span></div></div>
+      </div>
+      <div class="bfoot">
+        <span class="revoke-note">Inference and tools closed in one move. The old token is dead; re-bind to issue a new one.</span>
+        <button class="btn btn-ghost btn-sm press">Re-bind</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ SURFACE 3 — TOOL ALLOWLIST (reuse note) ============ -->
+<section class="surface" id="s-tools" role="tabpanel" aria-labelledby="t-tools" hidden>
+  <p class="section-title">Tool allowlist · <span class="n">reuses SF-3's editor</span></p>
+  <p class="lede">A bound agent's tools are governed by the <b>same editor native agents use</b> — nothing new to learn.
+    LEASH doesn't rebuild the allowlist per bind type; a bound agent is just an agent to the policy layer.</p>
+
+  <div class="panel">
+    <div class="reuse">
+      <div class="rtext">
+        <p><b>Same governed tool-use editor.</b> Grant <code>allowed</code> per tool, cap <code>maxArgBytes</code>, scope <code>recipientAllowlist</code> / <code>urlOriginAllowlist</code>, pick a preset — exactly as for native agents.</p>
+        <p>The default-deny invariant holds here too: a freshly bound agent has <b>zero tools</b> until you grant them, and a <b>sensitive tool always asks at call time</b> even when allowlisted.</p>
+        <p style="margin:0"><span class="mono" style="color:var(--ink-faint);font-size:11px">support-triage · 3 tools granted · 1 sensitive</span></p>
+      </div>
+      <a class="xlink" href="./tools.html" aria-label="Open the governed tool-use allowlist editor">
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M6 10 14 2M9 2h5v5" stroke-linecap="round" stroke-linejoin="round"/><path d="M13 9.5V13a1.5 1.5 0 0 1-1.5 1.5h-8A1.5 1.5 0 0 1 2 13V5a1.5 1.5 0 0 1 1.5-1.5H7" stroke-linecap="round"/></svg>
+        Open allowlist editor · SF-3
+      </a>
+    </div>
+  </div>
+
+  <p class="foot">
+    <b>FE-surface-parity (F-Xd):</b> every input <code>POST /api/agents/bind-external</code> accepts is collected on Surface 1 —
+    <code>name</code>, <code>toolAllowlist</code> (default-deny), optional <code>leashAccount</code>, <code>interactionMode</code> (observe live; passive/active declared-deferred),
+    group A/B recipe selection — and the response is rendered verbatim: <code>gatewayUrl</code>, <code>mcpEndpoint</code>, the once-shown <code>gatewayToken</code>, and the base_url swap.
+    Revoke maps to the one-move inference+tools close. Static mock data; SD-F8 design-reference, not the live app.
+  </p>
+</section>
+
+<script>
+/* ---------- theme toggle (persisted, matches console.html / tools.html) ---------- */
+(function(){
+  const KEY='leash-theme', root=document.documentElement, btn=document.getElementById('themeToggle');
+  const moon='<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13.5 9.3A5.5 5.5 0 1 1 6.7 2.5 4.3 4.3 0 0 0 13.5 9.3Z"/></svg>';
+  const sun ='<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="8" cy="8" r="3.2"/><path d="M8 1v1.6M8 13.4V15M1 8h1.6M13.4 8H15M3 3l1.1 1.1M11.9 11.9 13 13M13 3l-1.1 1.1M4.1 11.9 3 13" stroke-linecap="round"/></svg>';
+  if(!btn) return;
+  const paint=()=>{ btn.innerHTML = root.getAttribute('data-theme')==='light' ? sun : moon; };
+  paint();
+  btn.addEventListener('click',()=>{
+    const toLight = root.getAttribute('data-theme')!=='light';
+    if(toLight){ root.setAttribute('data-theme','light'); localStorage.setItem(KEY,'light'); }
+    else { root.removeAttribute('data-theme'); localStorage.setItem(KEY,'dark'); }
+    paint();
+  });
+})();
+
+/* ---------- in-page tab switching (matches tools.html) ---------- */
+(function(){
+  const tabs=[...document.querySelectorAll('.tab')];
+  function show(name){
+    tabs.forEach(t=>{
+      const on=t.dataset.surface===name;
+      t.setAttribute('aria-selected', on?'true':'false');
+      document.getElementById('s-'+t.dataset.surface).hidden = !on;
+    });
+  }
+  tabs.forEach(t=>{
+    t.addEventListener('click',()=>show(t.dataset.surface));
+    t.addEventListener('keydown',e=>{
+      const i=tabs.indexOf(t);
+      if(e.key==='ArrowRight'||e.key==='ArrowLeft'){
+        e.preventDefault();
+        const n=(i+(e.key==='ArrowRight'?1:tabs.length-1))%tabs.length;
+        tabs[n].focus(); show(tabs[n].dataset.surface);
+      }
+    });
+  });
+})();
+
+/* ---------- group chooser: toggles which paste-recipe panel shows ---------- */
+(function(){
+  const choices=[...document.querySelectorAll('.choice')];
+  function pick(group){
+    choices.forEach(c=>c.setAttribute('aria-pressed', c.dataset.choice===group?'true':'false'));
+    document.querySelectorAll('[data-group]').forEach(p=>{
+      p.setAttribute('data-active', p.dataset.group===group ? 'true':'false');
+    });
+  }
+  choices.forEach(c=>c.addEventListener('click',()=>pick(c.dataset.choice)));
+  pick('code'); // default = Group A, no recipe panel
+})();
+
+/* ---------- interaction mode: only observe selectable (passive/active disabled) ---------- */
+(function(){
+  const modes=[...document.querySelectorAll('.mode')];
+  modes.forEach(m=>m.addEventListener('click',()=>{
+    if(m.getAttribute('aria-disabled')==='true') return;
+    modes.forEach(x=>{ const on=x===m; x.setAttribute('aria-pressed',on?'true':'false'); x.setAttribute('aria-checked',on?'true':'false'); });
+  }));
+})();
+
+/* ---------- reveal result panel on bind (static mock) ---------- */
+(function(){
+  const btn=document.getElementById('doBind'), panel=document.getElementById('resultPanel');
+  if(!btn||!panel) return;
+  btn.addEventListener('click',()=>{
+    panel.hidden=false;
+    panel.scrollIntoView({behavior:'smooth', block:'start'});
+  });
+})();
+
+/* ---------- copy affordance (gateway url / mcp / token) ---------- */
+(function(){
+  document.addEventListener('click',e=>{
+    const b=e.target.closest('.copy'); if(!b) return;
+    const txt=b.dataset.copy||'';
+    const done=()=>{ const o=b.textContent; b.textContent='Copied'; setTimeout(()=>b.textContent=o,1400); };
+    if(navigator.clipboard&&navigator.clipboard.writeText){ navigator.clipboard.writeText(txt).then(done).catch(done); }
+    else done();
+  });
+})();
+</script>
+</body>
+</html>

@@ -30,7 +30,9 @@ ALTER TABLE agents ALTER COLUMN audit_pubkey     DROP NOT NULL;
 ALTER TABLE agents ALTER COLUMN account_addr DROP NOT NULL;
 
 -- bind_mode: NULL = native (the only kind before SF-2); 'external' = Tier-2
--- bound. A partial index keeps the native hot paths untouched.
+-- bound. listActiveAgents filters `bind_mode IS DISTINCT FROM 'external'`; the
+-- predicate is cheap (native rows are NULL) and the agents table is owner-scoped
+-- small, so no dedicated index is warranted yet.
 ALTER TABLE agents ADD COLUMN bind_mode text
   CHECK (bind_mode IS NULL OR bind_mode = 'external');
 

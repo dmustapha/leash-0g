@@ -132,13 +132,34 @@ export function originOf(url: string): string | null {
 export function isInternalHost(host: string): boolean {
   if (!host) return true;
   let h = host.toLowerCase().trim();
-  // strip a :port and IPv6 brackets.
-  if (h.startsWith('[')) h = h.slice(1, h.indexOf(']') === -1 ? undefined : h.indexOf(']'));
-  else if (h.includes(':') && !h.includes('::')) h = h.slice(0, h.lastIndexOf(':'));
+  // Strip IPv6 brackets; only strip a trailing :port on a bracketed or dotted-quad
+  // host — never last-colon-truncate a bare IPv6 literal (L-01 footgun).
+  if (h.startsWith('[')) {
+    const end = h.indexOf(']');
+    h = end === -1 ? h.slice(1) : h.slice(1, end); // also drops any :port after ]
+  } else if (/^\d{1,3}(\.\d{1,3}){3}:\d+$/.test(h)) {
+    h = h.slice(0, h.lastIndexOf(':'));
+  }
+  // Trailing-dot FQDN is DNS-equivalent to the dotless form (H-01) — normalize
+  // before the suffix/exact checks or `metadata.google.internal.` sails through.
+  if (h.endsWith('.')) h = h.slice(0, -1);
+  // IPv4-mapped IPv6 (H-01): `::ffff:169.254.169.254` (dotted) and the hex-group
+  // form `::ffff:a9fe:a9fe` that `new URL().hostname` emits — re-check as IPv4 or
+  // the cloud-metadata endpoint reaches the proxy as a non-internal host.
+  const mappedDotted = /^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(h);
+  if (mappedDotted?.[1]) return isInternalHost(mappedDotted[1]);
+  const mappedHex = /^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(h);
+  if (mappedHex?.[1] && mappedHex[2]) {
+    const hi = parseInt(mappedHex[1], 16);
+    const lo = parseInt(mappedHex[2], 16);
+    return isInternalHost(`${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`);
+  }
   if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.internal') || h.endsWith('.local')) return true;
   if (h === 'metadata' || h === 'metadata.google.internal') return true;
-  // IPv6 loopback / unspecified / unique-local (fc00::/7) / link-local (fe80::/10).
-  if (h === '::1' || h === '::' ) return true;
+  // IPv6 loopback / unspecified / non-compressed loopback / unique-local
+  // (fc00::/7) / link-local (fe80::/10).
+  if (h === '::1' || h === '::') return true;
+  if (/^(0:){7}0*1$/.test(h)) return true;
   if (/^f[cd][0-9a-f]{2}:/.test(h) || /^fe[89ab][0-9a-f]:/.test(h)) return true;
   // IPv4 dotted-quad ranges.
   const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);

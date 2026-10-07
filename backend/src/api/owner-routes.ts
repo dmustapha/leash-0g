@@ -99,7 +99,7 @@ import type { ChainOps, RuntimeManager, Settings } from '../server.js';
 import { onboardAgentToChain, OnboardRefusedError, type OnboardChainOps } from '../chain/onboard.js';
 import { UnregisteredChainError } from '../chain/registry.js';
 import { listChainDeployments, getOwnedAgentIdByDeployment } from '../store/chain-deployments.js';
-import { getAgentByAccountAndChain } from '../store/agents.js';
+import { getAgentByAccountAndChain, countAgentsByOwner } from '../store/agents.js';
 import { getBoundAgent, updateBoundTokenHash } from '../store/bound-agents.js';
 import { bindExternalAgent, BindRefusedError } from '../binding/bind-external.js';
 import { listRequestsByChainAndAccount } from '../store/capabilities.js';
@@ -192,6 +192,9 @@ const bindExternalSchema = z.object({
     .optional(),
   chainId: z.number().int().positive().optional(),
   baseUrl: z.string().url().max(2048).optional(),
+}).refine((d) => d.leashedAccountAddr === undefined || d.chainId !== undefined, {
+  message: 'chainId is required when leashedAccountAddr is provided',
+  path: ['chainId'],
 });
 
 // Role/goal union (spec §3b): the discriminator is interpreted ONLY by the
@@ -879,6 +882,10 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
   const chainsRateOk = makeSlidingLimiter(deps.settings.createRatePerHour);
   // Stage D: the capability grant/envelope routes get their OWN per-owner ceiling.
   const capabilitiesRateOk = makeSlidingLimiter(deps.settings.createRatePerHour);
+  // SF-2 (M-01): the external-bind route mints an argon2id hash per call + inserts
+  // rows — a CPU/memory-amplification + unbounded-growth surface if unbounded.
+  // Same per-owner ceiling as create.
+  const bindRateOk = makeSlidingLimiter(deps.settings.createRatePerHour);
   const capabilityDeps: CapabilityDeps = {
     pool: deps.pool,
     hub: deps.hub,
@@ -1517,6 +1524,17 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
   // the gateway/MCP endpoints + the (once-shown) gateway token + base_url swap.
   // No session key is ever minted (F-2b zero-authority).
   router.post('/api/agents/bind-external', asyncRoute(async (req: OwnerRequest, res) => {
+    const ownerAddr = req.ownerAddr as string;
+    // M-01: per-owner rate ceiling (argon2id cost) + quota (bound agents are
+    // agents rows → they count toward the owner's create quota, same as native).
+    if (!bindRateOk(ownerAddr)) {
+      res.status(429).json({ error: 'rate_limited' });
+      return;
+    }
+    if ((await countAgentsByOwner(deps.pool, ownerAddr)) >= deps.settings.createQuotaPerOwner) {
+      res.status(403).json({ error: 'quota_exceeded', limit: deps.settings.createQuotaPerOwner });
+      return;
+    }
     const parsed = bindExternalSchema.safeParse(req.body);
     if (!parsed.success) {
       res.status(400).json({ error: { message: 'invalid request body' } });

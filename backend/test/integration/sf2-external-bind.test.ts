@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
-import { createTestDb, type TestDb } from '../helpers/db.js';
+import { createTestDb, seedAgent, type TestDb } from '../helpers/db.js';
 import { buildTestApp, testSettings, ownerAuth, type TestApp } from '../helpers/app.js';
 import { getAgentById } from '../../src/store/agents.js';
 import { getBoundAgent } from '../../src/store/bound-agents.js';
@@ -137,14 +137,23 @@ describe('SF-2 — rotate-gateway-token', () => {
     expect(oldAuth.ok).toBe(false);
   });
 
-  it('refuses rotate-gateway-token on a NATIVE agent (wrong route)', async () => {
-    // A foreign-owner bound agent is 404 (enumeration-oracle) — proves ownership scoping.
+  it('is owner-scoped: a foreign owner gets 404 (enumeration-oracle)', async () => {
     const res = await bind(OWNER, { name: 'bound' });
     const foreign = await request(t.app)
       .post(`/api/agents/${res.body.agentId}/rotate-gateway-token`)
       .set('authorization', ownerAuth(OTHER))
       .send({});
     expect(foreign.status).toBe(404);
+  });
+
+  it('refuses rotate-gateway-token on a NATIVE agent (409 not_external — use /rotate)', async () => {
+    const nativeId = await seedAgent(db.pool, { ownerAddr: OWNER, name: 'native' });
+    const r = await request(t.app)
+      .post(`/api/agents/${nativeId}/rotate-gateway-token`)
+      .set('authorization', ownerAuth(OWNER))
+      .send({});
+    expect(r.status).toBe(409);
+    expect(r.body.error.reason).toBe('not_external');
   });
 });
 

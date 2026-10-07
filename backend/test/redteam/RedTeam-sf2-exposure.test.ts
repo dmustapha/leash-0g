@@ -30,10 +30,22 @@ describe('SF-2 SD-F7 — SSRF / internal-host egress guard (C-SF3-1)', () => {
       'fe80::1',
       'foo.internal',
       'metadata.google.internal',
+      // H-01 regressions: IPv4-mapped IPv6 (dotted + hex-group) + trailing-dot FQDN.
+      '::ffff:169.254.169.254',
+      '::ffff:a9fe:a9fe', // 169.254.169.254 in hex groups (new URL().hostname form)
+      '::ffff:127.0.0.1',
+      'metadata.google.internal.',
+      'foo.internal.',
+      '0:0:0:0:0:0:0:1', // non-compressed IPv6 loopback
       '', // empty → fail-closed internal
     ]) {
       expect(isInternalHost(h)).toBe(true);
     }
+  });
+
+  it('H-01: a bracketed IPv4-mapped IPv6 metadata URL is classified internal', () => {
+    expect(isInternalUrl('http://[::ffff:169.254.169.254]/latest/meta-data/')).toBe(true);
+    expect(isInternalUrl('http://metadata.google.internal./computeMetadata/v1/')).toBe(true);
   });
 
   it('classifies real external hosts as NOT internal', () => {
@@ -129,10 +141,13 @@ describe('SF-2 SD-F7 — poisoned tool I/O (C-SF3-3)', () => {
   });
 
   it('still strips prototype-pollution keys at depth (regression guard)', () => {
-    const r = guardToolArgs({ a: 1, __proto__: { polluted: true }, nested: { constructor: 'x' } });
+    // JSON.parse (not an object literal) creates a REAL own `__proto__` key — an
+    // object literal sets the prototype at parse time and never exercises the strip.
+    const r = guardToolArgs(JSON.parse('{"a":1,"__proto__":{"polluted":true},"nested":{"constructor":"x"}}'));
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(Object.prototype.hasOwnProperty.call(r.value, '__proto__')).toBe(false);
+      expect(({} as Record<string, unknown>)['polluted']).toBeUndefined(); // prototype not polluted
       // The own 'constructor' KEY is stripped (reading .constructor still finds
       // the inherited Object.constructor via the prototype chain — that's fine;
       // what matters is no attacker-supplied own-key rode through).

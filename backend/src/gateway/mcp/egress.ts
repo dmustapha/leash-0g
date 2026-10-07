@@ -31,7 +31,15 @@ export function createHttpMcpEgressClient(timeoutMs = DEFAULT_TIMEOUT_MS): McpEg
             params: { name: toolName, arguments: args ?? {} },
           }),
           signal: controller.signal,
+          // M-02 (SD-F7 SSRF): do NOT follow redirects. An allowlisted-but-hostile
+          // MCP server could 302 the proxy to http://169.254.169.254/… (cloud
+          // metadata) — the boot-time origin check can't catch a runtime redirect.
+          // A 3xx is treated as a tool error, never followed.
+          redirect: 'manual',
         });
+        if (res.status >= 300 && res.status < 400) {
+          return { content: [{ type: 'text', text: '[tool redirect refused]' }], isError: true };
+        }
         // L-01 hardening: best-effort early reject on a declared Content-Length
         // over the cap (a well-behaved server discloses it). The AUTHORITATIVE
         // bound is the post-read length check below — it covers chunked / omitted-
