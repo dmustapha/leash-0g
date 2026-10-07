@@ -149,7 +149,7 @@ contract LeashAccountV5SigningTest is Test {
         bytes32[] memory f = _fields(spender, 100 ether + 1, block.timestamp + 30 minutes);
         bytes memory sig = _sign(sessionPk, _digest(f));
         vm.prank(session);
-        vm.expectRevert(abi.encodeWithSelector(LeashAccountV5.OverPerCallCap.selector, 100 ether + 1, uint128(100 ether)));
+        vm.expectRevert(abi.encodeWithSelector(LeashAccountV5.OverPerIntentCap.selector, 100 ether + 1, uint128(100 ether)));
         acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig);
     }
 
@@ -386,7 +386,7 @@ contract LeashAccountV5SigningTest is Test {
         bytes32[] memory f = _fields(spender, 20 ether, block.timestamp + 30 minutes);
         bytes memory sig = _sign(sessionPk, _digest(f));
         vm.prank(session);
-        vm.expectRevert(abi.encodeWithSelector(LeashAccountV5.OverPerCallCap.selector, 20 ether, uint128(10 ether)));
+        vm.expectRevert(abi.encodeWithSelector(LeashAccountV5.OverPerIntentCap.selector, 20 ether, uint128(10 ether)));
         acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig);
     }
 
@@ -486,11 +486,106 @@ contract LeashAccountV5SigningTest is Test {
         bytes memory sig = _sign(sessionPk, _digest(f));
         vm.prank(session);
         if (amount > 100 ether) {
-            vm.expectRevert(abi.encodeWithSelector(LeashAccountV5.OverPerCallCap.selector, amount, uint128(100 ether)));
+            vm.expectRevert(abi.encodeWithSelector(LeashAccountV5.OverPerIntentCap.selector, amount, uint128(100 ether)));
             acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig);
         } else {
             bytes32 digest = acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig);
             assertEq(acct.isValidSignature(digest, ""), ERC1271_MAGIC);
         }
+    }
+
+    // ============ FP-CARRY-5 / D-FP1-7: re-arm idempotency + arming-epoch ============
+
+    function _spent() internal view returns (uint128 spent) {
+        (,, spent,) = acct.spendBudget(address(usd));
+    }
+
+    /// Re-arming a STILL-LIVE digest reverts (no double-debit of the shared budget).
+    function test_CARRY5_rearmLiveDigest_reverts() public {
+        _budget(address(usd), 500 ether);
+        _grantSigning(address(usd), 100 ether, 1 hours, spender);
+        uint256 dl = block.timestamp + 30 minutes;
+        _arm(spender, 100 ether, dl);
+        assertEq(_spent(), 100 ether, "first arm debits once");
+        bytes32[] memory f = _fields(spender, 100 ether, dl); // identical fields ⇒ same digest
+        bytes memory sig = _sign(sessionPk, _digest(f));
+        vm.prank(session);
+        vm.expectRevert(LeashAccountV5.AlreadyArmed.selector);
+        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig);
+        assertEq(_spent(), 100 ether, "reverted re-arm must NOT debit again");
+    }
+
+    /// Tightening the signing grant invalidates every in-flight armed intent (epoch bump).
+    function test_CARRY5_tightenGrant_invalidatesArmed() public {
+        _budget(address(usd), 500 ether);
+        _grantSigning(address(usd), 100 ether, 1 hours, spender);
+        bytes32 d = _arm(spender, 100 ether, block.timestamp + 30 minutes);
+        assertEq(acct.isValidSignature(d, ""), ERC1271_MAGIC, "valid before tighten");
+        vm.prank(owner);
+        acct.tightenSigningGrant(DESCRIPTOR_ID, 50 ether, 1 hours); // lower cap
+        assertEq(acct.isValidSignature(d, ""), ERC1271_INVALID, "stale arm invalid after tighten");
+    }
+
+    /// Tightening the SHARED per-token budget also invalidates in-flight arms.
+    function test_CARRY5_tightenBudget_invalidatesArmed() public {
+        _budget(address(usd), 500 ether);
+        _grantSigning(address(usd), 100 ether, 1 hours, spender);
+        bytes32 d = _arm(spender, 100 ether, block.timestamp + 30 minutes);
+        assertEq(acct.isValidSignature(d, ""), ERC1271_MAGIC);
+        vm.prank(owner);
+        acct.tightenSpendBudget(address(usd), 300 ether);
+        assertEq(acct.isValidSignature(d, ""), ERC1271_INVALID, "budget tighten kills stale arm");
+    }
+
+    /// Removing the descriptor (default-deny again) invalidates in-flight arms.
+    function test_CARRY5_removeDescriptor_invalidatesArmed() public {
+        _budget(address(usd), 500 ether);
+        _grantSigning(address(usd), 100 ether, 1 hours, spender);
+        bytes32 d = _arm(spender, 100 ether, block.timestamp + 30 minutes);
+        assertEq(acct.isValidSignature(d, ""), ERC1271_MAGIC);
+        vm.prank(owner);
+        acct.removeSigningDescriptor(DESCRIPTOR_ID);
+        assertEq(acct.isValidSignature(d, ""), ERC1271_INVALID, "removed descriptor kills stale arm");
+    }
+
+    /// revoke → rearm must NOT silently resurrect arms authorized before the revoke.
+    function test_CARRY5_revokeThenRearm_doesNotResurrect() public {
+        _budget(address(usd), 500 ether);
+        _grantSigning(address(usd), 100 ether, 1 hours, spender);
+        bytes32 d = _arm(spender, 100 ether, block.timestamp + 30 minutes);
+        assertEq(acct.isValidSignature(d, ""), ERC1271_MAGIC);
+        vm.prank(owner);
+        acct.revoke();
+        vm.prank(owner);
+        acct.rearm();
+        assertEq(acct.isValidSignature(d, ""), ERC1271_INVALID, "pre-revoke arm must stay dead after rearm");
+    }
+
+    /// A STALE (epoch-invalidated) digest MAY be re-armed — re-authorized under the
+    /// now-current policy, debiting the budget afresh.
+    function test_CARRY5_rearmStaleDigest_allowed() public {
+        _budget(address(usd), 500 ether);
+        _grantSigning(address(usd), 100 ether, 1 hours, spender);
+        uint256 dl = block.timestamp + 30 minutes;
+        bytes32 d = _arm(spender, 100 ether, dl);
+        assertEq(_spent(), 100 ether);
+        vm.prank(owner);
+        acct.tightenSigningGrant(DESCRIPTOR_ID, 100 ether, 59 minutes); // tighten window only (epoch++)
+        assertEq(acct.isValidSignature(d, ""), ERC1271_INVALID, "stale after tighten");
+        bytes32 re = _arm(spender, 100 ether, dl); // same fields ⇒ same digest, now re-armable
+        assertEq(re, d, "same fields => same digest");
+        assertEq(acct.isValidSignature(d, ""), ERC1271_MAGIC, "re-armed valid under new epoch");
+        assertEq(_spent(), 200 ether, "re-arm of a stale digest debits afresh");
+    }
+
+    // ============ FP-CARRY: descriptor role-index aliasing rejected at grant ============
+
+    function test_CARRY_indexAliasing_reverts() public {
+        vm.prank(owner);
+        vm.expectRevert(LeashAccountV5.InvalidPolicy.selector);
+        acct.proposeSigningGrant(
+            2, domainSep, TYPEHASH, NUM_FIELDS, SPENDER_IDX, AMOUNT_IDX, AMOUNT_IDX, address(usd),
+            100 ether, 1 hours, _spenders(spender)
+        ); // deadlineIndex == amountIndex ⇒ InvalidPolicy
     }
 }

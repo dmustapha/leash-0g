@@ -124,6 +124,8 @@ contract LeashAccountV5 is ReentrancyGuard {
     struct ArmedIntent {
         bool set;
         uint64 expiry;
+        uint64 epoch; // FP-CARRY-5: snapshot of signingEpoch at arm time; a tighten bumps the
+            // live epoch so a stale arm is invalid in isValidSignature without a per-digest disarm.
     }
 
     // ---------- errors ----------
@@ -183,6 +185,8 @@ contract LeashAccountV5 is ReentrancyGuard {
     error DeadlineInPast();
     error DeadlineTooFar(uint256 deadline);
     error AssetNotEighteenDecimals(uint8 got);
+    error AlreadyArmed(); // FP-CARRY-5 (D-FP1-7): a still-live digest cannot be re-debited.
+    error OverPerIntentCap(uint256 amount, uint128 cap); // distinct from the Stage-D calling-path cap.
 
     // ---------- events ----------
     event Executed(address indexed to, uint256 value, uint128 spentInWindow);
@@ -316,6 +320,15 @@ contract LeashAccountV5 is ReentrancyGuard {
     mapping(uint256 => mapping(address => bool)) public signingSpender; // descriptorId => spender => allowed
     mapping(uint256 => address[]) internal signingSpenderList; // descriptorId => spenders (so a re-grant/remove clears cleanly)
     mapping(bytes32 => ArmedIntent) public armedIntent; // eip712 digest => armed
+
+    /// @notice FP-CARRY-5 (D-FP1-7): the monotonic signing epoch. Every armed intent snapshots
+    ///         it; `isValidSignature` requires the snapshot == the current value. Any
+    ///         signing-relevant TIGHTEN (tightenSigningGrant / removeSigningDescriptor /
+    ///         tightenSpendBudget) and `revoke` advance it, so one owner tighten invalidates
+    ///         ALL in-flight armed intents fail-safe — the owner never needs each digest.
+    ///         Deliberately global (any tighten kills every stale arm); re-arm re-authorizes
+    ///         under the new (tightened) policy.
+    uint64 public signingEpoch;
 
     /// @notice Co-signer seam (FP-4, `07 #15`). INERT in FP-1: `coSigner == address(0)`
     ///         ⇒ the hook is a no-op. FP-4 adds the owner setter + the second-factor
@@ -730,8 +743,18 @@ contract LeashAccountV5 is ReentrancyGuard {
     function isValidSignature(bytes32 hash, bytes calldata /*signature*/ ) external view returns (bytes4) {
         if (revoked) return ERC1271_INVALID; // revoke fails-closed
         ArmedIntent memory a = armedIntent[hash];
-        if (a.set && block.timestamp <= a.expiry) return ERC1271_MAGIC;
+        // FP-CARRY-5: a stale-epoch arm (invalidated by an owner tighten) is INVALID.
+        if (a.set && a.epoch == signingEpoch && block.timestamp <= a.expiry) return ERC1271_MAGIC;
         return ERC1271_INVALID;
+    }
+
+    /// @dev FP-CARRY-5 (D-FP1-7): advance the signing epoch — every in-flight armed intent
+    ///      snapshotting the old value becomes INVALID in `isValidSignature`. Called by every
+    ///      signing-relevant tighten/removal + `revoke` (fail-safe, global).
+    function _bumpSigningEpoch() internal {
+        unchecked {
+            signingEpoch++;
+        }
     }
 
     /// @notice The STATEFUL pre-authorization (the enforcement locus — ERC-1271 being
@@ -777,6 +800,14 @@ contract LeashAccountV5 is ReentrancyGuard {
         bytes32 structHash = keccak256(abi.encodePacked(s.typeHash, fields));
         digest = keccak256(abi.encodePacked(hex"1901", s.domainSeparator, structHash));
 
+        // FP-CARRY-5 (D-FP1-7) re-arm idempotency: a STILL-LIVE armed digest cannot be
+        // re-debited (double-charging the shared budget for one authorization). A stale
+        // (epoch-invalidated) or expired entry MAY be overwritten — it is re-authorized under
+        // current policy. An expired same-fields digest is already blocked below by the
+        // deadline check (same fields ⇒ same deadline).
+        ArmedIntent memory existing = armedIntent[digest];
+        if (existing.set && existing.epoch == signingEpoch && block.timestamp <= existing.expiry) revert AlreadyArmed();
+
         // the session key must have actually signed this exact digest.
         if (ECDSA.recover(digest, sessionSig) != sessionKey) revert BadIntentSignature();
 
@@ -785,7 +816,7 @@ contract LeashAccountV5 is ReentrancyGuard {
         uint256 deadline = uint256(fields[s.deadlineIndex]);
 
         if (!signingSpender[descriptorId][spender]) revert SpenderNotAllowlisted(spender);
-        if (amount > s.perIntentCap) revert OverPerCallCap(amount, s.perIntentCap);
+        if (amount > s.perIntentCap) revert OverPerIntentCap(amount, s.perIntentCap);
         if (deadline <= block.timestamp) revert DeadlineInPast();
         if (deadline > uint256(block.timestamp) + s.maxDeadlineWindow) revert DeadlineTooFar(deadline);
 
@@ -797,7 +828,7 @@ contract LeashAccountV5 is ReentrancyGuard {
             _debitSpendBudget(s.token, amount, p.windowSeconds);
         }
 
-        armedIntent[digest] = ArmedIntent({set: true, expiry: uint64(deadline)});
+        armedIntent[digest] = ArmedIntent({set: true, expiry: uint64(deadline), epoch: signingEpoch});
         emit SigningIntentAuthorized(descriptorId, digest, spender, amount, uint64(deadline));
     }
 
@@ -848,6 +879,11 @@ contract LeashAccountV5 is ReentrancyGuard {
         if (token == address(0)) revert ZeroAddress();
         if (numFields == 0 || numFields > 32) revert InvalidPolicy();
         if (spenderIndex >= numFields || amountIndex >= numFields || deadlineIndex >= numFields) revert InvalidPolicy();
+        // FP-CARRY (index aliasing): the three role indices must be pairwise distinct, else a
+        // single field word would be read as two roles (e.g. a deadline decoded as the amount).
+        if (spenderIndex == amountIndex || spenderIndex == deadlineIndex || amountIndex == deadlineIndex) {
+            revert InvalidPolicy();
+        }
         pendingSigningGrant = PendingSigningGrant({
             descriptorId: descriptorId,
             domainSeparator: domainSeparator,
@@ -913,6 +949,7 @@ contract LeashAccountV5 is ReentrancyGuard {
         if (perIntentCap > s.perIntentCap || maxDeadlineWindow > s.maxDeadlineWindow) revert NotTightening();
         s.perIntentCap = perIntentCap;
         s.maxDeadlineWindow = maxDeadlineWindow;
+        _bumpSigningEpoch(); // FP-CARRY-5: invalidate in-flight arms under the old (looser) caps.
         _clearPendingSigningGrant();
         emit SigningGrantChanged(descriptorId, s.token, perIntentCap);
     }
@@ -922,6 +959,7 @@ contract LeashAccountV5 is ReentrancyGuard {
     function removeSigningDescriptor(uint256 descriptorId) external onlyOwner {
         _clearSigningSpenders(descriptorId);
         delete signingIntentPolicy[descriptorId];
+        _bumpSigningEpoch(); // FP-CARRY-5: default-deny again ⇒ kill every in-flight arm.
         _clearPendingSigningGrant();
         emit SigningDescriptorRemoved(descriptorId);
     }
@@ -1056,6 +1094,8 @@ contract LeashAccountV5 is ReentrancyGuard {
         if (!b.set) revert BudgetNotSet(token);
         if (windowCap > b.windowCap) revert NotTightening();
         b.windowCap = windowCap;
+        _bumpSigningEpoch(); // FP-CARRY-5: the budget is shared with signing ⇒ a lower cap
+            // must also invalidate in-flight armed intents that drew on the old (higher) budget.
         _clearPendingBudget();
         emit SpendBudgetChanged(token, windowCap);
     }
@@ -1232,6 +1272,7 @@ contract LeashAccountV5 is ReentrancyGuard {
     function revoke() external {
         if (msg.sender != owner && msg.sender != guardian) revert NotGuardianOrOwner();
         revoked = true;
+        _bumpSigningEpoch(); // FP-CARRY-5: a later rearm must NOT silently resurrect stale arms.
         _clearPendingTimelocks();
         emit Revoked(msg.sender);
     }
