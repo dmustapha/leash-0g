@@ -68,6 +68,18 @@ export interface OnboardChainOps extends ChainOps {
     tokenPolicy?: { perTransferCapToken: bigint; windowCapToken: bigint };
     accountSalt: string;
   }): Promise<string>;
+  /** Stage F′ (FP-4 P1): the V5 analogue — pure off-chain CREATE2 (guardian required). */
+  predictAccountV5(input: {
+    ownerAddr: string;
+    guardianAddr: string;
+    sessionKeyAddr: string;
+    policy: { perTransferCap: bigint; windowCap: bigint; windowSeconds: number; expiresAt: number };
+    allowlist: string[];
+    timelockDelay: number;
+    settlementToken?: string;
+    tokenPolicy?: { perTransferCapToken: bigint; windowCapToken: bigint };
+    accountSalt: string;
+  }): string;
 }
 
 /**
@@ -107,8 +119,12 @@ export async function onboardAgentToChain(
   // SF-2: second-chain onboard is a native-only operation (a bound agent has no
   // on-chain account to replicate at a CREATE2 address).
   assertNativeAgent(agent);
-  if (agent.accountVersion !== 4 || !agent.accountSalt) {
-    throw new OnboardRefusedError('not_v4', 'only deterministic V4 accounts (with a persisted salt) can onboard to another chain');
+  // Stage F′ (FP-4 P1): V4 (governed-calldata) AND V5 (governed-signing) are both
+  // deterministic CREATE2 accounts that can replay onto another chain; legacy v2
+  // cannot. Either requires a persisted salt (+ tuple, checked below).
+  const deterministic = agent.accountVersion === 4 || agent.accountVersion === 5;
+  if (!deterministic || !agent.accountSalt) {
+    throw new OnboardRefusedError('not_v4', 'only deterministic V4/V5 accounts (with a persisted salt) can onboard to another chain');
   }
   if (targetChainId === agent.chainId) {
     throw new OnboardRefusedError('home_chain', `chain ${targetChainId} is the agent's home chain`);
@@ -152,7 +168,9 @@ export async function onboardAgentToChain(
   // REFUSAL-FIRST: the target chain's prediction for the persisted tuple must
   // equal the persisted account address. Any drift = mutated/reconstructed
   // tuple = refuse BEFORE minting anything.
-  const predicted = (await ops.predictAccountV4(predictInput)).toLowerCase();
+  const predicted = (
+    agent.accountVersion === 5 ? ops.predictAccountV5(predictInput) : await ops.predictAccountV4(predictInput)
+  ).toLowerCase();
   if (predicted !== agent.accountAddr.toLowerCase()) {
     throw new OnboardRefusedError(
       'tuple_prediction_mismatch',
@@ -164,7 +182,7 @@ export async function onboardAgentToChain(
     sessionKeyAddr: tuple.sessionKeyAddr,
     auditPubKey: agent.auditPubkey,
     name: agent.name,
-    accountVersion: 4,
+    accountVersion: agent.accountVersion === 5 ? 5 : 4,
     policy: predictInput.policy,
     allowlist: tuple.allowlist,
     timelockDelay: tuple.timelockDelay,

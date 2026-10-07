@@ -10,10 +10,33 @@ export interface TestDb {
   drop: () => Promise<void>;
 }
 
-/** Hermetic per-test-run schema on the real (Neon) DATABASE_URL — spec test plan. */
+/**
+ * The DB URL integration tests build their hermetic per-run schema on. TI-1: the
+ * DEFAULT suite (`vitest run`) should NOT hit Neon — a full-parallel run deadlocks
+ * the shared Neon instance. Prefer TEST_DATABASE_URL (a LOCAL Postgres, e.g.
+ * `postgres://postgres:postgres@localhost:5432/leash_test`), then a `localhost`
+ * default, falling back to DATABASE_URL only when a test explicitly points there
+ * (the live suite). A non-local DATABASE_URL with no TEST_DATABASE_URL set is a
+ * loud error so the default suite can never silently run against Neon.
+ */
+const LOCAL_TEST_DB_DEFAULT = 'postgres://postgres:postgres@localhost:5432/leash_test';
+
+export function resolveTestDbUrl(env: NodeJS.ProcessEnv = process.env): string {
+  const explicit = env['TEST_DATABASE_URL'];
+  if (explicit) return explicit;
+  const dbUrl = env['DATABASE_URL'];
+  // A LOCAL DATABASE_URL is fine to reuse; a remote one must opt in via TEST_DATABASE_URL.
+  if (dbUrl && /@(localhost|127\.0\.0\.1|\[::1\])[:/]/.test(dbUrl)) return dbUrl;
+  if (!dbUrl) return LOCAL_TEST_DB_DEFAULT;
+  throw new Error(
+    'DATABASE_URL points at a non-local host; set TEST_DATABASE_URL to a local Postgres for the default (hermetic) suite',
+  );
+}
+
+/** Hermetic per-test-run schema on a LOCAL Postgres (TI-1), or an opt-in remote URL. */
 export async function createTestDb(): Promise<TestDb> {
-  const url = process.env['DATABASE_URL'];
-  if (!url) throw new Error('DATABASE_URL required for integration tests');
+  const url = resolveTestDbUrl();
+  if (!url) throw new Error('no test database URL resolved (set TEST_DATABASE_URL)');
   const schema = `test_${randomBytes(6).toString('hex')}`;
   const admin = createPool(url);
   await admin.query(`CREATE SCHEMA ${schema}`);

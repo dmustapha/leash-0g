@@ -46,8 +46,10 @@ export interface ChainOps {
      * calldata V4 (the product-standard account; selects `createAccountV4` on
      * the V4 factory), 2 = legacy v2/v3 (selects `createAccount` on the legacy
      * factory). Arg-identical wire; only the factory + fn/event name differ.
+     * Stage F′ (FP-4 P1): 5 = governed-signing V5 — minted through the generic
+     * `Create2Deployer` with backend-assembled initcode (no typed factory).
      */
-    accountVersion: 2 | 4;
+    accountVersion: 2 | 4 | 5;
     policy: { perTransferCap: bigint; windowCap: bigint; windowSeconds: number; expiresAt: number };
     allowlist: string[];
     timelockDelay: number;
@@ -71,14 +73,20 @@ export interface ChainOps {
     createTx: string;
     registerTx: string;
     guardianAddr: string;
-    accountVersion: 2 | 4;
+    accountVersion: 2 | 4 | 5;
     accountSalt: string | null;
     /**
-     * SE-6: the EXACT canonical construction tuple the v4 mint used (serializable;
-     * null for legacy mints) — persisted so a later chain onboard replays it
-     * verbatim (the tuple is baked into the CREATE2 initcode).
+     * SE-6: the EXACT canonical construction tuple the v4/v5 mint used
+     * (serializable; null for legacy mints) — persisted so a later chain onboard
+     * replays it verbatim (the tuple is baked into the CREATE2 initcode).
      */
     accountCreateTuple: AccountCreateTuple | null;
+    /**
+     * Stage F′ (FP-4 P1, RULING-A): keccak256 of the EXACT V5 initcode the deploy
+     * ran — persisted at mint so `assertSameAddress` compares THAT, not a re-derived
+     * mutable tuple. Null for V4/legacy mints (their predict is factory-side).
+     */
+    initCodeHash: string | null;
     /** SE-6 (M-02): a pre-existing deterministic deploy was adopted (no mint tx). */
     adopted: boolean;
   }>;

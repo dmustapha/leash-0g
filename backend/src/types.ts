@@ -148,6 +148,12 @@ export interface AgentRow {
    */
   accountCreateTuple: Record<string, unknown> | null;
   /**
+   * Stage F′ (FP-4 P1, RULING-A): keccak256 of the EXACT V5 initcode the CREATE2
+   * deploy ran — the fixed cross-chain anchor assertSameAddress compares. Null for
+   * V4/legacy mints (their prediction is factory-side, not off-chain initcode).
+   */
+  initCodeHash: string | null;
+  /**
    * SF-2: binding mode. NULL = native (session key + on-chain account — the only
    * kind before SF-2); 'external' = a Tier-2 bound agent (zero on-chain
    * authority, governed only at the SF-1/SF-3 gateway egress boundary).

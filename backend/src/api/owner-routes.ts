@@ -349,9 +349,11 @@ export const createAgentSchema = z.object({
    * SE-1 (Stage E, SD-E7): on-chain account version. Default 4 — new agents are
    * governed-calldata V4 accounts (the product-standard; V4 is a strict superset
    * of the v3 settlement path). `2` pins the legacy factory (E-1 regression).
-   * Coerced from JSON number; only 2 | 4 accepted.
+   * Stage F′ (FP-4 P1): `5` = governed-signing V5, minted through the generic
+   * CREATE2 deployer (default-denied on chains missing the V5 singletons).
+   * Coerced from JSON number; only 2 | 4 | 5 accepted.
    */
-  accountVersion: z.union([z.literal(2), z.literal(4)]).default(4),
+  accountVersion: z.union([z.literal(2), z.literal(4), z.literal(5)]).default(4),
   /**
    * SE-7 (spec §7.C "chain choice collected at create"): which registered
    * chain the agent's account is minted on. Default = the home 0G chain.
@@ -781,6 +783,9 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       // the SAME address (the tuple is baked into the CREATE2 initcode).
       accountSalt: deployed.accountSalt,
       accountCreateTuple: deployed.accountCreateTuple as Record<string, unknown> | null,
+      // FP-4 (RULING-A): persist the V5 initcode hash (null for V4/legacy) so the
+      // cross-chain same-address check compares a fixed anchor, not a mutable tuple.
+      initCodeHash: deployed.initCodeHash,
     });
 
     // The committed agent row carries the quota/rate count from here on —
@@ -2664,7 +2669,10 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       accountAddr: agent.accountAddr,
       // Whether this agent CAN onboard to another chain (deterministic V4 with
       // the persisted salt+tuple) — the FE surfaces the action only when true.
-      onboardable: agent.accountVersion === 4 && !!agent.accountSalt && !!agent.accountCreateTuple,
+      onboardable:
+        (agent.accountVersion === 4 || agent.accountVersion === 5) &&
+        !!agent.accountSalt &&
+        !!agent.accountCreateTuple,
       homeChainId: agent.chainId,
       chains: [
         { chainId: agent.chainId, accountAddr: agent.accountAddr, role: 'home' as const },

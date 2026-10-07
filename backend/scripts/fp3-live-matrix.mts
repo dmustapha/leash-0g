@@ -186,15 +186,15 @@ for (const spec of chains) {
   try {
     const r = await runChain(spec);
     results[spec.name] = r.detail;
-    // eslint-disable-next-line no-console
+     
     console.log(`✅ ${spec.name}: ${r.detail}`);
   } catch (err) {
     results[spec.name] = `❌ ${err instanceof Error ? err.message : String(err)}`;
-    // eslint-disable-next-line no-console
+     
     console.log(`❌ ${spec.name}: ${results[spec.name]}`);
   }
 }
-// eslint-disable-next-line no-console
+ 
 console.log('\n=== FP-f LIVE MATRIX SUMMARY ===');
 for (const [name, detail] of Object.entries(results)) console.log(`${name}: ${detail}`);
 const allOk = Object.values(results).every((d) => !d.startsWith('❌'));

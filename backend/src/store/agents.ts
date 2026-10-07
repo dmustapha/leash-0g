@@ -23,6 +23,7 @@ interface DbAgentRow {
   account_version: number;
   account_salt: string | null;
   account_create_tuple: Record<string, unknown> | null;
+  init_code_hash: string | null;
   bind_mode: 'external' | null;
   created_at: Date;
 }
@@ -50,6 +51,7 @@ function mapRow(r: DbAgentRow): AgentRow {
     accountVersion: r.account_version,
     accountSalt: r.account_salt,
     accountCreateTuple: r.account_create_tuple,
+    initCodeHash: r.init_code_hash,
     bindMode: r.bind_mode,
     createdAt: r.created_at.toISOString(),
   };
@@ -58,7 +60,7 @@ function mapRow(r: DbAgentRow): AgentRow {
 const COLS = `id, chain_agent_id, chain_id, owner_addr, account_addr, session_key_addr, session_key_enc,
   audit_pubkey, token_id, token_hash, name, status, gateway_rules, goal, encrypted_audit_key,
   gateway_token_enc, guardian_addr, capability_label, account_version, account_salt, account_create_tuple,
-  bind_mode, created_at`;
+  init_code_hash, bind_mode, created_at`;
 
 export async function getAgentById(pool: Pool, id: string): Promise<AgentRow | null> {
   if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
@@ -121,8 +123,8 @@ export interface InsertAgentInput {
   guardianAddr: string;
   /** Phase-5 (D-B9): optional freeform capability label; null when unset. */
   capabilityLabel?: string | null;
-  /** SE-1 (Stage E): on-chain account version (2 legacy | 4 governed-calldata). */
-  accountVersion: 2 | 4;
+  /** SE-1 (Stage E): on-chain account version (2 legacy | 4 governed-calldata | 5 governed-signing, FP-4). */
+  accountVersion: 2 | 4 | 5;
   /**
    * SE-6: the per-agent CREATE2 salt (0x-prefixed bytes32, server-generated at a
    * deterministic v4 create; reused verbatim on every chain the agent onboards so
@@ -135,14 +137,17 @@ export interface InsertAgentInput {
    * initcode; a reconstructed tuple would predict a different address).
    */
   accountCreateTuple?: Record<string, unknown> | null;
+  /** Stage F′ (RULING-A): keccak256 of the V5 initcode (null for V4/legacy). */
+  initCodeHash?: string | null;
 }
 
 export async function insertAgent(pool: Pool, input: InsertAgentInput): Promise<string> {
   const res = await pool.query<{ id: string }>(
     `INSERT INTO agents (chain_agent_id, chain_id, owner_addr, account_addr, session_key_addr, session_key_enc,
                          audit_pubkey, token_id, token_hash, name, gateway_rules, goal, encrypted_audit_key,
-                         gateway_token_enc, guardian_addr, capability_label, account_version, account_salt, account_create_tuple)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19) RETURNING id`,
+                         gateway_token_enc, guardian_addr, capability_label, account_version, account_salt, account_create_tuple,
+                         init_code_hash)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING id`,
     [
       input.chainAgentId.toString(),
       input.chainId,
@@ -163,6 +168,7 @@ export async function insertAgent(pool: Pool, input: InsertAgentInput): Promise<
       input.accountVersion,
       input.accountSalt?.toLowerCase() ?? null,
       input.accountCreateTuple ? JSON.stringify(input.accountCreateTuple) : null,
+      input.initCodeHash?.toLowerCase() ?? null,
     ],
   );
   const row = res.rows[0];

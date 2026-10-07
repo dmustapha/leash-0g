@@ -34,6 +34,26 @@ export interface ChainConfig {
    */
   factoryAddr?: string | undefined;
   registryAddr: string;
+  /**
+   * Stage F′ (FP-4 P1): the generic CREATE2 deployer — the account-agnostic
+   * dispatcher a V5 create mints THROUGH (the backend assembles initcode off-chain
+   * and passes it in). Per-chain, operator-set, lowercase-normalized (like
+   * factoryV4Addr). Must be the SAME address on every chain (deployed via the std
+   * deterministic-deployment proxy with a fixed salt) for cross-chain same-address.
+   */
+  create2DeployerAddr?: string | undefined;
+  /**
+   * Stage F′ (FP-4 P1, RULING-B): the SigningLib helper singleton baked into the
+   * V5 account initcode. The canonical address the post-deploy read-back asserts —
+   * NEVER request input. Must be the SAME address on every chain (pinned singleton).
+   */
+  signingHelperAddr?: string | undefined;
+  /**
+   * Stage F′ (FP-4 P1, RULING-B): the DecodeLib helper singleton baked into the V5
+   * account initcode. Canonical, read-back-asserted, same-address-pinned. A V5
+   * create is DEFAULT-DENIED on a chain missing ANY of the three singletons.
+   */
+  decodeHelperAddr?: string | undefined;
   /** Default account version minted on this chain (SD-E7: 4 = governed calldata). */
   accountVersion: number;
   /** Canonical deployed targets on this chain (mock/real per stage). */
@@ -110,7 +130,15 @@ export class SameAddressMismatchError extends Error {
       | 'account_codehash'
       | 'factory_missing'
       | 'expected_account'
-      | 'home_chain_undeployed',
+      | 'home_chain_undeployed'
+      // Stage F′ (FP-4 P1): the 3 pinned V5 singletons (deployer + both helpers) —
+      // address divergence, bytecode divergence, or an absent singleton on a chain.
+      | 'singleton_addr'
+      | 'singleton_codehash'
+      | 'singleton_missing'
+      // Stage F′ (FP-4 P1, Gate-② W-02): the rebuilt V5 initcode hash diverges from the
+      // PERSISTED agents.init_code_hash — the construction tuple drifted after mint (RULING-A anchor).
+      | 'init_code_hash',
     public readonly expected: string,
     public readonly actual: string,
   ) {
@@ -218,6 +246,9 @@ export class ChainRegistry {
       guardianPrivateKey: this.signing.guardianPrivateKey,
       ...(c.factoryAddr ? { factoryAddr: c.factoryAddr } : {}),
       ...(c.factoryV4Addr ? { factoryV4Addr: c.factoryV4Addr } : {}),
+      ...(c.create2DeployerAddr ? { create2DeployerAddr: c.create2DeployerAddr } : {}),
+      ...(c.signingHelperAddr ? { signingHelperAddr: c.signingHelperAddr } : {}),
+      ...(c.decodeHelperAddr ? { decodeHelperAddr: c.decodeHelperAddr } : {}),
       registryAddr: c.registryAddr,
       ...(clients ? { clients } : {}),
     });
@@ -298,6 +329,14 @@ export class ChainRegistry {
     create: SameAddressCreateInput;
     chainIds: readonly number[];
     /**
+     * Stage F′ (FP-4 P1): which deterministic account the agent uses. 4 (default,
+     * back-compat with every existing caller) verifies the V4 factory identity +
+     * `predictAccountV4`; 5 verifies the 3 PINNED V5 singletons (generic deployer +
+     * both helper contracts, address + codehash) across chains + the off-chain
+     * `predictAccountV5`. A chain missing any pinned singleton is REFUSED.
+     */
+    accountVersion?: 4 | 5;
+    /**
      * The persisted account address (`agents.account_addr`) the caller is about
      * to route funds for. When provided, the verification BINDS the prediction
      * to it — a reconstructed-tuple drift can never "verify" a counterfactual
@@ -305,6 +344,12 @@ export class ChainRegistry {
      * pre-create time (no account exists yet).
      */
     expectedAccountAddr?: string;
+    /**
+     * Stage F′ (FP-4 P1, RULING-A active anchor): the persisted `agents.init_code_hash`. When
+     * provided for a V5 agent, the rebuilt initcode hash MUST equal it — a construction tuple
+     * mutated after mint (independent of the stored hash) is refused. Omit at pre-create time.
+     */
+    initCodeHash?: string;
     /**
      * The agent's home chain: when provided, the account must have DEPLOYED
      * bytecode there — "verified but deployed nowhere" is a refusal, not a
@@ -315,64 +360,23 @@ export class ChainRegistry {
     if (input.chainIds.length < 2) {
       throw new Error('assertSameAddress requires at least 2 chains (cross-chain verification)');
     }
-    // PASS 1 — factory identity FIRST (address + bytecode), so a misconfigured /
-    // spoofed factory is refused with a TYPED error BEFORE any eth_call is made
-    // against it (a predict against a non-factory contract would surface as a raw
-    // RPC revert instead of a legible refusal).
-    const factories: Array<{ chainId: number; factoryAddr: string; factoryCodehash: string | null }> = [];
-    for (const chainId of input.chainIds) {
-      const cfg = this.getChainConfig(chainId); // default-deny (E-11)
-      const ops = this.getChainOps(chainId);
-      const factoryAddr = cfg.factoryV4Addr?.toLowerCase();
-      if (!factoryAddr) {
-        throw new SameAddressMismatchError(chainId, 'factory_missing', 'a configured V4 factory', 'none');
-      }
-      factories.push({ chainId, factoryAddr, factoryCodehash: await ops.getCodeHash(factoryAddr) });
-    }
-    const refFactory = factories[0];
-    if (!refFactory) throw new Error('assertSameAddress: unreachable — no chains resolved');
-    if (refFactory.factoryCodehash === null) {
-      // No factory bytecode on the reference chain — nothing is verifiable.
-      throw new SameAddressMismatchError(refFactory.chainId, 'factory_codehash', 'deployed factory bytecode', 'no code');
-    }
-    for (const f of factories.slice(1)) {
-      if (f.factoryAddr !== refFactory.factoryAddr) {
-        throw new SameAddressMismatchError(f.chainId, 'factory_addr', refFactory.factoryAddr, f.factoryAddr);
-      }
-      if (f.factoryCodehash !== refFactory.factoryCodehash) {
-        throw new SameAddressMismatchError(f.chainId, 'factory_codehash', refFactory.factoryCodehash, f.factoryCodehash ?? 'no code');
-      }
+    const version = input.accountVersion ?? 4;
+    // PASS 1 — the CREATE2-derivation DEPENDENCIES' identity FIRST (address +
+    // bytecode), so a misconfigured / spoofed dependency is refused with a TYPED
+    // error BEFORE any predict is attempted. V4 pins the one factory; V5 pins the
+    // three singletons (generic deployer + both helpers) baked into the address.
+    if (version === 5) {
+      await this.assertV5SingletonsSameAddress(input.chainIds);
+    } else {
+      await this.assertV4FactorySameAddress(input.chainIds);
     }
     // PASS 2 — CREATE2 predictions + deployed-account bytecode.
     const perChain: Array<{ chainId: number; predicted: string; accountCodehash: string | null }> = [];
     for (const chainId of input.chainIds) {
       const ops = this.getChainOps(chainId);
-      let predicted: string;
-      try {
-        predicted = (
-          await ops.predictAccountV4({
-            ownerAddr: input.ownerAddr,
-            sessionKeyAddr: input.create.sessionKeyAddr,
-            guardianAddr: input.create.guardianAddr,
-            policy: input.create.policy,
-            allowlist: input.create.allowlist,
-            timelockDelay: input.create.timelockDelay,
-            ...(input.create.settlementToken !== undefined ? { settlementToken: input.create.settlementToken } : {}),
-            ...(input.create.tokenPolicy !== undefined ? { tokenPolicy: input.create.tokenPolicy } : {}),
-            accountSalt: input.accountSalt,
-          })
-        ).toLowerCase();
-      } catch (err) {
-        // A reverting predict means the configured contract is NOT a deterministic
-        // V4 factory (even though its bytecode matched across chains) — a spoof or
-        // a misconfig either way: refuse with the typed error, never a raw throw.
-        throw new SameAddressMismatchError(
-          chainId,
-          'predicted_address',
-          'a CREATE2 prediction',
-          `predict reverted (${err instanceof Error ? err.message.slice(0, 80) : String(err).slice(0, 80)})`,
-        );
-      }
+      const predicted = (
+        version === 5 ? this.predictV5(ops, input) : await this.predictV4(ops, chainId, input)
+      ).toLowerCase();
       perChain.push({ chainId, predicted, accountCodehash: await ops.getCodeHash(predicted) });
     }
     const ref = perChain[0];
@@ -380,6 +384,26 @@ export class ChainRegistry {
     for (const c of perChain.slice(1)) {
       if (c.predicted !== ref.predicted) {
         throw new SameAddressMismatchError(c.chainId, 'predicted_address', ref.predicted, c.predicted);
+      }
+    }
+    // RULING-A active anchor (Gate-② W-02): bind the prediction to the PERSISTED initcode hash. The
+    // tuple the predictions were derived from must hash to the stored anchor — a post-mint tuple drift
+    // (which would shift every chain's prediction in lockstep, invisible to the cross-chain check) is
+    // refused here. V5 only; omitted at pre-create time (no account/hash yet).
+    if (version === 5 && input.initCodeHash) {
+      const rebuilt = this.getChainOps(ref.chainId).v5InitCodeHash({
+        ownerAddr: input.ownerAddr,
+        guardianAddr: input.create.guardianAddr,
+        sessionKeyAddr: input.create.sessionKeyAddr,
+        policy: input.create.policy,
+        allowlist: input.create.allowlist,
+        timelockDelay: input.create.timelockDelay,
+        ...(input.create.settlementToken !== undefined ? { settlementToken: input.create.settlementToken } : {}),
+        ...(input.create.tokenPolicy !== undefined ? { tokenPolicy: input.create.tokenPolicy } : {}),
+        accountSalt: input.accountSalt,
+      }).toLowerCase();
+      if (rebuilt !== input.initCodeHash.toLowerCase()) {
+        throw new SameAddressMismatchError(ref.chainId, 'init_code_hash', input.initCodeHash.toLowerCase(), rebuilt);
       }
     }
     // Bind the prediction to the PERSISTED account (security M-01): consistent
@@ -418,6 +442,104 @@ export class ChainRegistry {
       }
     }
     return ref.predicted;
+  }
+
+  /** V4 PASS 1 — the one factory's identity (address + bytecode) across chains. */
+  private async assertV4FactorySameAddress(chainIds: readonly number[]): Promise<void> {
+    const factories: Array<{ chainId: number; addr: string; codehash: string | null }> = [];
+    for (const chainId of chainIds) {
+      const cfg = this.getChainConfig(chainId); // default-deny (E-11)
+      const addr = cfg.factoryV4Addr?.toLowerCase();
+      if (!addr) throw new SameAddressMismatchError(chainId, 'factory_missing', 'a configured V4 factory', 'none');
+      factories.push({ chainId, addr, codehash: await this.getChainOps(chainId).getCodeHash(addr) });
+    }
+    const ref = factories[0];
+    if (!ref) throw new Error('assertSameAddress: unreachable — no chains resolved');
+    if (ref.codehash === null) {
+      throw new SameAddressMismatchError(ref.chainId, 'factory_codehash', 'deployed factory bytecode', 'no code');
+    }
+    for (const f of factories.slice(1)) {
+      if (f.addr !== ref.addr) throw new SameAddressMismatchError(f.chainId, 'factory_addr', ref.addr, f.addr);
+      if (f.codehash !== ref.codehash) {
+        throw new SameAddressMismatchError(f.chainId, 'factory_codehash', ref.codehash, f.codehash ?? 'no code');
+      }
+    }
+  }
+
+  /**
+   * V5 PASS 1 (FP-4 P1 / THREAT 4) — the THREE pinned singletons (generic deployer
+   * + SigningLib + DecodeLib) must each be at the SAME address with the SAME
+   * bytecode on every chain; an absent singleton on any chain is a REFUSAL. Each is
+   * part of the account's CREATE2 preimage (deployer in the formula, helpers in the
+   * initcode), so divergence means funds would land outside the proven wall.
+   */
+  private async assertV5SingletonsSameAddress(chainIds: readonly number[]): Promise<void> {
+    const kinds = ['create2DeployerAddr', 'signingHelperAddr', 'decodeHelperAddr'] as const;
+    for (const kind of kinds) {
+      const rows: Array<{ chainId: number; addr: string; codehash: string | null }> = [];
+      for (const chainId of chainIds) {
+        const addr = this.getChainConfig(chainId)[kind]?.toLowerCase();
+        if (!addr) throw new SameAddressMismatchError(chainId, 'singleton_missing', kind, 'none');
+        rows.push({ chainId, addr, codehash: await this.getChainOps(chainId).getCodeHash(addr) });
+      }
+      const ref = rows[0];
+      if (!ref) throw new Error('assertSameAddress: unreachable — no chains resolved');
+      if (ref.codehash === null) {
+        throw new SameAddressMismatchError(ref.chainId, 'singleton_codehash', `${kind} bytecode`, 'no code');
+      }
+      for (const r of rows.slice(1)) {
+        if (r.addr !== ref.addr) throw new SameAddressMismatchError(r.chainId, 'singleton_addr', `${kind} ${ref.addr}`, r.addr);
+        if (r.codehash !== ref.codehash) {
+          throw new SameAddressMismatchError(r.chainId, 'singleton_codehash', `${kind} ${ref.codehash}`, r.codehash ?? 'no code');
+        }
+      }
+    }
+  }
+
+  /** V4 per-chain CREATE2 prediction (eth_call); a revert → typed refusal, not a raw throw. */
+  private async predictV4(
+    ops: LeashChainOps,
+    chainId: number,
+    input: { ownerAddr: string; accountSalt: string; create: SameAddressCreateInput },
+  ): Promise<string> {
+    try {
+      return await ops.predictAccountV4({
+        ownerAddr: input.ownerAddr,
+        sessionKeyAddr: input.create.sessionKeyAddr,
+        guardianAddr: input.create.guardianAddr,
+        policy: input.create.policy,
+        allowlist: input.create.allowlist,
+        timelockDelay: input.create.timelockDelay,
+        ...(input.create.settlementToken !== undefined ? { settlementToken: input.create.settlementToken } : {}),
+        ...(input.create.tokenPolicy !== undefined ? { tokenPolicy: input.create.tokenPolicy } : {}),
+        accountSalt: input.accountSalt,
+      });
+    } catch (err) {
+      throw new SameAddressMismatchError(
+        chainId,
+        'predicted_address',
+        'a CREATE2 prediction',
+        `predict reverted (${err instanceof Error ? err.message.slice(0, 80) : String(err).slice(0, 80)})`,
+      );
+    }
+  }
+
+  /** V5 per-chain CREATE2 prediction — PURE off-chain (no eth_call); uses the chain's singletons. */
+  private predictV5(
+    ops: LeashChainOps,
+    input: { ownerAddr: string; accountSalt: string; create: SameAddressCreateInput },
+  ): string {
+    return ops.predictAccountV5({
+      ownerAddr: input.ownerAddr,
+      guardianAddr: input.create.guardianAddr,
+      sessionKeyAddr: input.create.sessionKeyAddr,
+      policy: input.create.policy,
+      allowlist: input.create.allowlist,
+      timelockDelay: input.create.timelockDelay,
+      ...(input.create.settlementToken !== undefined ? { settlementToken: input.create.settlementToken } : {}),
+      ...(input.create.tokenPolicy !== undefined ? { tokenPolicy: input.create.tokenPolicy } : {}),
+      accountSalt: input.accountSalt,
+    });
   }
 
   /** Resolve (and cache) the runtime session-key chain for a chain, or default-deny. */
