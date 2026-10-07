@@ -30,6 +30,15 @@ import { guardToolResult, type ToolGrantState, type ToolRegistry } from '../tool
 import { raiseToolRequest, type ToolServiceDeps } from '../tool-use/tool-service.js';
 import type { McpEgressClient } from '../gateway/mcp/governed-provider.js';
 import {
+  classifySigning,
+  buildIntent,
+  computeSigningRequestHash,
+  type SigningGrantState,
+  type SigningRegistry,
+} from '../signing/index.js';
+import { raiseSigningRequest, type SigningServiceDeps } from '../signing/signing-service.js';
+import { recordSigningArm } from '../store/signing.js';
+import {
   buildReasonRequest,
   completionContent,
   parseDecision,
@@ -64,9 +73,36 @@ export type CycleOutcome =
   | { type: 'stood_down'; reason: string }
   | { type: 'denied'; reason: string }
   | { type: 'failed'; reason: string; decoded?: DecodedLeashError }
-  | { type: 'tool_used'; toolId: string; isError?: boolean };
+  | { type: 'tool_used'; toolId: string; isError?: boolean }
+  // FP-3 governed signing: an L1 intent armed on-chain (session-key), or an L2 sensitive intent
+  // quarantined to the owner JIT rail (armed only on consent — the arm submit path mirrors L1).
+  | { type: 'signed'; digest: string; descriptorId: number }
+  | { type: 'signing_requested'; descriptorId: number };
 
-type Route = 'act' | 'approval' | 'delegate' | 'call' | 'tool_call' | 'stand_down';
+type Route = 'act' | 'approval' | 'delegate' | 'call' | 'tool_call' | 'sign' | 'stand_down';
+
+/**
+ * FP-3 — the runtime signing rail (OPTIONAL, mirror of `toolRail`). When wired, the decide node
+ * routes a `sign` action through the SAME engine the owner routes use: classify against the owner's
+ * signing grant-state; L1 → never-guess-money build + session-key `authorizeSigningIntent` arm +
+ * record the arm; L2 (sensitive) → raise a quarantined JIT request + stand down (armed on consent);
+ * forbidden / L3-widen → stand down, traced. Absent ⇒ a `sign` stands down (safe default-deny).
+ */
+export interface SigningRail {
+  registry: SigningRegistry;
+  /** live-read the owner's signing grant-state (rules mirror + on-chain signingEpoch). */
+  loadGrant: (agentId: string) => Promise<SigningGrantState>;
+  /**
+   * Resolve the SERVER-held pins for a descriptor's NON-role, non-self leaves (never model text):
+   * the permit `nonce` (read from chain), Permit2's `token` leaf (the granted budget token), etc.
+   * A leaf with no pin stands the build down (`missing_pin`) — the engine never fabricates one.
+   */
+  resolvePins: (input: {
+    agentId: string;
+    descriptorId: number;
+  }) => Promise<Record<string, string | number | bigint | boolean>>;
+  service: SigningServiceDeps;
+}
 
 /**
  * SF-3 — the runtime tool rail (OPTIONAL, mirror of the `capabilities` dep). When
@@ -116,6 +152,13 @@ const TreasuryState = Annotation.Root({
   toolEndpoint: Annotation<string>,
   toolArgs: Annotation<Json>,
   toolIdResolved: Annotation<string>,
+  /** FP-3: the resolved L1 signing intent for the `sign` route (session-key arm leg). */
+  signDescriptorId: Annotation<number>,
+  signFields: Annotation<string[]>,
+  signDigest: Annotation<string>,
+  signSpender: Annotation<string>,
+  signAmountWei: Annotation<string>,
+  signDeadlineSec: Annotation<number>,
   /** Verbatim markFailed reason for a rejected inbound envelope (spec §3b). */
   inboundReject: Annotation<string>,
   approvalId: Annotation<string>,
@@ -143,6 +186,8 @@ export interface TreasuryGraphDeps {
   capabilities?: CapabilityDeps | undefined;
   /** SF-3 — the governed tool-use rail (optional; absent ⇒ tool_call stands down). */
   toolRail?: ToolRail | undefined;
+  /** FP-3 — the governed signing rail (optional; absent ⇒ sign stands down). */
+  signingRail?: SigningRail | undefined;
   /**
    * SE-8 — the governed-bridging lane. `targets` = the chain's bridge allowlist
    * (classify enforcement, carry #2); `assertRoutable` = the HARD pre-routing
@@ -496,6 +541,7 @@ export function buildTreasuryGraph(
     // in classify). Resolve it BEFORE the transfer-damping block.
     if (verdict.route === 'call') return decideCall(state, verdict.decision);
     if (verdict.route === 'tool_call') return decideToolCall(state, verdict.decision);
+    if (verdict.route === 'sign') return decideSign(state, verdict.decision);
     // P3C-6(iii): boundary damping. Refresh clear conditions first (window
     // reset / policy change / re-arm — clearing resolves the limit_hit
     // alert and re-enables normal flow), then short-circuit outcomes that
@@ -835,6 +881,148 @@ export function buildTreasuryGraph(
     }
   }
 
+  /**
+   * FP-3 — the governed signing decide node (mirror of `decideCall`/`decideToolCall`). Routes a
+   * `sign` through the SAME engine the owner routes use, grant-state only:
+   *   forbidden / L3-widen → stand down (an out-of-grant sign would REVERT on-chain; the resolution
+   *     is a timelocked owner widen, never a doomed arm — P3C-6);
+   *   L2 (sensitive)       → raise a quarantined JIT request + stand down (armed on owner consent);
+   *   L1                   → never-guess-money BUILD + route 'sign' → `signAct` (session-key arm).
+   * The built digest + leaf words are server-held; the human card is derived from server fields via
+   * the builder (`decodeForHuman`), NEVER agent text (D-FP2-6 / signing-service M-01).
+   */
+  /** The deadline window (seconds) to derive the sign deadline from: the owner grant's
+   * `maxDeadlineWindow` when granted (so the built deadline sits inside the on-chain bound), else a
+   * small positive default (an un-granted descriptor classifies L3 and never reaches the arm). */
+  function windowForGrant(grant: SigningGrantState, descriptorId: number): number {
+    const rule = grant.rules.get(descriptorId);
+    return rule && rule.maxDeadlineWindow > 0 ? rule.maxDeadlineWindow : 600;
+  }
+
+  async function decideSign(state: State, decision: AgentDecision): Promise<Partial<State>> {
+    const standDownResult = (reason: string): Partial<State> => ({
+      decision: { action: 'stand_down', amountWei: '0', reason },
+      route: 'stand_down',
+    });
+    if (state.policy.revoked) return standDownResult('account revoked since sense — not signing');
+    const rail = deps.signingRail;
+    if (!rail) return standDownResult('sign requested but no signing rail configured — standing down');
+    const descriptorId = decision.descriptorId ?? -1;
+    const descriptor = rail.registry.get(descriptorId);
+    const grant = await rail.loadGrant(ctx.agentId);
+    const nowSec = Math.floor(Date.now() / 1000);
+
+    // Unknown descriptor → the default-deny floor (never inferred — 00 §9). Narrow here so the rest
+    // of the node works on a defined descriptor.
+    if (!descriptor) return standDownResult('signing forbidden (unknown_descriptor)');
+    const rule = grant.rules.get(descriptorId);
+
+    // never-guess-money: build FIRST (pins spender/deadline/owner/expiry from server state + grant),
+    // so classify reads the SAME resolved authority the wall will (never raw model fields). The
+    // non-role pins (nonce, Permit2 `token`) come from the server-side resolver, never the model.
+    const pins = await rail.resolvePins({ agentId: ctx.agentId, descriptorId });
+    const built = buildIntent(descriptor, rule, {
+      amountWei: decision.amountWei,
+      ...(decision.signSpender !== undefined ? { spender: decision.signSpender } : {}),
+      ctx: { self: ctx.accountAddr, nowSec, windowSec: windowForGrant(grant, descriptorId), pins },
+    });
+    // classify reads the resolved spender/amount/deadline (forbidden on malformed; L1/L2/L3 otherwise).
+    const classification = classifySigning(
+      {
+        descriptorId,
+        spender: built.ok ? built.spender : (decision.signSpender ?? ''),
+        amountWei: decision.amountWei,
+        deadlineSec: built.ok ? built.deadlineSec : nowSec + 1,
+      },
+      descriptor,
+      grant,
+      nowSec,
+    );
+
+    if (classification.lane === 'forbidden') return standDownResult(`signing forbidden (${classification.reason})`);
+    if (classification.lane === 'l3_widen') {
+      return standDownResult(`signing needs an owner grant-widen (${classification.reasons.join(', ')}) — standing down`);
+    }
+    // from here the intent must have built (L1/L2 require an in-grant descriptor + resolvable spender).
+    if (!built.ok) return standDownResult(`signing intent not authority-determined (${built.reason})`);
+    if (!rule) return standDownResult('signing intent has no standing grant — standing down');
+
+    if (classification.lane === 'l2') {
+      // sensitive → owner consents per-sign; quarantine on the JIT rail (armed on consent, FP-2 path).
+      const requestHash = computeSigningRequestHash(
+        descriptor.domain.chainId,
+        descriptorId,
+        built.spender,
+        built.amountWei,
+        built.deadlineSec,
+      );
+      const intent: Json = { descriptorId, fields: built.fields, digest: built.digest };
+      await raiseSigningRequest(rail.service, ctx.agentRow, {
+        descriptorId,
+        triggers: classification.triggers,
+        requestHash,
+        humanReadable: built.humanReadable, // D-FP2-6: server-derived, never agent text
+        protocol: descriptor.protocol,
+        spender: built.spender,
+        amountWei: built.amountWei,
+        deadlineSec: built.deadlineSec,
+        token: rule.token,
+        maxDeadlineWindow: rule.maxDeadlineWindow,
+        intent,
+      });
+      return standDownResult('sensitive signing — raised a JIT request for owner consent');
+    }
+
+    // L1 — in policy; arm it (session-key submit) via signAct.
+    return {
+      decision,
+      route: 'sign',
+      signDescriptorId: descriptorId,
+      signFields: built.fields,
+      signDigest: built.digest,
+      signSpender: built.spender,
+      signAmountWei: built.amountWei,
+      signDeadlineSec: built.deadlineSec,
+    };
+  }
+
+  /**
+   * FP-3 — arm an L1 signing intent on-chain via the scoped session key, then record the arm in the
+   * `signing_arms` read-model (status=armed, epoch snapshot). Symmetric with `callAct`: a revert is a
+   * genuine boundary hit (recorded failed, never a phantom arm). The on-chain V5 wall re-validates +
+   * debits the shared budget regardless — this submit never originates authority.
+   */
+  async function signAct(state: State): Promise<Partial<State>> {
+    if (!deps.chain.authorizeSigningIntent) {
+      return { outcome: { type: 'stood_down', reason: 'signing arm unsupported on this runtime chain' } };
+    }
+    try {
+      const armed = await deps.chain.authorizeSigningIntent({
+        sessionPrivateKey: ctx.sessionPrivateKey,
+        accountAddr: ctx.accountAddr,
+        descriptorId: state.signDescriptorId,
+        fields: state.signFields,
+        digest: state.signDigest,
+      });
+      await recordSigningArm(deps.pool, {
+        agentId: ctx.agentId,
+        descriptorId: state.signDescriptorId,
+        digest: armed.digest,
+        spender: state.signSpender,
+        amount: state.signAmountWei,
+        deadline: state.signDeadlineSec,
+        epoch: armed.epoch,
+      });
+      return { outcome: { type: 'signed', digest: armed.digest, descriptorId: state.signDescriptorId } };
+    } catch (err) {
+      const decoded = decodeLeashError(err);
+      const reason = decoded
+        ? `signing arm refused: ${decoded.plain}`
+        : `signing arm failed: ${err instanceof Error ? err.message : String(err)}`;
+      return { outcome: { type: 'failed', reason, ...(decoded ? { decoded } : {}) } };
+    }
+  }
+
   async function requestApproval(state: State): Promise<Partial<State>> {
     // Pauses here; the manager persists the consent record BEFORE resuming.
     const resume = interrupt<Json, ApprovalDecision>({
@@ -1096,6 +1284,7 @@ export function buildTreasuryGraph(
     .addNode('act', act)
     .addNode('callAct', callAct)
     .addNode('toolAct', toolAct)
+    .addNode('signAct', signAct)
     .addNode('requestApproval', requestApproval)
     .addNode('delegate', delegate)
     .addNode('standDown', standDown)
@@ -1108,6 +1297,7 @@ export function buildTreasuryGraph(
       act: 'act',
       call: 'callAct',
       tool_call: 'toolAct',
+      sign: 'signAct',
       approval: 'requestApproval',
       delegate: 'delegate',
       stand_down: 'standDown',
@@ -1115,6 +1305,7 @@ export function buildTreasuryGraph(
     .addEdge('act', 'record')
     .addEdge('callAct', 'record')
     .addEdge('toolAct', 'record')
+    .addEdge('signAct', 'record')
     .addEdge('requestApproval', 'record')
     .addEdge('delegate', 'record')
     .addEdge('standDown', 'record')
@@ -1196,6 +1387,15 @@ function evaluateDecision(
     return { decision: parsed, route: 'tool_call' };
   }
 
+  // FP-3 (STAGE-F-PRIME): a governed signing intent. Deterministic pre-checks here; the grant-state
+  // classify + never-guess-money build happen in the decide node (never trust the model for authority).
+  if (parsed.action === 'sign') {
+    if (parsed.descriptorId === undefined) return stand('sign decision missing descriptorId');
+    if (state.policy.revoked) return stand('account is revoked');
+    if (state.policy.expiresAt <= Math.floor(Date.now() / 1000)) return stand('session expired');
+    return { decision: parsed, route: 'sign' };
+  }
+
   // FR3 (F-8): the trader NEVER sends native transfers — a 'send' from it is a
   // model error (or an injected instruction); refuse deterministically.
   if (ctx.goal.type === 'trader') return stand('trader never sends native transfers');
@@ -1245,6 +1445,10 @@ function outcomeSummary(o: CycleOutcome): string {
       return o.reason;
     case 'tool_used':
       return o.isError ? `tool ${o.toolId} returned an error` : `used tool ${o.toolId}`;
+    case 'signed':
+      return `armed a governed signing intent (descriptor ${o.descriptorId})`;
+    case 'signing_requested':
+      return `raised a JIT signing request for owner consent (descriptor ${o.descriptorId})`;
     default:
       return 'cycle complete';
   }

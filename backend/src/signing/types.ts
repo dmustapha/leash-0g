@@ -39,11 +39,30 @@ export interface Eip712Domain {
   salt?: Hex;
 }
 
-/** One ordered field of the primary struct. N-02: `type` MUST be a static 32-byte word. */
+/** One ordered field of a struct. N-02: a LEAF `type` MUST be a static 32-byte word. For the ONE
+ * top-level member that is a nested sub-struct (FP-3), `type` names the sub-struct's primaryType and
+ * the descriptor's `nested` group supplies its leaf fields. */
 export interface Eip712Field {
   name: string;
-  /** a STATIC ABI type only (address/bool/bytesN≤32/uintN/intN) — N-02 rejects dynamic/nested. */
+  /** a STATIC ABI type (address/bool/bytesN≤32/uintN/intN) for a leaf; or a sub-struct type name for
+   * the single nested member (FP-3). N-02 rejects dynamic/array leaves. */
   type: string;
+}
+
+/**
+ * FP-3 (C-02 reopened): the ONE optional nested sub-struct of a descriptor — the off-chain mirror of
+ * the on-chain fold spec (`nestedTypeHash`/`nestedLeafStart`/`nestedLeafCount`). Exactly one level is
+ * supported (Permit2 `PermitSingle`/`PermitTransferFrom`); the sub-struct's fields are themselves all
+ * static leaves (N-02 recurses). The engine stores the PROTOCOL's real type strings verbatim so the
+ * reconstructed digest equals viem `hashTypedData` for the real typed-data (FP-3 review R-6).
+ */
+export interface Eip712NestedGroup {
+  /** the top-level member NAME that is the nested struct (e.g. `details`, `permitted`). */
+  memberName: string;
+  /** the sub-struct primaryType (e.g. `PermitDetails`, `TokenPermissions`). */
+  structType: string;
+  /** the sub-struct's ordered static leaf fields. */
+  subFields: Eip712Field[];
 }
 
 /**
@@ -66,10 +85,22 @@ export interface SigningDescriptor {
   domain: Eip712Domain;
   /** the EIP-712 primaryType name. */
   primaryType: string;
-  /** ordered fields — index order MUST equal the on-chain numFields/indices. */
+  /**
+   * ordered TOP-LEVEL members. For a FLAT descriptor every member is a static leaf and this equals
+   * the leaf list (FP-1). For a NESTED descriptor (FP-3) the one member named by `nested.memberName`
+   * is the sub-struct; the flat LEAF list is derived by expanding it in place (see `descriptorLeaves`).
+   */
   fields: Eip712Field[];
-  /** which field NAMES carry the three authority roles (mirror of the on-chain indices). */
+  /** FP-3: the single optional nested sub-struct (at most one — N-02 recurses, one level only). */
+  nested?: Eip712NestedGroup;
+  /** which LEAF field NAMES carry the three authority roles (resolved to leaf indices on-chain). */
   roles: { spender: string; amount: string; deadline: string };
+  /**
+   * FP-3 review R-2: the optional secondary-expiry LEAF field name (Permit2 `expiration` — the
+   * ALLOWANCE lifetime, distinct from the signature `deadline`). When set, the wall bounds it to the
+   * same `maxDeadlineWindow`; the builder pins it. Absent (ERC-2612) ⇒ no secondary expiry (0xFF).
+   */
+  expiryRole?: string;
   /**
    * sensitive = ALWAYS requires owner approval (L2) regardless of grant-state or
    * what the model decided (00 §6c). A sensitive descriptor can never classify L1.

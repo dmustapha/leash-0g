@@ -1,6 +1,6 @@
 import { createPublicClient, createWalletClient, encodePacked, http, keccak256, type Hex, type PublicClient } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { aggregatorV3Abi, leashAccountAbi, leashAccountV4Abi, erc20MetaAbi } from '../chain/abis.js';
+import { aggregatorV3Abi, leashAccountAbi, leashAccountV4Abi, leashAccountV5SigningAbi, erc20MetaAbi } from '../chain/abis.js';
 import { readPolicyView, zeroGChain } from '../chain/ops.js';
 import type { PolicyView } from '../types.js';
 import { waitReceipt } from '../chain/wait-receipt.js';
@@ -98,6 +98,22 @@ export interface RuntimeChain {
    * (the on-chain wall is the ultimate guard regardless); prod SessionChain does.
    */
   readOneShotAuth?(accountAddr: string, callHash: string): Promise<bigint>;
+  /**
+   * Stage F′ FP-3: the governed-signing ARM. The scoped session key signs the EIP-712 `digest`
+   * (raw ECDSA — the contract `ECDSA.recover(digest, sig)`s it) and submits the ordered leaf words
+   * via `authorizeSigningIntent`. The on-chain V5 wall reconstructs the digest from the fields,
+   * re-checks the descriptor policy (spender ∈ set · nested amount ≤ cap · deadline/expiry bounds),
+   * DEBITS the shared per-token budget, and arms the digest for `isValidSignature`. A revert is a
+   * genuine boundary hit (never recorded as an armed intent). Returns the armed digest + the epoch
+   * snapshot the read-model records. Optional so coordination-free fakes need not implement it.
+   */
+  authorizeSigningIntent?(input: {
+    sessionPrivateKey: string;
+    accountAddr: string;
+    descriptorId: number;
+    fields: string[];
+    digest: string;
+  }): Promise<{ txHash: string; digest: string; epoch: number }>;
 }
 
 export class SessionChain implements RuntimeChain {
@@ -327,6 +343,41 @@ export class SessionChain implements RuntimeChain {
     const receipt = await waitReceipt(this.publicClient, txHash);
     assertReceiptSuccess(receipt.status, txHash);
     return { txHash };
+  }
+
+  async authorizeSigningIntent(input: {
+    sessionPrivateKey: string;
+    accountAddr: string;
+    descriptorId: number;
+    fields: string[];
+    digest: string;
+  }): Promise<{ txHash: string; digest: string; epoch: number }> {
+    const account = privateKeyToAccount(input.sessionPrivateKey as Hex);
+    // RAW ECDSA over the EIP-712 digest (the contract does `ECDSA.recover(digest, sig)` — no
+    // eth-prefix). viem `account.sign({ hash })` is exactly that raw signature.
+    const sessionSig = await account.sign({ hash: input.digest as Hex });
+    const wallet = createWalletClient({
+      chain: zeroGChain(this.opts.rpcUrl, this.opts.chainId),
+      transport: http(this.opts.rpcUrl),
+      account,
+    });
+    const txHash = await wallet.writeContract({
+      chain: wallet.chain,
+      account,
+      address: input.accountAddr as Hex,
+      abi: leashAccountV5SigningAbi,
+      functionName: 'authorizeSigningIntent',
+      args: [BigInt(input.descriptorId), input.fields as Hex[], sessionSig],
+    });
+    const receipt = await waitReceipt(this.publicClient, txHash);
+    assertReceiptSuccess(receipt.status, txHash);
+    // the epoch snapshot the read-model records (FP-CARRY-5 staleness keys off it).
+    const epoch = await this.publicClient.readContract({
+      address: input.accountAddr as Hex,
+      abi: leashAccountV5SigningAbi,
+      functionName: 'signingEpoch',
+    });
+    return { txHash, digest: input.digest, epoch: Number(epoch) };
   }
 }
 

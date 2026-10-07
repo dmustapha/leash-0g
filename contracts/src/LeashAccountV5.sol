@@ -2,6 +2,8 @@
 pragma solidity 0.8.30;
 
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {SigningLib} from "./SigningLib.sol";
+import {DecodeLib} from "./DecodeLib.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
@@ -106,6 +108,24 @@ contract LeashAccountV5 is ReentrancyGuard {
     ///         permits. A protocol whose EIP-712 struct nests a sub-struct (e.g. Permit2
     ///         `PermitSingle`) is onboarded by the off-chain engine supplying the flattened
     ///         field layout, or a v-next on-chain extension — surfaced to Dami, FP-3 scope.
+    /// @dev FP-3 (C-02 reopened): `numFields` is the TOP-LEVEL member count; the role indices
+    ///      (`spenderIndex`/`amountIndex`/`deadlineIndex`) are LEAF-space indices into the flat
+    ///      leaf-word array the session key submits. For a FLAT descriptor (`nestedTypeHash==0`,
+    ///      the FP-1 path) leaf space == top-level space and this struct behaves byte-identically
+    ///      to FP-1. For a ONE-LEVEL-nested descriptor (Permit2 `PermitSingle`/`PermitTransferFrom`)
+    ///      the submitter provides ALL leaves flat (nested leaves included) so the wall reads the
+    ///      REAL nested `amount` as `leaves[amountIndex]` (cappable), and `nestedTypeHash` +
+    ///      `nestedLeafStart` + `nestedLeafCount` describe the single contiguous sub-struct run the
+    ///      wall folds back to reconstruct the protocol's true EIP-712 digest. `nestedLeafStart`
+    ///      doubles as the nested member's TOP-LEVEL position (provably equal: every top member
+    ///      before the group is a single leaf). `expiryLeafIndex` (0xFF ⇒ none) bounds a secondary
+    ///      time field (Permit2 `expiration`) to the same `maxDeadlineWindow` so the on-chain
+    ///      allowance lifetime cannot outlive the governed window (FP-3 review R-2).
+    ///      NOTE (FP-3 review R-1): no separate amount-width check is needed — `perIntentCap` is
+    ///      uint128, so any leaf word with a bit at position ≥128 exceeds the max possible cap and
+    ///      reverts `OverPerIntentCap`; the deadline/expiry are likewise self-bounded by the uint64
+    ///      `maxDeadlineWindow`. High-bit stuffing therefore fails closed at OUR invariant, not the
+    ///      downstream protocol's.
     struct SigningIntentPolicy {
         bool set;
         bytes32 domainSeparator;
@@ -117,6 +137,11 @@ contract LeashAccountV5 is ReentrancyGuard {
         address token;
         uint128 perIntentCap;
         uint64 maxDeadlineWindow;
+        // --- FP-3 one-level nested fold (all-zero ⇒ flat FP-1 path) ---
+        bytes32 nestedTypeHash;
+        uint8 nestedLeafStart;
+        uint8 nestedLeafCount;
+        uint8 expiryLeafIndex; // 0xFF ⇒ no secondary expiry field
     }
 
     /// @notice An armed EIP-712 digest the pre-authorization accepted — the view
@@ -227,6 +252,11 @@ contract LeashAccountV5 is ReentrancyGuard {
 
     // ---------- v3 state (verbatim) ----------
     address public immutable owner;
+    /// @dev FP-3 (EIP-170): the deployed stateless pure helper singletons (signing fold + grant
+    ///      validation; governed-call decode). Called via STATICCALL (C-03 no-delegatecall preserved).
+    ///      Immutable — set once at construction, never swappable.
+    address public immutable signingHelper;
+    address public immutable decodeHelper;
     address public guardian;
     address public sessionKey;
     bool public revoked;
@@ -347,14 +377,26 @@ contract LeashAccountV5 is ReentrancyGuard {
         uint128 perIntentCap;
         uint64 maxDeadlineWindow;
         uint64 eta;
+        // --- FP-3 one-level nested fold (mirrors SigningIntentPolicy) ---
+        bytes32 nestedTypeHash;
+        uint8 nestedLeafStart;
+        uint8 nestedLeafCount;
+        uint8 expiryLeafIndex;
     }
 
     PendingSigningGrant public pendingSigningGrant;
     address[] internal pendingSigningSpenders;
 
     modifier onlyOwner() {
-        if (msg.sender != owner) revert NotOwner();
+        _onlyOwner();
         _;
+    }
+
+    /// @dev Modifier logic wrapped into a function so the owner-gate is a single CALL at each of its
+    ///      ~36 use-sites instead of inlined everywhere — a behavior-identical EIP-170 size reduction
+    ///      (the solc `unwrapped-modifier-logic` hint; FP-3 brought the account under the 24KB limit).
+    function _onlyOwner() internal view {
+        if (msg.sender != owner) revert NotOwner();
     }
 
     constructor(
@@ -365,10 +407,15 @@ contract LeashAccountV5 is ReentrancyGuard {
         address[] memory initialAllowlist,
         uint64 timelockDelay_,
         address settlementToken_,
-        TokenPolicy memory initialTokenPolicy
+        TokenPolicy memory initialTokenPolicy,
+        address signingHelper_,
+        address decodeHelper_
     ) {
         if (owner_ == address(0) || sessionKey_ == address(0)) revert ZeroAddress();
+        if (signingHelper_ == address(0) || decodeHelper_ == address(0)) revert ZeroAddress();
         if (initialPolicy.windowSeconds == 0) revert InvalidPolicy();
+        signingHelper = signingHelper_;
+        decodeHelper = decodeHelper_;
         owner = owner_;
         guardian = guardian_;
         sessionKey = sessionKey_;
@@ -463,7 +510,17 @@ contract LeashAccountV5 is ReentrancyGuard {
         uint64 osEta = oneShotAuthEta[callHash];
         if (osEta != 0) {
             if (block.timestamp > osEta) revert OneShotExpired();
-            if (_isBridgeSelector(selector)) _checkBridgeArgs(selector, value, data);
+            if (DecodeLib(decodeHelper).isBridgeSelector(selector)) {
+                // one-shot bridge pre-check: re-run the pure bridge decode + the storage remote-token
+                // pin check (the former `_checkBridgeArgs` side-effect), now split across DecodeLib.
+                DecodeLib.Decoded memory bd =
+                    DecodeLib(decodeHelper).decodeStructuredArgs(selector, value, data, address(this), 0, target);
+                if (bd.bridgeLocalToken != address(0)) {
+                    address pinned = bridgeRemoteToken[bd.bridgeLocalToken];
+                    if (pinned == address(0)) revert RemoteTokenNotPinned(bd.bridgeLocalToken);
+                    if (bd.bridgeRemoteClaim != pinned) revert RemoteTokenMismatch(pinned, bd.bridgeRemoteClaim);
+                }
+            }
             {
                 bytes32 osRuleKey = keccak256(abi.encodePacked(target, selector));
                 if (requireBandForSwap && selector == SEL_SWAP && !priceBand[osRuleKey].set) {
@@ -535,6 +592,11 @@ contract LeashAccountV5 is ReentrancyGuard {
         }
     }
 
+    /// @dev Thin wrapper over the pure `DecodeLib.decodeStructuredArgs` (FP-3 EIP-170 extraction):
+    ///      the library does all shape/`==self`/arithmetic decode + reverts; the account performs the
+    ///      STORAGE policy checks the decode cannot (spender allowlist, recipient allowlist, bridge
+    ///      remote-token pin) on the returned values. Behaviour byte-identical to the former inlined
+    ///      decode — the full governed-call suite re-verifies it.
     function _checkStructuredArgs(
         address target,
         bytes4 selector,
@@ -543,120 +605,20 @@ contract LeashAccountV5 is ReentrancyGuard {
         bytes32 ruleKey,
         CallRule memory rule
     ) internal view returns (uint256 chargeable, address spendToken, bool checkBoolReturn) {
-        if (selector == SEL_APPROVE || selector == SEL_INCREASE_ALLOWANCE) {
-            if (data.length != 4 + 64) revert DecodeMismatch();
-            address spender = _decodeAddress(data, 4);
-            uint256 amount = _decodeUint(data, 36);
-            if (selector == SEL_APPROVE && amount == type(uint256).max) revert InfiniteApprovalForbidden();
-            if (!callRuleSpender[ruleKey][spender]) revert SpenderNotAllowlisted(spender);
-            return (amount, target, true);
+        DecodeLib.Decoded memory dd =
+            DecodeLib(decodeHelper).decodeStructuredArgs(selector, value, data, address(this), rule.recipientMode, target);
+        if (dd.spenderToAllow != address(0) && !callRuleSpender[ruleKey][dd.spenderToAllow]) {
+            revert SpenderNotAllowlisted(dd.spenderToAllow);
         }
-        if (selector == SEL_TRANSFER) {
-            if (data.length != 4 + 64) revert DecodeMismatch();
-            address to = _decodeAddress(data, 4);
-            uint256 amount = _decodeUint(data, 36);
-            _checkRecipient(to, rule.recipientMode);
-            return (amount, target, true);
+        if (dd.recipientToAllowlist != address(0) && !allowlist[dd.recipientToAllowlist]) {
+            revert NotAllowlisted(dd.recipientToAllowlist);
         }
-        if (selector == SEL_TRANSFER_FROM) {
-            if (data.length != 4 + 96) revert DecodeMismatch();
-            address from = _decodeAddress(data, 4);
-            address to = _decodeAddress(data, 36);
-            uint256 amount = _decodeUint(data, 68);
-            if (from != address(this)) revert RecipientNotSelf(from);
-            _checkRecipient(to, rule.recipientMode);
-            return (amount, target, true);
+        if (dd.bridgeLocalToken != address(0)) {
+            address pinned = bridgeRemoteToken[dd.bridgeLocalToken];
+            if (pinned == address(0)) revert RemoteTokenNotPinned(dd.bridgeLocalToken);
+            if (dd.bridgeRemoteClaim != pinned) revert RemoteTokenMismatch(pinned, dd.bridgeRemoteClaim);
         }
-        if (selector == SEL_SET_APPROVAL_FOR_ALL) {
-            if (data.length != 4 + 64) revert DecodeMismatch();
-            address operator = _decodeAddress(data, 4);
-            uint256 approvedRaw = _decodeUint(data, 36);
-            if (approvedRaw > 1) revert DecodeMismatch();
-            if (approvedRaw == 1) revert BlanketApprovalForbidden();
-            if (!callRuleSpender[ruleKey][operator]) revert SpenderNotAllowlisted(operator);
-            return (0, target, false);
-        }
-        if (selector == SEL_DEPOSIT) {
-            if (data.length != 4 + 64) revert DecodeMismatch();
-            uint256 assets = _decodeUint(data, 4);
-            address receiver = _decodeAddress(data, 36);
-            _checkRecipient(receiver, rule.recipientMode);
-            return (assets, target, false);
-        }
-        // FP-CARRY-1 (RH2 H-01): the DEX swap is STRUCTURED on V5. On V4 `SEL_SWAP`
-        // fell through to the non-structured fallback — recipient UNPINNED, `amountIn`
-        // UNBUDGETED (an OPEN on-chain spine residual). V5 decodes the static 6-arg
-        // swap(tokenIn, tokenOut, amountIn, amountOutMin, recipient, deadline): pin the
-        // recipient (offset 132) via `_checkRecipient` AND charge `amountIn` (offset 68)
-        // against `tokenIn`'s (offset 4) cumulative budget + per-call cap + window. One
-        // addition closes BOTH open rows (swap-exfil + swap-size). The price-band
-        // (`_checkPriceBand`, run in `_enforceAndExecute`) independently bounds PRICE.
-        if (selector == SEL_SWAP) {
-            if (data.length != 4 + 192) revert DecodeMismatch();
-            address tokenIn = _decodeAddress(data, 4);
-            uint256 amountIn = _decodeUint(data, 68);
-            address recipient = _decodeAddress(data, 132);
-            _checkRecipient(recipient, rule.recipientMode);
-            return (amountIn, tokenIn, false);
-        }
-        if (_isBridgeSelector(selector)) {
-            return _checkBridgeArgs(selector, value, data);
-        }
-        return (value, address(0), false);
-    }
-
-    function _isBridgeSelector(bytes4 selector) internal pure returns (bool) {
-        return selector == SEL_BRIDGE_ETH_TO || selector == SEL_BRIDGE_ERC20_TO
-            || selector == SEL_WITHDRAW_ETH || selector == SEL_OUTBOUND_TRANSFER;
-    }
-
-    function _checkBridgeArgs(bytes4 selector, uint256 value, bytes calldata data)
-        internal
-        view
-        returns (uint256 chargeable, address spendToken, bool checkBoolReturn)
-    {
-        if (selector == SEL_BRIDGE_ETH_TO) {
-            if (data.length != 4 + 128) revert DecodeMismatch();
-            address to = _decodeAddress(data, 4);
-            uint256 minGas = _decodeUint(data, 36);
-            if (minGas >> 32 != 0) revert DecodeMismatch();
-            if (_decodeUint(data, 68) != 0x60) revert DecodeMismatch();
-            if (_decodeUint(data, 100) != 0) revert DecodeMismatch();
-            if (to != address(this)) revert RecipientNotSelf(to);
-            return (value, address(0), false);
-        }
-        if (selector == SEL_BRIDGE_ERC20_TO) {
-            if (data.length != 4 + 224) revert DecodeMismatch();
-            if (value != 0) revert DecodeMismatch();
-            address localToken = _decodeAddress(data, 4);
-            address remoteToken = _decodeAddress(data, 36);
-            address to = _decodeAddress(data, 68);
-            uint256 amount = _decodeUint(data, 100);
-            uint256 minGas = _decodeUint(data, 132);
-            if (minGas >> 32 != 0) revert DecodeMismatch();
-            if (_decodeUint(data, 164) != 0xc0) revert DecodeMismatch();
-            if (_decodeUint(data, 196) != 0) revert DecodeMismatch();
-            if (to != address(this)) revert RecipientNotSelf(to);
-            address pinned = bridgeRemoteToken[localToken];
-            if (pinned == address(0)) revert RemoteTokenNotPinned(localToken);
-            if (remoteToken != pinned) revert RemoteTokenMismatch(pinned, remoteToken);
-            return (amount, localToken, false);
-        }
-        if (selector == SEL_OUTBOUND_TRANSFER) {
-            if (data.length != 4 + 160) revert DecodeMismatch();
-            if (value != 0) revert DecodeMismatch();
-            address l1Token = _decodeAddress(data, 4);
-            address to = _decodeAddress(data, 36);
-            uint256 amount = _decodeUint(data, 68);
-            if (_decodeUint(data, 100) != 0x80) revert DecodeMismatch();
-            if (_decodeUint(data, 132) != 0) revert DecodeMismatch();
-            if (to != address(this)) revert RecipientNotSelf(to);
-            return (amount, l1Token, false);
-        }
-        if (data.length != 4 + 32) revert DecodeMismatch();
-        address dest = _decodeAddress(data, 4);
-        if (dest != address(this)) revert RecipientNotSelf(dest);
-        return (value, address(0), false);
+        return (dd.chargeable, dd.spendToken, dd.checkBoolReturn);
     }
 
     function _isBoolReturningSelector(bytes4 selector) internal pure returns (bool) {
@@ -664,33 +626,12 @@ contract LeashAccountV5 is ReentrancyGuard {
             || selector == SEL_TRANSFER_FROM;
     }
 
+    /// @dev The band storage read + `set` early-return stay here; the decode + oracle math are in the
+    ///      stateless `DecodeLib` helper (STATICCALL — FP-3 EIP-170 extraction; C-03 preserved).
     function _checkPriceBand(bytes32 ruleKey, bytes4 selector, bytes calldata data) internal view {
         PriceBandPolicy memory band = priceBand[ruleKey];
         if (!band.set) return;
-        if (selector != SEL_SWAP) revert BandOnlyForSwap(selector);
-        if (data.length != 4 + 192) revert DecodeMismatch();
-        address tokenOut = _decodeAddress(data, 36);
-        uint256 amountIn = _decodeUint(data, 68);
-        uint256 amountOutMin = _decodeUint(data, 100);
-        if (tokenOut != band.asset) revert PriceBandAssetMismatch(band.asset, tokenOut);
-        if (amountOutMin == 0) revert PremiumBreach(type(uint256).max, 0);
-
-        try IAggregatorV3Minimal(band.feed).latestRoundData() returns (
-            uint80 roundId, int256 answer, uint256, uint256 updatedAt, uint80 answeredInRound
-        ) {
-            if (answer <= 0) revert OraclePriceInvalid();
-            if (updatedAt == 0 || updatedAt > block.timestamp || block.timestamp - updatedAt > band.maxStaleness) {
-                revert StaleOracle(updatedAt, band.maxStaleness);
-            }
-            if (answeredInRound < roundId) revert OraclePriceInvalid();
-
-            uint256 impliedPrice18 = (amountIn * 1e18) / amountOutMin;
-            uint256 oracle18 = uint256(answer) * 1e10;
-            uint256 maxPrice = (oracle18 * (10_000 + band.maxDeviationBps)) / 10_000;
-            if (impliedPrice18 > maxPrice) revert PremiumBreach(impliedPrice18, maxPrice);
-        } catch {
-            revert OracleCallFailed();
-        }
+        DecodeLib(decodeHelper).checkPriceBand(band.feed, band.asset, band.maxDeviationBps, band.maxStaleness, selector, data);
     }
 
     function _checkRecipient(address to, uint8 recipientMode) internal view {
@@ -794,10 +735,13 @@ contract LeashAccountV5 is ReentrancyGuard {
 
         SigningIntentPolicy memory s = signingIntentPolicy[descriptorId];
         if (!s.set) revert DescriptorNotRegistered(descriptorId); // default-deny
-        if (fields.length != s.numFields) revert DecodeMismatch();
 
-        // strict-canonical binding: reconstruct the EIP-712 digest from the fields.
-        bytes32 structHash = keccak256(abi.encodePacked(s.typeHash, fields));
+        // strict-canonical binding: reconstruct the EIP-712 digest from the submitted leaf words.
+        // FLAT (nestedTypeHash==0) is the FP-1 path, byte-identical. NESTED folds one contiguous
+        // sub-struct run back into a single top-level member so the reconstructed digest equals the
+        // real protocol's (Permit2); the nested leaves (incl. the amount) remain readable below.
+        bytes32 structHash =
+            SigningLib(signingHelper).structHash(s.typeHash, s.nestedTypeHash, s.nestedLeafStart, s.nestedLeafCount, s.numFields, fields);
         digest = keccak256(abi.encodePacked(hex"1901", s.domainSeparator, structHash));
 
         // FP-CARRY-5 (D-FP1-7) re-arm idempotency: a STILL-LIVE armed digest cannot be
@@ -819,6 +763,16 @@ contract LeashAccountV5 is ReentrancyGuard {
         if (amount > s.perIntentCap) revert OverPerIntentCap(amount, s.perIntentCap);
         if (deadline <= block.timestamp) revert DeadlineInPast();
         if (deadline > uint256(block.timestamp) + s.maxDeadlineWindow) revert DeadlineTooFar(deadline);
+        // FP-3 review R-2: a secondary expiry leaf (Permit2 `expiration` — the ALLOWANCE lifetime,
+        // distinct from `sigDeadline`) must sit within the SAME governed window, so a long-lived
+        // on-chain allowance cannot outlive the owner's deadline bound. 0xFF ⇒ no such field.
+        if (s.expiryLeafIndex != type(uint8).max) {
+            uint256 expiry = uint256(fields[s.expiryLeafIndex]);
+            // FP-3 Gate-② (L-01): bound BOTH ends — a zero/past expiry would debit the budget for an
+            // allowance that is already void downstream (a budget-drain with no value moved). Fail closed.
+            if (expiry <= block.timestamp) revert DeadlineInPast();
+            if (expiry > uint256(block.timestamp) + s.maxDeadlineWindow) revert DeadlineTooFar(expiry);
+        }
 
         // co-signer seam (FP-4) — inert while coSigner == address(0).
         _coSignerHook(descriptorId, digest, amount);
@@ -862,47 +816,48 @@ contract LeashAccountV5 is ReentrancyGuard {
     /// @notice Onboard or RE-grant a protocol: its descriptor (decode spec) + caps +
     ///         spender set, in one atomic owner grant. Adding signable surface is
     ///         LOOSENING → timelocked. Adding a protocol changes NO code path (FP-e).
-    function proposeSigningGrant(
-        uint256 descriptorId,
-        bytes32 domainSeparator,
-        bytes32 typeHash,
-        uint8 numFields,
-        uint8 spenderIndex,
-        uint8 amountIndex,
-        uint8 deadlineIndex,
-        address token,
-        uint128 perIntentCap,
-        uint64 maxDeadlineWindow,
-        address[] calldata spenders
-    ) external onlyOwner {
-        if (domainSeparator == bytes32(0) || typeHash == bytes32(0)) revert InvalidPolicy();
-        if (token == address(0)) revert ZeroAddress();
-        if (numFields == 0 || numFields > 32) revert InvalidPolicy();
-        if (spenderIndex >= numFields || amountIndex >= numFields || deadlineIndex >= numFields) revert InvalidPolicy();
-        // FP-CARRY (index aliasing): the three role indices must be pairwise distinct, else a
-        // single field word would be read as two roles (e.g. a deadline decoded as the amount).
-        if (spenderIndex == amountIndex || spenderIndex == deadlineIndex || amountIndex == deadlineIndex) {
-            revert InvalidPolicy();
-        }
+    /// @notice FP-3 (C-02 reopened): onboard a ONE-LEVEL-nested protocol (Permit2
+    ///         `PermitSingle`/`PermitTransferFrom`). Same LOOSENING→timelocked grant as the flat
+    ///         path; the fold spec lets the wall reconstruct the real protocol digest while reading
+    ///         the nested `amount` as a leaf (so `perIntentCap` + the budget debit still bind it).
+    ///         Validated in-contract (NOT engine-only) — the owner tx is the sole authority.
+    function proposeSigningGrantNested(SigningLib.SigningGrantParams calldata p, address[] calldata spenders)
+        external
+        onlyOwner
+    {
+        _stageSigningGrant(p, spenders);
+    }
+
+    /// @dev Shared validate-and-stage for both flat and nested signing grants. Validation is the pure
+    ///      `SigningLib.validateGrant` (FP-3 review R-3; it REVERTS internally on any defect — called
+    ///      unconditionally BEFORE the write, never in a try/catch, so an invalid grant can never be
+    ///      stored). The storage write stays in the account.
+    function _stageSigningGrant(SigningLib.SigningGrantParams memory p, address[] calldata spenders) internal {
+        SigningLib(signingHelper).validateGrant(p); // reverts InvalidPolicy/ZeroAddress on any defect — fail-closed
+
         pendingSigningGrant = PendingSigningGrant({
-            descriptorId: descriptorId,
-            domainSeparator: domainSeparator,
-            typeHash: typeHash,
-            numFields: numFields,
-            spenderIndex: spenderIndex,
-            amountIndex: amountIndex,
-            deadlineIndex: deadlineIndex,
-            token: token,
-            perIntentCap: perIntentCap,
-            maxDeadlineWindow: maxDeadlineWindow,
-            eta: uint64(block.timestamp) + timelockDelay
+            descriptorId: p.descriptorId,
+            domainSeparator: p.domainSeparator,
+            typeHash: p.typeHash,
+            numFields: p.numTopFields,
+            spenderIndex: p.spenderLeafIndex,
+            amountIndex: p.amountLeafIndex,
+            deadlineIndex: p.deadlineLeafIndex,
+            token: p.token,
+            perIntentCap: p.perIntentCap,
+            maxDeadlineWindow: p.maxDeadlineWindow,
+            eta: uint64(block.timestamp) + timelockDelay,
+            nestedTypeHash: p.nestedTypeHash,
+            nestedLeafStart: p.nestedLeafStart,
+            nestedLeafCount: p.nestedLeafCount,
+            expiryLeafIndex: p.expiryLeafIndex
         });
         delete pendingSigningSpenders;
         for (uint256 i = 0; i < spenders.length; i++) {
             if (spenders[i] == address(0)) revert ZeroAddress();
             pendingSigningSpenders.push(spenders[i]);
         }
-        emit SigningGrantProposed(descriptorId, pendingSigningGrant.eta);
+        emit SigningGrantProposed(p.descriptorId, pendingSigningGrant.eta);
     }
 
     function applySigningGrant() external onlyOwner {
@@ -922,6 +877,10 @@ contract LeashAccountV5 is ReentrancyGuard {
         s.token = pg.token;
         s.perIntentCap = pg.perIntentCap;
         s.maxDeadlineWindow = pg.maxDeadlineWindow;
+        s.nestedTypeHash = pg.nestedTypeHash;
+        s.nestedLeafStart = pg.nestedLeafStart;
+        s.nestedLeafCount = pg.nestedLeafCount;
+        s.expiryLeafIndex = pg.expiryLeafIndex;
         uint256 len = pendingSigningSpenders.length;
         for (uint256 i = 0; i < len; i++) {
             address sp = pendingSigningSpenders[i];
@@ -1289,6 +1248,11 @@ contract LeashAccountV5 is ReentrancyGuard {
         if (k == address(0)) revert ZeroAddress();
         emit SessionKeyChanged(sessionKey, k);
         sessionKey = k;
+        // FP-3 Gate-② (security M-01): a session-key rotation MUST invalidate every in-flight armed
+        // signing intent from the old key — else a pre-armed (un-expired) digest stays valid in
+        // `isValidSignature` after the owner rotates away an exfiltrated key. Bump the signing epoch
+        // (like every other signing-relevant state change); legitimate in-flight intents re-arm.
+        _bumpSigningEpoch();
     }
 
     function setGuardian(address g) external onlyOwner {

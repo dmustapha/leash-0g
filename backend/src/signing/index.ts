@@ -5,6 +5,7 @@
 export type {
   Eip712Domain,
   Eip712Field,
+  Eip712NestedGroup,
   SigningDescriptor,
   SigningRule,
   SigningGrantState,
@@ -20,11 +21,14 @@ export {
   DescriptorError,
   descriptorTypeHash,
   descriptorDomainSeparator,
+  descriptorLeaves,
+  foldSpec,
   onChainGrantParams,
   encodeType,
   BUILT_IN as BUILT_IN_DESCRIPTORS,
   type SigningRegistry,
   type OnChainGrantParams,
+  type FoldSpec,
 } from './intent-registry.js';
 export { classifySigning, type IntendedSigning } from './intent-classify.js';
 export { buildIntent, decodeForHuman, type BuildIntentInput, type BuildIntentResult } from './intent-builder.js';

@@ -3,6 +3,8 @@ pragma solidity 0.8.30;
 
 import {Test} from "forge-std/Test.sol";
 import {LeashAccountV5} from "../src/LeashAccountV5.sol";
+import {DecodeLib} from "../src/DecodeLib.sol";
+import {SigningLib} from "../src/SigningLib.sol";
 import {MockERC20} from "../src/MockERC20.sol";
 
 /// Stage F′ FP-1 — the ERC-1271 governed-signing spine.
@@ -57,7 +59,7 @@ contract LeashAccountV5SigningTest is Test {
         usd = new MockERC20("Test USD 18", "TUSD18", 18);
         address[] memory list = new address[](0);
         acct = new LeashAccountV5(
-            owner, guardian, session, _policy(), list, DELAY, address(usd), LeashAccountV5.TokenPolicy(0, 0)
+            owner, guardian, session, _policy(), list, DELAY, address(usd), LeashAccountV5.TokenPolicy(0, 0), address(new SigningLib()), address(new DecodeLib())
         );
         usd.mint(address(acct), 1_000 ether);
         // the chainId-bound domain separator for the "protocol" the descriptor models.
@@ -79,6 +81,18 @@ contract LeashAccountV5SigningTest is Test {
         s[0] = a;
     }
 
+    // FP-3: the flat `proposeSigningGrant` was removed (owners use the nested fn with a zeroed fold).
+    // This helper preserves the FP-1 call convention, exercising the identical flat on-chain path.
+    function _proposeFlat(
+        uint256 id, bytes32 ds, bytes32 th, uint8 nf, uint8 si, uint8 ai, uint8 di,
+        address token, uint128 cap, uint64 win, address[] memory sp
+    ) internal {
+        acct.proposeSigningGrantNested(
+            SigningLib.SigningGrantParams(id, ds, th, nf, si, ai, di, type(uint8).max, bytes32(0), 0, 0, token, cap, win),
+            sp
+        );
+    }
+
     function _budget(address token, uint128 cap) internal {
         vm.prank(owner);
         acct.proposeSpendBudget(token, cap);
@@ -91,7 +105,7 @@ contract LeashAccountV5SigningTest is Test {
     /// is a descriptor + grant", FP-e). Timelocked (loosening).
     function _grantSigning(address token, uint128 perIntentCap, uint64 maxDeadlineWindow, address sp) internal {
         vm.prank(owner);
-        acct.proposeSigningGrant(
+        _proposeFlat(
             DESCRIPTOR_ID, domainSep, TYPEHASH, NUM_FIELDS, SPENDER_IDX, AMOUNT_IDX, DEADLINE_IDX, token,
             perIntentCap, maxDeadlineWindow, _spenders(sp)
         );
@@ -306,7 +320,7 @@ contract LeashAccountV5SigningTest is Test {
         address[] memory s2 = new address[](1);
         s2[0] = sp2;
         vm.prank(owner);
-        acct.proposeSigningGrant(id2, domain2, type2, 3, 0, 1, 2, address(usd), 50 ether, 1 hours, s2);
+        _proposeFlat(id2, domain2, type2, 3, 0, 1, 2, address(usd), 50 ether, 1 hours, s2);
         vm.warp(block.timestamp + DELAY);
         vm.prank(owner);
         acct.applySigningGrant();
@@ -370,7 +384,7 @@ contract LeashAccountV5SigningTest is Test {
     function test_FPh_agentCannotGrantOwnDescriptor() public {
         vm.prank(session);
         vm.expectRevert(LeashAccountV5.NotOwner.selector);
-        acct.proposeSigningGrant(
+        _proposeFlat(
             7, domainSep, TYPEHASH, NUM_FIELDS, SPENDER_IDX, AMOUNT_IDX, DEADLINE_IDX, address(usd),
             1e30, 1 hours, _spenders(attacker)
         );
@@ -583,7 +597,7 @@ contract LeashAccountV5SigningTest is Test {
     function test_CARRY_indexAliasing_reverts() public {
         vm.prank(owner);
         vm.expectRevert(LeashAccountV5.InvalidPolicy.selector);
-        acct.proposeSigningGrant(
+        _proposeFlat(
             2, domainSep, TYPEHASH, NUM_FIELDS, SPENDER_IDX, AMOUNT_IDX, AMOUNT_IDX, address(usd),
             100 ether, 1 hours, _spenders(spender)
         ); // deadlineIndex == amountIndex ⇒ InvalidPolicy

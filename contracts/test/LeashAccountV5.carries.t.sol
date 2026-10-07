@@ -3,6 +3,8 @@ pragma solidity 0.8.30;
 
 import {Test} from "forge-std/Test.sol";
 import {LeashAccountV5} from "../src/LeashAccountV5.sol";
+import {DecodeLib} from "../src/DecodeLib.sol";
+import {SigningLib} from "../src/SigningLib.sol";
 import {LeashAccountV4} from "../src/LeashAccountV4.sol";
 import {LeashAccountV5FactoryDeterministic} from "../src/LeashAccountV5FactoryDeterministic.sol";
 import {MockERC20} from "../src/MockERC20.sol";
@@ -43,7 +45,7 @@ contract LeashAccountV5CarriesTest is Test {
         router = new MockRouter();
         address[] memory list = new address[](0);
         acct = new LeashAccountV5(
-            owner, guardian, session, _policy(), list, DELAY, address(usd), LeashAccountV5.TokenPolicy(0, 0)
+            owner, guardian, session, _policy(), list, DELAY, address(usd), LeashAccountV5.TokenPolicy(0, 0), address(new SigningLib()), address(new DecodeLib())
         );
         usd.mint(address(acct), 1_000 ether);
     }
@@ -203,7 +205,7 @@ contract LeashAccountV5CarriesTest is Test {
     // ============ FP-g: CREATE2 same-address + version-selected factory; V4 untouched ============
 
     function test_FPg_factoryDeterministicSameAddress() public {
-        LeashAccountV5FactoryDeterministic f = new LeashAccountV5FactoryDeterministic();
+        LeashAccountV5FactoryDeterministic f = new LeashAccountV5FactoryDeterministic(address(new SigningLib()), address(new DecodeLib()));
         address[] memory list = new address[](0);
         bytes32 salt = keccak256("owner-salt");
         address predicted = f.predictAccountV5(
@@ -217,7 +219,7 @@ contract LeashAccountV5CarriesTest is Test {
     }
 
     function test_FPg_factoryRedeploy_reverts() public {
-        LeashAccountV5FactoryDeterministic f = new LeashAccountV5FactoryDeterministic();
+        LeashAccountV5FactoryDeterministic f = new LeashAccountV5FactoryDeterministic(address(new SigningLib()), address(new DecodeLib()));
         address[] memory list = new address[](0);
         bytes32 salt = keccak256("owner-salt");
         f.createAccountV5(owner, guardian, session, _policy(), list, DELAY, address(usd), LeashAccountV5.TokenPolicy(0, 0), salt);

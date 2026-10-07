@@ -33,6 +33,18 @@ contract LeashAccountV5FactoryDeterministic {
     /// @notice Version constant the registry/backend use to distinguish a v5 account (SE-1).
     uint8 public constant ACCOUNT_VERSION_V5 = 5;
 
+    /// @dev FP-3: the stateless pure helper singletons every account this factory deploys is wired to
+    ///      (signing fold + grant validation; governed-call decode). Immutable — baked into the account
+    ///      initcode, so the deterministic (cross-chain same-address) property holds as long as the
+    ///      helpers are at the same address on every chain (deploy them via CREATE2 + a fixed salt).
+    address public immutable signingHelper;
+    address public immutable decodeHelper;
+
+    constructor(address signingHelper_, address decodeHelper_) {
+        signingHelper = signingHelper_;
+        decodeHelper = decodeHelper_;
+    }
+
     function createAccountV5(
         address owner,
         address guardian,
@@ -57,7 +69,9 @@ contract LeashAccountV5FactoryDeterministic {
                 initialAllowlist,
                 timelockDelay,
                 settlementToken,
-                initialTokenPolicy
+                initialTokenPolicy,
+                signingHelper,
+                decodeHelper
             )
         );
         assert(account == predicted);
@@ -89,7 +103,9 @@ contract LeashAccountV5FactoryDeterministic {
                     initialAllowlist,
                     timelockDelay,
                     settlementToken,
-                    initialTokenPolicy
+                    initialTokenPolicy,
+                    signingHelper,
+                    decodeHelper
                 )
             )
         );

@@ -184,3 +184,49 @@ export const leashAccountV4Abi = parseAbi([
 export const aggregatorV3Abi = parseAbi([
   'function latestRoundData() view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)',
 ]);
+
+/**
+ * Stage F′ (LeashAccountV5) — the governed-signing surface (FP-1 spine + FP-3 nested decode).
+ * The session key submits the EIP-712 leaf words + its signature over the reconstructed digest via
+ * `authorizeSigningIntent` (the runtime arm); the owner onboards a protocol via `proposeSigningGrant`
+ * (flat) / `proposeSigningGrantNested` (one-level nested, Permit2) + `applySigningGrant` (timelocked).
+ * Reads mirror the on-chain policy + armed read-model. Hand-derived from contracts/src/LeashAccountV5.sol.
+ */
+export const leashAccountV5SigningAbi = parseAbi([
+  // the session-key arm (the runtime write) — returns the armed/reconstructed digest.
+  'function authorizeSigningIntent(uint256 descriptorId, bytes32[] fields, bytes sessionSig) returns (bytes32 digest)',
+  'function disarmSigningIntent(bytes32 digest)',
+  // owner grant grammar — flat (FP-1) + nested (FP-3) propose, shared apply (timelocked loosen).
+  'function proposeSigningGrant(uint256 descriptorId, bytes32 domainSeparator, bytes32 typeHash, uint8 numFields, uint8 spenderIndex, uint8 amountIndex, uint8 deadlineIndex, address token, uint128 perIntentCap, uint64 maxDeadlineWindow, address[] spenders)',
+  'function proposeSigningGrantNested((uint256 descriptorId, bytes32 domainSeparator, bytes32 typeHash, uint8 numTopFields, uint8 spenderLeafIndex, uint8 amountLeafIndex, uint8 deadlineLeafIndex, uint8 expiryLeafIndex, bytes32 nestedTypeHash, uint8 nestedLeafStart, uint8 nestedLeafCount, address token, uint128 perIntentCap, uint64 maxDeadlineWindow) p, address[] spenders)',
+  'function applySigningGrant()',
+  'function tightenSigningGrant(uint256 descriptorId, uint128 perIntentCap, uint64 maxDeadlineWindow)',
+  'function removeSigningDescriptor(uint256 descriptorId)',
+  // reads
+  'function isValidSignature(bytes32 hash, bytes signature) view returns (bytes4)',
+  'function signingEpoch() view returns (uint64)',
+  'function signingIntentPolicy(uint256) view returns (bool set, bytes32 domainSeparator, bytes32 typeHash, uint8 numFields, uint8 spenderIndex, uint8 amountIndex, uint8 deadlineIndex, address token, uint128 perIntentCap, uint64 maxDeadlineWindow, bytes32 nestedTypeHash, uint8 nestedLeafStart, uint8 nestedLeafCount, uint8 expiryLeafIndex)',
+  'function signingSpender(uint256, address) view returns (bool)',
+  'function armedIntent(bytes32) view returns (bool set, uint64 expiry, uint64 epoch)',
+  'function pendingSigningGrant() view returns (uint256 descriptorId, bytes32 domainSeparator, bytes32 typeHash, uint8 numFields, uint8 spenderIndex, uint8 amountIndex, uint8 deadlineIndex, address token, uint128 perIntentCap, uint64 maxDeadlineWindow, uint64 eta, bytes32 nestedTypeHash, uint8 nestedLeafStart, uint8 nestedLeafCount, uint8 expiryLeafIndex)',
+  // events
+  'event SigningIntentAuthorized(uint256 indexed descriptorId, bytes32 indexed digest, address spender, uint256 amount, uint64 deadline)',
+  'event SigningGrantProposed(uint256 indexed descriptorId, uint64 eta)',
+  'event SigningGrantChanged(uint256 indexed descriptorId, address token, uint128 perIntentCap)',
+  // errors (decode reverts to plain language in the cockpit / drill)
+  'error DescriptorNotRegistered(uint256 descriptorId)',
+  'error BadIntentSignature()',
+  'error DeadlineInPast()',
+  'error DeadlineTooFar(uint256 deadline)',
+  'error OverPerIntentCap(uint256 amount, uint128 cap)',
+  'error SpenderNotAllowlisted(address spender)',
+  'error AlreadyArmed()',
+  'error DecodeMismatch()',
+  'error InvalidPolicy()',
+  'error NotSessionKey()',
+  'error AccountRevoked()',
+  'error SessionExpired()',
+  'error TimelockNotElapsed(uint64 eta)',
+  'error NothingPending()',
+  'error ZeroAddress()',
+]);

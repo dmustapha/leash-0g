@@ -31,7 +31,7 @@ export interface PolicySnapshot {
 }
 
 export interface AgentDecision {
-  action: 'send' | 'call' | 'tool_call' | 'stand_down';
+  action: 'send' | 'call' | 'tool_call' | 'sign' | 'stand_down';
   amountWei: string;
   reason: string;
   /** Stage D (D-10) governed call: the granted target contract (only for action 'call'). */
@@ -42,6 +42,10 @@ export interface AgentDecision {
   toolId?: string;
   /** SF-3 governed tool-use: the tool arguments (only for action 'tool_call'); re-guarded by the gate. */
   toolArgs?: Record<string, Json>;
+  /** FP-3 governed signing: the reviewed descriptor id to sign under (only for action 'sign'). */
+  descriptorId?: number;
+  /** FP-3 governed signing: the spender the permit would authorize (validated ∈ the owner grant). */
+  signSpender?: string;
 }
 
 /**
@@ -293,9 +297,13 @@ function buildObservation(ctx: ReasonContext) {
 
 const decisionSchema = z
   .object({
-    action: z.enum(['send', 'call', 'tool_call', 'stand_down']),
+    action: z.enum(['send', 'call', 'tool_call', 'sign', 'stand_down']),
     amountWei: z.string().regex(/^\d{1,30}$/).default('0'),
     reason: z.string().max(1000).default(''),
+    // FP-3: present only for action 'sign'. The decide node re-derives every authority field from
+    // server grant state (never-guess-money) and re-classifies against the owner's signing grant.
+    descriptorId: z.preprocess((v) => (v === '' || v === null ? undefined : v), z.number().int().nonnegative().optional()),
+    signSpender: z.preprocess((v) => (v === '' || v === null ? undefined : v), z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional()),
     // Stage D (D-10): present only for action 'call'. Strict shape — the decide
     // node re-derives every authority arg from on-chain grant state regardless.
     // FR3b: the DECISION_CONTRACT template shows the target/selector keys, so
@@ -318,6 +326,10 @@ const decisionSchema = z
     // A 'tool_call' with no toolId is malformed → reject (deterministic stand-down).
     if (d.action === 'tool_call' && !d.toolId) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'tool_call requires toolId' });
+    }
+    // A 'sign' with no descriptorId is malformed → reject (deterministic stand-down).
+    if (d.action === 'sign' && d.descriptorId === undefined) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'sign requires descriptorId' });
     }
   });
 
@@ -381,6 +393,8 @@ export function parseDecision(content: string): AgentDecision | null {
       ...(d.action === 'call' && d.selector ? { selector: d.selector } : {}),
       ...(d.action === 'tool_call' && d.toolId ? { toolId: d.toolId } : {}),
       ...(d.action === 'tool_call' && d.toolArgs ? { toolArgs: d.toolArgs as Record<string, Json> } : {}),
+      ...(d.action === 'sign' && d.descriptorId !== undefined ? { descriptorId: d.descriptorId } : {}),
+      ...(d.action === 'sign' && d.signSpender ? { signSpender: d.signSpender } : {}),
     };
   }
   return last;
