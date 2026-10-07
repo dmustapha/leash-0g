@@ -161,8 +161,8 @@ describe('SE-7 second-chain onboarding (persisted-tuple replay)', () => {
     const res = await request(app.ownerApp).get('/api/networks').set('Authorization', ownerAuth(OWNER));
     expect(res.status).toBe(200);
     expect(res.body.chains).toEqual([
-      { chainId: HOME_CHAIN, name: '0G Galileo Testnet', capabilities: [] },
-      { chainId: BASE_CHAIN, name: 'Base Sepolia', capabilities: [] },
+      { chainId: HOME_CHAIN, name: '0G Galileo Testnet', capabilities: [], router: null },
+      { chainId: BASE_CHAIN, name: 'Base Sepolia', capabilities: [], router: null },
     ]);
   });
 
