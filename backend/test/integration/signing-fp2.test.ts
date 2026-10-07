@@ -17,8 +17,10 @@ import {
   listRecentSigningRequests,
   listSigningArms,
   recordSigningArm,
+  reconcileSigningArmsByDescriptor,
 } from '../../src/store/signing.js';
-import { onChainGrantParams, defaultSigningRegistry, computeSigningRequestHash } from '../../src/signing/index.js';
+import { onChainGrantParams, defaultSigningRegistry, computeSigningRequestHash, classifySigning } from '../../src/signing/index.js';
+import type { SigningGrantState } from '../../src/signing/types.js';
 
 /**
  * F′ FP-2 — the off-chain governed-signing engine end-to-end: owner signing-policy
@@ -142,6 +144,8 @@ describe('FP-2 sensitive-signing JIT rail (decoded cards, consent, always-ask)',
       spender: SPENDER,
       amountWei: '500',
       deadlineSec: 2_000_000,
+      token: TOKEN,
+      maxDeadlineWindow: 3600,
       intent: { fields: ['0x00'], digest: '0xdeadbeef' },
     });
   }
@@ -187,6 +191,60 @@ describe('FP-2 sensitive-signing JIT rail (decoded cards, consent, always-ask)',
     expect(outcome.ok).toBe(true);
     const rules = await listSigningRules(db.pool, h.agentId);
     expect(rules.some((r) => r.descriptorId === DESC_ID && r.source === 'jit')).toBe(true);
+  });
+
+  // Gate-② FP-2 send-back regression (the mutation-SENSITIVE proof the hollow test
+  // above lacked): drive `always_allow` through the REAL `POST /api/approvals/:id`
+  // signing branch — the one that builds the standing grant — then assert (a) the
+  // recorded grant carries the REAL token + deadline window (not the 0x0/0 placeholder
+  // the old branch wrote), and (b) the NEXT sign of a SENSITIVE descriptor, even
+  // over-cap, still classifies L2. FAILS on `ceb300e`: the route wrote
+  // `maxDeadlineWindow:0`/`token:0x0`, and classify ordered the widen checks ahead of
+  // the `sensitive → L2` floor, so the next sign re-classified L3, not L2.
+  it('always_allow via the real approvals route records a real grant and keeps sensitive at L2', async () => {
+    const { request: row } = await raise();
+    const res = await request(h.t.app)
+      .post(`/api/approvals/${row.approvalId}`)
+      .set('authorization', ownerAuth(OWNER))
+      .send({ decision: 'always_allow' });
+    expect(res.status).toBe(200);
+
+    // (a) fix #2 — the grant the route wrote carries the REAL token + window, sourced
+    // from the request's decoded binding, NOT the inert 0x0/0 placeholder.
+    const rules = await listSigningRules(db.pool, h.agentId);
+    const jit = rules.find((r) => r.descriptorId === DESC_ID && r.source === 'jit');
+    expect(jit).toBeTruthy();
+    expect(jit!.token.toLowerCase()).toBe(TOKEN.toLowerCase());
+    expect(jit!.maxDeadlineWindow).toBe(3600);
+
+    // (b) fix #1 — re-classify the NEXT sign of this descriptor as SENSITIVE. Even an
+    // over-cap amount (which would widen to L3 under the old ordering) must land L2:
+    // sensitive is the floor, evaluated before any cap/deadline/spender widen check.
+    const sensitive = { ...defaultSigningRegistry.get(DESC_ID)!, sensitive: true };
+    const NOW = 1_000_000;
+    const grant: SigningGrantState = {
+      rules: new Map([
+        [
+          DESC_ID,
+          {
+            descriptorId: jit!.descriptorId,
+            spenderSet: jit!.spenderSet,
+            perIntentCap: jit!.perIntentCap,
+            maxDeadlineWindow: jit!.maxDeadlineWindow,
+            token: jit!.token,
+            active: true,
+          },
+        ],
+      ]),
+      signingEpoch: 0,
+    };
+    const next = classifySigning(
+      { descriptorId: DESC_ID, spender: SPENDER, amountWei: '999999', deadlineSec: NOW + 1800 },
+      sensitive,
+      grant,
+      NOW,
+    );
+    expect(next).toEqual({ lane: 'l2', triggers: ['sensitive'] });
   });
 
   it('a decision on a request belonging to another agent fails closed (agent_mismatch)', async () => {
@@ -242,5 +300,36 @@ describe('FP-2 FP-CARRY-4/5 arm reconcile (a tighten epoch-bump → stale)', () 
     expect(await reconcileAfterEpochBump(h.deps, h.agentId, 5)).toBe(0);
     const arms = await listSigningArms(db.pool, h.agentId);
     expect(arms[0]!.status).toBe('armed');
+  });
+
+  // FP-CARRY-4: the remove path reconcile is SCOPED to the removed descriptor — it
+  // must stale that descriptor's arms and leave OTHER descriptors' arms armed (the
+  // old `Number.MAX_SAFE_INTEGER` epoch-sentinel staled everything: fail-safe, wrong).
+  it('reconcileSigningArmsByDescriptor stales only the removed descriptor, not others', async () => {
+    const h = await harness();
+    await recordSigningArm(db.pool, {
+      agentId: h.agentId,
+      descriptorId: DESC_ID,
+      digest: '0x' + '11'.repeat(32),
+      spender: SPENDER,
+      amount: '10',
+      deadline: 2_000_000,
+      epoch: 0,
+    });
+    await recordSigningArm(db.pool, {
+      agentId: h.agentId,
+      descriptorId: DESC_ID + 1,
+      digest: '0x' + '22'.repeat(32),
+      spender: SPENDER,
+      amount: '10',
+      deadline: 2_000_000,
+      epoch: 0,
+    });
+    const n = await reconcileSigningArmsByDescriptor(db.pool, h.agentId, DESC_ID);
+    expect(n).toBe(1);
+    const arms = await listSigningArms(db.pool, h.agentId);
+    const byDesc = new Map(arms.map((a) => [a.descriptorId, a.status]));
+    expect(byDesc.get(DESC_ID)).toBe('stale');
+    expect(byDesc.get(DESC_ID + 1)).toBe('armed');
   });
 });

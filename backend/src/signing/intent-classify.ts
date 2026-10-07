@@ -2,9 +2,9 @@ import type {
   SigningClassification,
   SigningDescriptor,
   SigningGrantState,
-  SigningTrigger,
   SigningWidenReason,
 } from './types.js';
+import { parseSigningAmount } from './amount.js';
 
 /**
  * The intended signing the classifier routes — the MINIMAL model intent: which
@@ -52,11 +52,20 @@ export function classifySigning(
   if (!descriptor) return { lane: 'forbidden', reason: 'unknown_descriptor' };
 
   // Structural validity of the money/time the model proposed.
-  const amount = parseAmount(intended.amountWei);
+  const amount = parseSigningAmount(intended.amountWei);
   if (amount === null) return { lane: 'forbidden', reason: 'malformed_intent' };
   if (!Number.isInteger(intended.deadlineSec) || intended.deadlineSec <= nowSec) {
     return { lane: 'forbidden', reason: 'malformed_intent' };
   }
+
+  // Sensitive = the L2 floor, evaluated BEFORE any grant/widen check (00 §6c). A
+  // sensitive descriptor ALWAYS asks the owner per-sign: the consent IS the authority
+  // for that one signature, so cap/deadline/spender/grant-state can never downgrade it
+  // to L1 or upgrade it to L3. (Only the structural forbidden guards above outrank it —
+  // an un-described or malformed intent is refused outright.) This is what the HTTP
+  // `always_allow` branch relies on: after the owner consents once, the NEXT sign of a
+  // sensitive descriptor must re-classify L2, not L3 — the defect the FP-2 re-gate caught.
+  if (descriptor.sensitive) return { lane: 'l2', triggers: ['sensitive'] };
 
   // Default-deny: no standing (or removed) rule ⇒ the owner must grant first. An
   // on-chain arm reverts `DescriptorNotRegistered`; off-chain that is an L3 widen.
@@ -68,32 +77,15 @@ export function classifySigning(
   const widen: SigningWidenReason[] = [];
   const spenders = new Set(rule.spenderSet.map((s) => s.toLowerCase()));
   if (!spenders.has(intended.spender.toLowerCase())) widen.push('new_spender');
-  const cap = parseAmount(rule.perIntentCap);
+  const cap = parseSigningAmount(rule.perIntentCap);
   if (cap === null || amount > cap) widen.push('over_cap');
   // deadline beyond the granted window (0 window ⇒ the descriptor is disabled).
   if (intended.deadlineSec > nowSec + rule.maxDeadlineWindow) widen.push('deadline_too_far');
   if (widen.length > 0) return { lane: 'l3_widen', reasons: dedupe(widen) };
-
-  // In policy. A sensitive descriptor ALWAYS asks (00 §6c) — the owner consents to
-  // each sign even inside the standing grant; it can never classify L1.
-  const triggers: SigningTrigger[] = [];
-  if (descriptor.sensitive) triggers.push('sensitive');
-  if (triggers.length > 0) return { lane: 'l2', triggers: dedupe(triggers) };
 
   return { lane: 'l1', reason: 'in_policy' };
 }
 
 function dedupe<T>(xs: T[]): T[] {
   return [...new Set(xs)];
-}
-
-/** Parse a base-units decimal amount; null if not a positive-or-zero integer string. */
-function parseAmount(s: string): bigint | null {
-  if (typeof s !== 'string' || !/^\d{1,40}$/.test(s)) return null;
-  try {
-    const v = BigInt(s);
-    return v >= 0n ? v : null;
-  } catch {
-    return null;
-  }
 }

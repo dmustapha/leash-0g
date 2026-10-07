@@ -1,6 +1,7 @@
 import { encodeAbiParameters, keccak256, concat, type Hex } from 'viem';
 import type { Eip712Field, SigningDescriptor, SigningRule } from './types.js';
 import { toViemDomain, descriptorTypeHash, descriptorDomainSeparator } from './intent-registry.js';
+import { parseSigningAmount } from './amount.js';
 
 /**
  * The never-guess-money intent-builder (FP-2, FP-c) — the Stage-D call-builder
@@ -78,7 +79,7 @@ export type BuildIntentResult =
 export function buildIntent(descriptor: SigningDescriptor, rule: SigningRule | undefined, input: BuildIntentInput): BuildIntentResult {
   if (!rule || !rule.active) return { ok: false, reason: 'no_grant' };
 
-  const amount = parseAmount(input.amountWei);
+  const amount = parseSigningAmount(input.amountWei);
   if (amount === null) return { ok: false, reason: 'bad_amount' };
 
   const spender = resolveSpender(rule, input.spender);
@@ -171,6 +172,19 @@ function resolveSpender(rule: SigningRule, proposed?: string): string | null {
   return set.length === 1 ? (set[0] ?? null) : null;
 }
 
+/**
+ * The enumerated set of EIP-712 field names that denote the SELF/account party of a
+ * permit — the party on whose behalf the account signs. Every one is pinned to the
+ * account `self` (never a confused-deputy address from model text):
+ *   - `owner`   — ERC-2612 permit holder;
+ *   - `holder`  — DAI-style permit holder;
+ *   - `account` — AAVE / generic account-permit party;
+ *   - `from`    — transfer-authorization source;
+ *   - `maker`   — order/intent maker (CoW, 0x, Hyperliquid).
+ * A NEW descriptor whose self-party uses a name outside this list must extend it with
+ * review (never inferred) — an unrecognized self-field falls through to the `pins`
+ * path and stands the build down (`missing_pin`) rather than fabricate self.
+ */
 function isOwnerField(name: string): boolean {
   return name === 'owner' || name === 'holder' || name === 'account' || name === 'from' || name === 'maker';
 }
@@ -182,25 +196,22 @@ function coerce(type: string, value: string | number | bigint | boolean): string
     return /^0x[0-9a-f]{40}$/.test(s) ? s : null;
   }
   if (type === 'bool') return typeof value === 'boolean' ? value : null;
-  if (/^bytes([1-9]|[12][0-9]|3[0-2])$/.test(type)) {
+  const bytesN = /^bytes([1-9]|[12][0-9]|3[0-2])$/.exec(type);
+  if (bytesN) {
     const s = String(value).toLowerCase();
-    return /^0x[0-9a-f]+$/.test(s) ? s : null;
+    // fail-closed: a bytesN pin MUST be exactly N bytes (`0x` + 2 hex chars each).
+    // A wrong-length hex string would otherwise silently right-pad (or throw deep in
+    // encodeAbiParameters) — latent today (no built-in uses bytesN), load-bearing for
+    // FP-3 descriptors that do. Enforce the exact width here (bad_pin on mismatch).
+    const n = Number(bytesN[1]);
+    if (!/^0x[0-9a-f]+$/.test(s) || s.length !== 2 + 2 * n) return null;
+    return s;
   }
   // uintN / intN
   try {
     const v = typeof value === 'bigint' ? value : BigInt(String(value));
     if (type.startsWith('uint') && v < 0n) return null;
     return v;
-  } catch {
-    return null;
-  }
-}
-
-function parseAmount(s: string): bigint | null {
-  if (typeof s !== 'string' || !/^\d{1,40}$/.test(s)) return null;
-  try {
-    const v = BigInt(s);
-    return v >= 0n ? v : null;
   } catch {
     return null;
   }

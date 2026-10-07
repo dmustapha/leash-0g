@@ -90,7 +90,7 @@ import {
   listRecentSigningRequests,
   listSigningArms,
   getSigningRequest,
-  reconcileSigningArms,
+  reconcileSigningArmsByDescriptor,
 } from '../store/signing.js';
 import { applyRevokeFanout } from '../agents/revoke-fanout.js';
 import {
@@ -1263,18 +1263,38 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
         res.status(404).json({ error: { message: 'not found' } });
         return;
       }
-      // On `always_allow` we record the standing grant from the descriptor + the
-      // request's decoded spender/amount — a SENSITIVE descriptor nonetheless stays
-      // always-ask (00 §6c; the engine re-classifies L2 next time).
+      // On `always_allow` we record the standing grant from the REVIEWED descriptor +
+      // the request's decoded spender/amount/token/window — a SENSITIVE descriptor
+      // nonetheless stays always-ask (00 §6c; the engine re-classifies L2 next time,
+      // because `sensitive → L2` is now the classify floor evaluated before any widen
+      // check). An un-described request is REFUSED (422), never recorded under a
+      // `descriptor:N` fallback key.
       const descriptor = defaultSigningRegistry.get(request.descriptorId);
+      if (!descriptor) {
+        res.status(422).json({ error: { message: 'unknown descriptor' } });
+        return;
+      }
       const decoded = request.decoded as Record<string, unknown>;
+      // The REAL per-token budget + deadline window are carried on the request at
+      // raise time (`signing-service.raiseSigningRequest`), sourced from the grant/
+      // build — never the zero placeholder the hollow grant used. If `always_allow`
+      // arrives without them, there is no legible grant to record → refuse (422).
+      const token = decoded['token'];
+      const maxDeadlineWindow = decoded['maxDeadlineWindow'];
+      if (
+        parsedSig.data.decision === 'always_allow' &&
+        !(typeof token === 'string' && typeof maxDeadlineWindow === 'number')
+      ) {
+        res.status(422).json({ error: { message: 'signing request missing token/deadline binding' } });
+        return;
+      }
       const grantOnAlways = {
         descriptorId: request.descriptorId,
-        descriptorKey: descriptor?.key ?? `descriptor:${request.descriptorId}`,
+        descriptorKey: descriptor.key,
         spenderSet: typeof decoded['spender'] === 'string' ? [decoded['spender']] : [],
         perIntentCap: typeof decoded['amountWei'] === 'string' ? decoded['amountWei'] : '0',
-        maxDeadlineWindow: 0,
-        token: '0x0000000000000000000000000000000000000000',
+        maxDeadlineWindow: typeof maxDeadlineWindow === 'number' ? maxDeadlineWindow : 0,
+        token: typeof token === 'string' ? token : '0x0000000000000000000000000000000000000000',
       };
       const outcome = await decideSigningRequest(signingServiceDeps, agent, request, parsedSig.data.decision, grantOnAlways, {
         channel: 'app',
@@ -2545,10 +2565,11 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     if (parsed.data.action === 'remove') {
       await setSigningRuleStatus(deps.pool, agent.id, descriptorId, 'removed');
       // FP-CARRY-4/5: removing a descriptor is a signing-relevant tighten → the
-      // on-chain epoch bumps; reconcile the read-model so stale arms show stale.
-      // (The owner's on-chain `removeSigningDescriptor` tx does the actual bump;
-      // here we advance the read-model best-effort by the current rule count.)
-      await reconcileSigningArms(deps.pool, agent.id, Number.MAX_SAFE_INTEGER);
+      // on-chain epoch bumps. Reconcile the read-model so dead arms show stale — but
+      // SCOPED to the removed descriptor. (The owner's on-chain `removeSigningDescriptor`
+      // tx does the actual epoch bump; here we stale only this descriptor's arms, not
+      // every descriptor's as the old epoch-sentinel call did.)
+      await reconcileSigningArmsByDescriptor(deps.pool, agent.id, descriptorId);
       res.json({ ok: true, action: 'remove' });
       return;
     }

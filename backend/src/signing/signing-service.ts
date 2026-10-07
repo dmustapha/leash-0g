@@ -45,12 +45,32 @@ export interface RaiseSigningInput {
   triggers: SigningTrigger[];
   /** keccak of (chainId, descriptorId, spender, amount, deadline) — the one-shot replay key. */
   requestHash: string;
-  /** the human-readable decode of EXACTLY what would be signed (00 §9). */
+  /**
+   * the human-readable decode of EXACTLY what would be signed (00 §9).
+   *
+   * BINDING FP-3 PRECONDITION (auditor M-01): the FP-3 runtime caller MUST derive this
+   * via `intent-builder.decodeForHuman` from SERVER-HELD fields (the pinned spender/
+   * amount/deadline/token), NEVER from agent-authored text. A card composed from model
+   * text re-opens the 00 §9 Grok/Bankr "owner approves a blob he cannot trust" shape.
+   * FP-2 has no runtime caller, so no call site feeds model text today — but any FP-3
+   * wiring that does is a Gate-② reject.
+   */
   humanReadable: string;
   protocol: string;
   spender: string;
   amountWei: string;
   deadlineSec: number;
+  /**
+   * the per-token budget this sign is bound to (the SAME token `executeCall` debits).
+   * Carried onto the request so an `always_allow` records a grant with the REAL token,
+   * never a zero-address placeholder — the engine knows it at build time (`rule.token`).
+   */
+  token: string;
+  /**
+   * the deadline window (seconds) the standing grant should record on `always_allow`
+   * — the window the owner is consenting to, carried from the grant/build, never 0.
+   */
+  maxDeadlineWindow: number;
   /** the built typed-data + ordered fields to arm on approve (server-held, inert until consent). */
   intent: Json;
 }
@@ -83,6 +103,8 @@ export async function raiseSigningRequest(
     spender: input.spender,
     amountWei: input.amountWei,
     deadlineSec: input.deadlineSec,
+    token: input.token,
+    maxDeadlineWindow: input.maxDeadlineWindow,
     humanReadable: input.humanReadable,
     triggers: input.triggers,
   };
