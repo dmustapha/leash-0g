@@ -102,10 +102,19 @@ export interface AgentRow {
   /** SE-5: the chain this agent's account lives on — the (chainId, account) anchor. */
   chainId: number;
   ownerAddr: string;
-  accountAddr: string;
-  sessionKeyAddr: string;
-  sessionKeyEnc: string;
-  auditPubkey: string;
+  /**
+   * SF-2: NULL for an external Tier-2 bound agent (`bindMode==='external'`) — a
+   * zero-authority bound agent has no on-chain account (the anchor is owner
+   * identity; an on-chain account is an OPTIONAL reference held on bound_agents).
+   * Always present for a native agent.
+   */
+  accountAddr: string | null;
+  /** SF-2: NULL for a bound agent (no session key → the runtime can never start it, F-2b). */
+  sessionKeyAddr: string | null;
+  /** SF-2: NULL for a bound agent (no session key). */
+  sessionKeyEnc: string | null;
+  /** SF-2: NULL for a bound agent (reuses the owner's audit handling; no per-agent audit key). */
+  auditPubkey: string | null;
   tokenId: string;
   tokenHash: string;
   name: string;
@@ -138,7 +147,41 @@ export interface AgentRow {
    * SAME CREATE2 address. Null for legacy / pre-SE-6 mints.
    */
   accountCreateTuple: Record<string, unknown> | null;
+  /**
+   * SF-2: binding mode. NULL = native (session key + on-chain account — the only
+   * kind before SF-2); 'external' = a Tier-2 bound agent (zero on-chain
+   * authority, governed only at the SF-1/SF-3 gateway egress boundary).
+   */
+  bindMode: 'external' | null;
   createdAt: string;
+}
+
+/** A native agent — every on-chain authority column is populated. */
+export type NativeAgentRow = AgentRow & {
+  accountAddr: string;
+  sessionKeyAddr: string;
+  sessionKeyEnc: string;
+  auditPubkey: string;
+};
+
+/**
+ * SF-2: assert an agent is native before any path that touches its on-chain
+ * account / session key. A bound (external) agent has none of those — it must
+ * never reach the runtime, chain-ops, onboard, or revoke-on-chain paths (F-2b
+ * zero-authority: no session key → the runtime can't start it). The runtime's
+ * active-agent view already excludes external binds; this is the belt-and-braces
+ * narrowing + loud failure if one ever leaks into a native path.
+ */
+export function assertNativeAgent(agent: AgentRow): asserts agent is NativeAgentRow {
+  if (
+    agent.bindMode === 'external' ||
+    agent.accountAddr === null ||
+    agent.sessionKeyAddr === null ||
+    agent.sessionKeyEnc === null ||
+    agent.auditPubkey === null
+  ) {
+    throw new Error(`agent ${agent.id} is an external bound agent (SF-2) — it has no on-chain account or session key`);
+  }
 }
 
 /**

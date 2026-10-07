@@ -93,13 +93,15 @@ import type { ChainStep } from '../types.js';
 import type { TelegramBot } from '../telegram/bot.js';
 import type { DigestService } from '../digest/service.js';
 import type { AgentRow, AuditBatch, Link } from '../types.js';
-import { goalAllowlistCandidates, goalRole } from '../types.js';
+import { goalAllowlistCandidates, goalRole, assertNativeAgent } from '../types.js';
 import type { Json } from '../crypto/canonical.js';
 import type { ChainOps, RuntimeManager, Settings } from '../server.js';
 import { onboardAgentToChain, OnboardRefusedError, type OnboardChainOps } from '../chain/onboard.js';
 import { UnregisteredChainError } from '../chain/registry.js';
 import { listChainDeployments, getOwnedAgentIdByDeployment } from '../store/chain-deployments.js';
 import { getAgentByAccountAndChain } from '../store/agents.js';
+import { getBoundAgent, updateBoundTokenHash } from '../store/bound-agents.js';
+import { bindExternalAgent, BindRefusedError } from '../binding/bind-external.js';
 import { listRequestsByChainAndAccount } from '../store/capabilities.js';
 
 /** SE-7: the registry surface the owner routes need (structural — tests fake it). */
@@ -175,6 +177,22 @@ const linkUpdateSchema = z.union([
 ]);
 
 const revokeBatchSchema = z.object({ agentIds: z.array(z.string().uuid()).min(1).max(16) });
+
+// SF-2: external Tier-2 bind body. Minimal by design (§1.2) — LEASH generates
+// the token/tenant/endpoints. interaction_mode defaults to 'observe'; the enum
+// carries passive/active so the UI can declare them, but bind-external refuses
+// to mint a non-observe bind (behavior deferred to SF-2′).
+const bindExternalSchema = z.object({
+  name: z.string().min(1).max(128),
+  interactionMode: z.enum(['observe', 'passive', 'active']).optional(),
+  toolAllowlist: z.array(z.string().min(1).max(128)).max(64).optional(),
+  leashedAccountAddr: z
+    .string()
+    .regex(/^0x[0-9a-fA-F]{40}$/)
+    .optional(),
+  chainId: z.number().int().positive().optional(),
+  baseUrl: z.string().url().max(2048).optional(),
+});
 
 // Role/goal union (spec §3b): the discriminator is interpreted ONLY by the
 // runtime layer — this schema just admits the three shapes. Phase-1 FE bodies
@@ -992,9 +1010,14 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
         // never a coordination-table column).
         role: goalRole(a.goal),
         capabilityLabel: a.capabilityLabel,
+        // SF-2: surface the bind mode so the fleet UI renders bound agents
+        // distinctly (no on-chain account, governed at the gateway only).
+        bindMode: a.bindMode,
         accountAddr: a.accountAddr,
         sessionKeyAddr: a.sessionKeyAddr,
-        accountBalanceWei: (await cachedBalance(a.accountAddr, a.chainId)).toString(),
+        // A bound agent has no on-chain account → no balance to read.
+        accountBalanceWei:
+          a.accountAddr !== null ? (await cachedBalance(a.accountAddr, a.chainId)).toString() : null,
         createdAt: a.createdAt,
       })),
     );
@@ -1034,6 +1057,29 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
   router.get('/api/agents/:id', asyncRoute(async (req: OwnerRequest, res) => {
     const agent = await requireOwnedAgent(req, res);
     if (!agent) return;
+    // SF-2: a bound (external) agent has no on-chain account/policy/balance to
+    // read. Its governance lives entirely at the gateway (tool allowlist + the
+    // JIT rail); surface the Tier-2 model instead of hitting a chain it has no
+    // account on.
+    if (agent.bindMode === 'external') {
+      const bound = await getBoundAgent(deps.pool, agent.id);
+      res.json({
+        status: agent.status === 'revoked' ? 'revoked' : deps.runtime.isRunning(agent.id) ? 'running' : 'paused',
+        bindMode: 'external',
+        bound: bound
+          ? {
+              interactionMode: bound.interactionMode,
+              mcpScope: bound.mcpScope,
+              leashedAccountAddr: bound.leashedAccountAddr,
+              chainId: bound.chainId,
+            }
+          : null,
+        addresses: { account: agent.accountAddr, sessionKey: agent.sessionKeyAddr, owner: agent.ownerAddr },
+        agent: publicAgent(agent),
+      });
+      return;
+    }
+    assertNativeAgent(agent); // narrows for the native on-chain reads below
     const [policy, accountBalance] = await Promise.all([
       // Role-aware allowlist candidate (spec §3b): treasury/sentinel =
       // beneficiary, requester = fee recipient, executor/provider/evaluator =
@@ -1128,6 +1174,15 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
         res.status(404).json({ error: { message: 'not found' } });
         return;
       }
+      // C-SF3-2: `agent` is resolved from the approval; `request` is fetched by
+      // id independently. Assert they belong to the SAME agent before deciding,
+      // or a crafted (approvalId, requestId) pair could decide a tool request
+      // that rides a different agent's grant. 404 (not 403) — same enumeration-
+      // oracle discipline as requireOwnedAgent.
+      if (request.agentId !== agent.id) {
+        res.status(404).json({ error: { message: 'not found' } });
+        return;
+      }
       const outcome = await decideToolRequest(toolServiceDeps, agent, request, parsedTool.data.decision, {
         channel: 'app',
       });
@@ -1201,6 +1256,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
    */
   async function resyncGuardian(agent: AgentRow): Promise<string | null> {
     try {
+      assertNativeAgent(agent); // only reached on a native on-chain revoke failure
       const onchain = await chainForAgent(agent).getGuardian(agent.accountAddr);
       if (onchain !== (agent.guardianAddr ?? '')) {
         await updateAgentGuardian(deps.pool, agent.id, onchain);
@@ -1382,6 +1438,17 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
         results.push({ agentId: fresh.id, ok: true, alreadyRevoked: true });
         continue;
       }
+      // SF-2: a bound agent revokes with no on-chain tx (no session authority).
+      if (fresh.bindMode === 'external') {
+        await applyRevokeFanout(
+          { pool: deps.pool, hub: deps.hub, runtime: deps.runtime, coordinator: deps.coordinator, alerts: deps.alerts },
+          fresh.id,
+          'guardian-api',
+        );
+        results.push({ agentId: fresh.id, ok: true, status: 'revoked', bindMode: 'external' });
+        continue;
+      }
+      assertNativeAgent(fresh);
       try {
         const { txHash } = await chainForAgent(fresh).revoke(fresh.accountAddr, fresh.guardianAddr);
         await applyRevokeFanout(
@@ -1445,6 +1512,73 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     res.json({ gatewayToken: token.token }); // returned once; old token is now invalid
   }));
 
+  // SF-2 (F-2a): bind an agent that already runs elsewhere onto the governed
+  // gateway. Creates a bound `agents` row + bound_agents side-table row; returns
+  // the gateway/MCP endpoints + the (once-shown) gateway token + base_url swap.
+  // No session key is ever minted (F-2b zero-authority).
+  router.post('/api/agents/bind-external', asyncRoute(async (req: OwnerRequest, res) => {
+    const parsed = bindExternalSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: { message: 'invalid request body' } });
+      return;
+    }
+    const d = parsed.data;
+    try {
+      const result = await bindExternalAgent(
+        { pool: deps.pool, publicBaseUrl: deps.settings.publicBaseUrl, keyEncryptionSecret: deps.settings.keyEncryptionSecret },
+        {
+          ownerAddr: req.ownerAddr as string,
+          name: d.name,
+          ...(d.interactionMode ? { interactionMode: d.interactionMode } : {}),
+          ...(d.toolAllowlist ? { toolAllowlist: d.toolAllowlist } : {}),
+          ...(d.leashedAccountAddr ? { leashedAccountAddr: d.leashedAccountAddr } : {}),
+          ...(d.chainId !== undefined ? { chainId: d.chainId } : {}),
+          ...(d.baseUrl ? { baseUrl: d.baseUrl } : {}),
+        },
+      );
+      res.status(201).json(result);
+    } catch (err) {
+      if (err instanceof BindRefusedError) {
+        res.status(409).json({ error: { message: err.message, reason: err.code } });
+        return;
+      }
+      throw err;
+    }
+  }));
+
+  // SF-2: unbind — one-move revoke for a bound agent (no on-chain tx). The
+  // gateway auth 403 then closes BOTH inference and tools (fails-closed).
+  router.post('/api/agents/:id/unbind', asyncRoute(async (req: OwnerRequest, res) => {
+    const agent = await requireOwnedAgent(req, res);
+    if (!agent) return;
+    if (agent.bindMode !== 'external') {
+      res.status(409).json({ error: { message: 'not a bound agent', reason: 'not_external' } });
+      return;
+    }
+    await applyRevokeFanout(
+      { pool: deps.pool, hub: deps.hub, runtime: deps.runtime, coordinator: deps.coordinator, alerts: deps.alerts },
+      agent.id,
+      'guardian-api',
+    );
+    res.json({ ok: true, status: 'revoked', bindMode: 'external' });
+  }));
+
+  // SF-2: rotate a bound agent's gateway token. Mints a new token (old one
+  // invalid immediately) and keeps the bound_agents side-table hash in sync.
+  router.post('/api/agents/:id/rotate-gateway-token', asyncRoute(async (req: OwnerRequest, res) => {
+    const agent = await requireOwnedAgent(req, res);
+    if (!agent) return;
+    if (agent.bindMode !== 'external') {
+      res.status(409).json({ error: { message: 'not a bound agent; use POST /api/agents/:id/rotate', reason: 'not_external' } });
+      return;
+    }
+    const token = generateGatewayToken();
+    const tHash = await hashTokenSecret(token.secret);
+    await rotateAgentToken(deps.pool, agent.id, token.tokenId, tHash, encryptSecret(token.token, deps.settings.keyEncryptionSecret));
+    await updateBoundTokenHash(deps.pool, agent.id, tHash);
+    res.json({ gatewayToken: token.token }); // returned once
+  }));
+
   router.get('/api/agents/:id/audit', asyncRoute(async (req: OwnerRequest, res) => {
     const agent = await requireOwnedAgent(req, res);
     if (!agent) return;
@@ -1479,6 +1613,13 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       res.status(409).json({ error: { message: 'agent is revoked' } });
       return;
     }
+    // SF-2 (F-2b): a bound agent has no session key → no runnable loop. It is
+    // governed at the gateway (its own base_url drives it), never started by the
+    // LEASH runtime. Refuse loudly so this invariant is explicit, not implicit.
+    if (agent.bindMode === 'external') {
+      res.status(409).json({ error: { message: 'external bound agents run on their own host; they are not started by LEASH', reason: 'external_bind' } });
+      return;
+    }
     try {
       await deps.runtime.start(agent.id);
     } catch (err) {
@@ -1507,6 +1648,20 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
   router.post('/api/agents/:id/revoke', asyncRoute(async (req: OwnerRequest, res) => {
     const agent = await requireOwnedAgent(req, res);
     if (!agent) return;
+    // SF-2 (F-2d): one-move revoke for a bound agent needs NO on-chain tx — it
+    // holds no session authority. Flip status + fan out; the gateway auth 403
+    // then closes BOTH inference and tools in one move (fails-closed). The
+    // on-chain revoke path below is untouched for native agents.
+    if (agent.bindMode === 'external') {
+      await applyRevokeFanout(
+        { pool: deps.pool, hub: deps.hub, runtime: deps.runtime, coordinator: deps.coordinator, alerts: deps.alerts },
+        agent.id,
+        'guardian-api',
+      );
+      res.json({ ok: true, status: 'revoked', bindMode: 'external' });
+      return;
+    }
+    assertNativeAgent(agent);
     try {
       const { txHash } = await chainForAgent(agent).revoke(agent.accountAddr, agent.guardianAddr);
       await applyRevokeFanout(

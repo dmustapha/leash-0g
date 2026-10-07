@@ -14,7 +14,7 @@ CREATE TABLE tool_rules (
   tool_id         text NOT NULL,                     -- canonical `server.tool`, lowercased
   allowed         boolean NOT NULL DEFAULT true,
   sensitive       boolean NOT NULL DEFAULT false,
-  per_call_policy jsonb,                             -- { maxArgBytes?, recipientAllowlist? }
+  per_call_policy jsonb,                             -- { maxArgBytes?, recipientAllowlist?, urlOriginAllowlist? } (C-SF3-5)
   source          text NOT NULL DEFAULT 'custom',    -- 'custom' | 'preset:<key>' | 'jit'
   status          text NOT NULL DEFAULT 'active'
                     CHECK (status IN ('proposed','active','removed')),

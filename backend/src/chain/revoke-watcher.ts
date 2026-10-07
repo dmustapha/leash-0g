@@ -54,7 +54,12 @@ export class RevokeWatcher {
         return;
       }
       if (head <= this.lastBlock) return;
-      const agents = await listActiveAgents(this.deps.pool);
+      // listActiveAgents already excludes external binds (F-2b); the null-account
+      // filter is the type-level echo of that invariant (a bound agent has no
+      // on-chain account to watch for revokes).
+      const agents = (await listActiveAgents(this.deps.pool)).filter(
+        (a): a is typeof a & { accountAddr: string } => a.accountAddr !== null,
+      );
       if (agents.length > 0) {
         const byAccount = new Map(agents.map((a) => [a.accountAddr.toLowerCase(), a]));
         const revoked = await this.deps.source.getRevokedAccounts(

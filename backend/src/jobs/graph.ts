@@ -10,7 +10,7 @@ import { approvalEvent, reasoningEvent, traceEvent } from '../sse/events.js';
 import type { Json } from '../crypto/canonical.js';
 import { canonicalJson } from '../crypto/canonical.js';
 import { eciesEncrypt } from '../crypto/ecies.js';
-import type { AgentGoal, AgentRow, RequesterGoal, ProviderGoal, EvaluatorGoal } from '../types.js';
+import { type AgentGoal, type NativeAgentRow, type RequesterGoal, type ProviderGoal, type EvaluatorGoal, assertNativeAgent } from '../types.js';
 import { CoordinationError, type DelegationCoordinator } from '../coordination/coordinator.js';
 import type { AlertService } from '../alerts/service.js';
 import { decodeLeashError } from '../chain/errors.js';
@@ -115,7 +115,9 @@ export interface JobAgentContext {
   agentId: string;
   accountAddr: string;
   goal: AgentGoal;
-  agentRow: AgentRow;
+  // SF-2: a job role is always native (ACP runs on-chain session keys + audit
+  // key). The runtime asserts this before building the graph.
+  agentRow: NativeAgentRow;
   sessionPrivateKey: string;
   gatewayToken: string;
 }
@@ -436,6 +438,10 @@ export function buildJobGraph(deps: JobGraphDeps, ctx: JobAgentContext, checkpoi
         route: 'noop',
       };
     }
+    // SF-2: job parties are native by construction (ACP needs on-chain session
+    // keys); narrow for the PoA session-key reads below.
+    assertNativeAgent(providerRow);
+    assertNativeAgent(evaluatorRow);
     // Defense-in-depth: never recover a signature over absent material. In an
     // evaluatable state these are always present (recordDelivery set them); assert
     // it rather than silently coalescing a null to '' and signing the empty string.

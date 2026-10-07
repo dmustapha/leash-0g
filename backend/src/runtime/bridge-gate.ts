@@ -1,4 +1,4 @@
-import type { AgentRow } from '../types.js';
+import { type AgentRow, assertNativeAgent } from '../types.js';
 import type { ChainRegistry } from '../chain/registry.js';
 import { SameAddressMismatchError, UnregisteredChainError } from '../chain/registry.js';
 import { OnboardRefusedError, parsePersistedTuple } from '../chain/onboard.js';
@@ -46,6 +46,8 @@ export async function assertBridgeRoutable(
   agent: AgentRow,
   bridgeTarget: string,
 ): Promise<{ destinationChainId: number; verifiedAddr: string }> {
+  // SF-2: bridge routing is native-only (requires the agent's on-chain account).
+  assertNativeAgent(agent);
   const target = bridgeTarget.toLowerCase();
   const cfg = registry.getChainConfig(agent.chainId); // default-deny home chain
   const allow = (cfg.bridgeAllowlist ?? []).map((a) => a.toLowerCase());

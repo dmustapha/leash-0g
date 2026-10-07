@@ -82,7 +82,10 @@ export function classifyTool(
     const v = intended.args[spec.name];
     if (typeof v !== 'string') continue; // a non-string url can't be egressed by the tool as a URL
     const origin = originOf(v);
-    if (origin === null || !urlAllowed.has(origin)) triggers.push('new_url');
+    // C-SF3-1: a model-supplied url-role arg pointing at an internal/loopback/
+    // metadata/private host ALWAYS asks (never silent), even if its origin were
+    // somehow allowlisted — the owner must consent to any internal fetch.
+    if (origin === null || !urlAllowed.has(origin) || isInternalUrl(v)) triggers.push('new_url');
   }
 
   if (triggers.length > 0) return { lane: 'l2', triggers: dedupe(triggers) };
@@ -115,5 +118,46 @@ export function originOf(url: string): string | null {
     return `${u.protocol}//${u.host}`.toLowerCase();
   } catch {
     return null;
+  }
+}
+
+/**
+ * C-SF3-1 (SSRF guard, §8): is a hostname an internal / loopback / link-local /
+ * cloud-metadata / private-range target the mediating egress proxy must never be
+ * coerced into reaching? Used at config-parse time (reject such an egress
+ * allowlist origin unless explicitly opted in) AND on model-supplied `url`-role
+ * args (which can never silently fetch an internal host). Fail-closed: an
+ * unparseable/empty host is treated as internal.
+ */
+export function isInternalHost(host: string): boolean {
+  if (!host) return true;
+  let h = host.toLowerCase().trim();
+  // strip a :port and IPv6 brackets.
+  if (h.startsWith('[')) h = h.slice(1, h.indexOf(']') === -1 ? undefined : h.indexOf(']'));
+  else if (h.includes(':') && !h.includes('::')) h = h.slice(0, h.lastIndexOf(':'));
+  if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.internal') || h.endsWith('.local')) return true;
+  if (h === 'metadata' || h === 'metadata.google.internal') return true;
+  // IPv6 loopback / unspecified / unique-local (fc00::/7) / link-local (fe80::/10).
+  if (h === '::1' || h === '::' ) return true;
+  if (/^f[cd][0-9a-f]{2}:/.test(h) || /^fe[89ab][0-9a-f]:/.test(h)) return true;
+  // IPv4 dotted-quad ranges.
+  const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(h);
+  if (m) {
+    const [a, b] = [Number(m[1]), Number(m[2])];
+    if (a === 127 || a === 0 || a === 10) return true; // loopback / this-host / private
+    if (a === 169 && b === 254) return true; // link-local + cloud metadata (169.254.169.254)
+    if (a === 192 && b === 168) return true; // private
+    if (a === 172 && b >= 16 && b <= 31) return true; // private
+    if (a === 100 && b >= 64 && b <= 127) return true; // CGNAT (100.64/10)
+  }
+  return false;
+}
+
+/** isInternalHost applied to a full URL string (fail-closed on parse failure). */
+export function isInternalUrl(url: string): boolean {
+  try {
+    return isInternalHost(new URL(url).hostname);
+  } catch {
+    return true;
   }
 }

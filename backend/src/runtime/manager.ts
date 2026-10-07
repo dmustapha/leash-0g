@@ -12,7 +12,7 @@ import { decryptSecret } from '../crypto/keycrypt.js';
 import { appendTrace } from '../trace/trace-store.js';
 import { traceEvent } from '../sse/events.js';
 import type { AgentRow } from '../types.js';
-import { goalRole } from '../types.js';
+import { goalRole, assertNativeAgent } from '../types.js';
 import type { DelegationCoordinator } from '../coordination/coordinator.js';
 import type { AlertService } from '../alerts/service.js';
 import { BoundaryRegistry } from './boundary.js';
@@ -219,6 +219,11 @@ export class LeashRuntimeManager implements RuntimeManager {
     if (this.loops.has(agentId)) return;
     const agent = await getAgentById(this.deps.pool, agentId);
     if (!agent || agent.status !== 'active') throw new Error('agent not startable');
+    // SF-2 (F-2b): an external bound agent has no session key → no runnable
+    // loop. It should never reach here (POST /start rejects it + listActiveAgents
+    // excludes it), but assert loudly so a leak fails closed, not with a silent
+    // null session key decrypt.
+    assertNativeAgent(agent);
     if (!agent.gatewayTokenEnc) throw new Error('agent has no runtime gateway token');
     const { keyEncryptionSecret } = this.deps.settings;
     const ctx = {
@@ -313,6 +318,7 @@ export class LeashRuntimeManager implements RuntimeManager {
     try {
       const agent = await getAgentById(this.deps.pool, agentId);
       if (!agent || agent.status !== 'active') return; // not actable — stand down silently
+      assertNativeAgent(agent); // SF-2: a bound agent has no one-shot/session key to consume
       const ctx = {
         agentId: agent.id,
         accountAddr: agent.accountAddr,
