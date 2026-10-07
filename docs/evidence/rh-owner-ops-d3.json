@@ -1,0 +1,36 @@
+{
+  "drill": "B3 — owner-op matrix vs RH prod-factory presence (HACKATHON-RH2 D3)",
+  "chainId": 46630,
+  "account": "0xD51af69E5feEEa7A36ab6f28fBe33d2623F65fEa",
+  "prodFactory": "0x9C10b48748Da1cA0CEE5AD7DA0725490A7d5E46f",
+  "blockscoutLinks": {
+    "approve": "https://explorer.testnet.chain.robinhood.com/tx/0x8231756769b2f28aac0569bfa4cccde52edaf59f793ba886ae3b56f00b00c495",
+    "revoke": "https://explorer.testnet.chain.robinhood.com/tx/0xe15554240c7b90fabd94772b449dcb2c07d2b9fc0da118c08b84633edd052ec7",
+    "rearm": "https://explorer.testnet.chain.robinhood.com/tx/0x8349f4542a0e01c34d562ead1cb29af1602cbad7bbaab58684fa445fb57c1f66",
+    "create": "https://explorer.testnet.chain.robinhood.com/tx/0xa679c15d0bb3eddfe0c5033448c82a19351dc51227cb879ce7bbc2c2c4e8d2ff"
+  },
+  "score": "4/4",
+  "checks": [
+    {
+      "check": "D3a POLICY — governed approve(router) executes within cap",
+      "ok": true,
+      "detail": "allowance=1000000000000000000000 tx=0x8231756769b2f28aac0569bfa4cccde52edaf59f793ba886ae3b56f00b00c495"
+    },
+    {
+      "check": "D3b REVOKE (one move) — revoked()==true & governed call reverts AccountRevoked",
+      "ok": true,
+      "detail": "revoked=true revertMsg=\"Execution reverted for an unknown reason.\" tx=0xe15554240c7b90fabd94772b449dcb2c07d2b9fc0da118c08b84633edd052ec7"
+    },
+    {
+      "check": "D3c REARM — revoked()==false & governed call works again",
+      "ok": true,
+      "detail": "revoked=false allowance=1500000000000000000000 rearmTx=0x8349f4542a0e01c34d562ead1cb29af1602cbad7bbaab58684fa445fb57c1f66 approveTx=0x0d090aa9a425594d83a730d61c9259eeb4bd00f89ed5c6ef64e8b4ccfb6da0c5"
+    },
+    {
+      "check": "D3d AUDIT — every tx resolves on RH Blockscout (receipt + well-formed link)",
+      "ok": true,
+      "detail": "https://explorer.testnet.chain.robinhood.com/tx/0x8231756769b2f28aac0569bfa4cccde52edaf59f793ba886ae3b56f00b00c495  https://explorer.testnet.chain.robinhood.com/tx/0xe15554240c7b90fabd94772b449dcb2c07d2b9fc0da118c08b84633edd052ec7  https://explorer.testnet.chain.robinhood.com/tx/0x8349f4542a0e01c34d562ead1cb29af1602cbad7bbaab58684fa445fb57c1f66  https://explorer.testnet.chain.robinhood.com/tx/0xa679c15d0bb3eddfe0c5033448c82a19351dc51227cb879ce7bbc2c2c4e8d2ff"
+    }
+  ],
+  "at": "2026-10-04T10:51:52.205Z"
+}

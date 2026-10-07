@@ -4,6 +4,17 @@ pragma solidity 0.8.30;
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
+/// @dev Minimal Chainlink feed surface — the ONLY method the oracle-aware wall
+///      reads. Byte-identical to `AggregatorV3Interface.latestRoundData()` so a
+///      mock feed and a real Chainlink feed are swap-compatible by address alone.
+interface IAggregatorV3Minimal {
+    function decimals() external view returns (uint8);
+    function latestRoundData()
+        external
+        view
+        returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound);
+}
+
 /// @title LeashAccountV4 — self-enforcing constrained account with GOVERNED CALLDATA.
 /// @notice The FIRST contract change since Phase 4 (Stage D). It adds a THIRD
 ///         governed execution path — `executeCall(target, value, data)` — on top of
@@ -125,6 +136,17 @@ contract LeashAccountV4 is ReentrancyGuard {
     // Stage E (SE-9, L-01) — the ERC-20 bridge remote-token pin (OP-stack leg).
     error RemoteTokenNotPinned(address localToken);
     error RemoteTokenMismatch(address expected, address got);
+    // RH slice — the oracle-aware PRICE-BAND policy (one parameterized revert
+    // branch at `_enforceAndExecute`; general condition-tree seam, folds back as
+    // SE-9). Four FAIL-CLOSED predicates + a premium-deviation band.
+    error PremiumBreach(uint256 impliedPrice, uint256 maxPrice); // impliedPrice > oracle*(1+band)
+    error StaleOracle(uint256 updatedAt, uint256 maxStaleness); // predicate 3
+    error OraclePriceInvalid(); // predicate 2 (answer<=0) + predicate 4 (answeredInRound<roundId)
+    error OracleCallFailed(); // predicate 1 (latestRoundData reverted)
+    error PriceBandAssetMismatch(address expected, address got); // governed swap must buy the priced asset
+    error BandOnlyForSwap(bytes4 selector); // a band may only govern the structured swap selector
+    error BandRequired(address target); // requireBandForSwap latched: a swap rule with no band is refused
+    error FeedNotEightDecimals(uint8 got); // the oracle feed must report 8 decimals (H-04 decimals pin)
 
     // ---------- events ----------
     event Executed(address indexed to, uint256 value, uint128 spentInWindow);
@@ -154,6 +176,9 @@ contract LeashAccountV4 is ReentrancyGuard {
     event OneShotConsumed(bytes32 indexed callHash);
     event BridgeRemoteTokenProposed(address indexed localToken, address indexed remoteToken, uint64 eta);
     event BridgeRemoteTokenChanged(address indexed localToken, address indexed remoteToken);
+    // RH slice — oracle-aware price-band policy events.
+    event PriceBandProposed(bytes32 indexed ruleKey, address feed, address asset, uint32 maxDeviationBps, uint64 maxStaleness, uint64 eta);
+    event PriceBandChanged(bytes32 indexed ruleKey, address feed, address asset, uint32 maxDeviationBps, uint64 maxStaleness);
 
     // ---------- v3 state (verbatim) ----------
     address public immutable owner;
@@ -204,6 +229,10 @@ contract LeashAccountV4 is ReentrancyGuard {
     // bridge selectors the wall understands; any other is default-DENIED off-chain.
     bytes4 internal constant SEL_OUTBOUND_TRANSFER = 0x7b3a3c8b; // outboundTransfer(address,address,uint256,bytes)
     bytes4 internal constant SEL_WITHDRAW_ETH = 0x25e16063; // withdrawEth(address)
+    // RH slice — the DEX-router swap the price-band policy governs. Static 6-arg:
+    // swap(address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOutMin,
+    //      address recipient, uint256 deadline).
+    bytes4 internal constant SEL_SWAP = 0x9908fc8b;
 
     mapping(address => bool) public callTargetAllowlist;
     mapping(bytes32 => CallRule) public callRules; // key = keccak256(target, selector)
@@ -218,6 +247,40 @@ contract LeashAccountV4 is ReentrancyGuard {
     // analogue: its `outboundTransfer` carries only the L1 token, and that arg is
     // the budget key — so an unconfigured remote token already reverts BudgetNotSet.
     mapping(address => address) public bridgeRemoteToken; // localToken => remoteToken (0 = unset)
+
+    // ---------- RH slice: oracle-aware price-band policy (the net-new seam) ----------
+    /// @notice A parameterized oracle price-sanity policy for ONE governed (target,
+    ///         selector) swap rule. When `set`, `_enforceAndExecute` reads `feed`
+    ///         (Chainlink `AggregatorV3Interface`, pinned 8dp), FAILS CLOSED on a
+    ///         stale/invalid/down feed, and reverts a swap whose implied price exceeds
+    ///         the live oracle price by more than `maxDeviationBps`. `asset` is the
+    ///         token being PRICED (the swap's `tokenOut`); the implied price is the
+    ///         quote paid per unit of `asset`. Parameterized by (feed, asset,
+    ///         threshold, staleness) — the first instance of the general condition-tree
+    ///         policy seam; folds back as SE-9, not Robinhood-only code.
+    /// @dev    GUARANTEE SCOPE (security-audit H-1/H-2, honest statement): the band
+    ///         binds a swap on a BANDED `(target, SEL_SWAP)` rule. To make "the agent
+    ///         can never land a premium/stale swap" hold ACCOUNT-WIDE, the owner latches
+    ///         `requireBandForSwap` — then ANY `SEL_SWAP` call on a rule WITHOUT a band
+    ///         reverts `BandRequired` (closes H-1: routing around via a second
+    ///         unbanded venue). The one-shot lane also re-runs the band (closes H-2).
+    struct PriceBandPolicy {
+        bool set;
+        address feed; // Chainlink AggregatorV3Interface (8dp)
+        address asset; // the priced token == the swap's tokenOut
+        uint32 maxDeviationBps; // premium band in bps (e.g. 500 = 5%)
+        uint64 maxStaleness; // max age (seconds) of the oracle's updatedAt
+    }
+
+    mapping(bytes32 => PriceBandPolicy) public priceBand; // ruleKey => band policy
+    // H-1: a one-way latch. Once enabled, every SEL_SWAP call (standing OR one-shot)
+    // on a rule without a set band reverts — pricing becomes default-DENY, not opt-in.
+    bool public requireBandForSwap;
+
+    // single-pending timelock slot for a band loosening (raise bps/staleness or change feed/asset).
+    bytes32 public pendingBandRuleKey;
+    PriceBandPolicy public pendingBand;
+    uint64 public pendingBandEta; // 0 = none
 
     // single-pending timelock slots for governed-calldata grants
     struct PendingCallRule {
@@ -371,6 +434,16 @@ contract LeashAccountV4 is ReentrancyGuard {
             // funds anywhere but the same-address account (previously owner-authority
             // + the off-chain rail only; now wall-enforced).
             if (_isBridgeSelector(selector)) _checkBridgeArgs(selector, value, data);
+            // H-2: a one-shot bypasses the standing ENVELOPE (owner reviewed exact
+            // bytes) but NOT oracle sanity — the price must still hold AT EXECUTION,
+            // since a one-shot expiry can outlive the price the owner signed against.
+            {
+                bytes32 osRuleKey = keccak256(abi.encodePacked(target, selector));
+                if (requireBandForSwap && selector == SEL_SWAP && !priceBand[osRuleKey].set) {
+                    revert BandRequired(target);
+                }
+                _checkPriceBand(osRuleKey, selector, data);
+            }
             delete oneShotAuthEta[callHash];
             emit OneShotConsumed(callHash);
             emit CallExecuted(target, selector, value, true);
@@ -409,6 +482,13 @@ contract LeashAccountV4 is ReentrancyGuard {
         bytes32 ruleKey = keccak256(abi.encodePacked(target, selector));
         CallRule memory rule = callRules[ruleKey];
         if (!rule.allowed) revert SelectorNotAllowlisted(selector);
+
+        // RH slice: oracle price-sanity. A no-op unless a band is set for this rule;
+        // when set, reads the live feed FAIL-CLOSED and reverts a premium swap. View
+        // check (CEI-safe) placed before any accounting so a bad price wastes no work.
+        // H-1: when the latch is on, a swap rule MUST carry a band (default-deny pricing).
+        if (requireBandForSwap && selector == SEL_SWAP && !priceBand[ruleKey].set) revert BandRequired(target);
+        _checkPriceBand(ruleKey, selector, data);
 
         // Structured-selector arg decode (D-2) → chargeable amount + token + bool-check.
         (uint256 chargeable, address spendToken, bool checkBoolReturn) =
@@ -634,6 +714,51 @@ contract LeashAccountV4 is ReentrancyGuard {
             || selector == SEL_TRANSFER_FROM;
     }
 
+    /// @dev Oracle price-sanity for a governed swap (RH slice). A no-op unless a band
+    ///      is set for this rule. A band may govern ONLY the structured swap selector.
+    ///      Enforces the FOUR fail-closed predicates, then reverts a swap whose implied
+    ///      price exceeds the live oracle price by more than `maxDeviationBps`.
+    function _checkPriceBand(bytes32 ruleKey, bytes4 selector, bytes calldata data) internal view {
+        PriceBandPolicy memory band = priceBand[ruleKey];
+        if (!band.set) return;
+        if (selector != SEL_SWAP) revert BandOnlyForSwap(selector);
+        // swap(address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOutMin,
+        //      address recipient, uint256 deadline) — static 6-arg = 4 + 192 bytes.
+        if (data.length != 4 + 192) revert DecodeMismatch();
+        address tokenOut = _decodeAddress(data, 36);
+        uint256 amountIn = _decodeUint(data, 68);
+        uint256 amountOutMin = _decodeUint(data, 100);
+        // The band prices `asset`; a governed swap must BUY it (tokenOut == asset).
+        if (tokenOut != band.asset) revert PriceBandAssetMismatch(band.asset, tokenOut);
+        // amountOutMin == 0 → implied price unbounded (infinite premium) → fail closed.
+        if (amountOutMin == 0) revert PremiumBreach(type(uint256).max, 0);
+
+        // ---- FOUR FAIL-CLOSED oracle predicates (exact spec) ----
+        // Predicate 1: latestRoundData() reverts (or decode fails) → OracleCallFailed.
+        try IAggregatorV3Minimal(band.feed).latestRoundData() returns (
+            uint80 roundId, int256 answer, uint256, uint256 updatedAt, uint80 answeredInRound
+        ) {
+            // Predicate 2: answer <= 0 → revert.
+            if (answer <= 0) revert OraclePriceInvalid();
+            // Predicate 3: updatedAt == 0 | in the future | older than maxStaleness → revert.
+            if (updatedAt == 0 || updatedAt > block.timestamp || block.timestamp - updatedAt > band.maxStaleness) {
+                revert StaleOracle(updatedAt, band.maxStaleness);
+            }
+            // Predicate 4: answeredInRound < roundId (incomplete round) → revert.
+            if (answeredInRound < roundId) revert OraclePriceInvalid();
+
+            // ---- premium band (DECIMALS EXPLICIT: oracle 8dp → 18dp via *1e10) ----
+            // impliedPrice = quote paid per unit asset, 18dp. amountIn & amountOutMin
+            // are both 18dp, so impliedPrice18 = amountIn * 1e18 / amountOutMin.
+            uint256 impliedPrice18 = (amountIn * 1e18) / amountOutMin;
+            uint256 oracle18 = uint256(answer) * 1e10;
+            uint256 maxPrice = (oracle18 * (10_000 + band.maxDeviationBps)) / 10_000;
+            if (impliedPrice18 > maxPrice) revert PremiumBreach(impliedPrice18, maxPrice);
+        } catch {
+            revert OracleCallFailed();
+        }
+    }
+
     function _checkRecipient(address to, uint8 recipientMode) internal view {
         if (recipientMode == 0) {
             if (to != address(this)) revert RecipientNotSelf(to);
@@ -840,7 +965,92 @@ contract LeashAccountV4 is ReentrancyGuard {
         emit BridgeRemoteTokenChanged(localToken, address(0));
     }
 
+    // ---------- RH slice: price-band grant grammar (tighten instant, loosen timelocked) ----------
+
+    /// @notice Add or tighten a price band — INSTANT. Creating a fresh band is a new
+    ///         restriction (tightening); tightening an existing one requires bps AND
+    ///         staleness to be lower/equal with feed+asset unchanged. Clears pending.
+    function tightenPriceBand(
+        address target,
+        bytes4 selector,
+        address feed,
+        address asset,
+        uint32 maxDeviationBps,
+        uint64 maxStaleness
+    ) external onlyOwner {
+        if (selector != SEL_SWAP) revert BandOnlyForSwap(selector);
+        if (feed == address(0) || asset == address(0)) revert ZeroAddress();
+        _assertFeedEightDecimals(feed); // L-01: the premium math assumes 8dp oracle.
+        bytes32 ruleKey = keccak256(abi.encodePacked(target, selector));
+        PriceBandPolicy storage b = priceBand[ruleKey];
+        if (b.set) {
+            if (feed != b.feed || asset != b.asset) revert NotTightening();
+            if (maxDeviationBps > b.maxDeviationBps || maxStaleness > b.maxStaleness) revert NotTightening();
+        }
+        b.set = true;
+        b.feed = feed;
+        b.asset = asset;
+        b.maxDeviationBps = maxDeviationBps;
+        b.maxStaleness = maxStaleness;
+        _clearPendingTimelocks();
+        emit PriceBandChanged(ruleKey, feed, asset, maxDeviationBps, maxStaleness);
+    }
+
+    /// @notice Loosen or re-point a price band (raise bps/staleness, change feed/asset)
+    ///         — LOOSENING → timelocked.
+    function proposePriceBand(
+        address target,
+        bytes4 selector,
+        address feed,
+        address asset,
+        uint32 maxDeviationBps,
+        uint64 maxStaleness
+    ) external onlyOwner {
+        if (selector != SEL_SWAP) revert BandOnlyForSwap(selector);
+        if (feed == address(0) || asset == address(0)) revert ZeroAddress();
+        _assertFeedEightDecimals(feed); // L-01: the premium math assumes 8dp oracle.
+        bytes32 ruleKey = keccak256(abi.encodePacked(target, selector));
+        pendingBandRuleKey = ruleKey;
+        pendingBand =
+            PriceBandPolicy({set: true, feed: feed, asset: asset, maxDeviationBps: maxDeviationBps, maxStaleness: maxStaleness});
+        pendingBandEta = uint64(block.timestamp) + timelockDelay;
+        emit PriceBandProposed(ruleKey, feed, asset, maxDeviationBps, maxStaleness, pendingBandEta);
+    }
+
+    function applyPriceBand() external onlyOwner {
+        uint64 eta = pendingBandEta;
+        if (eta == 0) revert NothingPending();
+        if (block.timestamp < eta) revert TimelockNotElapsed(eta);
+        bytes32 ruleKey = pendingBandRuleKey;
+        PriceBandPolicy memory pb = pendingBand;
+        priceBand[ruleKey] = pb;
+        emit PriceBandChanged(ruleKey, pb.feed, pb.asset, pb.maxDeviationBps, pb.maxStaleness);
+        _clearPendingBand();
+    }
+
+    /// @notice One-way latch (H-1): once enabled, every SEL_SWAP call on a rule WITHOUT
+    ///         a set band reverts `BandRequired` — pricing becomes default-DENY, so the
+    ///         agent cannot route a premium trade around the band via an unbanded venue.
+    ///         Irreversible by design (a security tightening); INSTANT (tightening).
+    function enableRequireBandForSwap() external onlyOwner {
+        requireBandForSwap = true;
+    }
+
+    /// @dev L-01: the premium math scales the oracle answer 8dp→18dp (`*1e10`), so the
+    ///      feed MUST report 8 decimals. Asserted at grant time (fail-loud) rather than
+    ///      silently mispricing a non-8dp feed. Token legs are required 18dp (documented).
+    function _assertFeedEightDecimals(address feed) internal view {
+        uint8 d = IAggregatorV3Minimal(feed).decimals();
+        if (d != 8) revert FeedNotEightDecimals(d);
+    }
+
     // ---------- revoke / re-arm ----------
+
+    function _clearPendingBand() internal {
+        pendingBandRuleKey = bytes32(0);
+        delete pendingBand;
+        pendingBandEta = 0;
+    }
 
     function _clearPendingRemoteToken() internal {
         pendingRemoteLocalToken = address(0);
@@ -872,6 +1082,7 @@ contract LeashAccountV4 is ReentrancyGuard {
         _clearPendingCallRule();
         _clearPendingBudget();
         _clearPendingRemoteToken();
+        _clearPendingBand();
     }
 
     function revoke() external {

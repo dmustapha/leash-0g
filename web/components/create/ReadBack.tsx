@@ -29,6 +29,7 @@ const ROLE_LABEL: Record<AgentRole, string> = {
   treasury: 'Manages an allowance itself',
   sentinel: 'Watches and requests top-ups',
   executor: 'Acts on requests from another agent',
+  trader: 'Trades toward a holding target',
   requester: 'Orders a job and pays for good work',
   provider: 'Does a job for others',
   evaluator: 'Judges others’ work',
@@ -36,7 +37,24 @@ const ROLE_LABEL: Record<AgentRole, string> = {
 
 /** Roles that can move money — drives which leash inputs the owner must complete. */
 function roleMovesMoney(role: AgentRole): boolean {
-  return role === 'treasury' || role === 'executor' || role === 'requester';
+  return role === 'treasury' || role === 'executor' || role === 'requester' || role === 'trader';
+}
+
+/**
+ * FR5 (F-14): which roles have an OWNER-TYPED external payee a redirect sets
+ * (never-guess-money). A `trader` only ever swaps into its OWN account, and an
+ * `executor` pays per inbound delegation — neither has an owner-typed recipient
+ * (the backend's applyRecipient rejects one for trader/executor), so their
+ * redirect must NOT require or send a recipient. Distinct from roleMovesMoney:
+ * trader/executor move money without an owner-typed recipient.
+ *
+ * NOTE: `sentinel` is also absent, but for a different reason — roleMovesMoney is
+ * false for it, so its money block never renders and this predicate is never
+ * consulted. If sentinel is ever added to roleMovesMoney, it must be added here
+ * too (backend applyRecipient DOES accept a sentinel beneficiary).
+ */
+function roleHasOwnerTypedRecipient(role: AgentRole): boolean {
+  return role === 'treasury' || role === 'requester';
 }
 
 function unsure(draft: ElevationDraft, path: string): boolean {
@@ -158,6 +176,8 @@ export function ReadBack(props: ReadBackProps) {
 function CreateReadBack({ draft, onConfirm, onBack }: CreateReadBackProps) {
   const role = draft.proposedRole;
   const movesMoney = roleMovesMoney(role);
+  // FR5 (F-14): a trader/executor has no owner-typed external payee — never require one.
+  const needsRecipient = roleHasOwnerTypedRecipient(role);
 
   // — "What it does" editable state (descriptive tier) —
   const [capabilityLabel, setCapabilityLabel] = useState(draft.capabilityLabel ?? '');
@@ -188,7 +208,7 @@ function CreateReadBack({ draft, onConfirm, onBack }: CreateReadBackProps) {
 
   function confirm() {
     // The recipient address is authority the model must never supply — the owner types it here.
-    if (movesMoney && !recipient.trim()) {
+    if (needsRecipient && !recipient.trim()) {
       setError('Enter the wallet address this agent may pay. It is never guessed for you.');
       return;
     }
@@ -220,7 +240,7 @@ function CreateReadBack({ draft, onConfirm, onBack }: CreateReadBackProps) {
     // The owner-typed recipient is passed alongside the draft (never merged into it) so the
     // quarantined suggestion never carries fabricated address authority. Undefined when the role
     // cannot move money.
-    onConfirm(edited, movesMoney ? recipient.trim() : undefined);
+    onConfirm(edited, needsRecipient ? recipient.trim() : undefined);
   }
 
   return (
@@ -375,16 +395,19 @@ function CreateReadBack({ draft, onConfirm, onBack }: CreateReadBackProps) {
               }
             />
 
-            {/* Recipient — ALWAYS blank-required, NEVER pre-filled (never-guess-money, spec §8). */}
-            <EditField
-              label="Who it can pay"
-              testid="rb-recipient"
-              value={recipient}
-              onChange={setRecipient}
-              placeholder="0x… — you must enter this"
-              required
-              requiredHint="A wallet address is never guessed for you. Type the one address this agent may pay."
-            />
+            {/* Recipient — blank-required for a role with an owner-typed payee, NEVER pre-filled
+                (never-guess-money, spec §8). A trader swaps to itself, so no recipient (FR5/F-14). */}
+            {needsRecipient ? (
+              <EditField
+                label="Who it can pay"
+                testid="rb-recipient"
+                value={recipient}
+                onChange={setRecipient}
+                placeholder="0x… — you must enter this"
+                required
+                requiredHint="A wallet address is never guessed for you. Type the one address this agent may pay."
+              />
+            ) : null}
           </>
         ) : (
           <p data-testid="read-back-no-money-note" style={{ margin: 0, fontSize: '0.88rem', color: 'var(--color-ink-dim)' }}>
@@ -450,6 +473,9 @@ function patchLabel(key: string): string {
 function DirectReadBack({ draft, onConfirm, onBack, chainCandidates, chainConfig }: DirectReadBackProps) {
   const role = draft.currentRole;
   const movesMoney = roleMovesMoney(role);
+  // FR5 (F-14): only a role with an owner-typed external payee requires a recipient
+  // at redirect; a trader (self-swap) / executor (delegation-driven) does not.
+  const needsRecipient = roleHasOwnerTypedRecipient(role);
 
   // Editable descriptive patch fields (never any money-authority key).
   const initial = useMemo(() => editablePatchEntries(draft.goalPatch), [draft.goalPatch]);
@@ -470,7 +496,7 @@ function DirectReadBack({ draft, onConfirm, onBack, chainCandidates, chainConfig
   );
 
   function confirm() {
-    if (movesMoney && !recipient.trim()) {
+    if (needsRecipient && !recipient.trim()) {
       setError('Enter the wallet address this agent may pay. It is never guessed for you.');
       return;
     }
@@ -487,7 +513,7 @@ function DirectReadBack({ draft, onConfirm, onBack, chainCandidates, chainConfig
     // the server re-validates every hop (ownership/links/caps/cycle) and rejects
     // an incomplete/invalid plan with a visible error.
     const plan = chainPlan.filter((h) => h.eligibleTargetIds.length > 0 && h.directedIntent.trim() !== '');
-    onConfirm(edited, movesMoney ? recipient.trim() : undefined, plan.length > 0 ? plan : undefined);
+    onConfirm(edited, needsRecipient ? recipient.trim() : undefined, plan.length > 0 ? plan : undefined);
   }
 
   return (
@@ -570,7 +596,7 @@ function DirectReadBack({ draft, onConfirm, onBack, chainCandidates, chainConfig
           </div>
         ) : null}
 
-        {movesMoney ? (
+        {needsRecipient ? (
           <EditField
             label="Who it can pay"
             testid="rb-recipient"
@@ -580,6 +606,12 @@ function DirectReadBack({ draft, onConfirm, onBack, chainCandidates, chainConfig
             required
             requiredHint="A wallet address is never guessed for you. Type the one address this agent may pay."
           />
+        ) : movesMoney ? (
+          <p data-testid="read-back-self-recipient-note" style={{ margin: 0, fontSize: '0.88rem', color: 'var(--color-ink-dim)' }}>
+            {role === 'trader'
+              ? 'There’s no outside address to set — this agent only ever moves money into its own account (a trader swaps to itself). Its spending stays bounded by its caps and the price band, which this redirect never loosens.'
+              : 'There’s no outside address to set — this agent only pays on an inbound delegation, within its own caps, which this redirect never loosens.'}
+          </p>
         ) : (
           <p data-testid="read-back-no-money-note" style={{ margin: 0, fontSize: '0.88rem', color: 'var(--color-ink-dim)' }}>
             Nothing to set here. This agent cannot move money, so redirecting its task never gives

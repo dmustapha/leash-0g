@@ -113,3 +113,37 @@ describe('applyRecipient — owner-typed out-of-band re-target', () => {
     expect(applyRecipient(PROVIDER, '0x' + 'cd'.repeat(20)).ok).toBe(false);
   });
 });
+
+// ─── FR3 (F-8): trader goal — descriptive vs money-invariant surface ───────────
+describe('trader goal (FR3) — R-1 descriptive/money split', () => {
+  const TRADER: AgentGoal = {
+    type: 'trader',
+    holdToken: '0x' + '44'.repeat(20),
+    spendToken: '0x' + '55'.repeat(20),
+    targetHoldWei: '1000000000000000000',
+    clipWei: '100000000000000000000',
+  };
+
+  it('parses in the live goal union (strict)', () => {
+    expect(goalSchema.safeParse(TRADER).success).toBe(true);
+  });
+  it('rejects a smuggled unknown key (strict parse)', () => {
+    expect(goalSchema.safeParse({ ...TRADER, minOut: '0' }).success).toBe(false);
+  });
+  it('merges descriptive targetHoldWei/clipWei via chat', () => {
+    const r = applyGoalPatch(TRADER, { targetHoldWei: '2000000000000000000', clipWei: '50000000000000000000' });
+    expect(r.ok).toBe(true);
+    if (r.ok) expect((r.goal as { clipWei: string }).clipWei).toBe('50000000000000000000');
+  });
+  it('REJECTS a chat patch on the owner-typed token pair (money authority)', () => {
+    expect(applyGoalPatch(TRADER, { holdToken: '0x' + '99'.repeat(20) }).ok).toBe(false);
+    expect(applyGoalPatch(TRADER, { spendToken: '0x' + '99'.repeat(20) }).ok).toBe(false);
+  });
+  it('REJECTS a role change onto/off trader via chat', () => {
+    expect(applyGoalPatch(TRADER, { type: 'treasury' }).ok).toBe(false);
+    expect(applyGoalPatch(TREASURY, { type: 'trader' }).ok).toBe(false);
+  });
+  it('applyRecipient refuses — the trader has no recipient to re-target', () => {
+    expect(applyRecipient(TRADER, '0x' + '77'.repeat(20)).ok).toBe(false);
+  });
+});

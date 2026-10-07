@@ -87,7 +87,21 @@ export interface RuntimeManagerDeps {
    * treasury-only test setups (the job graph is never built then).
    */
   uploader?: StorageUploader | undefined;
+  /**
+   * F-6: the DB-level runtime lease — when wired, start() refuses while
+   * another backend instance holds it (two backends sharing one DB must
+   * never double-loop the same agents). Optional: absent in test setups.
+   */
+  lease?: { held(): boolean } | undefined;
   settings: RuntimeSettings;
+}
+
+/** F-6: thrown by start() when this instance does not hold the runtime lease. */
+export class RuntimeLeaseNotHeldError extends Error {
+  constructor() {
+    super('the runtime lease is held by another backend instance — agent loops are disabled here');
+    this.name = 'RuntimeLeaseNotHeldError';
+  }
 }
 
 interface Loop {
@@ -174,6 +188,7 @@ export class LeashRuntimeManager implements RuntimeManager {
   }
 
   async start(agentId: string): Promise<void> {
+    if (this.deps.lease && !this.deps.lease.held()) throw new RuntimeLeaseNotHeldError();
     if (this.loops.has(agentId)) return;
     const agent = await getAgentById(this.deps.pool, agentId);
     if (!agent || agent.status !== 'active') throw new Error('agent not startable');

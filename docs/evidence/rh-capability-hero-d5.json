@@ -1,0 +1,37 @@
+{
+  "drill": "B4 — capability-factory create wire (HACKATHON-RH2 D5)",
+  "chainId": 46630,
+  "defaultFactory": "0x9C10b48748Da1cA0CEE5AD7DA0725490A7d5E46f",
+  "oracleBandFactory": "0x85E1758d29D2F5026E8B36664E41c6C891D0fF70",
+  "heroAccount": "0x57705Ff219A8Bb91D49fC9a7A8B9412D560Be9DD",
+  "heroCreateTx": "0x96a95e26a855cdda4dfe69f230ea03994b73545b5059ada2b083062c1ee7bfb6",
+  "score": "5/5",
+  "checks": [
+    {
+      "check": "D5a getCapabilityFactory resolves oracleBand, default-denies unknown",
+      "ok": true,
+      "detail": "oracleBand=0x85E1758d29D2F5026E8B36664E41c6C891D0fF70 bogus=undefined"
+    },
+    {
+      "check": "D5b getChainOpsForFactory default-denies an off-config factory",
+      "ok": true,
+      "detail": "arbitrary factory rejected"
+    },
+    {
+      "check": "D5c create via oracleBand factory mints a distinct (band-wall) account",
+      "ok": true,
+      "detail": "bandAccount=0x57705Ff219A8Bb91D49fC9a7A8B9412D560Be9DD prodPrediction=0xf889cd9cd29f848117d9d3958d596e3f196573b4 createTx=0x96a95e26a855cdda4dfe69f230ea03994b73545b5059ada2b083062c1ee7bfb6"
+    },
+    {
+      "check": "D5d created hero reports requireBandForSwap == true on-chain (IS the oracle-wall hero)",
+      "ok": true,
+      "detail": "account=0x57705Ff219A8Bb91D49fC9a7A8B9412D560Be9DD requireBandForSwap=true"
+    },
+    {
+      "check": "D5e default create lane uses the PROD factory",
+      "ok": true,
+      "detail": "default lane === getChainOps (prod factory)"
+    }
+  ],
+  "at": "2026-10-04T10:52:21.041Z"
+}

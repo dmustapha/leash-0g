@@ -1,0 +1,30 @@
+{
+  "drill": "B1 — prod-bytecode deterministic V4 factory on Robinhood Chain (HACKATHON-RH2 D1)",
+  "chainId": 46630,
+  "factoryAddr": "0x9C10b48748Da1cA0CEE5AD7DA0725490A7d5E46f",
+  "expectedAddr": "0x9C10b48748Da1cA0CEE5AD7DA0725490A7d5E46f",
+  "expectedCodehash": "0x4771f0574001ae3435299d296f76e60546fe5de413940aab18e8a6faf904f325",
+  "actualCodehash": "0x4771f0574001ae3435299d296f76e60546fe5de413940aab18e8a6faf904f325",
+  "codehashMatch": true,
+  "deployTx": "already-deployed",
+  "ops": "0xc211C942946011859ca634F22400d80570ED12A5",
+  "score": "3/3",
+  "checks": [
+    {
+      "check": "predicted address == expected",
+      "ok": true,
+      "detail": "0x9C10b48748Da1cA0CEE5AD7DA0725490A7d5E46f"
+    },
+    {
+      "check": "code present at 0x9C10…E46f on RH",
+      "ok": true,
+      "detail": "38438 bytes"
+    },
+    {
+      "check": "runtime codehash == prod codehash",
+      "ok": true,
+      "detail": "0x4771f0574001ae3435299d296f76e60546fe5de413940aab18e8a6faf904f325 MATCH ✓"
+    }
+  ],
+  "at": "2026-10-04T10:50:35.671Z"
+}

@@ -44,6 +44,13 @@ export interface SelectorSpec {
   /** SE-8: this selector is a structured BRIDGE-family decoder (BR-2). */
   bridge?: true;
   /**
+   * FR3 (F-8): the positional indexes of a swap's free args, resolvable from a
+   * trader goal's OWNER-TYPED token pair + server constants (never model text).
+   * Present only on swap-family specs; without a trade context the builder
+   * still refuses these args (`not_authority_determined`).
+   */
+  swapArgs?: { tokenIn: number; tokenOut: number; minOut: number; deadline: number };
+  /**
    * E-12 M-01: the budget-debited token is a DECODED ARG (the bridge leg charges
    * the localToken's budget — unit-correct), overriding `spendToken` semantics.
    */
@@ -168,6 +175,7 @@ export const SELECTORS: ReadonlyMap<string, SelectorSpec> = new Map<string, Sele
     amountIndex: 2,
     spendToken: 'native',
     verb: 'swap',
+    swapArgs: { tokenIn: 0, tokenOut: 1, minOut: 3, deadline: 5 },
   }),
   // MockVault / ERC-4626 deposit(assets, receiver).
   spec({

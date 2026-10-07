@@ -7,7 +7,7 @@ import { createApproval } from '../store/approvals.js';
 import { appendTrace } from '../trace/trace-store.js';
 import { approvalEvent, reasoningEvent, traceEvent } from '../sse/events.js';
 import type { Json } from '../crypto/canonical.js';
-import type { AgentGoal, AgentRow, SentinelGoal, TreasuryGoal } from '../types.js';
+import type { AgentGoal, AgentRow, SentinelGoal, TraderGoal, TreasuryGoal } from '../types.js';
 import { CoordinationError, type DelegationCoordinator } from '../coordination/coordinator.js';
 import type { AlertService } from '../alerts/service.js';
 import { BoundaryRegistry, policyFingerprint, DAMPABLE_ERRORS, type DampableError } from './boundary.js';
@@ -20,6 +20,8 @@ import type { DecodedLeashError } from '../types.js';
 import type { RuntimeChain } from './session-chain.js';
 import { loadGrantState } from './grant-state.js';
 import { buildGovernedCall, BRIDGE_SELECTORS, SELECTORS } from '../governed-call/index.js';
+import { SELECTOR_APPROVE } from '../governed-call/selectors.js';
+import type { TradeFill } from '../governed-call/call-builder.js';
 import { classifyIntendedCall } from '../gateway/call-gate.js';
 import { raiseCapabilityRequest, type CapabilityDeps } from '../capabilities/service.js';
 import { listGrants } from '../store/capabilities.js';
@@ -31,6 +33,7 @@ import {
   type CapabilityView,
   type InboundDelegationInput,
   type PolicySnapshot,
+  type TraderHoldings,
 } from './prompt.js';
 
 /**
@@ -70,6 +73,16 @@ const TreasuryState = Annotation.Root({
   policy: Annotation<PolicySnapshot>,
   /** Stage D (D-10): the governed calls this agent may make this cycle (serializable). */
   capabilities: Annotation<CapabilityView[]>,
+  /** FR3 (F-8): the trader role's sensed token holdings (null for every other role). */
+  holdings: Annotation<TraderHoldings | null>,
+  /**
+   * FR3b: the band-feed price (18dp decimal string) sensed for the trader's swap
+   * rule this cycle, or null (no band / unreadable). Read at SENSE time so the
+   * wall re-checks a price that is one reasoning-step old — exactly the gap the
+   * on-chain band exists to close (a feed move mid-cycle reverts PremiumBreach).
+   * Never shown to the model; only the minOut derivation consumes it.
+   */
+  bandPrice18: Annotation<string | null>,
   reasoning: Annotation<string>,
   decision: Annotation<AgentDecision>,
   route: Annotation<Route>,
@@ -185,7 +198,7 @@ type ChainHandoff = z.infer<typeof chainHandoffSchema>;
  *   reason, no reasoning, no act.
  */
 type CycleMode =
-  | { mode: 'autonomous'; goal: TreasuryGoal | SentinelGoal }
+  | { mode: 'autonomous'; goal: TreasuryGoal | SentinelGoal | TraderGoal }
   | { mode: 'executor_idle' }
   | { mode: 'inbound_transfer'; request: TransferRequest }
   // Phase 5.6: a chain hop the downstream re-reasons on under its OWN goal — the
@@ -200,7 +213,11 @@ function classifyCycle(goal: AgentGoal, inbound: InboundDelegationInput | null |
   const isLegacyAutonomous = role === 'treasury' || role === 'sentinel';
   if (!inbound) {
     if (role === 'executor') return { mode: 'executor_idle' };
-    if (isLegacyAutonomous) return { mode: 'autonomous', goal: goal as TreasuryGoal | SentinelGoal };
+    // FR3 (F-8): the trader is autonomous like treasury — its decide loop is the
+    // first surface a granted swap capability can ADVANCE (it never sends native).
+    if (isLegacyAutonomous || role === 'trader') {
+      return { mode: 'autonomous', goal: goal as TreasuryGoal | SentinelGoal | TraderGoal };
+    }
     return { mode: 'inbound_reject', reason: 'unsupported kind' };
   }
   // Phase 5.6 chain hop: a goal-bearing (treasury/sentinel) downstream
@@ -225,7 +242,7 @@ function classifyCycle(goal: AgentGoal, inbound: InboundDelegationInput | null |
 }
 
 /** The autonomous goal a cycle re-reasons under (Phase 5.6 folds inbound_chain in). */
-function autonomousGoalOf(mode: CycleMode): TreasuryGoal | SentinelGoal | null {
+function autonomousGoalOf(mode: CycleMode): TreasuryGoal | SentinelGoal | TraderGoal | null {
   if (mode.mode === 'autonomous' || mode.mode === 'inbound_chain') return mode.goal;
   return null;
 }
@@ -249,7 +266,9 @@ export function buildTreasuryGraph(
    */
   async function senseCapabilities(mode: CycleMode): Promise<CapabilityView[]> {
     const role = ctx.goal.type ?? 'treasury';
-    if (role !== 'treasury') return [];
+    // FR3 (F-8): the trader acts on governed calls too — it is the role a swap
+    // capability exists FOR (sentinel delegates, executor is inbound-driven).
+    if (role !== 'treasury' && role !== 'trader') return [];
     if (mode.mode !== 'autonomous' && mode.mode !== 'inbound_chain') return [];
     const grants = await listGrants(deps.pool, ctx.agentId);
     return grants.map((g) => ({
@@ -258,6 +277,74 @@ export function buildTreasuryGraph(
       signature: SELECTORS.get(g.selector.toLowerCase())?.signature ?? null,
       perCallCap: g.perCallCap,
     }));
+  }
+
+  /** P3C-6(i): snapshot a PolicyView with the contract's own lazy window-rollover math. */
+  function toPolicySnapshot(policy: Awaited<ReturnType<RuntimeChain['getPolicyView']>>): PolicySnapshot {
+    const nowSec = Math.floor(Date.now() / 1000);
+    const resetsAt = policy.windowStart + policy.windowSeconds;
+    const rolled = policy.windowSeconds > 0 && nowSec >= resetsAt;
+    const spent = rolled ? 0n : policy.spentInWindow;
+    const remaining = policy.windowCap > spent ? policy.windowCap - spent : 0n;
+    return {
+      perTransferCapWei: policy.perTransferCap.toString(),
+      windowCapWei: policy.windowCap.toString(),
+      windowSeconds: policy.windowSeconds,
+      expiresAt: policy.expiresAt,
+      allowlist: policy.allowlist.map((a) => a.toLowerCase()),
+      revoked: policy.revoked,
+      spentInWindowWei: spent.toString(),
+      remainingWindowWei: remaining.toString(),
+      windowResetsAtUnix: rolled ? nowSec : resetsAt,
+    };
+  }
+
+  /**
+   * FR3 (F-8): trader sense — on-chain token holdings instead of a beneficiary
+   * balance. The allowance is read against the SINGLE granted approve-spender on
+   * the spend token (the router, from owner grant state — never model text);
+   * with no such grant the allowance reads 0 and the ladder stands down.
+   */
+  async function senseTrader(goal: TraderGoal): Promise<Partial<State>> {
+    const grants = await listGrants(deps.pool, ctx.agentId);
+    const capabilities: CapabilityView[] = grants.map((g) => ({
+      target: g.target,
+      selector: g.selector,
+      signature: SELECTORS.get(g.selector.toLowerCase())?.signature ?? null,
+      perCallCap: g.perCallCap,
+    }));
+    const approveGrant = grants.find(
+      (g) =>
+        g.selector.toLowerCase() === SELECTOR_APPROVE &&
+        g.target.toLowerCase() === goal.spendToken.toLowerCase() &&
+        g.spenderSet.length === 1,
+    );
+    const spender = approveGrant?.spenderSet[0];
+    // FR3b: the granted swap rule (if any) — its band feed prices this cycle's minOut.
+    const swapGrant = grants.find((g) => SELECTORS.get(g.selector.toLowerCase())?.swapArgs);
+    const [account, policy, holdBalance, spendBalance, allowance, bandPrice] = await Promise.all([
+      deps.chain.getBalance(ctx.accountAddr),
+      deps.chain.getPolicyView(ctx.accountAddr, []),
+      deps.chain.getErc20Balance(goal.holdToken, ctx.accountAddr),
+      deps.chain.getErc20Balance(goal.spendToken, ctx.accountAddr),
+      spender ? deps.chain.getErc20Allowance(goal.spendToken, ctx.accountAddr, spender) : Promise.resolve(0n),
+      swapGrant
+        ? deps.chain.getSwapBandPrice18(ctx.accountAddr, swapGrant.target, swapGrant.selector)
+        : Promise.resolve(null),
+    ]);
+    return {
+      beneficiaryBalanceWei: '0',
+      accountBalanceWei: account.toString(),
+      effectiveBeneficiary: '',
+      capabilities,
+      bandPrice18: bandPrice !== null ? bandPrice.toString() : null,
+      holdings: {
+        holdBalanceWei: holdBalance.toString(),
+        spendBalanceWei: spendBalance.toString(),
+        routerAllowanceWei: allowance.toString(),
+      },
+      policy: toPolicySnapshot(policy),
+    };
   }
 
   async function sense(state: State): Promise<Partial<State>> {
@@ -271,6 +358,8 @@ export function buildTreasuryGraph(
         accountBalanceWei: '0',
         effectiveBeneficiary: '',
         capabilities: [],
+        holdings: null,
+        bandPrice18: null,
         policy: {
           perTransferCapWei: '0',
           windowCapWei: '0',
@@ -285,39 +374,29 @@ export function buildTreasuryGraph(
       };
     }
     const autoGoal = autonomousGoalOf(mode);
-    const beneficiary = mode.mode === 'inbound_transfer' ? mode.request.beneficiary : (autoGoal?.beneficiary ?? '');
+    // FR3 (F-8): the trader watches token holdings, not a beneficiary balance.
+    if (autoGoal !== null && autoGoal.type === 'trader') return senseTrader(autoGoal);
+    const beneficiary =
+      mode.mode === 'inbound_transfer'
+        ? mode.request.beneficiary
+        : (autoGoal !== null && 'beneficiary' in autoGoal ? autoGoal.beneficiary : '');
     const [beneficiaryBalance, account, policy, capabilities] = await Promise.all([
       deps.chain.getBalance(beneficiary),
       deps.chain.getBalance(ctx.accountAddr),
       deps.chain.getPolicyView(ctx.accountAddr, [beneficiary]),
       senseCapabilities(mode),
     ]);
-    // P3C-6(i): window observability with the contract's OWN lazy-rollover
-    // math (LeashAccount.execute) — past the boundary the window has
-    // logically reset even though storage updates on the next spend.
-    const nowSec = Math.floor(Date.now() / 1000);
-    const resetsAt = policy.windowStart + policy.windowSeconds;
-    const rolled = policy.windowSeconds > 0 && nowSec >= resetsAt;
-    const spent = rolled ? 0n : policy.spentInWindow;
-    const remaining = policy.windowCap > spent ? policy.windowCap - spent : 0n;
     return {
       beneficiaryBalanceWei: beneficiaryBalance.toString(),
       accountBalanceWei: account.toString(),
       effectiveBeneficiary: beneficiary,
       capabilities,
-      policy: {
-        perTransferCapWei: policy.perTransferCap.toString(),
-        windowCapWei: policy.windowCap.toString(),
-        windowSeconds: policy.windowSeconds,
-        expiresAt: policy.expiresAt,
-        allowlist: policy.allowlist.map((a) => a.toLowerCase()),
-        revoked: policy.revoked,
-        spentInWindowWei: spent.toString(),
-        remainingWindowWei: remaining.toString(),
-        // After a logical reset the NEXT window starts at the next spend —
-        // report the boundary that already passed (FE copy clamps to "now").
-        windowResetsAtUnix: rolled ? nowSec : resetsAt,
-      },
+      holdings: null,
+      bandPrice18: null,
+      // P3C-6(i): window observability with the contract's OWN lazy-rollover
+      // math (LeashAccount.execute) — past the boundary the window has
+      // logically reset even though storage updates on the next spend.
+      policy: toPolicySnapshot(policy),
     };
   }
 
@@ -337,6 +416,8 @@ export function buildTreasuryGraph(
       accountBalanceWei: state.accountBalanceWei,
       policy: state.policy,
       nowSec: Math.floor(Date.now() / 1000),
+      // FR3 (F-8): the trader's sensed token holdings (absent for other roles).
+      ...(state.holdings ? { holdings: state.holdings } : {}),
       // Stage D (D-10): the governed-call envelope the model may act on this cycle.
       ...(state.capabilities && state.capabilities.length > 0 ? { capabilities: state.capabilities } : {}),
       // Inbound delegation rides the observation as LABELED UNTRUSTED input
@@ -354,7 +435,28 @@ export function buildTreasuryGraph(
     if (!res.ok) {
       throw new Error(`gateway refused inference: status ${res.status}`);
     }
-    const text = completionContent(completion);
+    let text = completionContent(completion);
+    if (!parseDecision(text)) {
+      // F-4: ONE in-cycle re-ask before the decide overlay stands down — the
+      // reasoning model drops an unparsable decision in a large share of
+      // cycles, and a second sample usually lands. A failed retry keeps the
+      // first output so the trace shows what the model actually said.
+      // Best-effort: a retry-transport failure must never kill the cycle the
+      // first (traced) response already paid for.
+      try {
+        const retryRes = await fetchFn(`${deps.gatewayUrl}/v1/chat/completions`, {
+          method: 'POST',
+          headers: { authorization: `Bearer ${ctx.gatewayToken}`, 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        if (retryRes.ok) {
+          const retryText = completionContent(await retryRes.json().catch(() => null));
+          if (parseDecision(retryText)) text = retryText;
+        }
+      } catch {
+        /* keep the first output — the decide overlay stands down on it */
+      }
+    }
     deps.hub.emit(ctx.agentId, 'reasoning', reasoningEvent(text || '(empty model output)'));
     return { reasoning: text };
   }
@@ -406,7 +508,9 @@ export function buildTreasuryGraph(
       const autoGoal = autonomousGoalOf(mode);
       const wantsTransfer =
         mode.mode === 'inbound_transfer' ||
-        (autoGoal !== null && BigInt(state.beneficiaryBalanceWei) < BigInt(autoGoal.targetBalanceWei));
+        (autoGoal !== null &&
+          'targetBalanceWei' in autoGoal && // trader never wants a native transfer
+          BigInt(state.beneficiaryBalanceWei) < BigInt(autoGoal.targetBalanceWei));
       if (
         wantsTransfer &&
         BigInt(state.policy.windowCapWei) > 0n &&
@@ -541,10 +645,34 @@ export function buildTreasuryGraph(
       return standDownResult('session expired since sense — not submitting a doomed governed call');
     }
     const grant = await loadGrantState(deps.pool, deps.chain, ctx.agentId, self, deps.bridge?.targets);
+    // FR3 (F-8/FR3b): the trader's swap free args resolve from its OWNER-TYPED
+    // goal tokens + SERVER-READ on-chain state — never model text. minOut derives
+    // from the band feed price sensed THIS cycle (implied price == oracle →
+    // dead-center in-band); with no band it falls back to 1 (unguarded testnet
+    // mock). The wall re-reads the feed at submit, so a feed move between sense
+    // and submit reverts PremiumBreach/StaleOracle — the refusal the demo shows.
+    let trade: TradeFill | undefined;
+    if (ctx.goal.type === 'trader') {
+      let minOutWei = 1n;
+      if (state.bandPrice18) {
+        const price = BigInt(state.bandPrice18);
+        if (price > 0n) {
+          const derived = (BigInt(decision.amountWei) * 10n ** 18n) / price;
+          if (derived > 0n) minOutWei = derived;
+        }
+      }
+      trade = {
+        tokenIn: ctx.goal.spendToken,
+        tokenOut: ctx.goal.holdToken,
+        minOutWei,
+        deadlineSec: Math.floor(Date.now() / 1000) + 600,
+      };
+    }
     const built = buildGovernedCall(
       { target: decision.target ?? '', selector: decision.selector ?? '', amountWei: decision.amountWei },
       grant,
       self,
+      trade,
     );
     if (!built.ok) {
       // An authority arg couldn't be pinned from grant state (no grant, ambiguous
@@ -758,6 +886,13 @@ export function buildTreasuryGraph(
     const c = coordinator();
     if (!c) return;
     const o = state.outcome;
+    // F-4: a parse miss is a mechanical failure, never a verdict — requeue the
+    // envelope (accepted → pending) so the next cycle re-reasons it instead of
+    // burning the owner's approval. Pickup-time expiry stays the TTL backstop.
+    if (o.type === 'stood_down' && o.reason === PARSE_MISS_REASON) {
+      await c.markRequeued(inbound.delegationId);
+      return;
+    }
     // Phase 5.6 chain hop: the downstream COMPLETING its re-reasoning is a
     // success even when it stands down (an analyst "completes" by producing
     // analysis + not spending) — so the chain advances carrying the
@@ -900,6 +1035,13 @@ export function buildTreasuryGraph(
 export type TreasuryGraph = ReturnType<typeof buildTreasuryGraph>;
 
 /**
+ * F-4: the one stand-down reason that is a MECHANICAL failure (unreadable model
+ * output), not a reasoned refusal — the inbound-outcome poster requeues on it
+ * instead of terminally failing an accepted envelope.
+ */
+export const PARSE_MISS_REASON = 'model output was not a valid decision';
+
+/**
  * Deterministic policy overlay on the model's decision. The LLM proposes;
  * this disposes — per role (spec §3b):
  * - treasury: Phase-1 behavior unchanged (act | approval | stand_down).
@@ -927,7 +1069,7 @@ function evaluateDecision(
   }
 
   const parsed = parseDecision(state.reasoning);
-  if (!parsed) return stand('model output was not a valid decision');
+  if (!parsed) return stand(PARSE_MISS_REASON);
   if (parsed.action === 'stand_down') {
     return { decision: parsed, route: 'stand_down' };
   }
@@ -936,12 +1078,29 @@ function evaluateDecision(
   // grant-state classify + never-guess-money build happens in the decide node.
   if (parsed.action === 'call') {
     const role = ctx.goal.type ?? 'treasury';
-    if (role !== 'treasury') return stand('governed calls are only for the treasury role');
+    if (role !== 'treasury' && role !== 'trader') {
+      return stand('governed calls are only for the treasury and trader roles');
+    }
     if (!parsed.target || !parsed.selector) return stand('call decision missing target/selector');
     if (state.policy.revoked) return stand('account is revoked');
     if (state.policy.expiresAt <= Math.floor(Date.now() / 1000)) return stand('session expired');
+    // FR3 (F-8): deterministic trader bounds — the model's ladder is advisory;
+    // target-met and the per-trade clip are re-checked here (never-guess-money:
+    // the clip is the owner-typed goal bound, on-chain caps bound again).
+    if (ctx.goal.type === 'trader') {
+      if (state.holdings && BigInt(state.holdings.holdBalanceWei) >= BigInt(ctx.goal.targetHoldWei)) {
+        return stand('hold-token target already met');
+      }
+      if (BigInt(parsed.amountWei) > BigInt(ctx.goal.clipWei)) {
+        return stand('proposed amount exceeds the per-trade clip');
+      }
+    }
     return { decision: parsed, route: 'call' };
   }
+
+  // FR3 (F-8): the trader NEVER sends native transfers — a 'send' from it is a
+  // model error (or an injected instruction); refuse deterministically.
+  if (ctx.goal.type === 'trader') return stand('trader never sends native transfers');
 
   const amount = BigInt(parsed.amountWei);
   if (amount <= 0n) return stand('non-positive transfer amount');
@@ -964,10 +1123,10 @@ function evaluateDecision(
     return stand('beneficiary is not allowlisted');
   }
   const autoGoal = autonomousGoalOf(mode);
-  if (autoGoal) {
+  if (autoGoal && 'targetBalanceWei' in autoGoal) {
     // Treasury/sentinel (incl. a re-reasoned chain hop) target check — an
     // inbound transfer.request has no goal target; the executor honours the
-    // request bounded by its policy instead.
+    // request bounded by its policy instead. (Trader already returned above.)
     if (BigInt(state.beneficiaryBalanceWei) >= BigInt(autoGoal.targetBalanceWei)) {
       return stand('target balance already met');
     }

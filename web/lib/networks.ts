@@ -41,7 +41,53 @@ const EXPLORER_TX_PREFIX: Record<number, string> = {
   84532: 'https://sepolia.basescan.org/tx/', // Base Sepolia
   11155111: 'https://sepolia.etherscan.io/tx/', // Ethereum Sepolia (bridge destination)
   421614: 'https://sepolia.arbiscan.io/tx/', // Arbitrum Sepolia (SE-9)
+  46630: 'https://explorer.testnet.chain.robinhood.com/tx/', // Robinhood Chain testnet (Orbit L2)
 };
+
+/** Public RPC endpoint by chainId — used to build per-chain viem clients so owner-wallet
+ *  writes land on the AGENT'S chain, never the platform default (F-11). Chains absent here
+ *  fall back to the default-chain RPC (config.rpcUrl). Mirrors the backend's registered set. */
+const RPC_URL: Record<number, string> = {
+  [config.chainId]: config.rpcUrl, // 0G Galileo (home)
+  84532: 'https://sepolia.base.org', // Base Sepolia
+  11155111: 'https://ethereum-sepolia-rpc.publicnode.com', // Ethereum Sepolia
+  421614: 'https://sepolia-rollup.arbitrum.io/rpc', // Arbitrum Sepolia
+  46630: 'https://rpc.testnet.chain.robinhood.com', // Robinhood Chain testnet (Orbit L2)
+};
+
+export function rpcUrlFor(chainId: number | undefined): string {
+  if (chainId === undefined) return config.rpcUrl;
+  return RPC_URL[chainId] ?? config.rpcUrl;
+}
+
+/** Legible chain name without the /api/networks table (viem chain metadata + wallet add-chain). */
+const CHAIN_DISPLAY_NAME: Record<number, string> = {
+  [config.chainId]: '0G Galileo Testnet',
+  84532: 'Base Sepolia',
+  11155111: 'Ethereum Sepolia',
+  421614: 'Arbitrum Sepolia',
+  46630: 'Robinhood Chain testnet',
+};
+
+export function chainDisplayName(chainId: number): string {
+  return CHAIN_DISPLAY_NAME[chainId] ?? `Chain ${chainId}`;
+}
+
+/** Native gas-token symbol by chainId — cockpit amounts are denominated in the agent's
+ *  HOME chain currency, not the platform's. Every registered non-0G chain today is an
+ *  ETH-gas testnet, so unknown chains fall back to ETH. */
+const NATIVE_SYMBOL: Record<number, string> = {
+  [config.chainId]: '0G', // 0G Galileo (home)
+  84532: 'ETH', // Base Sepolia
+  11155111: 'ETH', // Ethereum Sepolia
+  421614: 'ETH', // Arbitrum Sepolia
+  46630: 'ETH', // Robinhood Chain testnet (Orbit L2)
+};
+
+export function nativeSymbol(chainId: number | undefined): string {
+  if (chainId === undefined) return '0G';
+  return NATIVE_SYMBOL[chainId] ?? 'ETH';
+}
 
 /** Explorer link for a tx on `chainId`, or null when no explorer is known for that chain. */
 export function networkTxUrl(chainId: number, txHash: string): string | null {

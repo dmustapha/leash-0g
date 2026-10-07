@@ -66,10 +66,10 @@ describe('POST /api/agents/:id/direct — quarantine (D-2)', () => {
     expect(JSON.stringify(res.body)).not.toMatch(/0x[0-9a-f]{40}/i);
   });
 
-  it('403 cross-owner; 401 without auth', async () => {
+  it('404 cross-owner; 401 without auth', async () => {
     const id = await seedTreasury();
     modelReply({ understanding: 'x', confidence: 'low' });
-    await request(t.app).post(`/api/agents/${id}/direct`).set('authorization', ownerAuth(OTHER)).send({ intent: 'x' }).expect(403);
+    await request(t.app).post(`/api/agents/${id}/direct`).set('authorization', ownerAuth(OTHER)).send({ intent: 'x' }).expect(404);
     await request(t.app).post(`/api/agents/${id}/direct`).send({ intent: 'x' }).expect(401);
   });
 });
@@ -125,14 +125,14 @@ describe('POST …/direct/:id/confirm — sole authority write (D-3) + R-1', () 
     expect(t.chain.revoked).toHaveLength(0);
   });
 
-  it('double-confirm is 409; cross-owner confirm is 403/404', async () => {
+  it('double-confirm is 409; cross-owner confirm is 404', async () => {
     const id = await seedTreasury();
     const dirId = await makeDraft(id, { targetBalanceWei: '2000' });
     await request(t.app).post(`/api/agents/${id}/direct/${dirId}/confirm`).set('authorization', ownerAuth(OWNER)).send({ edited: { goalPatch: { targetBalanceWei: '2000' } } }).expect(200);
     await request(t.app).post(`/api/agents/${id}/direct/${dirId}/confirm`).set('authorization', ownerAuth(OWNER)).send({ edited: { goalPatch: { targetBalanceWei: '2000' } } }).expect(409);
     const id2 = await seedTreasury();
     const dir2 = await makeDraft(id2, { targetBalanceWei: '2000' });
-    await request(t.app).post(`/api/agents/${id2}/direct/${dir2}/confirm`).set('authorization', ownerAuth(OTHER)).send({ edited: {} }).expect(403);
+    await request(t.app).post(`/api/agents/${id2}/direct/${dir2}/confirm`).set('authorization', ownerAuth(OTHER)).send({ edited: {} }).expect(404);
   });
 });
 
@@ -168,10 +168,10 @@ describe('GET /api/agents/:id/status — read-only, quarantined (D-7, D-8)', () 
     expect(Number(dirs.rows[0].n)).toBe(0); // no directive created from a query
   });
 
-  it('400 without q; 403 cross-owner', async () => {
+  it('400 without q; 404 cross-owner', async () => {
     const id = await seedTreasury();
     await request(t.app).get(`/api/agents/${id}/status`).set('authorization', ownerAuth(OWNER)).expect(400);
-    await request(t.app).get(`/api/agents/${id}/status`).query({ q: 'x' }).set('authorization', ownerAuth(OTHER)).expect(403);
+    await request(t.app).get(`/api/agents/${id}/status`).query({ q: 'x' }).set('authorization', ownerAuth(OTHER)).expect(404);
   });
 });
 
@@ -186,7 +186,7 @@ describe('POST /api/agents/:id/wind-down — lifespan dial (D-10)', () => {
     const alerts = await db.pool.query(`SELECT kind FROM alerts WHERE agent_id = $1`, [id]);
     expect(alerts.rows.some((r) => r.kind === 'completed')).toBe(true);
     // cross-owner cannot wind down
-    await request(t.app).post(`/api/agents/${id}/wind-down`).set('authorization', ownerAuth(OTHER)).expect(403);
+    await request(t.app).post(`/api/agents/${id}/wind-down`).set('authorization', ownerAuth(OTHER)).expect(404);
   });
 });
 

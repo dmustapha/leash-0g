@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, vi } from 'vitest';
 import request from 'supertest';
+import { PrivateKey as EciesPrivateKey } from 'eciesjs';
 import { createTestDb, seedAgent, type TestDb } from '../helpers/db.js';
 import { buildTestApp, testSettings, ownerAuth, type TestApp } from '../helpers/app.js';
 import { getAgentById } from '../../src/store/agents.js';
@@ -883,13 +884,14 @@ describe('PATCH /api/agents/:id/rules', () => {
     expect(bad.status).toBe(400);
   });
 
-  it('enforces ownership (403 foreign) like every owner route', async () => {
+  it('enforces ownership (404 foreign — enumeration-oracle rule) like every owner route', async () => {
     const agent = await seedFullAgent(OWNER, 'rules-authz');
     const res = await request(t.app)
       .patch(`/api/agents/${agent.id}/rules`)
       .set('authorization', ownerAuth(OTHER_OWNER))
       .send({ rules: [] });
-    expect(res.status).toBe(403);
+    // Foreign-owned answers 404, NOT 403: a 403 confirms the id exists.
+    expect(res.status).toBe(404);
   });
 });
 
@@ -921,15 +923,16 @@ describe('GET /api/delegations', () => {
     // neither filter → 400
     expect((await request(t.app).get('/api/delegations').set('authorization', ownerAuth(OWNER))).status).toBe(400);
 
-    // foreign owner probing my agent/link → 403
+    // foreign owner probing my agent/link → 404 (enumeration-oracle rule:
+    // real-but-not-yours must be indistinguishable from never-existed)
     expect(
       (await request(t.app).get(`/api/delegations?agentId=${a.id}`).set('authorization', ownerAuth(OTHER_OWNER)))
         .status,
-    ).toBe(403);
+    ).toBe(404);
     expect(
       (await request(t.app).get(`/api/delegations?linkId=${linkId}`).set('authorization', ownerAuth(OTHER_OWNER)))
         .status,
-    ).toBe(403);
+    ).toBe(404);
   });
 
   it('keyset cursor walks the feed without gaps or repeats', async () => {
@@ -1146,7 +1149,8 @@ describe('gate fixes', () => {
       .set('authorization', ownerAuth(owner))
       .send({
         name: 'resync-agent',
-        auditPubKey: '04' + 'cd'.repeat(64),
+        // Must be a REAL secp256k1 point: create validates the curve (F-3).
+        auditPubKey: new EciesPrivateKey().publicKey.toHex(),
         policy: {
           perTransferCapWei: '10000000000000000',
           windowCapWei: '30000000000000000',
