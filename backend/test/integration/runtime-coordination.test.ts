@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from
 import type { Server } from 'node:http';
 import request from 'supertest';
 import nock from 'nock';
+import { PrivateKey as EciesPrivateKey } from 'eciesjs';
 import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import { createTestDb, seedAgent, type TestDb } from '../helpers/db.js';
 import { buildTestApp, ownerAuth, TEST_KEK, UPSTREAM, type TestApp } from '../helpers/app.js';
@@ -77,6 +78,15 @@ class FakeRuntimeChain implements RuntimeChain {
     data: string;
   }): Promise<{ txHash: string }> {
     return { txHash: '0x' + 'cc'.repeat(32) };
+  }
+  async getErc20Balance(): Promise<bigint> {
+    return 0n;
+  }
+  async getErc20Allowance(): Promise<bigint> {
+    return 0n;
+  }
+  async getSwapBandPrice18(): Promise<bigint | null> {
+    return null;
   }
   async getErc20Meta(): Promise<{ symbol: string; decimals: number }> {
     return { symbol: '0G', decimals: 18 };
@@ -427,6 +437,59 @@ describe('executor (inbound channel)', () => {
     expect(fakeChain.executed).toHaveLength(0);
   });
 
+  it('F-4: a parse miss never terminally fails an accepted envelope — requeued, then consumed next cycle', async () => {
+    const sentinel = await seedRoleAgent(SENTINEL_GOAL);
+    const executor = await seedRoleAgent(EXECUTOR_GOAL);
+    const delegationId = await seedInbound(sentinel.id, executor.id, {
+      beneficiary: BENEFICIARY,
+      amountWei: (CAP / 2n).toString(),
+    });
+    // Cycle 1: both the first ask AND the in-cycle retry return brace soup.
+    mockModelDecision('I think { maybe } but also { "action": "unsure" and no close', 2);
+    // Cycle 2: a clean decision.
+    mockModelDecision(JSON.stringify({ action: 'send', amountWei: (CAP / 2n).toString(), reason: 'valid request' }));
+
+    await start(executor.id);
+    // The envelope goes BACK to pending instead of failed (approval not burned).
+    await waitFor(async () => (await getDelegation(db.pool, delegationId))?.status === 'pending');
+    await manager.settle(executor.id);
+
+    // Cycle 2 re-picks the requeued 'pending' envelope and consumes it. Drive it
+    // with a settle loop (NOT a DB-polling waitFor): polling getDelegation every
+    // 100ms starves the small test pool of the connections cycle 2 needs, so the
+    // cycle can't finish while we poll for it. nudge schedules on a later tick, so
+    // keep nudging+settling until the envelope reaches a terminal state.
+    for (let i = 0; i < 50; i++) {
+      manager.nudge(executor.id);
+      await manager.settle(executor.id);
+      const s = (await getDelegation(db.pool, delegationId))?.status;
+      if (s === 'completed' || s === 'failed') break;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+
+    const row = await getDelegation(db.pool, delegationId);
+    expect(row?.status).toBe('completed');
+    expect(row?.result).toEqual({ txHash: '0x' + 'ee'.repeat(32) });
+    expect(fakeChain.executed).toEqual([{ to: BENEFICIARY, valueWei: CAP / 2n }]);
+  });
+
+  it('F-4: the in-cycle retry recovers a parse miss without burning the cycle', async () => {
+    const sentinel = await seedRoleAgent(SENTINEL_GOAL);
+    const executor = await seedRoleAgent(EXECUTOR_GOAL);
+    const delegationId = await seedInbound(sentinel.id, executor.id, {
+      beneficiary: BENEFICIARY,
+      amountWei: (CAP / 2n).toString(),
+    });
+    mockModelDecision('brace soup { not a decision', 1);
+    mockModelDecision(JSON.stringify({ action: 'send', amountWei: (CAP / 2n).toString(), reason: 'retry landed' }));
+
+    await start(executor.id);
+    await waitFor(async () => (await getDelegation(db.pool, delegationId))?.status === 'completed');
+    await manager.settle(executor.id);
+
+    expect(fakeChain.executed).toEqual([{ to: BENEFICIARY, valueWei: CAP / 2n }]);
+  });
+
   it('exactly-once: two cycles over one envelope produce one action', async () => {
     const sentinel = await seedRoleAgent(SENTINEL_GOAL);
     const executor = await seedRoleAgent(EXECUTOR_GOAL);
@@ -456,7 +519,8 @@ describe('executor (inbound channel)', () => {
 });
 
 describe('goal-union create route (spec §3c compatibility)', () => {
-  const auditPubKey = '04' + 'cd'.repeat(64);
+  // Must be a REAL secp256k1 point: create validates the curve (F-3).
+  const auditPubKey = new EciesPrivateKey().publicKey.toHex();
   const base = {
     name: 'role-create',
     auditPubKey,
@@ -519,6 +583,32 @@ describe('goal-union create route (spec §3c compatibility)', () => {
       },
     });
     expect(sentinelAboveOwnCap.status).toBe(201);
+  });
+
+  it('F-5: spend-incapable roles auto-start at create; spend-capable stay paused; autoStart:false opts out', async () => {
+    const sentinelBody = {
+      ...base,
+      allowlist: [],
+      policy: { ...base.policy, perTransferCapWei: '0', windowCapWei: '0' },
+      goal: { type: 'sentinel', beneficiary: BENEFICIARY, targetBalanceWei: (5n * CAP).toString(), topUpWei: (CAP / 2n).toString() },
+    };
+    const sentinel = await create(sentinelBody);
+    expect(sentinel.status).toBe(201);
+    expect(t.runtime.isRunning(sentinel.body.agentId)).toBe(true);
+
+    // Spend-capable (treasury) waits for funding — never auto-started here.
+    const treasury = await create({
+      ...base,
+      allowlist: [BENEFICIARY],
+      goal: { beneficiary: BENEFICIARY, targetBalanceWei: (5n * CAP).toString(), topUpWei: (CAP / 2n).toString() },
+    });
+    expect(treasury.status).toBe(201);
+    expect(t.runtime.isRunning(treasury.body.agentId)).toBe(false);
+
+    // Explicit API opt-out.
+    const optedOut = await create({ ...sentinelBody, autoStart: false });
+    expect(optedOut.status).toBe(201);
+    expect(t.runtime.isRunning(optedOut.body.agentId)).toBe(false);
   });
 });
 

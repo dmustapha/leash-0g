@@ -34,6 +34,7 @@ export function PolicyPanel({
   onApply,
   onWindDown,
   onRearm,
+  currency = '0G',
 }: {
   detail: AgentDetail;
   /** Called with the new policy; implementation picks tightenPolicy vs proposePolicy. Carries
@@ -50,6 +51,8 @@ export function PolicyPanel({
   onWindDown?: () => Promise<void>;
   /** Re-arm / extend — reuses the owner-wallet rearm tx. */
   onRearm?: () => Promise<string>;
+  /** Native symbol of the agent's HOME chain (SE-7) — RH/Base/Eth/Arb agents gas in ETH. */
+  currency?: string;
 }) {
   const [editing, setEditing] = useState(false);
   const [perTransfer, setPerTransfer] = useState(weiToOg(detail.policy.perTransferCapWei));
@@ -171,10 +174,10 @@ export function PolicyPanel({
 
       {!editing ? (
         <dl style={{ display: 'grid', gap: '0.5rem', margin: 0, fontSize: '0.88rem' }}>
-          <Row k="Per payment" v={`${weiToOg(detail.policy.perTransferCapWei)} 0G max`} />
+          <Row k="Per payment" v={`${weiToOg(detail.policy.perTransferCapWei)} ${currency} max`} />
           <Row
             k="Budget"
-            v={`${weiToOg(detail.policy.windowCapWei)} 0G / ${Math.round(detail.policy.windowSeconds / 3600)}h`}
+            v={`${weiToOg(detail.policy.windowCapWei)} ${currency} / ${Math.round(detail.policy.windowSeconds / 3600)}h`}
           />
           <Row k="Can pay" v={detail.policy.allowlist.map(shortAddr).join(', ') || 'nobody yet'} />
           <Row k="Expires" v={new Date(detail.policy.expiresAt * 1000).toLocaleString()} />
@@ -187,7 +190,7 @@ export function PolicyPanel({
             value={perTransfer}
             onChange={(e) => setPerTransfer(e.target.value)}
             inputMode="decimal"
-            suffix="0G"
+            suffix={currency}
           />
           <Field
             id="edit-window-cap"
@@ -195,7 +198,7 @@ export function PolicyPanel({
             value={windowCap}
             onChange={(e) => setWindowCap(e.target.value)}
             inputMode="decimal"
-            suffix="0G"
+            suffix={currency}
           />
           <Field
             id="edit-window-hours"

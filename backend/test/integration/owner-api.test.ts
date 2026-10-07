@@ -73,10 +73,10 @@ describe('owner auth', () => {
     }
   });
 
-  it("403 when the authed wallet does not match the agent's owner_addr", async () => {
+  it("404 when the authed wallet does not match the agent's owner_addr", async () => {
     const a = await createAgent();
     const res = await request(t.app).get(`/api/agents/${a.id}`).set('authorization', ownerAuth(OTHER_OWNER));
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(404);
   });
 });
 
@@ -322,7 +322,7 @@ describe('agent lifecycle routes', () => {
     const denied = await request(t.app)
       .get(`/api/agents/${a.id}/traces`)
       .set('authorization', ownerAuth(OTHER_OWNER));
-    expect(denied.status).toBe(403);
+    expect(denied.status).toBe(404);
   });
 
   it('GET audit lists batches as a bare array with ciphertext URLs', async () => {
@@ -404,7 +404,8 @@ describe('C-1 create hardening', () => {
   it('rejects an allowlist longer than ALLOWLIST_MAX with the spec error shape', async () => {
     const body = {
       ...CREATE_BODY,
-      allowlist: Array.from({ length: 17 }, (_, i) => '0x' + i.toString(16).padStart(2, '0').repeat(20)),
+      // i+1: index 0 would mint the zero address, which the schema rejects first.
+      allowlist: Array.from({ length: 17 }, (_, i) => '0x' + (i + 1).toString(16).padStart(2, '0').repeat(20)),
     };
     const res = await request(t.app).post('/api/agents').set('authorization', ownerAuth(OWNER)).send(body);
     expect(res.status).toBe(400);

@@ -3,6 +3,7 @@
 // balance, and created date. Pure component — data and paging bubble up via props.
 'use client';
 
+import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import type { AgentSummary } from '@/lib/types';
 import { shortAddr, weiToOg } from '@/lib/format';
@@ -23,6 +24,12 @@ export function FleetList({
   loadingMore?: boolean;
   onLoadMore: () => void;
 }) {
+  // Revoked agents are kept but hidden by default — a dead agent should not crowd the
+  // live fleet. The toggle reveals them on demand; ordering is otherwise preserved.
+  const [showRevoked, setShowRevoked] = useState(false);
+  const revokedCount = useMemo(() => agents.filter((a) => a.status === 'revoked').length, [agents]);
+  const visible = showRevoked ? agents : agents.filter((a) => a.status !== 'revoked');
+
   if (agents.length === 0) {
     return (
       <div className="panel" data-testid="fleet-empty" style={{ padding: '1.4rem', display: 'grid', gap: '0.8rem', justifyItems: 'start' }}>
@@ -38,8 +45,26 @@ export function FleetList({
 
   return (
     <div style={{ display: 'grid', gap: '0.7rem' }} data-testid="fleet-list">
+      {revokedCount > 0 ? (
+        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          <button
+            type="button"
+            className="btn btn-ghost btn-sm"
+            onClick={() => setShowRevoked((s) => !s)}
+            data-testid="fleet-toggle-revoked"
+            aria-pressed={showRevoked}
+          >
+            {showRevoked ? 'Hide revoked' : `Show revoked (${revokedCount})`}
+          </button>
+        </div>
+      ) : null}
+      {visible.length === 0 && revokedCount > 0 ? (
+        <p data-testid="fleet-all-revoked" style={{ color: 'var(--color-ink-dim)' }}>
+          All agents are revoked. Use the toggle above to view them.
+        </p>
+      ) : null}
       <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: '0.6rem' }}>
-        {agents.map((a) => (
+        {visible.map((a) => (
           <li key={a.agentId}>
             <Link
               href={`/agents/${a.agentId}`}

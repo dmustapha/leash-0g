@@ -36,6 +36,18 @@ export type SentinelGoal = {
 /** Executor (spec §3b): acts on inbound delegations within ITS OWN caps. */
 export type ExecutorGoal = { type: 'executor'; model?: string };
 
+/** Trader (FR3/F-8): autonomous governed-swap role — accumulates holdToken by
+ *  swapping spendToken via owner-granted capabilities, one clip per cycle.
+ *  Token addresses are owner-typed at create; it never sends native funds. */
+export type TraderGoal = {
+  type: 'trader';
+  holdToken: Address;
+  spendToken: Address;
+  targetHoldWei: string; // token base units
+  clipWei: string; // token base units
+  model?: string;
+};
+
 /** Phase-4 ACP roles (spec §3b). Only the requester spends (governed ERC-20). */
 export type RequesterGoal = {
   type: 'requester';
@@ -50,7 +62,7 @@ export type RequesterGoal = {
 export type ProviderGoal = { type: 'provider'; serviceSpec: string; model?: string };
 export type EvaluatorGoal = { type: 'evaluator'; rubricRef: string; model?: string };
 
-export type AgentGoal = GoalInput | SentinelGoal | ExecutorGoal | RequesterGoal | ProviderGoal | EvaluatorGoal;
+export type AgentGoal = GoalInput | SentinelGoal | ExecutorGoal | TraderGoal | RequesterGoal | ProviderGoal | EvaluatorGoal;
 
 /** Phase-4 settlement-token config (requester only, F1): immutable token + per-token caps. */
 export type TokenConfigInput = {
@@ -71,6 +83,10 @@ export type CreateAgentRequest = {
   tokenConfig?: TokenConfigInput;
   /** Phase-5 (D-B9): optional freeform capability label (elevation-suggested, owner-edited). Inert. */
   capabilityLabel?: string;
+  /** SE-7: which registered chain to mint on. Default = home 0G chain when omitted. */
+  chainId?: number;
+  /** RH2 (two-factory): mint through a named wall-capability factory (e.g. `oracleBand`). */
+  capability?: string;
 };
 
 export type CreateAgentResponse = {
@@ -93,7 +109,7 @@ export type GatewayRule = {
 };
 
 /** Fleet row from GET /api/agents (spec §4 AgentSummary). */
-export type AgentRole = 'treasury' | 'sentinel' | 'executor' | 'requester' | 'provider' | 'evaluator';
+export type AgentRole = 'treasury' | 'sentinel' | 'executor' | 'trader' | 'requester' | 'provider' | 'evaluator';
 
 export type AgentSummary = {
   agentId: string;
@@ -354,6 +370,12 @@ export type Digest = {
   since: string | null;
   agents: AgentDigest[];
   links: LinkDigest[];
+  /** B-6: fleet lifecycle since the mark (optional: pre-B-6 records lack it). */
+  lifecycle?: {
+    created: Array<{ agentId: string; name: string }>;
+    onboarded: Array<{ agentId: string; name: string; chainId: number }>;
+    linksCreated: Array<{ linkId: string; fromAgentId: string; toAgentId: string }>;
+  };
   totals: { spendWei: string; actions: number; decisions: number; jobFees?: { count: number; byToken: Record<string, string>; feeLabel?: string } };
   empty: boolean;
 };
@@ -586,7 +608,7 @@ export type CapabilityEnvelopeView = {
   recentRequests: CapabilityRequestRow[];
 };
 
-export type CapabilityRuleAction = 'propose' | 'tighten' | 'remove';
+export type CapabilityRuleAction = 'propose' | 'tighten' | 'remove' | 'apply';
 export type CapabilityDecision = 'approve_once' | 'always_allow' | 'deny';
 
 export type JobStatus =
@@ -605,7 +627,14 @@ export type JobStatus =
 // agent-chaining delegation graph — a different concept entirely.
 
 /** A registered blockchain network (GET /api/networks). */
-export type NetworkChain = { chainId: number; name: string };
+export type NetworkChain = {
+  chainId: number;
+  name: string;
+  /** RH2: named wall-capability keys this chain can mint through (e.g. `oracleBand`). */
+  capabilities: string[];
+  /** FR4 (F-9): the chain's canonical swap router (band-arm target), when configured. */
+  router?: string | null;
+};
 
 /** One per-chain presence row for an agent — SAME accountAddr on every chain. */
 export type AgentNetworkRow = {

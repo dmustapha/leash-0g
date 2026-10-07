@@ -1,0 +1,28 @@
+{
+  "drill": "B2 — same-address onboard replay on RH prod factory (HACKATHON-RH2 D2)",
+  "rhChainId": 46630,
+  "homeCompareChainId": 84532,
+  "prodFactory": "0x9C10b48748Da1cA0CEE5AD7DA0725490A7d5E46f",
+  "tupleSalt": "0x0a7b84663bfd5660197d69ea4b7361be0e8beba206e7ef4f8b8619359bac898d",
+  "predictedAddr": "0x40a79a46e8f43852b91ecb9ba7c5fb28eefe37b7",
+  "mintedAddr": "0x40a79a46e8f43852b91ecb9ba7c5fb28eefe37b7",
+  "score": "3/3",
+  "checks": [
+    {
+      "check": "D2a cross-chain prediction identical (RH == Base, prod factory)",
+      "ok": true,
+      "detail": "RH=0x40a79a46e8f43852b91ecb9ba7c5fb28eefe37b7 Base=0x40a79a46e8f43852b91ecb9ba7c5fb28eefe37b7"
+    },
+    {
+      "check": "D2b account already present on RH at prediction (idempotent)",
+      "ok": true,
+      "detail": "codehash 0x73528755822a7c79adcdc95845345352e42a6164b4467a0b74eaa59247d97a1a at 0x40a79a46e8f43852b91ecb9ba7c5fb28eefe37b7"
+    },
+    {
+      "check": "D2c mutated tuple (expiry+1) predicts a DIFFERENT address → refusal-first gate fires",
+      "ok": true,
+      "detail": "mutated=0xcda2ad6cae4a8aca022183cb566e86e0f66cfbca != 0x40a79a46e8f43852b91ecb9ba7c5fb28eefe37b7"
+    }
+  ],
+  "at": "2026-10-04T10:50:42.293Z"
+}

@@ -45,6 +45,13 @@ export interface ChainConfig {
   /** 0G enforces a 2-gwei floor; other chains have their own. Applied at send time. */
   gasFloorWei: bigint;
   /**
+   * F-2: session-key gas dust is CHAIN-PRICED — RH (46630) gas is ~0.012 gwei,
+   * so the 0G-sized global default (0.002) is orders of magnitude oversized
+   * there and drains the ops wallet per create. Unset ⇒ the global
+   * SESSION_GAS_DUST_WEI default applies.
+   */
+  sessionGasDustWei?: bigint | undefined;
+  /**
    * Allowlisted real protocols (Uniswap/Aave/Permit2, …). SE-8 (carry #2): when
    * SET, the owner grant surface refuses call-rule/preset targets outside
    * `protocolAllowlist ∪ bridgeAllowlist ∪ canonical` — no longer dormant.
@@ -63,6 +70,15 @@ export interface ChainConfig {
    * that destination chain (`assertSameAddress`) BEFORE any bridge call routes.
    */
   bridgeDestinations?: Readonly<Record<string, number>> | undefined;
+  /**
+   * RH2 (SE-9 two-factory): named, operator-configured SECONDARY factories that
+   * carry a wall CAPABILITY distinct from the chain's default (same-address) wall.
+   * Keyed by capability name (e.g. `oracleBand` → the audit-fixed price-band wall
+   * factory). A create may target one BY NAME (`POST /api/agents {capability}`) —
+   * the address is NEVER caller-supplied, so a caller can never inject an arbitrary
+   * factory. Default-deny: a capability not listed here for this chain is refused.
+   */
+  capabilityFactories?: Readonly<Record<string, string>> | undefined;
 }
 
 /** Signing material shared across chains (same owner/ops/guardian keys per EVM). */
@@ -155,6 +171,8 @@ export function assertTestnetOnly(configs: readonly ChainConfig[]): void {
 export class ChainRegistry {
   private readonly byId = new Map<number, ChainConfig>();
   private readonly opsCache = new Map<number, LeashChainOps>();
+  /** RH2 (two-factory): capability-factory lanes, keyed `${chainId}:${factory}`. */
+  private readonly opsForFactoryCache = new Map<string, LeashChainOps>();
   private readonly sessionCache = new Map<number, RuntimeChain>();
 
   constructor(
@@ -204,6 +222,54 @@ export class ChainRegistry {
       ...(clients ? { clients } : {}),
     });
     this.opsCache.set(chainId, ops);
+    return ops;
+  }
+
+  /**
+   * RH2 (two-factory): resolve the operator-configured factory for a NAMED wall
+   * capability on this chain, or `undefined` if the chain declares none. The name
+   * is an operator-controlled KEY — the resolved address never comes from the
+   * caller — so this cannot be used to inject an arbitrary factory (the security
+   * property that lets `POST /api/agents {capability}` be safe).
+   */
+  getCapabilityFactory(chainId: number, capability: string): string | undefined {
+    return this.getChainConfig(chainId).capabilityFactories?.[capability];
+  }
+
+  /**
+   * RH2 (two-factory): an ops lane whose V4 factory is `factoryV4Addr`, cached per
+   * `${chainId}:${factory}`. Default-deny: the factory MUST be either the chain's
+   * default V4 factory or one of its named `capabilityFactories` — an off-config
+   * address is refused, so a create can only ever mint through an operator-vetted
+   * factory. Everything else (RPC, keys, registry) matches the default lane.
+   */
+  getChainOpsForFactory(chainId: number, factoryV4Addr: string): LeashChainOps {
+    const c = this.getChainConfig(chainId);
+    const want = factoryV4Addr.toLowerCase();
+    const allowed = new Set<string>([
+      ...(c.factoryV4Addr ? [c.factoryV4Addr.toLowerCase()] : []),
+      ...Object.values(c.capabilityFactories ?? {}).map((a) => a.toLowerCase()),
+    ]);
+    if (!allowed.has(want)) {
+      throw new Error(`factory ${want} is not a configured factory for chain ${chainId} (default-deny)`);
+    }
+    // The default factory reuses the standard cached lane (byte-identical wire).
+    if (c.factoryV4Addr && want === c.factoryV4Addr.toLowerCase()) return this.getChainOps(chainId);
+    const key = `${chainId}:${want}`;
+    const cached = this.opsForFactoryCache.get(key);
+    if (cached) return cached;
+    const clients = this.testClients.get(chainId);
+    const ops = new LeashChainOps({
+      rpcUrl: c.rpcUrl,
+      chainId: c.chainId,
+      opsPrivateKey: this.signing.opsPrivateKey,
+      guardianPrivateKey: this.signing.guardianPrivateKey,
+      ...(c.factoryAddr ? { factoryAddr: c.factoryAddr } : {}),
+      factoryV4Addr: want,
+      registryAddr: c.registryAddr,
+      ...(clients ? { clients } : {}),
+    });
+    this.opsForFactoryCache.set(key, ops);
     return ops;
   }
 

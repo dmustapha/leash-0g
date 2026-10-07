@@ -269,6 +269,11 @@ const extraChainSchema = z.object({
     })
     .optional(),
   gasFloorWei: z.string().regex(/^\d{1,30}$/).optional(),
+  // F-2: per-chain session-key gas dust (wei). Unset ⇒ SESSION_GAS_DUST_WEI.
+  sessionGasDustWei: z.string().regex(/^\d{1,30}$/).optional(),
+  // RH2 (two-factory): named secondary factories carrying a distinct wall
+  // capability (e.g. `oracleBand`). Bounded (L-02) + address-shaped (L-03).
+  capabilityFactories: z.record(z.string().regex(/^0x[0-9a-fA-F]{40}$/)).optional(),
 });
 
 /**
@@ -308,6 +313,7 @@ export function parseExtraChains(raw: string, defaultFactoryV4?: string): ChainC
       registryAddr: e.registryAddr,
       accountVersion: 4,
       gasFloorWei: e.gasFloorWei ? BigInt(e.gasFloorWei) : 0n,
+      ...(e.sessionGasDustWei ? { sessionGasDustWei: BigInt(e.sessionGasDustWei) } : {}),
       ...(e.canonical
         ? {
             canonical: {
@@ -319,6 +325,18 @@ export function parseExtraChains(raw: string, defaultFactoryV4?: string): ChainC
         : {}),
       ...(e.protocolAllowlist ? { protocolAllowlist: e.protocolAllowlist.map((a) => a.toLowerCase()) } : {}),
       ...(bridge ?? {}),
+      ...(e.capabilityFactories
+        ? (() => {
+            const keys = Object.keys(e.capabilityFactories);
+            // L-02: bound the operator-controlled capability map.
+            if (keys.length > 8) throw new Error(`EXTRA_CHAINS[${i}] (${e.name}) has too many capabilityFactories (${keys.length} > 8)`);
+            return {
+              capabilityFactories: Object.fromEntries(
+                Object.entries(e.capabilityFactories).map(([k, v]) => [k, v.toLowerCase()]),
+              ),
+            };
+          })()
+        : {}),
     } satisfies ChainConfig;
   });
 }

@@ -101,6 +101,22 @@ describe('SE-10 — the GENERIC chain-table (a new chain is CONFIG, not code)', 
     expect(amoy?.gasFloorWei).toBe(0n);
   });
 
+  // F-2: dust is chain-priced — RH gas ≈ 0.012 gwei vs 0G's 2-gwei floor.
+  it('a per-entry sessionGasDustWei parses to bigint; unset stays undefined (global default applies)', () => {
+    const [op, amoy] = parseExtraChains(
+      JSON.stringify([{ ...OP, sessionGasDustWei: '20000000000000' }, AMOY]),
+      V4,
+    );
+    expect(op?.sessionGasDustWei).toBe(20_000_000_000_000n);
+    expect(amoy?.sessionGasDustWei).toBeUndefined();
+  });
+
+  it('a malformed sessionGasDustWei fails startup (L-03 fail-loud)', () => {
+    expect(() => parseExtraChains(JSON.stringify([{ ...OP, sessionGasDustWei: '0.002e18' }]), V4)).toThrow(
+      /EXTRA_CHAINS\[0\] invalid/,
+    );
+  });
+
   it('a per-entry factoryV4Addr overrides the default deterministic factory', () => {
     const [op] = parseExtraChains(JSON.stringify([{ ...OP, factoryV4Addr: '0x' + '99'.repeat(20) }]), V4);
     expect(op?.factoryV4Addr).toBe('0x' + '99'.repeat(20)); // entry wins over defaultFactoryV4

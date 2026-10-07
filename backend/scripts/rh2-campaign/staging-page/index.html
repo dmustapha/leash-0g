@@ -1,0 +1,43 @@
+<!doctype html>
+<!-- B-hero staging page — signs the three V4 owner calls the cockpit UI lacks on RH:
+     proposeSpendBudget / applySpendBudget / applyCallRule. Localhost-only tooling;
+     MetaMask does the signing. NOT part of the product. -->
+<html><head><meta charset="utf-8"><title>LEASH demo staging (RH 46630)</title>
+<style>
+  body{font-family:ui-monospace,monospace;background:#101418;color:#d8e0e8;max-width:680px;margin:3rem auto;padding:0 1rem}
+  button{display:block;width:100%;margin:.5rem 0;padding:.8rem;font-size:1rem;background:#1d2733;color:#d8e0e8;border:1px solid #324155;border-radius:8px;cursor:pointer}
+  button:hover{background:#263445}
+  input{width:100%;padding:.6rem;background:#0c1014;color:#d8e0e8;border:1px solid #324155;border-radius:6px;box-sizing:border-box}
+  #log{white-space:pre-wrap;font-size:.8rem;color:#9ab;margin-top:1rem;border-top:1px solid #324155;padding-top:1rem}
+  .ok{color:#7ec699}.err{color:#e07a7a}
+</style></head><body>
+<h2>B-hero staging — RH 46630</h2>
+<label>Agent account address (0x…)</label>
+<input id="acct" placeholder="0x… (from cockpit)" />
+<button onclick="go('propose')">1. proposeSpendBudget(sUSD, 5000)</button>
+<button onclick="go('applyBudget')">2. applySpendBudget() — after ~15 min</button>
+<button onclick="go('applyRule')">applyCallRule() — after a rule's safety delay</button>
+<button onclick="go('tighten')">A. tightenPriceBand(router.swap, feed, sTSLA, 5%, 1h)</button>
+<button onclick="go('enable')">B. enableRequireBandForSwap()</button>
+<div id="log"></div>
+<script>
+const SUSD_BUDGET_CALLDATA='0xc28764550000000000000000000000005f6a3abc97e421f7b3930fc504d6a0ce4ee41e0600000000000000000000000000000000000000000000010f0cf064dd59200000';
+const DATA={propose:SUSD_BUDGET_CALLDATA, applyBudget:'0x9d3a2e7f', applyRule:'0xee1d92bd',
+tighten:'0x8771a2030000000000000000000000004964991514f731cb3cf252108dff889d30036fcb9908fc8b000000000000000000000000000000000000000000000000000000000000000000000000000000008e107bac6f430aecb8aa11b383e9690e9a5214be000000000000000000000000b9431b3be9a56a1eea8e728326332f8b4dd5138200000000000000000000000000000000000000000000000000000000000001f40000000000000000000000000000000000000000000000000000000000000e10',
+enable:'0xbb760e62'};
+const CHAIN='0xb626'; // 46630
+function log(m,c){const d=document.createElement('div');if(c)d.className=c;d.textContent=new Date().toISOString().slice(11,19)+' '+m;document.getElementById('log').prepend(d)}
+async function go(k){
+  try{
+    const acct=document.getElementById('acct').value.trim();
+    if(!/^0x[0-9a-fA-F]{40}$/.test(acct)){log('enter the agent account address first','err');return}
+    const eth=window.ethereum; if(!eth){log('no wallet','err');return}
+    const [from]=await eth.request({method:'eth_requestAccounts'});
+    try{await eth.request({method:'wallet_switchEthereumChain',params:[{chainId:CHAIN}]})}
+    catch(e){await eth.request({method:'wallet_addEthereumChain',params:[{chainId:CHAIN,chainName:'Robinhood Chain testnet',rpcUrls:['https://rpc.testnet.chain.robinhood.com'],nativeCurrency:{name:'ETH',symbol:'ETH',decimals:18}}]})}
+    log(k+': requesting signature from '+from.slice(0,10)+'…');
+    const tx=await eth.request({method:'eth_sendTransaction',params:[{from,to:acct,data:DATA[k],gas:'0x927c0'}]});
+    log(k+' tx '+tx,'ok');
+  }catch(e){log(k+' failed: '+(e.message||e),'err')}
+}
+</script></body></html>

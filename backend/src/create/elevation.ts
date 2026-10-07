@@ -19,12 +19,14 @@ import type { ComputeQueue } from '../gateway/compute-queue.js';
 import type { AgentRole } from '../types.js';
 import { ruleSchema } from '../jobs/acceptance.js';
 
+// 'trader' is INTENTIONALLY excluded (FR3): its token pair is owner-typed in the
+// wizard, never model-suggested — elevation can never draft a trader goal.
 const ROLES = ['treasury', 'sentinel', 'executor', 'requester', 'provider', 'evaluator'] as const;
 const weiSchema = z.string().regex(/^[0-9]{1,30}$/);
 
 /** Roles that can move funds (native or ERC-20). Everything else is spend-incapable. */
 export function moneyPowerOf(role: AgentRole): 'can-move-money' | 'cannot-move-money' {
-  return role === 'treasury' || role === 'executor' || role === 'requester'
+  return role === 'treasury' || role === 'executor' || role === 'requester' || role === 'trader'
     ? 'can-move-money'
     : 'cannot-move-money';
 }
@@ -191,7 +193,12 @@ export function feeFromIntent(intent: string): string | undefined {
  * low-confidence agent the owner completes on the read-back.
  */
 export function safeFallback(req: ElevateRequest): ElevationDraft {
-  const role: AgentRole = req.role ?? 'provider';
+  // FR3: elevation never drafts a trader (its token pair is owner-typed in the
+  // wizard, never model-suggested) — an out-of-ROLES role hint falls back to provider.
+  const hinted: AgentRole = req.role ?? 'provider';
+  const role: (typeof ROLES)[number] = (ROLES as readonly string[]).includes(hinted)
+    ? (hinted as (typeof ROLES)[number])
+    : 'provider';
   const label = req.intent.trim().split(/\s+/).slice(0, 4).join(' ').slice(0, 120) || 'my agent';
   const draft: ElevationDraft = {
     proposedRole: role,

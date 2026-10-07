@@ -16,6 +16,12 @@ export const LEASH_ACCOUNT_V4_ABI = parseAbi([
   'function authorizeOnce(bytes32 callHash, uint64 expiry)',
   // per-token cumulative outflow budget (the spine)
   'function proposeSpendBudget(address token, uint128 windowCap)',
+  // FR4 (F-9): the RH price-band wall — tighten is INSTANT (new band = new restriction),
+  // enable latches band-required-for-every-swap (one-way owner opt-in).
+  'function tightenPriceBand(address target, bytes4 selector, address feed, address asset, uint32 maxDeviationBps, uint64 maxStaleness)',
+  'function enableRequireBandForSwap()',
+  'function requireBandForSwap() view returns (bool)',
+  'function priceBand(bytes32 ruleKey) view returns (bool set, address feed, address asset, uint32 maxDeviationBps, uint64 maxStaleness)',
   'function applySpendBudget()',
   // reads (the account stays authoritative; the read-model mirrors these)
   'function pendingCallRule() view returns (address target, bytes4 selector, uint8 recipientMode, uint128 perCallCap, uint128 windowCapCall, bytes32 codehash, uint64 eta)',

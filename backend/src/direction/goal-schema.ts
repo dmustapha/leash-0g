@@ -57,6 +57,16 @@ const sentinelGoalSchema = z
   })
   .strict();
 const executorGoalSchema = z.object({ type: z.literal('executor'), model: modelSchema }).strict();
+const traderGoalSchema = z
+  .object({
+    type: z.literal('trader'),
+    holdToken: addrSchema,
+    spendToken: addrSchema,
+    targetHoldWei: weiSchema,
+    clipWei: weiSchema,
+    model: modelSchema,
+  })
+  .strict();
 const requesterGoalSchema = z
   .object({
     type: z.literal('requester'),
@@ -80,6 +90,7 @@ export const goalSchema: z.ZodType<AgentGoal> = z.union([
   treasuryGoalSchema,
   sentinelGoalSchema,
   executorGoalSchema,
+  traderGoalSchema,
   requesterGoalSchema,
   providerGoalSchema,
   evaluatorGoalSchema,
@@ -100,6 +111,9 @@ export const DESCRIPTIVE_FIELDS: Record<AgentRole, readonly string[]> = {
   treasury: ['targetBalanceWei', 'topUpWei'],
   sentinel: ['targetBalanceWei', 'topUpWei'],
   executor: [],
+  // F-8/FR3: how MUCH to accumulate / per trade is intent; WHICH tokens is
+  // money authority (owner-typed at create, invariant below).
+  trader: ['targetHoldWei', 'clipWei'],
   requester: [],
   provider: ['serviceSpec'],
   evaluator: ['rubricRef'],
@@ -191,6 +205,7 @@ const MONEY_INVARIANT_FIELDS: Record<AgentRole, readonly string[]> = {
   treasury: [],
   sentinel: [],
   executor: [],
+  trader: ['holdToken', 'spendToken'],
   requester: ['feeToken', 'feeCapPerJobWei', 'jobSpecSource', 'providerAgentId', 'evaluatorAgentId'],
   provider: [],
   evaluator: [],

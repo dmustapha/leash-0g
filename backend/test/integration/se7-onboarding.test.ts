@@ -161,8 +161,8 @@ describe('SE-7 second-chain onboarding (persisted-tuple replay)', () => {
     const res = await request(app.ownerApp).get('/api/networks').set('Authorization', ownerAuth(OWNER));
     expect(res.status).toBe(200);
     expect(res.body.chains).toEqual([
-      { chainId: HOME_CHAIN, name: '0G Galileo Testnet' },
-      { chainId: BASE_CHAIN, name: 'Base Sepolia' },
+      { chainId: HOME_CHAIN, name: '0G Galileo Testnet', capabilities: [], router: null },
+      { chainId: BASE_CHAIN, name: 'Base Sepolia', capabilities: [], router: null },
     ]);
   });
 
@@ -285,13 +285,13 @@ describe('SE-7 second-chain onboarding (persisted-tuple replay)', () => {
       .post(`/api/agents/${agentId}/networks`)
       .set('Authorization', ownerAuth(OTHER_OWNER))
       .send({ chainId: BASE_CHAIN });
-    expect(post.status).toBe(403);
+    expect(post.status).toBe(404);
     const get = await request(app.ownerApp).get(`/api/agents/${agentId}/networks`).set('Authorization', ownerAuth(OTHER_OWNER));
-    expect(get.status).toBe(403);
+    expect(get.status).toBe(404);
   });
 
   it('create-time chain choice (spec §7.C): POST /api/agents with chainId mints on THAT chain', async () => {
-    const auditKey = '02' + 'd4'.repeat(32);
+    const auditKey = '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798'; // valid secp256k1 point (generator)
     const body = {
       name: 'base-native agent',
       auditPubKey: auditKey,
@@ -314,7 +314,7 @@ describe('SE-7 second-chain onboarding (persisted-tuple replay)', () => {
       .set('Authorization', ownerAuth(OWNER))
       .send({
         name: 'x',
-        auditPubKey: '02' + 'd4'.repeat(32),
+        auditPubKey: '0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798',
         policy: { perTransferCapWei: '1', windowCapWei: '2', windowSeconds: 3600, expiresAt: Math.floor(Date.now() / 1000) + 86_400 },
         allowlist: ['0x' + '9c'.repeat(20)],
         goal: { beneficiary: '0x' + '9c'.repeat(20), targetBalanceWei: '5', topUpWei: '1' },

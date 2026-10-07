@@ -237,15 +237,38 @@ export interface EvaluatorGoal {
   model?: string | undefined;
 }
 
+/**
+ * Trader (RH2/F-8): the autonomous GOVERNED-SWAP role — the first goal shape a
+ * swap capability can advance. Accumulates `holdToken` by swapping `spendToken`
+ * through an owner-granted (router, swap) capability, one clip per cycle, until
+ * the hold-token balance meets the target. NEVER sends native transfers.
+ * Token addresses are OWNER-TYPED at create (never model text); amounts are
+ * bounded by clipWei here, the call-rule caps + spend budget on-chain, and the
+ * band wall regardless (containment, not prevention).
+ */
+export interface TraderGoal {
+  type: 'trader';
+  /** token to accumulate (owner-typed, e.g. sTSLA). */
+  holdToken: string;
+  /** token to spend (owner-typed, e.g. sUSD). */
+  spendToken: string;
+  /** stop when holdToken balance ≥ this (base units). */
+  targetHoldWei: string;
+  /** per-trade spend of spendToken (base units). */
+  clipWei: string;
+  model?: string | undefined;
+}
+
 export type AgentGoal =
   | TreasuryGoal
   | SentinelGoal
   | ExecutorGoal
+  | TraderGoal
   | RequesterGoal
   | ProviderGoal
   | EvaluatorGoal;
 
-export type AgentRole = 'treasury' | 'sentinel' | 'executor' | 'requester' | 'provider' | 'evaluator';
+export type AgentRole = 'treasury' | 'sentinel' | 'executor' | 'trader' | 'requester' | 'provider' | 'evaluator';
 
 /** Missing discriminator ⇒ treasury (Phase-1 rows predate the union). */
 export function goalRole(goal: AgentGoal): AgentRole {
@@ -271,6 +294,7 @@ export function goalAllowlistCandidates(goal: AgentGoal): string[] {
     case 'requester':
       return [goal.feeRecipient];
     case 'executor':
+    case 'trader': // spends via governed calls only — no native send target
     case 'provider':
     case 'evaluator':
       return [];

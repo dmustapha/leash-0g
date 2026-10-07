@@ -8,6 +8,7 @@ import { statusEvent, traceEvent } from '../sse/events.js';
 import type { ApprovalBroker } from '../approvals/broker.js';
 import { generateGatewayToken, hashTokenSecret } from '../crypto/token.js';
 import { encryptSecret } from '../crypto/keycrypt.js';
+import { isValidEciesPubkey } from '../crypto/ecies.js';
 import { appendTrace, listTraces, verifyAgentChainIncremental } from '../trace/trace-store.js';
 import {
   getAgentById,
@@ -53,7 +54,7 @@ import {
   setGrantStatus,
   getCapabilityRequest,
 } from '../store/capabilities.js';
-import { presetKeys, type CallRule, type PresetKey } from '../governed-call/index.js';
+import { presetKeys, type CallRule, type PresetKey, type TargetCatalog } from '../governed-call/index.js';
 import { applyRevokeFanout } from '../agents/revoke-fanout.js';
 import {
   createLink,
@@ -84,13 +85,25 @@ import { listRequestsByChainAndAccount } from '../store/capabilities.js';
 /** SE-7: the registry surface the owner routes need (structural — tests fake it). */
 export interface OwnerChainRegistry {
   has(chainId: number): boolean;
-  listChains(): Array<{ chainId: number; name: string }>;
+  listChains(): Array<{
+    chainId: number;
+    name: string;
+    capabilityFactories?: Readonly<Record<string, string>> | undefined;
+    // FR4 (F-9): canonical per-chain addresses (band-arm target = canonical.router).
+    canonical?: { router?: string | undefined } | undefined;
+  }>;
   getChainOps(chainId: number): OnboardChainOps;
+  /** RH2 (two-factory): resolve a NAMED wall-capability factory for a chain, or undefined. */
+  getCapabilityFactory?(chainId: number, capability: string): string | undefined;
+  /** RH2 (two-factory): ops lane for a configured capability factory (default-deny otherwise). */
+  getChainOpsForFactory?(chainId: number, factoryV4Addr: string): OnboardChainOps;
   /** SE-8 (carry #2): the grant surface reads the chain's protocol/bridge allowlists. */
   getChainConfig(chainId: number): {
     protocolAllowlist?: readonly string[] | undefined;
     bridgeAllowlist?: readonly string[] | undefined;
     canonical?: { router?: string | undefined; vault?: string | undefined; settlementToken?: string | undefined } | undefined;
+    /** F-2: per-chain session-key gas dust override (unset ⇒ global default). */
+    sessionGasDustWei?: bigint | undefined;
   };
 }
 
@@ -169,6 +182,19 @@ const executorGoalSchema = z.object({
   model: z.string().min(1).optional(),
 });
 
+// FR3 (F-8): the trader — autonomous governed-swap role. Token addresses are
+// OWNER-TYPED here at create (never model text, never chat-patchable); the
+// decide loop's per-trade spend is bounded by clipWei, the call-rule caps +
+// spend budget on-chain, and the band wall regardless.
+const traderGoalSchema = z.object({
+  type: z.literal('trader'),
+  holdToken: addressSchema,
+  spendToken: addressSchema,
+  targetHoldWei: weiSchema,
+  clipWei: weiSchema,
+  model: z.string().min(1).optional(),
+});
+
 // Phase-4 ACP roles (spec §3b). Requester is the sole governed spender; provider
 // and evaluator are spend-incapable. jobSpecSource/rubricRef are opaque server
 // handles; the fee amount is NEVER trusted from these — it comes from the
@@ -199,6 +225,7 @@ const evaluatorGoalSchema = z.object({
 const goalSchema = z.union([
   sentinelGoalSchema,
   executorGoalSchema,
+  traderGoalSchema,
   requesterGoalSchema,
   providerGoalSchema,
   evaluatorGoalSchema,
@@ -214,9 +241,34 @@ const tokenConfigSchema = z.object({
   windowCapTokenWei: weiSchema,
 });
 
-const createAgentSchema = z.object({
+/**
+ * F-2: recognize an ops-wallet balance failure anywhere in a viem error chain.
+ * Exported for unit tests. viem's InsufficientFundsError text ("insufficient
+ * funds for gas * price + value") and common node phrasings are both matched;
+ * anything else keeps the opaque-500 path (no detail leaks, M-01). Scope: only
+ * called around OPS-WALLET sends (deploy/register/dust) — never around calls
+ * whose revert strings user input could shape (e.g. token transfers).
+ */
+export function isInsufficientFunds(err: unknown): boolean {
+  let cur: unknown = err;
+  for (let depth = 0; depth < 8 && cur instanceof Error; depth++) {
+    const text = `${cur.name} ${cur.message} ${(cur as { details?: string }).details ?? ''}`;
+    if (/insufficient funds|insufficient balance|InsufficientFundsError/i.test(text)) return true;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
+// Exported for unit tests (create-input hardening: past expiry, zero-address allowlist).
+export const createAgentSchema = z.object({
   name: z.string().min(1).max(120),
-  auditPubKey: z.string().regex(/^(0x)?0[23][0-9a-fA-F]{64}$|^(0x)?04[0-9a-fA-F]{128}$/),
+  auditPubKey: z
+    .string()
+    .regex(/^(0x)?0[23][0-9a-fA-F]{64}$|^(0x)?04[0-9a-fA-F]{128}$/)
+    // F-3: the regex pins the SHAPE only — a well-shaped blob that is not a
+    // point on secp256k1 would poison every later audit flush ("bad point:
+    // is not on curve"). Reject it at the door.
+    .refine(isValidEciesPubkey, { message: 'auditPubKey is not a valid secp256k1 point' }),
   policy: z.object({
     perTransferCapWei: weiSchema,
     windowCapWei: weiSchema,
@@ -248,6 +300,20 @@ const createAgentSchema = z.object({
    * Validated against the ChainRegistry at the route (default-deny, E-11).
    */
   chainId: z.number().int().positive().optional(),
+  /**
+   * RH2 (two-factory): mint through a NAMED secondary wall-capability factory on
+   * the target chain (e.g. `oracleBand` → the price-band wall). A KEY, never an
+   * address — resolved to an operator-configured factory at the route, else 409.
+   */
+  capability: z.string().min(1).max(32).optional(),
+  /**
+   * F-5: agents are not born paused. Spend-incapable roles (sentinel/provider/
+   * evaluator) start their runtime loop right after create — they can never
+   * move money, so there is nothing to fund first. Spend-capable roles stay
+   * paused until funded (the FE starts them on funding success). `false` opts
+   * an API caller out entirely.
+   */
+  autoStart: z.boolean().default(true),
 }).superRefine((v, issues) => {
   const role = v.goal.type ?? 'treasury';
   if (role === 'treasury' && v.allowlist.length < 1) {
@@ -299,6 +365,33 @@ const createAgentSchema = z.object({
       path: ['goal', 'topUpWei'],
     });
   }
+  // FR3 (F-8): a trader must trade BETWEEN two distinct tokens, and spends only
+  // via governed calls — no native allowlist target is required (unlike treasury).
+  if (v.goal.type === 'trader' && v.goal.holdToken.toLowerCase() === v.goal.spendToken.toLowerCase()) {
+    issues.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'goal.holdToken and goal.spendToken must differ',
+      path: ['goal', 'holdToken'],
+    });
+  }
+  // A past expiry would mint a born-dead account (expired on-chain from its
+  // first block) and burn the deploy gas for nothing.
+  if (v.policy.expiresAt <= Math.floor(Date.now() / 1000)) {
+    issues.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'policy.expiresAt must be in the future',
+      path: ['policy', 'expiresAt'],
+    });
+  }
+  // The zero address is never a valid recipient; it reverts deep in the deploy
+  // path and surfaces as an opaque 500.
+  if (v.allowlist.some((a) => /^0x0{40}$/.test(a))) {
+    issues.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'allowlist must not contain the zero address',
+      path: ['allowlist'],
+    });
+  }
 });
 
 const decisionSchema = z.object({
@@ -324,7 +417,9 @@ const presetApplySchema = z.object({
   txHash: z.string().regex(/^0x[0-9a-fA-F]{64}$/).optional(),
 });
 const capabilityRuleSchema = z.object({
-  action: z.enum(['propose', 'tighten', 'remove']),
+  // FR3 (F-8c): 'apply' — the owner signed applyCallRule for a matured proposed
+  // rule; flips the read-model grant proposed→active (on-chain stays authoritative).
+  action: z.enum(['propose', 'tighten', 'remove', 'apply']),
   rule: callRuleSchema,
   txHash: z.string().regex(/^0x[0-9a-fA-F]{64}$/).optional(),
 });
@@ -405,16 +500,17 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       .catch(() => res.status(401).json({ error: { message: 'unauthorized' } }));
   });
 
-  /** Load the agent and enforce owner match; responds 403/404 itself. */
+  /**
+   * Load the agent and enforce owner match; responds 404 itself.
+   * Foreign-owned answers 404, NOT 403: a 403 is an enumeration oracle — it
+   * confirms to a stranger that the agent ID exists. Real-but-not-yours must
+   * be indistinguishable from never-existed (matches the alerts surface).
+   */
   async function requireOwnedAgent(req: OwnerRequest, res: Response): Promise<AgentRow | null> {
     const id = req.params['id'] ?? '';
     const agent = await getAgentById(deps.pool, id);
-    if (!agent) {
+    if (!agent || agent.ownerAddr !== req.ownerAddr) {
       res.status(404).json({ error: { message: 'not found' } });
-      return null;
-    }
-    if (agent.ownerAddr !== req.ownerAddr) {
-      res.status(403).json({ error: { message: 'forbidden' } });
       return null;
     }
     return agent;
@@ -500,32 +596,65 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       }
       createChain = deps.chainRegistry.getChainOps(createChainId);
     }
-    const deployed = await createChain.deployAndRegister({
-      ownerAddr,
-      sessionKeyAddr,
-      auditPubKey: input.auditPubKey,
-      name: input.name,
-      accountVersion: input.accountVersion, // SE-1: 4 (default) → V4 factory; 2 → legacy
-      policy: {
-        perTransferCap: BigInt(input.policy.perTransferCapWei),
-        windowCap: BigInt(input.policy.windowCapWei),
-        windowSeconds: input.policy.windowSeconds,
-        expiresAt: input.policy.expiresAt,
-      },
-      allowlist: input.allowlist,
-      timelockDelay: deps.settings.defaultTimelockDelay,
-      // Phase-4: token-capable ONLY for a requester (validated above); the
-      // settlement token is immutable at create (F3).
-      ...(input.tokenConfig
-        ? {
-            settlementToken: input.tokenConfig.settlementToken,
-            tokenPolicy: {
-              perTransferCapToken: BigInt(input.tokenConfig.perTransferCapTokenWei),
-              windowCapToken: BigInt(input.tokenConfig.windowCapTokenWei),
-            },
-          }
-        : {}),
-    });
+    // RH2 (two-factory): mint through a NAMED secondary wall-capability factory
+    // when asked (e.g. `oracleBand`). Default-deny: the capability must be
+    // configured for THIS chain, and the default chain has no secondary factories.
+    if (input.capability) {
+      const capFactory =
+        createChainId !== deps.settings.defaultChainId
+          ? deps.chainRegistry?.getCapabilityFactory?.(createChainId, input.capability)
+          : undefined;
+      if (!capFactory || !deps.chainRegistry?.getChainOpsForFactory) {
+        res.status(409).json({ error: 'unknown_capability', capability: input.capability, chainId: createChainId });
+        return;
+      }
+      createChain = deps.chainRegistry.getChainOpsForFactory(createChainId, capFactory);
+    }
+    // F-2: an underfunded OPS wallet is an operator-funding condition, not an
+    // "internal error" — surface it as a clear 4xx instead of an opaque 500.
+    const opsUnderfunded = (): void => {
+      res.status(409).json({
+        error: {
+          message: `the operator gas wallet on chain ${createChainId} is underfunded — agent creation is temporarily unavailable on this chain`,
+          reason: 'ops_wallet_underfunded',
+        },
+      });
+    };
+    let deployed;
+    try {
+      deployed = await createChain.deployAndRegister({
+        ownerAddr,
+        sessionKeyAddr,
+        auditPubKey: input.auditPubKey,
+        name: input.name,
+        accountVersion: input.accountVersion, // SE-1: 4 (default) → V4 factory; 2 → legacy
+        policy: {
+          perTransferCap: BigInt(input.policy.perTransferCapWei),
+          windowCap: BigInt(input.policy.windowCapWei),
+          windowSeconds: input.policy.windowSeconds,
+          expiresAt: input.policy.expiresAt,
+        },
+        allowlist: input.allowlist,
+        timelockDelay: deps.settings.defaultTimelockDelay,
+        // Phase-4: token-capable ONLY for a requester (validated above); the
+        // settlement token is immutable at create (F3).
+        ...(input.tokenConfig
+          ? {
+              settlementToken: input.tokenConfig.settlementToken,
+              tokenPolicy: {
+                perTransferCapToken: BigInt(input.tokenConfig.perTransferCapTokenWei),
+                windowCapToken: BigInt(input.tokenConfig.windowCapTokenWei),
+              },
+            }
+          : {}),
+      });
+    } catch (err) {
+      if (isInsufficientFunds(err)) {
+        opsUnderfunded();
+        return;
+      }
+      throw err;
+    }
 
     const token = generateGatewayToken();
     const agentId = await insertAgent(deps.pool, {
@@ -562,8 +691,58 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     await releaseReservation(deps.pool, reserved.reservationId);
 
     // Gas dust so the session key can pay execute() gas; funds stay behind the
-    // account. Funded on the CHAIN the account was minted on (SE-7).
-    await createChain.fundSessionKey(sessionKeyAddr, deps.settings.sessionGasDustWei);
+    // account. Funded on the CHAIN the account was minted on (SE-7). F-2: dust
+    // is chain-priced — a per-chain override (EXTRA_CHAINS sessionGasDustWei)
+    // beats the 0G-sized global default.
+    const dustWei =
+      (createChainId !== deps.settings.defaultChainId
+        ? deps.chainRegistry?.getChainConfig(createChainId).sessionGasDustWei
+        : undefined) ?? deps.settings.sessionGasDustWei;
+    try {
+      await createChain.fundSessionKey(sessionKeyAddr, dustWei);
+    } catch (err) {
+      // The ops wallet ran dry BETWEEN deploy and dust-funding (narrow, but
+      // observed on RH). The agent EXISTS (minted + registered + inserted,
+      // quota slot consumed) — a 409 here would orphan it with no agentId
+      // returned. Answer 201 with the full create payload + a warning so the
+      // owner can fund/retry; the one-shot gatewayToken must not be lost.
+      if (isInsufficientFunds(err)) {
+        console.error(`agent ${agentId} created but session key unfunded: ops wallet dry on chain ${createChainId}`);
+        res.status(201).json({
+          agentId,
+          accountAddr: deployed.accountAddr,
+          sessionKeyAddr,
+          chainAgentId: deployed.chainAgentId.toString(),
+          gatewayToken: token.token,
+          txHashes: [deployed.createTx, deployed.registerTx],
+          warning: {
+            code: 'session_key_unfunded',
+            message: `the operator gas wallet on chain ${createChainId} ran dry before gas-dust funding — the agent was created but its session key has no gas yet`,
+          },
+        });
+        return;
+      }
+      throw err;
+    }
+
+    // F-5: spend-incapable roles go live immediately — an unfunded spender
+    // would burn an LLM cycle + error trace every 30s, so treasury/executor/
+    // requester wait for the FE's funding-success (or explicit) start.
+    const createdRole = input.goal.type ?? 'treasury';
+    if (input.autoStart && (createdRole === 'sentinel' || createdRole === 'provider' || createdRole === 'evaluator')) {
+      try {
+        await deps.runtime.start(agentId);
+        deps.hub.emit(agentId, 'status', statusEvent('running'));
+      } catch (err) {
+        // Create already succeeded — a start hiccup must not fail the response;
+        // the owner still has the manual Start CTA.
+        // F-6: on a non-holder instance this is RuntimeLeaseNotHeldError — the
+        // agent is born active in the DB but unlooped until the holder (or a
+        // lease handover) picks it up; the manual Start CTA routes through
+        // whichever instance answers then. Known LOW-severity liveness gap.
+        console.error(`auto-start failed for agent ${agentId}`, err);
+      }
+    }
 
     // Shape = FE CreateAgentResponse (web/lib/types.ts).
     res.status(201).json({
@@ -672,6 +851,26 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       throw new Error(`agent home chain ${a.chainId} requires the multichain registry (not configured)`);
     }
     return deps.chainRegistry.getChainOps(a.chainId);
+  }
+
+  /**
+   * FR3 (SE-8 carry, F-8a): resolve the preset TargetCatalog from the AGENT'S
+   * chain — the registered chain's `canonical` targets — instead of only the
+   * global CAP_* env (which describes the default chain). A non-default chain
+   * with no canonical config resolves to an empty catalog → resolvePreset
+   * answers `unresolvable_target` legibly (default-deny, never the WRONG
+   * chain's addresses). The default chain keeps the existing env-built catalog.
+   */
+  function catalogForAgent(agent: { chainId: number }): TargetCatalog {
+    if (agent.chainId === deps.settings.defaultChainId || !deps.chainRegistry) {
+      return deps.settings.capabilityCatalog;
+    }
+    const canonical = deps.chainRegistry.getChainConfig(agent.chainId).canonical;
+    return {
+      ...(canonical?.router ? { router: canonical.router.toLowerCase() } : {}),
+      ...(canonical?.vault ? { vault: canonical.vault.toLowerCase() } : {}),
+      ...(canonical?.settlementToken ? { settlement_token: canonical.settlementToken.toLowerCase() } : {}),
+    };
   }
 
   /**
@@ -857,7 +1056,8 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     }
     const agent = await getAgentById(deps.pool, approval.agentId);
     if (!agent || agent.ownerAddr !== req.ownerAddr) {
-      res.status(403).json({ error: { message: 'forbidden' } });
+      // 404, not 403 — same enumeration-oracle rule as requireOwnedAgent.
+      res.status(404).json({ error: { message: 'not found' } });
       return;
     }
     const ref = approval.requestRef;
@@ -1058,25 +1258,18 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       res.status(400).json({ error: { message: 'agentId or linkId required' } });
       return;
     }
+    // 404 for foreign-owned, same enumeration-oracle rule as requireOwnedAgent.
     if (agentId !== undefined) {
       const agent = await getAgentById(deps.pool, agentId);
-      if (!agent) {
+      if (!agent || agent.ownerAddr !== req.ownerAddr) {
         res.status(404).json({ error: { message: 'not found' } });
-        return;
-      }
-      if (agent.ownerAddr !== req.ownerAddr) {
-        res.status(403).json({ error: { message: 'forbidden' } });
         return;
       }
     }
     if (linkId !== undefined) {
       const link = await getLink(deps.pool, linkId);
-      if (!link) {
+      if (!link || link.ownerAddr !== req.ownerAddr) {
         res.status(404).json({ error: { message: 'not found' } });
-        return;
-      }
-      if (link.ownerAddr !== req.ownerAddr) {
-        res.status(403).json({ error: { message: 'forbidden' } });
         return;
       }
     }
@@ -1209,7 +1402,16 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       res.status(409).json({ error: { message: 'agent is revoked' } });
       return;
     }
-    await deps.runtime.start(agent.id);
+    try {
+      await deps.runtime.start(agent.id);
+    } catch (err) {
+      // F-6: a non-holder instance must refuse loudly, not 500 opaquely.
+      if (err instanceof Error && err.name === 'RuntimeLeaseNotHeldError') {
+        res.status(503).json({ error: { message: err.message, reason: 'runtime_lease_not_held' } });
+        return;
+      }
+      throw err;
+    }
     deps.hub.emit(agent.id, 'status', statusEvent('running'));
     res.json({ ok: true, running: true });
   }));
@@ -1757,9 +1959,15 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       return;
     }
     const qRaw = req.query['q'];
-    const q = (typeof qRaw === 'string' ? qRaw : '').trim().slice(0, 500);
+    const q = (typeof qRaw === 'string' ? qRaw : '').trim();
     if (!q) {
       res.status(400).json({ error: { message: 'q is required' } });
+      return;
+    }
+    // C14: the 500-char cap is a WALL, not a silent truncation — a trimmed-
+    // behind-your-back question would get an answer to a different question.
+    if (q.length > 500) {
+      res.status(400).json({ error: { message: 'q is too long (max 500 characters)' } });
       return;
     }
     const answer = await answerStatus(
@@ -1795,7 +2003,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       res.status(400).json({ error: { message: 'unknown preset' } });
       return;
     }
-    const resolved = resolvePreset(parsed.data.presetKey as PresetKey, deps.settings.capabilityCatalog);
+    const resolved = resolvePreset(parsed.data.presetKey as PresetKey, catalogForAgent(agent));
     if (!resolved.ok) {
       res.status(422).json({ error: { message: resolved.reason } });
       return;
@@ -1828,7 +2036,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       return;
     }
     const rule = toCallRule(parsed.data.rule);
-    if (parsed.data.action !== 'remove' && !targetGrantable(agent, rule.target)) {
+    if (parsed.data.action !== 'remove' && parsed.data.action !== 'apply' && !targetGrantable(agent, rule.target)) {
       res.status(422).json({
         error: { message: `rule target ${rule.target} is outside this chain's protocol allowlist` },
       });
@@ -1837,6 +2045,14 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     if (parsed.data.action === 'remove') {
       await setGrantStatus(deps.pool, agent.id, rule.target, rule.selector, 'removed');
       res.json({ ok: true, action: 'remove' });
+      return;
+    }
+    // FR3 (F-8c): a matured proposed rule the owner applied on-chain — flip the
+    // read-model to active. No allowlist re-check: the target was checked at
+    // propose, and the on-chain timelock/apply is the enforcement regardless.
+    if (parsed.data.action === 'apply') {
+      await setGrantStatus(deps.pool, agent.id, rule.target, rule.selector, 'active');
+      res.json({ ok: true, action: 'apply' });
       return;
     }
     if (parsed.data.txHash) {
@@ -1876,7 +2092,19 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       res.status(503).json({ error: { message: 'multichain_unavailable' } });
       return;
     }
-    res.json({ chains: deps.chainRegistry.listChains().map((c) => ({ chainId: c.chainId, name: c.name })) });
+    res.json({
+      chains: deps.chainRegistry.listChains().map((c) => ({
+        chainId: c.chainId,
+        name: c.name,
+        // RH2 (two-factory): the named wall-capability keys this chain can mint
+        // through (e.g. `oracleBand`). The FE surfaces an opt-in only when present;
+        // an empty list means the default V4 factory is the only path.
+        capabilities: Object.keys(c.capabilityFactories ?? {}),
+        // FR4 (F-9): the chain's canonical swap router — the band-arm surface
+        // pins the band to THIS target (config truth, never user/model text).
+        router: c.canonical?.router ?? null,
+      })),
+    });
   }));
 
   // GET /api/agents/:id/networks — the agent's per-chain presence: home chain +

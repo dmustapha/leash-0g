@@ -1,6 +1,19 @@
 import type { Pool } from 'pg';
 import { canonicalJson, type Json } from '../crypto/canonical.js';
-import { eciesEncrypt } from '../crypto/ecies.js';
+import { eciesEncrypt, isValidEciesPubkey } from '../crypto/ecies.js';
+
+/**
+ * F-3: a stored audit pubkey that is REGEX-shaped but not a secp256k1 point
+ * can never encrypt — retrying it forever only burns ticks and spams logs.
+ * Typed so the flush loop can tell a permanent key defect from a transient
+ * upload/RPC failure (which keeps its retry/backoff semantics).
+ */
+export class BadAuditKeyError extends Error {
+  constructor(key: string) {
+    super(`stored audit pubkey for ${key} is not a valid secp256k1 point`);
+    this.name = 'BadAuditKeyError';
+  }
+}
 
 export interface StorageUploader {
   upload(data: Buffer): Promise<{ root: string; txHash: string }>;
@@ -166,6 +179,11 @@ export class StreamBatcher {
   private readonly opts: Required<BatcherOptions>;
   private timer: NodeJS.Timeout | null = null;
   private readonly failures = new Map<string, { count: number; nextAttempt: number }>();
+  /** F-3: keys with a permanently unusable audit pubkey — skipped, logged once.
+   * TODO(F-3 follow-up): no audit-key rotation path exists yet; a quarantined
+   * agent needs a DB hotfix until PATCH /agents/:id/audit-pubkey lands. Records
+   * stay durable + hash-chained in Postgres meanwhile. */
+  private readonly quarantined = new Set<string>();
   private flushing = false;
 
   constructor(
@@ -207,12 +225,21 @@ export class StreamBatcher {
       for (const row of pending) {
         const due = row.n >= this.opts.maxRecords || now - row.oldest.getTime() >= this.opts.maxAgeMs;
         if (!due) continue;
+        if (this.quarantined.has(row.key)) continue; // F-3: permanent key defect — no retry
         const backoff = this.failures.get(row.key);
         if (backoff && now < backoff.nextAttempt) continue;
         try {
           await this.flushKey(row.key);
           this.failures.delete(row.key);
         } catch (err) {
+          if (err instanceof BadAuditKeyError) {
+            // F-3: records stay durable + hash-chained in Postgres; only the
+            // 0G Storage batch is withheld until the owner rotates the key.
+            this.quarantined.add(row.key);
+            this.failures.delete(row.key);
+            console.error(`${this.source.name} flush PERMANENTLY skipped for ${row.key}: ${err.message}`);
+            continue;
+          }
           const count = (backoff?.count ?? 0) + 1;
           this.failures.set(row.key, {
             count,
@@ -230,6 +257,7 @@ export class StreamBatcher {
     const pool = this.deps.pool;
     const pubkey = await this.source.pubkeyFor(pool, key);
     if (pubkey === null) return; // defer (S10 pre-key window) — not a failure
+    if (!isValidEciesPubkey(pubkey)) throw new BadAuditKeyError(key);
 
     const cursor = await this.source.cursor(pool, key);
     const records = await this.source.records(pool, key, cursor, this.opts.maxBatchSize);

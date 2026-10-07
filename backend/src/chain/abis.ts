@@ -47,6 +47,8 @@ export const factoryV4DeterministicAbi = parseAbi([
 export const erc20MetaAbi = parseAbi([
   'function decimals() view returns (uint8)',
   'function symbol() view returns (string)',
+  'function balanceOf(address owner) view returns (uint256)',
+  'function allowance(address owner, address spender) view returns (uint256)',
 ]);
 
 export const registryAbi = parseAbi([
@@ -165,4 +167,20 @@ export const leashAccountV4Abi = parseAbi([
   'error CodehashMismatch()',
   'error OneShotExpired()',
   'error EmptyCodeTarget(address target)',
+  // RH band wall (oracle price-sanity for governed swaps) — read + errors so a
+  // band refusal decodes to plain language in the cockpit (FR3b).
+  'function priceBand(bytes32) view returns (bool set, address feed, address asset, uint32 maxDeviationBps, uint64 maxStaleness)',
+  'function requireBandForSwap() view returns (bool)',
+  'error PremiumBreach(uint256 impliedPrice, uint256 maxPrice)',
+  'error StaleOracle(uint256 updatedAt, uint256 maxStaleness)',
+  'error OracleCallFailed()',
+  'error OraclePriceInvalid()',
+  'error BandRequired(address target)',
+  'error BandOnlyForSwap(bytes4 selector)',
+  'error PriceBandAssetMismatch(address expected, address actual)',
+]);
+
+/** Minimal Chainlink AggregatorV3 read — the band feed the runtime prices swaps from (FR3b). */
+export const aggregatorV3Abi = parseAbi([
+  'function latestRoundData() view returns (uint80 roundId, int256 answer, uint256 startedAt, uint256 updatedAt, uint80 answeredInRound)',
 ]);

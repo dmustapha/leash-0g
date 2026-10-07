@@ -38,3 +38,4 @@ landing/object-candidates/
 landing/proposals-screenshots/
 landing/scripts/design-tests.mjs
 landing/scripts/measure-reference.mjs
+backend/scripts/rh2-campaign/state/

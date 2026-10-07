@@ -7,6 +7,7 @@ import { useEffect, useRef } from 'react';
 import type { StreamEvent } from '@/lib/types';
 import { shortAddr, weiToOg } from '@/lib/format';
 import { txUrl } from '@/lib/chain';
+import { networkTxUrl } from '@/lib/networks';
 import type { Hex } from '@/lib/types';
 import { Disclosure } from '@/components/ui/Disclosure';
 
@@ -18,9 +19,12 @@ export type FeedItem =
 export function StreamFeed({
   items,
   connection,
+  chainId,
 }: {
   items: FeedItem[];
   connection: 'connecting' | 'open' | 'reconnecting' | 'closed';
+  /** F-11: the agent's home chain — explorer links must point at ITS explorer. */
+  chainId?: number;
 }) {
   const endRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -78,7 +82,7 @@ export function StreamFeed({
                       : `trace #${item.event.seq}`)}
                 </span>
                 {item.event.txHash ? (
-                  <a className="link-tx" href={txUrl(item.event.txHash as Hex)} target="_blank" rel="noreferrer">
+                  <a className="link-tx" href={(chainId !== undefined ? networkTxUrl(chainId, item.event.txHash as string) : null) ?? txUrl(item.event.txHash as Hex)} target="_blank" rel="noreferrer">
                     view tx
                   </a>
                 ) : null}

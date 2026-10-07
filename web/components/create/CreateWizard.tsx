@@ -8,8 +8,9 @@ import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import { isAddress, type Address } from 'viem';
 import { ApiError } from '@/lib/api';
+import { config } from '@/lib/config';
 import { isValidOgAmount, ogToWei, weiToOg } from '@/lib/format';
-import type { AgentGoal, CreateAgentResponse, Hex, JobSpecSummary, PolicyInput, TokenConfigInput } from '@/lib/types';
+import type { AgentGoal, CreateAgentResponse, Hex, JobSpecSummary, NetworkChain, PolicyInput, TokenConfigInput } from '@/lib/types';
 import { Disclosure } from '@/components/ui/Disclosure';
 import { Field } from '@/components/ui/Field';
 import { CopyButton } from '@/components/ui/CopyButton';
@@ -31,10 +32,17 @@ export type WizardInput = {
   tokenConfig?: TokenConfigInput;
   /** Phase-5 (D-B9): optional freeform capability label (elevation-suggested, owner-edited). */
   capabilityLabel?: string;
+  /** SE-7: the chain this agent mints on. Omitted = the home 0G chain (backend default). */
+  chainId?: number;
+  /** RH2 (two-factory): the named wall-capability to mint through (e.g. `oracleBand`). */
+  capability?: string;
 };
 
+/** The band-wall capability key a chain advertises when it can mint price-band-walled agents. */
+const ORACLE_BAND = 'oracleBand';
+
 /** Role variant chooser (spec §3c/§3b): ONE plain-language choice on the goal step. */
-export type AgentRole = 'treasury' | 'sentinel' | 'executor' | 'requester' | 'provider' | 'evaluator';
+export type AgentRole = 'treasury' | 'sentinel' | 'executor' | 'trader' | 'requester' | 'provider' | 'evaluator';
 
 /** A pickable existing agent (for the requester's provider/evaluator links). */
 export type JobAgentOption = { id: string; name: string };
@@ -61,10 +69,22 @@ export type CreateWizardProps = {
   jobAgents?: { providers: JobAgentOption[]; evaluators: JobAgentOption[] };
   /** Phase-5 (D-A2): the owner's saved job specs, for the requester job-handle picker. */
   jobSpecs?: JobSpecSummary[];
+  /**
+   * SE-7: the registered chain table (GET /api/networks), for the network picker.
+   * Omitted/empty ⇒ the picker is hidden and the agent mints on the backend default
+   * (the home 0G chain) — the Phase-1 behavior.
+   */
+  networks?: NetworkChain[];
   /** Phase-5 (D-B3): seed all fields from a confirmed read-back draft and jump to `review`. */
   prefill?: WizardPrefill;
   /** Phase-5 (D-A1): CTA when the requester's advanced-door prerequisites are unmet. */
   onStartAgent?: () => void;
+  /**
+   * F-5: start the created agent's runtime loop. Spend-incapable roles are
+   * auto-started by the backend; for spend-capable roles the done screen calls
+   * this on funding success and from the loud skip-fund Start CTA.
+   */
+  startCreatedAgent?: (agentId: string) => Promise<unknown>;
 };
 
 type Step =
@@ -91,6 +111,10 @@ const STEP_ORDERS: Record<AgentRole, Step[]> = {
   treasury: ['name', 'goal', 'transfer-cap', 'budget', 'allowlist', 'expiry', 'review'],
   sentinel: ['name', 'goal', 'sentinel-policy', 'expiry', 'review'],
   executor: ['name', 'goal', 'transfer-cap', 'budget', 'allowlist', 'expiry', 'review'],
+  // FR3 (F-8): the trader never moves native funds (zero native caps, empty
+  // allowlist) — its spending power comes from governed-call grants + per-token
+  // budgets the owner adds in the cockpit AFTER create. No policy steps.
+  trader: ['name', 'goal', 'expiry', 'review'],
   // Phase-4 ACP roles (spec §3b). Provider/evaluator are spend-incapable (no
   // policy steps, like the sentinel); the requester is the sole governed
   // spender, so it gets the settlement-token config step.
@@ -117,6 +141,11 @@ const ROLE_OPTIONS: Array<{ value: AgentRole; label: string; explain: string }> 
     value: 'executor',
     label: 'Act on requests from another agent',
     explain: 'It waits for requests over a link you create, checks them against its own limits, then pays.',
+  },
+  {
+    value: 'trader',
+    label: 'Trade toward a holding target',
+    explain: 'It swaps one token for another from its own loop, one bounded clip at a time, until it holds your target. Grants, budgets, and the price band wall every trade on-chain.',
   },
   {
     value: 'provider',
@@ -180,6 +209,8 @@ function entryStepFor(role: AgentRole, fields: Partial<Record<string, string>>):
       return !has('beneficiary') ? 'goal' : !has('payee') ? 'allowlist' : 'review';
     case 'executor':
       return has('payee') ? 'review' : 'allowlist';
+    case 'trader':
+      return has('holdToken') && has('spendToken') ? 'review' : 'goal';
     case 'requester':
       return has('jobSpecSource') && has('providerAgentId') && has('evaluatorAgentId') &&
         has('feeToken') && has('feeRecipient') && has('feeCapPerJob') &&
@@ -195,6 +226,8 @@ function seedFromPrefill(p: WizardPrefill): {
   entryStep: Step;
   fields: Partial<Record<string, string>>;
   allowlist: Address[];
+  chainId?: number;
+  capability?: string;
 } {
   const g = p.goal;
   const role: AgentRole =
@@ -211,6 +244,12 @@ function seedFromPrefill(p: WizardPrefill): {
     fields['feeRecipient'] = g.feeRecipient;
     fields['feeCapPerJob'] = g.feeCapPerJobWei;
   }
+  if (role === 'trader' && 'holdToken' in g) {
+    fields['holdToken'] = g.holdToken;
+    fields['spendToken'] = g.spendToken;
+    fields['targetHold'] = weiToOg(g.targetHoldWei);
+    fields['clip'] = weiToOg(g.clipWei);
+  }
   if ((role === 'treasury' || role === 'sentinel') && 'beneficiary' in g) {
     fields['beneficiary'] = g.beneficiary;
     fields['targetBalance'] = weiToOg(g.targetBalanceWei);
@@ -225,10 +264,10 @@ function seedFromPrefill(p: WizardPrefill): {
     fields['tokenWindow'] = p.tokenConfig.windowCapTokenWei;
   }
   if (p.allowlist[0]) fields['payee'] = p.allowlist[0];
-  return { role, entryStep: entryStepFor(role, fields), fields, allowlist: p.allowlist };
+  return { role, entryStep: entryStepFor(role, fields), fields, allowlist: p.allowlist, chainId: p.chainId, capability: p.capability };
 }
 
-export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs, prefill, onStartAgent }: CreateWizardProps) {
+export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs, networks, prefill, onStartAgent, startCreatedAgent }: CreateWizardProps) {
   const seed = prefill ? seedFromPrefill(prefill) : null;
   const [step, setStep] = useState<Step>(seed?.entryStep ?? 'name');
   const [role, setRole] = useState<AgentRole>(seed?.role ?? 'treasury');
@@ -239,6 +278,13 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
     (jobAgents?.evaluators.length ?? 0) >= 1 &&
     (jobSpecs?.length ?? 0) >= 1;
   const [name, setName] = useState(seed?.fields['name'] ?? '');
+  // SE-7: the chain to mint on. Defaults to the home 0G chain; the picker appears only
+  // when the networks table carries more than the home chain.
+  const [chainId, setChainId] = useState<number>(seed?.chainId ?? config.chainId);
+  // RH2: opt-in to the price-band wall when the selected chain advertises `oracleBand`.
+  // A prefill carrying the band capability seeds the checkbox on; the chainSupportsBand
+  // guard still gates whether it reaches the POST.
+  const [bandWall, setBandWall] = useState(seed?.capability === ORACLE_BAND);
   const [beneficiary, setBeneficiary] = useState(seed?.fields['beneficiary'] ?? '');
   const [targetBalance, setTargetBalance] = useState(seed?.fields['targetBalance'] ?? '0.1');
   const [topUp, setTopUp] = useState(seed?.fields['topUp'] ?? '0.01');
@@ -250,6 +296,11 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
   const [passphrase, setPassphrase] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<WizardResult | null>(null);
+  // FR3 trader fields (token amounts entered in whole-token units, 18-decimals).
+  const [holdToken, setHoldToken] = useState(seed?.fields['holdToken'] ?? '');
+  const [spendToken, setSpendToken] = useState(seed?.fields['spendToken'] ?? '');
+  const [targetHold, setTargetHold] = useState(seed?.fields['targetHold'] ?? '1');
+  const [clip, setClip] = useState(seed?.fields['clip'] ?? '100');
   // Phase-4 job-role fields.
   const [serviceSpec, setServiceSpec] = useState(seed?.fields['serviceSpec'] ?? '');
   const [rubricRef, setRubricRef] = useState(seed?.fields['rubricRef'] ?? '');
@@ -321,6 +372,37 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
       };
     }
 
+    // FR3 (F-8) trader: zero native caps + empty allowlist — its ONLY spending
+    // power is governed-call grants + per-token budgets added in the cockpit.
+    // Token addresses are owner-typed HERE (never model text, never patchable).
+    // TODO(review WARNING): ogToWei assumes 18-decimal tokens (true for the RH
+    // mocks). A 6-decimal token (USDC/USDT) would store a semantically wrong
+    // clip/target — resolve token decimals from chain before shipping beyond
+    // 18dp testnet tokens. The on-chain caps/budgets bound the spend regardless.
+    if (role === 'trader') {
+      if (
+        !isAddress(holdToken) ||
+        !isAddress(spendToken) ||
+        holdToken.toLowerCase() === spendToken.toLowerCase() ||
+        !isValidOgAmount(targetHold) ||
+        !isValidOgAmount(clip)
+      ) {
+        return null;
+      }
+      return {
+        name: name.trim(),
+        policy: zeroCaps,
+        allowlist: [],
+        goal: {
+          type: 'trader',
+          holdToken,
+          spendToken,
+          targetHoldWei: ogToWei(targetHold),
+          clipWei: ogToWei(clip),
+        },
+      };
+    }
+
     if (role === 'sentinel') {
       // Spend-incapable preset (spec §3c): zero caps, empty allowlist. The goal amounts
       // are what it ASKS the executor to send — its own caps never bound them.
@@ -378,13 +460,33 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
   }, [
     role, name, beneficiary, targetBalance, topUp, perTransfer, windowAmount, windowHours, payee, expiryDays,
     serviceSpec, rubricRef, jobSpecSource, providerAgentId, evaluatorAgentId, feeToken, feeRecipient, feeCapPerJob,
-    tokenPerTransfer, tokenWindow,
+    tokenPerTransfer, tokenWindow, holdToken, spendToken, targetHold, clip,
   ]);
 
+  // SE-7 / RH2: the chosen chain and whether it can mint band-walled agents. An empty
+  // networks table (unit tests, multichain disabled) means the home chain only, no picker.
+  const selectedChain = useMemo(
+    () => networks?.find((c) => c.chainId === chainId),
+    [networks, chainId],
+  );
+  const chainSupportsBand = !!selectedChain?.capabilities.includes(ORACLE_BAND);
+  // The band-wall opt-in only applies on a chain that advertises it — guard the flag so a
+  // stale `true` from switching chains never leaks into the POST.
+  const bandWallOn = chainSupportsBand && bandWall;
+
   // D-B9: attach the freeform capability label (inert) without touching the per-role builders.
+  // SE-7/RH2 additively carry the chosen chain + band-wall capability into the create POST.
   const input = useMemo<WizardInput | null>(
-    () => (baseInput ? { ...baseInput, ...(capabilityLabel.trim() ? { capabilityLabel: capabilityLabel.trim() } : {}) } : null),
-    [baseInput, capabilityLabel],
+    () =>
+      baseInput
+        ? {
+            ...baseInput,
+            ...(capabilityLabel.trim() ? { capabilityLabel: capabilityLabel.trim() } : {}),
+            chainId,
+            ...(bandWallOn ? { capability: ORACLE_BAND } : {}),
+          }
+        : null,
+    [baseInput, capabilityLabel, chainId, bandWallOn],
   );
 
   // Reviewed constraint (TREASURY only): a single top-up is one payment, so it can never
@@ -481,6 +583,50 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
               placeholder="e.g. Treasury helper"
               autoFocus
             />
+            {(networks?.length ?? 0) > 1 ? (
+              <label className="label" style={{ color: 'var(--color-ink)', display: 'grid', gap: '0.35rem' }}>
+                Network
+                <select
+                  className="field"
+                  data-testid="network-select"
+                  value={chainId}
+                  onChange={(e) => {
+                    setChainId(Number(e.target.value));
+                    setBandWall(false); // reset the opt-in when the chain changes
+                  }}
+                >
+                  {(networks ?? []).map((c) => (
+                    <option key={c.chainId} value={c.chainId}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+                <span style={{ fontSize: '0.82rem', color: 'var(--color-ink-dim)' }}>
+                  The blockchain your agent&apos;s account is created on. Defaults to 0G.
+                </span>
+              </label>
+            ) : null}
+            {chainSupportsBand ? (
+              <label
+                className="panel"
+                data-testid="band-wall-optin"
+                style={{ display: 'flex', gap: '0.65rem', alignItems: 'flex-start', padding: '0.8rem 0.9rem', cursor: 'pointer' }}
+              >
+                <input
+                  type="checkbox"
+                  checked={bandWall}
+                  onChange={(e) => setBandWall(e.target.checked)}
+                  style={{ marginTop: '0.2rem' }}
+                />
+                <span style={{ display: 'grid', gap: '0.25rem' }}>
+                  <span style={{ fontWeight: 600 }}>Band-walled trading agent</span>
+                  <span style={{ fontSize: '0.84rem', color: 'var(--color-ink-dim)' }}>
+                    Every trade is checked against the live oracle price band on-chain — trades
+                    outside the band are refused by the contract.
+                  </span>
+                </span>
+              </label>
+            ) : null}
           </>,
         )}
 
@@ -489,8 +635,16 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
           stepOrder[stepOrder.indexOf('goal') + 1] ?? 'review',
           role === 'executor' ||
             isJobRole(role) ||
-            (isAddress(beneficiary) && isValidOgAmount(targetBalance) && isValidOgAmount(topUp)),
-          'Enter a valid wallet address and amounts greater than zero, like 0.1.',
+            (role === 'trader'
+              ? isAddress(holdToken) &&
+                isAddress(spendToken) &&
+                holdToken.toLowerCase() !== spendToken.toLowerCase() &&
+                isValidOgAmount(targetHold) &&
+                isValidOgAmount(clip)
+              : isAddress(beneficiary) && isValidOgAmount(targetBalance) && isValidOgAmount(topUp)),
+          role === 'trader'
+            ? 'Enter two different valid token addresses and amounts greater than zero.'
+            : 'Enter a valid wallet address and amounts greater than zero, like 0.1.',
           <>
             <h1 style={{ fontSize: 'var(--text-h1)' }}>What should this agent do?</h1>
             <fieldset style={{ border: 0, margin: 0, padding: 0, display: 'grid', gap: '0.5rem' }} data-testid="role-chooser">
@@ -574,6 +728,51 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
                 </div>
               )}
             </div>
+
+            {role === 'trader' ? (
+              <>
+                <Field
+                  id="goal-hold-token"
+                  label="Token to accumulate"
+                  hint="The ERC-20 it buys and holds (e.g. the tokenized stock). Type the exact contract address."
+                  value={holdToken}
+                  onChange={(e) => setHoldToken(e.target.value)}
+                  placeholder="0x…"
+                />
+                <Field
+                  id="goal-spend-token"
+                  label="Token to spend"
+                  hint="The ERC-20 it pays with (e.g. the test dollar). Type the exact contract address."
+                  value={spendToken}
+                  onChange={(e) => setSpendToken(e.target.value)}
+                  placeholder="0x…"
+                />
+                <Field
+                  id="goal-target-hold"
+                  label="Hold target"
+                  hint="It stops trading once it holds this much of the accumulate token. Amounts assume an 18-decimal token."
+                  value={targetHold}
+                  onChange={(e) => setTargetHold(e.target.value)}
+                  inputMode="decimal"
+                  suffix="tokens"
+                />
+                <Field
+                  id="goal-clip"
+                  label="Spend at most, per trade"
+                  hint="Each swap spends at most this much of the spend token. On-chain caps and budgets bound it again."
+                  value={clip}
+                  onChange={(e) => setClip(e.target.value)}
+                  inputMode="decimal"
+                  suffix="tokens"
+                />
+                <Disclosure label="How does it actually get to trade?">
+                  Creating the agent gives it NO trading power. After create, you grant it the
+                  exact contract calls (approve + swap), a per-token spending budget, and — on a
+                  band-wall chain — every trade is checked against the live oracle price band
+                  on-chain. Each grant waits a short safety delay before it takes effect.
+                </Disclosure>
+              </>
+            ) : null}
 
             {isTopUpRole(role) ? (
               <>
@@ -948,6 +1147,8 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
           <dl style={{ display: 'grid', gap: '0.55rem', margin: 0 }} data-testid="review-summary">
             {[
               ['Name', name.trim()],
+              ['Network', selectedChain?.name ?? (chainId !== config.chainId ? 'Loading…' : '0G Galileo Testnet')],
+              ...(bandWallOn ? [['Band wall', 'on — trades outside the oracle band are refused on-chain']] : []),
               [
                 'Job',
                 role === 'treasury'
@@ -956,11 +1157,13 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
                     ? 'watches and requests top-ups (never pays)'
                     : role === 'executor'
                       ? 'acts on requests from a linked agent'
-                      : role === 'provider'
-                        ? 'does jobs (spend-incapable)'
-                        : role === 'evaluator'
-                          ? 'judges work — skeptic (spend-incapable)'
-                          : 'orders jobs and pays for good work',
+                      : role === 'trader'
+                        ? 'trades toward a holding target (governed swaps only)'
+                        : role === 'provider'
+                          ? 'does jobs (spend-incapable)'
+                          : role === 'evaluator'
+                            ? 'judges work — skeptic (spend-incapable)'
+                            : 'orders jobs and pays for good work',
               ],
               // treasury/sentinel top-up rows
               ...(isTopUpRole(role)
@@ -968,6 +1171,15 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
                     [role === 'sentinel' ? 'Watches' : 'Keeps topped up', beneficiary],
                     ['Keep them at', `${targetBalance} 0G`],
                     [role === 'sentinel' ? 'Asks for, per top-up' : 'Per top-up', `${topUp} 0G max`],
+                  ]
+                : []),
+              // FR3 trader rows
+              ...(role === 'trader'
+                ? [
+                    ['Accumulates', holdToken],
+                    ['Spends', spendToken],
+                    ['Hold target', `${targetHold} tokens`],
+                    ['Per trade', `${clip} tokens max`],
                   ]
                 : []),
               // Phase-4 job-role rows
@@ -989,7 +1201,9 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
                     ['Per payment', 'nothing — it can never pay'],
                     ['Can pay', 'nobody (empty allowlist)'],
                   ]
-                : isJobRole(role)
+                : role === 'trader'
+                  ? [['Moves native funds', 'no — trades only via grants you add after create']]
+                  : isJobRole(role)
                   ? [['Moves native funds', role === 'requester' ? 'no — settles ERC-20 only' : 'no — spend-incapable']]
                   : [
                       ['Per payment', `${weiToOg(input?.policy.perTransferCapWei ?? '0')} 0G max`],
@@ -1029,7 +1243,10 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
             <button
               type="button"
               className="btn btn-primary"
-              disabled={!walletReady || !input || topUpExceedsCap}
+              // A prefill can seed a non-home chain before the networks table resolves; creating
+              // in that window would silently drop the band-wall capability (bandWallOn is
+              // derived from the not-yet-loaded chain entry), so wait for the chain to resolve.
+              disabled={!walletReady || !input || topUpExceedsCap || (chainId !== config.chainId && selectedChain === undefined)}
               onClick={() => void submit()}
               data-testid="create-agent"
             >
@@ -1105,9 +1322,30 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
             <button type="button" className="btn" onClick={result.downloadBackup}>
               Download audit key backup
             </button>
-            <a className="btn btn-primary" href={`/agents/${result.response.agentId}`}>
-              Open the cockpit
-            </a>
+            {role === 'sentinel' || role === 'provider' || role === 'evaluator' ? (
+              // Backend auto-started this spend-incapable agent — plain cockpit link.
+              <a className="btn btn-primary" href={`/agents/${result.response.agentId}`}>
+                Open the cockpit — it&apos;s already running
+              </a>
+            ) : (
+              // F-5: loud Start CTA for the skip-fund path — spend-capable agents
+              // are born paused until funded or explicitly started.
+              <button
+                type="button"
+                className="btn btn-primary"
+                data-testid="start-and-open"
+                onClick={async () => {
+                  try {
+                    await startCreatedAgent?.(result.response.agentId);
+                  } catch {
+                    /* cockpit has the Start button as fallback */
+                  }
+                  window.location.href = `/agents/${result.response.agentId}`;
+                }}
+              >
+                Start agent &amp; open cockpit
+              </button>
+            )}
           </div>
           {role !== 'sentinel' ? (
             <section aria-label="Fund your agent" className="panel" style={{ padding: '0.9rem 1rem', display: 'grid', gap: '0.7rem' }}>
@@ -1117,9 +1355,16 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
                 it can actually pay when the time comes.
               </p>
               <FundPanel
+                chainId={chainId}
                 accountAddr={result.response.accountAddr}
                 defaultAmountOg={weiToOg(2n * BigInt(input?.policy.windowCapWei ?? ogToWei(windowAmount)))}
                 onSend={fund ? (valueWei) => fund.send(result.response.accountAddr, valueWei) : undefined}
+                onFunded={
+                  startCreatedAgent
+                    ? // F-5: funding landed — start the spend-capable agent right away.
+                      () => void startCreatedAgent(result.response.agentId).catch(() => {})
+                    : undefined
+                }
                 getBalance={fundGetBalance ? () => fundGetBalance(result.response.accountAddr) : undefined}
                 skipHref={`/agents/${result.response.agentId}`}
               />

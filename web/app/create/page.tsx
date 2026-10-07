@@ -32,7 +32,7 @@ import {
 import { FunnelEntry } from '@/components/create/FunnelEntry';
 import { ReadBack } from '@/components/create/ReadBack';
 import { draftToPrefill } from '@/components/create/draft-to-prefill';
-import type { ElevationDraft, JobSpecSummary } from '@/lib/types';
+import type { ElevationDraft, JobSpecSummary, NetworkChain } from '@/lib/types';
 
 function download(filename: string, contents: string) {
   const url = URL.createObjectURL(new Blob([contents], { type: 'application/json' }));
@@ -48,6 +48,8 @@ type Screen = 'funnel' | 'readback' | 'wizard';
 export default function CreatePage() {
   const wallet = useOwnerWallet();
   const { setAgentId } = useAgentId();
+  // F-11: the chain the agent was minted on (undefined = platform default).
+  const [createdChainId, setCreatedChainId] = useState<number | undefined>(undefined);
   const api = useMemo(() => makeApi(wallet.getToken), [wallet.getToken]);
 
   const [screen, setScreen] = useState<Screen>('funnel');
@@ -61,12 +63,16 @@ export default function CreatePage() {
   });
   // Phase-5 (D-A2): the owner's saved job specs, for the requester job-handle picker.
   const [jobSpecs, setJobSpecs] = useState<JobSpecSummary[]>([]);
+  // SE-7: the registered chain table, for the wizard's network picker. Empty when
+  // multichain is unavailable (503) — the picker stays hidden, home-chain default.
+  const [networks, setNetworks] = useState<NetworkChain[]>([]);
   useEffect(() => {
     void (async () => {
       try {
-        const [{ agents }, specs] = await Promise.all([
+        const [{ agents }, specs, nets] = await Promise.all([
           api.listAgents(),
           api.listJobSpecs().catch(() => ({ specs: [] as JobSpecSummary[] })),
+          api.listNetworks().catch(() => ({ chains: [] as NetworkChain[] })),
         ]);
         const active = agents.filter((a) => a.status === 'active');
         setJobAgents({
@@ -74,6 +80,7 @@ export default function CreatePage() {
           evaluators: active.filter((a) => a.role === 'evaluator').map((a) => ({ id: a.agentId, name: a.name })),
         });
         setJobSpecs(specs.specs);
+        setNetworks(nets.chains);
       } catch {
         /* the pickers just show empty — non-fatal */
       }
@@ -93,11 +100,22 @@ export default function CreatePage() {
       } else {
         if (!wallet.address) throw new Error('Connect your wallet first.');
         const message = kekSignMessage(wallet.address, config.chainId);
-        const sig = await probeDeterministicSignature(wallet.signMessage, message);
+        // ANY wallet-layer failure (user reject, extension security interstitial killing
+        // the request) falls back to the passphrase KEK — the wizard must stay recoverable
+        // without a wallet signature.
+        let sig: string | null;
+        try {
+          sig = await probeDeterministicSignature(wallet.signMessage, message);
+        } catch {
+          sig = null;
+        }
         if (!sig) throw new PassphraseRequiredError();
         blob = await encryptWithSignature(hexToBytes(keypair.privKeyHex), sig);
       }
 
+      // F-11 (review fix): clear any PRIOR create's chain before this one — a default-chain
+      // create passes undefined and must not inherit a previous non-default choice.
+      setCreatedChainId(undefined);
       // 3. Create via backend — server stores the encrypted blob blind.
       const response = await api.createAgent({
         name: input.name,
@@ -109,8 +127,13 @@ export default function CreatePage() {
         ...(input.tokenConfig ? { tokenConfig: input.tokenConfig } : {}),
         // Phase-5 (D-B9): thread the freeform capability label (inert display field).
         ...(input.capabilityLabel ? { capabilityLabel: input.capabilityLabel } : {}),
+        // SE-7 / RH2: the chosen chain + optional band-wall capability (default-deny beyond).
+        ...(input.chainId !== undefined ? { chainId: input.chainId } : {}),
+        ...(input.capability ? { capability: input.capability } : {}),
       });
       setAgentId(response.agentId);
+      // F-11: remember the minted chain so the fund step sends on the AGENT'S chain.
+      setCreatedChainId(input.chainId);
 
       return {
         response,
@@ -130,11 +153,11 @@ export default function CreatePage() {
       send: async (to: Address, valueWei: bigint) => {
         if (!wallet.address) throw new Error('Connect your wallet first.');
         const provider = await wallet.getProvider();
-        return sendNativeOnchain(provider, wallet.address, to, valueWei);
+        return sendNativeOnchain(provider, wallet.address, to, valueWei, createdChainId);
       },
-      ...(config.e2eMode ? {} : { getBalance: (account: Address) => readAccountBalance(account) }),
+      ...(config.e2eMode ? {} : { getBalance: (account: Address) => readAccountBalance(account, createdChainId) }),
     }),
-    [wallet],
+    [wallet, createdChainId],
   );
 
   // — Funnel transitions —
@@ -172,8 +195,10 @@ export default function CreatePage() {
           fund={fund}
           jobAgents={jobAgents}
           jobSpecs={jobSpecs}
+          networks={networks}
           {...(prefill ? { prefill } : {})}
           onStartAgent={onManual}
+          startCreatedAgent={(agentId) => api.start(agentId)}
         />
       )}
     </div>

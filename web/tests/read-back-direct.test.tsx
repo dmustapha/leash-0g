@@ -91,6 +91,34 @@ describe('ReadBack (direct mode) — redirect quarantine + never-guess-money', (
     expect(JSON.stringify(edited)).not.toContain(RECIPIENT);
   });
 
+  it('FR5/F-14: a trader redirect needs NO recipient — confirms without one, self-recipient note shown', async () => {
+    const user = userEvent.setup();
+    const onConfirm = vi.fn();
+    const traderDirection: DirectionDraft = {
+      agentId: 'agent-1',
+      currentRole: 'trader',
+      understanding: 'Increase the target hold amount to 400 sTSLA and keep the clip at 100 sUSD.',
+      goalPatch: { targetHoldWei: '400000000000000000000', clipWei: '100000000000000000000' },
+      moneyPower: 'can-move-money',
+      unsureFields: [],
+      confidence: 'high',
+    };
+    render(<ReadBack mode="direct" draft={traderDirection} onConfirm={onConfirm} onBack={vi.fn()} />);
+    // Moves money, but NO recipient input — a trader swaps into its own account.
+    expect(screen.queryByTestId('rb-recipient')).not.toBeInTheDocument();
+    expect(screen.getByTestId('read-back-self-recipient-note')).toBeInTheDocument();
+    // Confirms with no recipient entered — not blocked — and passes recipient === undefined.
+    await user.click(screen.getByTestId('read-back-confirm'));
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    const [edited, recipient] = onConfirm.mock.calls[0]!;
+    expect(recipient).toBeUndefined();
+    expect(edited.goalPatch.targetHoldWei).toBe('400000000000000000000');
+    // Quarantine wall: no address-shaped value or recipient key smuggled into the draft.
+    expect(JSON.stringify(edited)).not.toMatch(/0x[0-9a-fA-F]{40}/);
+    expect(edited.goalPatch).not.toHaveProperty('beneficiary');
+    expect(edited.goalPatch).not.toHaveProperty('feeRecipient');
+  });
+
   it('shows a suggestedPolicy read-only with the time-locked disclosure (never armed here)', () => {
     render(<ReadBack mode="direct" draft={treasuryDirection()} onConfirm={vi.fn()} onBack={vi.fn()} />);
     const block = screen.getByTestId('read-back-suggested-policy');

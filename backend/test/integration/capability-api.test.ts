@@ -116,13 +116,13 @@ describe('POST /api/agents/:id/capabilities/preset', () => {
     expect(res.body.error.message).toBe('unresolvable_target');
   });
 
-  it('is owner-scoped (403 for another owner, 404 for a missing agent)', async () => {
+  it('is owner-scoped (404 for another owner (enumeration-safe), 404 for a missing agent)', async () => {
     const a = await seedOwned();
     const forbidden = await request(t.app)
       .post(`/api/agents/${a.id}/capabilities/preset`)
       .set('authorization', ownerAuth(OTHER))
       .send({ presetKey: 'defi_trader' });
-    expect(forbidden.status).toBe(403);
+    expect(forbidden.status).toBe(404);
     const missing = await request(t.app)
       .post(`/api/agents/00000000-0000-0000-0000-000000000000/capabilities/preset`)
       .set('authorization', ownerAuth(OWNER))
