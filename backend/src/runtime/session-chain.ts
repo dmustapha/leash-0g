@@ -133,21 +133,21 @@ export class SessionChain implements RuntimeChain {
   }
 
   async getErc20Balance(token: string, owner: string): Promise<bigint> {
-    return (await this.publicClient.readContract({
+    return this.publicClient.readContract({
       address: token as Hex,
       abi: erc20MetaAbi,
       functionName: 'balanceOf',
       args: [owner as Hex],
-    })) as bigint;
+    });
   }
 
   async getErc20Allowance(token: string, owner: string, spender: string): Promise<bigint> {
-    return (await this.publicClient.readContract({
+    return this.publicClient.readContract({
       address: token as Hex,
       abi: erc20MetaAbi,
       functionName: 'allowance',
       args: [owner as Hex, spender as Hex],
-    })) as bigint;
+    });
   }
 
   async getSwapBandPrice18(accountAddr: string, target: string, selector: string): Promise<bigint | null> {
@@ -157,25 +157,25 @@ export class SessionChain implements RuntimeChain {
     try {
       // on-chain ruleKey = keccak256(abi.encodePacked(target, selector)).
       const key = keccak256(encodePacked(['address', 'bytes4'], [target.toLowerCase() as Hex, selector.toLowerCase() as Hex]));
-      const band = (await this.publicClient.readContract({
+      const band = await this.publicClient.readContract({
         address: accountAddr as Hex,
         abi: leashAccountV4Abi,
         functionName: 'priceBand',
         args: [key],
-      })) as readonly [boolean, Hex, Hex, number, bigint];
+      });
       if (!band[0]) return null;
-      const [, answer] = (await this.publicClient.readContract({
+      const [, answer] = await this.publicClient.readContract({
         address: band[1],
         abi: aggregatorV3Abi,
         functionName: 'latestRoundData',
-      })) as readonly [bigint, bigint, bigint, bigint, bigint];
+      });
       if (answer <= 0n) return null;
       return answer * 10n ** 10n; // 8dp oracle → 18dp
     } catch (err) {
       // No band / legacy account / feed unreadable — minOut falls back to 1 and
       // the on-chain wall (if any) remains the enforcement guarantee. Logged so a
       // misconfigured account/feed is visible in service logs without killing the cycle.
-      console.warn(`band price read failed for ${accountAddr} ${target}:${selector}: ${err instanceof Error ? err.message : err}`);
+      console.warn(`band price read failed for ${accountAddr} ${target}:${selector}: ${err instanceof Error ? err.message : String(err)}`);
       return null;
     }
   }
