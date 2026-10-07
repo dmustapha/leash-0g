@@ -126,3 +126,12 @@ window, so the bounded loss is minimal until V5 ships.
 **FIX:** `LeashAccountV5` (Stage F′) makes swap structured — add a `SEL_SWAP` branch to `_checkStructuredArgs`
 that pins `recipient` (offset 132) via `_checkRecipient` AND charges `amountIn` against `spendBudget[tokenIn]`
 + per-call cap + window. See `~/0g-fleet/docs/phases/STAGE-F-PRIME.md` FP-CARRY-1.
+
+**✅ LANDED in V5 (FP-1, 2026-10-07, branch `stage-f-prime-signing`):** `LeashAccountV5._checkStructuredArgs`
+now has the `SEL_SWAP` branch (decodes the static 6-arg swap, pins `recipient` @132 via `_checkRecipient`,
+charges `amountIn` @68 against `spendBudget[tokenIn]` @4 + per-call cap + window). Both open rows (swap-exfil +
+swap-size) are CLOSED on-chain for V5 accounts. Tests: `contracts/test/LeashAccountV5.carries.t.sol`
+`test_CARRY1_swapRecipientRedirect_reverts` / `swapAmountInChargesTokenInBudget` / `swapOverPerCallCap_reverts` /
+`swapOverCumulativeBudget_reverts` / `swapNoBudget_reverts`. **V4 remains immutable + untouched** — existing V4
+accounts keep this limitation and the backend recipient-pin + tight-allowance mitigation; migrate value to V5
+accounts to inherit the on-chain fix. Also note V5 does NOT redeploy V4 (new version, new CREATE2 address).
