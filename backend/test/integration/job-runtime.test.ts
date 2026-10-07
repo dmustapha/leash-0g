@@ -194,6 +194,19 @@ beforeEach(() => {
 afterEach(async () => {
   for (const id of started.splice(0)) await manager.stop(id);
   nock.cleanAll();
+  // Per-test DB isolation (TI-2 fix, 2026-10-07). createTestDb builds ONE schema
+  // per FILE, so `jobs` rows accumulate across the tests in this file. Every test
+  // shares the same OWNER and asserts on listJobsForOwner(OWNER)[0], so a prior
+  // test's already-'rejected' job (e.g. layer-1's malformed deliverable, which lands
+  // blockedBy='acceptance') satisfies the NEXT test's `waitFor(...status==='rejected')`
+  // on the FIRST poll — before that test's own cascade has produced its job. The next
+  // test then asserts on the stale row and reads the wrong blockedBy. THAT cross-test
+  // data-leak (not pool starvation) is what made layer-2 fail in the full-file run yet
+  // pass in isolation. `jobs` is the only table the tests read by the shared OWNER key
+  // (approvals/traces are queried by the fresh per-test agent id), and nothing
+  // references `jobs` by FK, so a plain TRUNCATE with no CASCADE fully isolates it
+  // without tripping the append-only trace_records/owner_records triggers.
+  await db.pool.query(`TRUNCATE "${db.schema}"."jobs"`);
 });
 
 afterAll(async () => {

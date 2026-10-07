@@ -99,14 +99,30 @@ LEASH is a work-in-progress research project. This is an honest scope boundary: 
   (349/349) + two independent security reviews (HIGH findings fixed). A clean whole-contract
   SMTChecker pass + formal mainline merge gate are deferred; the branch stays OFF mainline.
 
-## L-RH2-1 — Trader swap size is bounded off-chain only (V4), fixed in V5 (F′)
-The `trader` role's per-trade clip (dollar-cost-averaging bound) is enforced in the backend runtime
-(`backend/src/runtime/treasury-graph.ts` clip check), NOT on-chain: `swap` is a non-structured
-governed call, so `LeashAccountV4`'s per-call cap / per-token budget / window cap do not debit the
-swap input leg (the band wall gates swap PRICE, not SIZE). Fund safety is intact on V4 — the swap
-recipient is pinned to the agent's own account (no exfil), the price stays inside the oracle band,
-and the total approve budget caps aggregate size — so a compromised session key could at worst force
-a fair-price conversion of the agent's own spend-token into its hold-token, in its own account (a
-risk-parameter bypass, not theft). Proven by the §10 trader adversarial pass (2026-10-06, 4 red-teams,
-spine CLOSED). FIX: `LeashAccountV5` (Stage F′) makes swap structured so the per-call cap + per-token
-budget bound `amountIn` on-chain — see `~/0g-fleet/docs/phases/STAGE-F-PRIME.md` FP-CARRY-1.
+## L-RH2-1 — Trader swap recipient is UNPINNED and size UNBUDGETED on-chain (V4); backend-only guard; fixed in V5 (F′)
+**Corrected 2026-10-07** per the independent Gate-② (`~/0g-fleet/docs/phases/RH2-REVIEW.md`); the earlier
+"recipient pinned to self / no exfil" wording was FALSE against the contract.
+
+`swap` is a **non-structured** governed call: `SEL_SWAP` is absent from `LeashAccountV4._checkStructuredArgs`,
+so a swap hits the fallback `return(value, address(0), false)` and `_checkRecipient` is **never invoked for a
+swap** (it runs only at `:565/575/599` for approve/transfer/bridge; `_checkPriceBand` reads calldata offsets
+36/68/100 and never offset 132, the recipient). Net on-chain residual on V4:
+
+- **Recipient is UNPINNED** — a swap's output can be directed to an arbitrary address by whoever controls the
+  session key; the wall does not re-enforce it.
+- **`amountIn` is UNBUDGETED** — per-call cap / per-token budget / window cap do not debit the swap input leg
+  (the band wall gates swap PRICE, not SIZE); the per-trade clip lives only in the backend
+  (`backend/src/runtime/treasury-graph.ts` clip check).
+
+**Value-at-risk on a compromised session key = the standing router ERC-20 allowance** (itself approve-budget-capped):
+a key can swap account funds at a fair in-band price and send the output anywhere, up to that allowance. The LEASH
+backend DOES pin recipient to self (`backend/src/governed-call/call-builder.ts:118-128`), so the shipped product
+path is safe — but the **on-chain wall, which is the stated guarantee (`00 §6c`), does not hold for the swap path.**
+This is an OPEN spine residual, not a mere risk-parameter bypass.
+
+**Mitigation while V4 is live:** keep each trader account's router ERC-20 allowance tight (≈ one clip) with a short
+window, so the bounded loss is minimal until V5 ships.
+
+**FIX:** `LeashAccountV5` (Stage F′) makes swap structured — add a `SEL_SWAP` branch to `_checkStructuredArgs`
+that pins `recipient` (offset 132) via `_checkRecipient` AND charges `amountIn` against `spendBudget[tokenIn]`
++ per-call cap + window. See `~/0g-fleet/docs/phases/STAGE-F-PRIME.md` FP-CARRY-1.
