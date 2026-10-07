@@ -141,6 +141,39 @@ describe('intent-builder — digest matches viem hashTypedData AND the on-chain 
   });
 });
 
+describe('intent-builder — bytesN pins are exact-width (FP-2 FP-CARRY-5, fail-closed)', () => {
+  // a descriptor with an extra static bytes32 field, pinned server-side (non-role).
+  const withSalt: SigningDescriptor = { ...erc2612, fields: [...erc2612.fields, { name: 'salt', type: 'bytes32' }] };
+  const bytes32 = '0x' + 'ab'.repeat(32); // exactly 32 bytes
+
+  it('accepts a correctly-sized bytes32 pin', () => {
+    const r = buildIntent(withSalt, grant().rules.get(1), {
+      amountWei: '500',
+      spender: SPENDER,
+      ctx: { self: ACCOUNT, nowSec: 1_000_000, windowSec: 1800, pins: { nonce: 7, salt: bytes32 } },
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  it('refuses a too-short bytesN pin (would silently right-pad) → bad_pin', () => {
+    const r = buildIntent(withSalt, grant().rules.get(1), {
+      amountWei: '500',
+      spender: SPENDER,
+      ctx: { self: ACCOUNT, nowSec: 1_000_000, windowSec: 1800, pins: { nonce: 7, salt: '0xabab' } },
+    });
+    expect(r).toEqual({ ok: false, reason: 'bad_pin' });
+  });
+
+  it('refuses a too-long bytesN pin → bad_pin', () => {
+    const r = buildIntent(withSalt, grant().rules.get(1), {
+      amountWei: '500',
+      spender: SPENDER,
+      ctx: { self: ACCOUNT, nowSec: 1_000_000, windowSec: 1800, pins: { nonce: 7, salt: '0x' + 'ab'.repeat(33) } },
+    });
+    expect(r).toEqual({ ok: false, reason: 'bad_pin' });
+  });
+});
+
 describe('intent-builder — never-guess-money (authority pinned from grant state, not model text)', () => {
   it('pins the deadline server-side (now + window), ignoring any model deadline', () => {
     const r = buildIntent(erc2612, grant().rules.get(1), {

@@ -354,6 +354,26 @@ export async function reconcileSigningArms(pool: Pool, agentId: string, currentE
   return res.rowCount ?? 0;
 }
 
+/**
+ * FP-CARRY-4 reconcile, SCOPED to one descriptor. Removing a single descriptor kills
+ * only ITS arms — not every descriptor's. Use this on the owner `remove` path instead
+ * of the epoch-sentinel call (which stales ALL descriptors' arms: fail-safe, but it
+ * over-marks unrelated live arms). Stales every still-'armed' arm of this descriptor
+ * regardless of epoch (the descriptor is gone, so all its arms are dead). Idempotent.
+ */
+export async function reconcileSigningArmsByDescriptor(
+  pool: Pool,
+  agentId: string,
+  descriptorId: number,
+): Promise<number> {
+  const res = await pool.query(
+    `UPDATE signing_arms SET status = 'stale', updated_at = now()
+     WHERE agent_id = $1 AND status = 'armed' AND descriptor_id = $2`,
+    [agentId, descriptorId],
+  );
+  return res.rowCount ?? 0;
+}
+
 export async function setSigningArmStatus(
   pool: Pool,
   agentId: string,
