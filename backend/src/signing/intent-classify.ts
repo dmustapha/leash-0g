@@ -22,6 +22,12 @@ export interface IntendedSigning {
   amountWei: string;
   /** the absolute unix-seconds deadline the server derived (now + window). */
   deadlineSec: number;
+  /**
+   * FP-4 Slice-5 (§5.4): a BATCH signing carries the `(token, amountWei)` pairs instead of the scalar
+   * `amountWei`. Over-cap becomes a PER-TOKEN check (Σ per token ≤ its reviewed cap); a token outside the
+   * allowlist is an un-granted token (L3, never silently L1). Absent for non-batch intents.
+   */
+  permits?: { token: string; amountWei: string }[];
 }
 
 /**
@@ -81,6 +87,26 @@ export function classifySigning(
   if (!isOrder) {
     const spenders = new Set(rule.spenderSet.map((s) => s.toLowerCase()));
     if (!spenders.has(intended.spender.toLowerCase())) widen.push('new_spender');
+  }
+  // FP-4 Slice-5 (§5.4): a BATCH is bounded PER TOKEN (Σ per token ≤ its reviewed cap), not by the scalar
+  // `perIntentCap`. A token outside the reviewed allowlist is an un-granted token ⇒ L3 (never silently L1).
+  if (descriptor.kind === 'batch') {
+    const caps = new Map((rule.tokenCaps ?? []).map((c) => [c.token.toLowerCase(), parseSigningAmount(c.cap)]));
+    const sums = new Map<string, bigint>();
+    for (const p of intended.permits ?? []) {
+      const amt = parseSigningAmount(p.amountWei);
+      if (amt === null) return { lane: 'forbidden', reason: 'malformed_intent' };
+      const t = p.token.toLowerCase();
+      sums.set(t, (sums.get(t) ?? 0n) + amt);
+    }
+    if (sums.size === 0) return { lane: 'forbidden', reason: 'malformed_intent' }; // empty batch
+    for (const [t, sum] of sums) {
+      const cap = caps.get(t);
+      if (cap === undefined || cap === null || sum > cap) widen.push('over_cap'); // un-allowlisted OR over its cap
+    }
+    if (intended.deadlineSec > nowSec + rule.maxDeadlineWindow) widen.push('deadline_too_far');
+    if (widen.length > 0) return { lane: 'l3_widen', reasons: dedupe(widen) };
+    return { lane: 'l1', reason: 'in_policy' };
   }
   const cap = parseSigningAmount(rule.perIntentCap);
   // FP-4 Slice-4 (§5.4, I-2): order's chargeable outflow is `sellAmount + feeAmount` (the wall debits the

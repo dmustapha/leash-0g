@@ -79,7 +79,8 @@ contract LeashAccountV5CoSignerTest is Test {
         vm.prank(owner);
         acct.proposeSigningGrantNested(
             SigningLib.SigningGrantParams(DESCRIPTOR_ID, domainSep, TYPEHASH, NUM_FIELDS, SPENDER_IDX, AMOUNT_IDX, DEADLINE_IDX, type(uint8).max, bytes32(0), 0, 0, token, cap, win, 0, address(0)),
-            _spenders(sp)
+            _spenders(sp),
+            new SigningLib.TokenCap[](0)
         );
         vm.warp(block.timestamp + DELAY);
         vm.prank(owner);
@@ -135,7 +136,7 @@ contract LeashAccountV5CoSignerTest is Test {
         bytes32[] memory f = _fields(spender, amount, deadline);
         digest = _digest(f);
         vm.prank(session);
-        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, _sign(sessionPk, digest), coSig);
+        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, new SigningLib.TokenCap[](0), _sign(sessionPk, digest), coSig);
     }
 
     // ============ SR-9: inert path (coSigner == 0) never enforces ============
@@ -170,12 +171,12 @@ contract LeashAccountV5CoSignerTest is Test {
         // missing / empty co-signer sig → revert
         vm.prank(session);
         vm.expectRevert(SigningLib.BadCoSignerSignature.selector);
-        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, _sign(sessionPk, d), "");
+        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, new SigningLib.TokenCap[](0), _sign(sessionPk, d), "");
         // valid co-signer sig → arms (precompute the approval BEFORE the prank — a view call in the
         // argument list would otherwise consume the prank).
         bytes memory co = _coNow(coSignerPk, d);
         vm.prank(session);
-        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, _sign(sessionPk, d), co);
+        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, new SigningLib.TokenCap[](0), _sign(sessionPk, d), co);
         assertEq(acct.isValidSignature(d, ""), ERC1271_MAGIC);
     }
 
@@ -186,10 +187,10 @@ contract LeashAccountV5CoSignerTest is Test {
         bytes32 d = _digest(f);
         vm.prank(session);
         vm.expectRevert(SigningLib.BadCoSignerSignature.selector);
-        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, _sign(sessionPk, d), "");
+        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, new SigningLib.TokenCap[](0), _sign(sessionPk, d), "");
         bytes memory co = _coNow(coSignerPk, d);
         vm.prank(session);
-        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, _sign(sessionPk, d), co);
+        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, new SigningLib.TokenCap[](0), _sign(sessionPk, d), co);
         assertEq(acct.isValidSignature(d, ""), ERC1271_MAGIC);
     }
 
@@ -201,7 +202,7 @@ contract LeashAccountV5CoSignerTest is Test {
         bytes memory wrongSigner = _coNow(sessionPk, d);
         vm.prank(session);
         vm.expectRevert(SigningLib.BadCoSignerSignature.selector);
-        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, _sign(sessionPk, d), wrongSigner);
+        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, new SigningLib.TokenCap[](0), _sign(sessionPk, d), wrongSigner);
     }
 
     // ============ SR-1: cross-chain / cross-account binding ============
@@ -212,7 +213,7 @@ contract LeashAccountV5CoSignerTest is Test {
         bytes memory wrong = _coApproval(coSignerPk, d, block.chainid + 1, address(acct), acct.signingEpoch());
         vm.prank(session);
         vm.expectRevert(SigningLib.BadCoSignerSignature.selector);
-        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, _sign(sessionPk, d), wrong);
+        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, new SigningLib.TokenCap[](0), _sign(sessionPk, d), wrong);
     }
 
     function test_SR1_wrongAccountRejected() public {
@@ -222,7 +223,7 @@ contract LeashAccountV5CoSignerTest is Test {
         bytes memory wrong = _coApproval(coSignerPk, d, block.chainid, address(0xBEEF), acct.signingEpoch());
         vm.prank(session);
         vm.expectRevert(SigningLib.BadCoSignerSignature.selector);
-        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, _sign(sessionPk, d), wrong);
+        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, new SigningLib.TokenCap[](0), _sign(sessionPk, d), wrong);
     }
 
     function test_SR1_replayOnOtherChainFails() public {
@@ -235,7 +236,7 @@ contract LeashAccountV5CoSignerTest is Test {
         vm.chainId(block.chainid + 7);
         vm.prank(session);
         vm.expectRevert(SigningLib.BadCoSignerSignature.selector);
-        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, _sign(sessionPk, d), approvalHere);
+        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, new SigningLib.TokenCap[](0), _sign(sessionPk, d), approvalHere);
     }
 
     // ============ SR-3: epoch-bump re-arm needs a FRESH approval ============
@@ -257,11 +258,11 @@ contract LeashAccountV5CoSignerTest is Test {
         bytes32[] memory f = _fields(spender, amt, dl);
         vm.prank(session);
         vm.expectRevert(SigningLib.BadCoSignerSignature.selector);
-        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, _sign(sessionPk, d), staleApproval);
+        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, new SigningLib.TokenCap[](0), _sign(sessionPk, d), staleApproval);
         // ...and succeed only with a FRESH (current-epoch) approval.
         bytes memory fresh = _coNow(coSignerPk, d);
         vm.prank(session);
-        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, _sign(sessionPk, d), fresh);
+        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, new SigningLib.TokenCap[](0), _sign(sessionPk, d), fresh);
         assertEq(acct.isValidSignature(d, ""), ERC1271_MAGIC);
     }
 
@@ -339,7 +340,7 @@ contract LeashAccountV5CoSignerTest is Test {
         // 64 zero bytes (wrong length / unrecoverable) → OZ tryRecover errors → BadCoSignerSignature.
         vm.prank(session);
         vm.expectRevert(SigningLib.BadCoSignerSignature.selector);
-        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, _sign(sessionPk, d), new bytes(64));
+        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, new SigningLib.TokenCap[](0), _sign(sessionPk, d), new bytes(64));
     }
 
     function test_applyCoSigner_nothingPendingReverts() public {

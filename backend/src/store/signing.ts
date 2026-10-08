@@ -25,6 +25,8 @@ export interface SigningRuleRow {
   perIntentCap: string;
   maxDeadlineWindow: number;
   spenderSet: string[];
+  /** FP-4 Slice-5: the batch per-token cap allowlist (empty for non-batch rules). */
+  tokenCaps: { token: string; cap: string }[];
   source: string;
   status: SigningGrantStatus;
   createdAt: string;
@@ -42,6 +44,7 @@ interface DbSigningRuleRow {
   per_intent_cap: string;
   max_deadline_window: string;
   spender_set: string[];
+  token_caps: { token: string; cap: string }[];
   source: string;
   status: SigningGrantStatus;
   created_at: Date;
@@ -60,6 +63,7 @@ function mapRule(r: DbSigningRuleRow): SigningRuleRow {
     perIntentCap: r.per_intent_cap,
     maxDeadlineWindow: Number(r.max_deadline_window),
     spenderSet: r.spender_set,
+    tokenCaps: r.token_caps ?? [],
     source: r.source,
     status: r.status,
     createdAt: r.created_at.toISOString(),
@@ -80,14 +84,15 @@ export async function upsertSigningRule(pool: Pool, input: UpsertSigningRuleInpu
   const { rule } = input;
   const res = await pool.query<DbSigningRuleRow>(
     `INSERT INTO signing_rules
-       (agent_id, chain_id, owner_addr, descriptor_id, descriptor_key, token, per_intent_cap, max_deadline_window, spender_set, source, status)
-     VALUES ($1, (SELECT chain_id FROM agents WHERE id = $1), $2,$3,$4,$5,$6,$7,$8,$9,$10)
+       (agent_id, chain_id, owner_addr, descriptor_id, descriptor_key, token, per_intent_cap, max_deadline_window, spender_set, token_caps, source, status)
+     VALUES ($1, (SELECT chain_id FROM agents WHERE id = $1), $2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
      ON CONFLICT (agent_id, descriptor_id) DO UPDATE SET
        descriptor_key      = EXCLUDED.descriptor_key,
        token               = EXCLUDED.token,
        per_intent_cap      = EXCLUDED.per_intent_cap,
        max_deadline_window = EXCLUDED.max_deadline_window,
        spender_set         = EXCLUDED.spender_set,
+       token_caps          = EXCLUDED.token_caps,
        source              = EXCLUDED.source,
        status              = EXCLUDED.status,
        updated_at          = now()
@@ -101,6 +106,7 @@ export async function upsertSigningRule(pool: Pool, input: UpsertSigningRuleInpu
       rule.perIntentCap,
       rule.maxDeadlineWindow,
       JSON.stringify(rule.spenderSet.map((s) => s.toLowerCase())),
+      JSON.stringify((rule.tokenCaps ?? []).map((c) => ({ token: c.token.toLowerCase(), cap: c.cap }))),
       input.source,
       input.status,
     ],
