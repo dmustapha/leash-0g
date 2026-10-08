@@ -139,6 +139,9 @@ contract LeashAccountV5 is ReentrancyGuard {
 
     /// @notice FP-4 Slice-4 — mirrors `SigningLib.KIND_ORDER`; a CoW order skips the spender allowlist (I-1).
     uint8 internal constant KIND_ORDER = 1;
+    /// @notice FP-4 Slice-5 — mirrors `SigningLib.KIND_BATCH`; a Permit2 batch loops `_debitSpendBudget` over
+    ///         the distinct `(token, Σ)` pairs the lib returns (the one load-bearing account change, I-3).
+    uint8 internal constant KIND_BATCH = 2;
 
     // ---------- errors ----------
     error NotOwner();
@@ -336,7 +339,10 @@ contract LeashAccountV5 is ReentrancyGuard {
     bytes4 internal constant ERC1271_MAGIC = 0x1626ba7e; // bytes4(keccak256("isValidSignature(bytes32,bytes)"))
     bytes4 internal constant ERC1271_INVALID = 0xffffffff;
 
-    mapping(uint256 => SigningLib.SigningIntentPolicy) public signingIntentPolicy; // descriptorId => policy
+    // FP-4 Slice-5 (EIP-170 reclaim): internal, not public. The auto-getter (unused by any test or the
+    // off-chain read-model, which is event-driven) cost ~0.5KB of return-tuple encoding; reclaiming it is
+    // what lets the batch arm fit under 24,576. On-chain reads are internal.
+    mapping(uint256 => SigningLib.SigningIntentPolicy) internal signingIntentPolicy; // descriptorId => policy
     mapping(uint256 => mapping(address => bool)) public signingSpender; // descriptorId => spender => allowed
     mapping(uint256 => address[]) internal signingSpenderList; // descriptorId => spenders (so a re-grant/remove clears cleanly)
     mapping(bytes32 => ArmedIntent) public armedIntent; // eip712 digest => armed
@@ -382,11 +388,15 @@ contract LeashAccountV5 is ReentrancyGuard {
         uint8 nestedLeafCount;
         uint8 expiryLeafIndex;
         // --- FP-4 Slice-4 (CoW order; mirrors SigningIntentPolicy) ---
-        uint8 kind; // KIND_STANDARD (0) / KIND_ORDER (1)
+        uint8 kind; // KIND_STANDARD (0) / KIND_ORDER (1) / KIND_BATCH (2)
         address buyToken; // KIND_ORDER only — wall-pinned proceeds token (G11(b)); 0 for standard
+        // --- FP-4 Slice-5 — the committed hash of the reviewed per-token cap allowlist (caps-hash commit,
+        //     Dami 2026-10-08; KIND_BATCH only, 0 otherwise). A word, not an array (EIP-170, §10). ---
+        bytes32 tokenCapsHash;
     }
 
-    PendingSigningGrant public pendingSigningGrant;
+    // FP-4 Slice-5 (EIP-170 reclaim): internal — see signingIntentPolicy note (unused auto-getter).
+    PendingSigningGrant internal pendingSigningGrant;
     address[] internal pendingSigningSpenders;
 
     modifier onlyOwner() {
@@ -728,6 +738,7 @@ contract LeashAccountV5 is ReentrancyGuard {
     function authorizeSigningIntent(
         uint256 descriptorId,
         bytes32[] calldata fields,
+        SigningLib.TokenCap[] calldata caps,
         bytes calldata sessionSig,
         bytes calldata coSignerSig
     ) external nonReentrant returns (bytes32 digest) {
@@ -749,10 +760,14 @@ contract LeashAccountV5 is ReentrancyGuard {
         // are canonical-decoded + cap/deadline-bounded — all BEFORE any state write (fail-closed, SR-11).
         // The spender-ALLOWLIST check + the re-arm idempotency guard stay here (storage).
         address spender;
-        uint256 amount;
         uint256 deadline;
-        (digest, spender, amount, deadline) = SigningLib(signingHelper).reconstructAndBound(
-            s, fields, block.timestamp, block.chainid, address(this), signingEpoch, coSigner, coSignerSig, sessionSig, sessionKey
+        // FP-4 Slice-5 — ONE lib call for ALL kinds (EIP-170 lever, §10): SigningLib delivers the arm's debit
+        // as an interleaved `(token-as-uint, Σ)[]` — for standard/order ONE pair (empty when amount==0); for
+        // batch the per-token Σ vectors. `caps` is the session-key-submitted reviewed allowlist, verified by
+        // the lib against the committed `s.tokenCapsHash` (caps-hash commit); it is empty for non-batch arms.
+        uint256[] memory debits;
+        (digest, spender, debits, deadline) = SigningLib(signingHelper).reconstructAndBound(
+            s, caps, fields, block.timestamp, block.chainid, address(this), signingEpoch, coSigner, coSignerSig, sessionSig, sessionKey
         );
 
         // FP-CARRY-5 (D-FP1-7) re-arm idempotency: a STILL-LIVE armed digest cannot be
@@ -769,10 +784,16 @@ contract LeashAccountV5 is ReentrancyGuard {
         // hard-bounded (sellToken==s.token, receiver==self, cap on sellAmount+feeAmount) inside reconstructAndBound.
         if (s.kind != KIND_ORDER && !signingSpender[descriptorId][spender]) revert SpenderNotAllowlisted(spender);
 
-        // signing ≤ calling: debit the SAME per-token budget the executeCall wall uses. `amount` already carries
-        // sellAmount+feeAmount for order (I-2), so the existing debit-site satisfies the fee-inclusive budget.
-        if (amount > 0) {
-            _debitSpendBudget(s.token, amount, policy.windowSeconds);
+        // signing ≤ calling: debit the SAME per-token budget the executeCall wall uses. ONE loop serves every
+        // kind (FP-4 Slice-5, I-3 the load-bearing account change): standard/order deliver a single
+        // `(s.token, amount)` pair — amount already carries order's sellAmount+feeAmount (I-2) — and an EMPTY
+        // vector when amount==0 (zero-notional arm, no debit); batch delivers each distinct `(token, Σ)` pair.
+        // `_debitSpendBudget` keys on token and reverts `BudgetNotSet` for any token the owner never funded
+        // (correct fail-closed — a batch can move only tokens with BOTH a reviewed cap AND a funded budget).
+        uint256 amount; // total notional debited across tokens (the arm event's amount field)
+        for (uint256 i = 0; i < debits.length; i += 2) {
+            _debitSpendBudget(address(uint160(debits[i])), debits[i + 1], policy.windowSeconds);
+            amount += debits[i + 1];
         }
 
         armedIntent[digest] = ArmedIntent({set: true, expiry: uint64(deadline), epoch: signingEpoch});
@@ -799,19 +820,31 @@ contract LeashAccountV5 is ReentrancyGuard {
     ///         path; the fold spec lets the wall reconstruct the real protocol digest while reading
     ///         the nested `amount` as a leaf (so `perIntentCap` + the budget debit still bind it).
     ///         Validated in-contract (NOT engine-only) — the owner tx is the sole authority.
-    function proposeSigningGrantNested(SigningLib.SigningGrantParams calldata p, address[] calldata spenders)
-        external
-        onlyOwner
-    {
-        _stageSigningGrant(p, spenders);
+    /// @notice FP-4 Slice-5 — the optional `caps` arg carries the reviewed per-token cap allowlist for a
+    ///         KIND_BATCH grant (empty for standard/order). The account validates it (`validateBatchCaps`
+    ///         reverts on empty/zero-cap/dup) and commits only `keccak256(abi.encode(caps))` to the policy
+    ///         (caps-hash commit, EIP-170). No new external selector beyond the added arg (§4.6).
+    function proposeSigningGrantNested(
+        SigningLib.SigningGrantParams calldata p,
+        address[] calldata spenders,
+        SigningLib.TokenCap[] calldata caps
+    ) external onlyOwner {
+        _stageSigningGrant(p, spenders, caps);
     }
 
     /// @dev Shared validate-and-stage for both flat and nested signing grants. Validation is the pure
     ///      `SigningLib.validateGrant` (FP-3 review R-3; it REVERTS internally on any defect — called
     ///      unconditionally BEFORE the write, never in a try/catch, so an invalid grant can never be
     ///      stored). The storage write stays in the account.
-    function _stageSigningGrant(SigningLib.SigningGrantParams memory p, address[] calldata spenders) internal {
-        SigningLib(signingHelper).validateGrant(p); // reverts InvalidPolicy/ZeroAddress on any defect — fail-closed
+    function _stageSigningGrant(
+        SigningLib.SigningGrantParams memory p,
+        address[] calldata spenders,
+        SigningLib.TokenCap[] calldata caps
+    ) internal {
+        // FP-4 Slice-5 — ONE lib call validates the grant AND (for batch) validates+hashes the caps allowlist,
+        // returning the commitment the account stores (caps-hash commit). Reverts InvalidPolicy/ZeroAddress on
+        // any defect — fail-closed, unconditional, no try/catch (FP-3 review R-3).
+        (, bytes32 capsHash) = SigningLib(signingHelper).validateGrant(p, caps);
 
         // Direct storage-field writes (not a memory struct literal copied to storage) — the same EIP-170
         // lever as the storage-pointer read in `applySigningGrant`; avoids building the 16-field struct in memory.
@@ -833,6 +866,9 @@ contract LeashAccountV5 is ReentrancyGuard {
         pg.expiryLeafIndex = p.expiryLeafIndex;
         pg.kind = p.kind;
         pg.buyToken = p.buyToken;
+        // FP-4 Slice-5 (caps-hash commit) — stage ONLY the caps commitment hash `validateGrant` returned (0
+        // for non-batch). Just a word, no on-chain array (EIP-170, §10).
+        pg.tokenCapsHash = capsHash;
         delete pendingSigningSpenders;
         for (uint256 i = 0; i < spenders.length; i++) {
             if (spenders[i] == address(0)) revert ZeroAddress();
@@ -866,6 +902,9 @@ contract LeashAccountV5 is ReentrancyGuard {
         s.expiryLeafIndex = pg.expiryLeafIndex;
         s.kind = pg.kind;
         s.buyToken = pg.buyToken;
+        // FP-4 Slice-5 (caps-hash commit) — apply ONLY the committed caps hash (a re-grant REPLACES it;
+        // batch-only, 0 otherwise). One word — the per-arm policy memory copy gains nothing but this word.
+        s.tokenCapsHash = pg.tokenCapsHash;
         uint256 len = pendingSigningSpenders.length;
         for (uint256 i = 0; i < len; i++) {
             address sp = pendingSigningSpenders[i];

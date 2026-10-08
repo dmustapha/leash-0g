@@ -6,6 +6,7 @@ import {
   descriptorDomainSeparator,
   descriptorLeaves,
   foldSpec,
+  encodeType,
 } from './intent-registry.js';
 import { parseSigningAmount } from './amount.js';
 
@@ -179,6 +180,156 @@ export function buildIntent(descriptor: SigningDescriptor, rule: SigningRule | u
       ? decodeOrderForHuman(amount, coercedByName, deadlineSec, input.ctx.nowSec)
       : decodeForHuman(descriptor, spender, amount, deadlineSec, input.ctx.nowSec, rule.token),
   };
+}
+
+export interface BuildBatchIntentInput {
+  /** the `(token, amountWei)` pairs the model proposed — the ONLY model input; token MUST be ∈ the reviewed
+   *  `tokenCaps` (never a model-supplied token — N-01), amount base-units decimal. */
+  permits: { token: string; amountWei: string }[];
+  /** the spender the agent would authorize (lowercased 0x) — validated ∈ the owner grant. */
+  spender?: string;
+  ctx: {
+    /** reference unix-seconds (server clock) — the deadline is `nowSec + windowSec`. */
+    nowSec: number;
+    /** the deadline window in seconds (≤ the grant's `maxDeadlineWindow`). */
+    windowSec: number;
+    /** the server-READ Permit2 nonce (never model text — `missing_pin` if absent). */
+    nonce?: string | number | bigint;
+  };
+}
+
+export type BuildBatchIntentResult =
+  | {
+      ok: true;
+      descriptorId: number;
+      typedData: {
+        domain: ReturnType<typeof toViemDomain>;
+        types: Record<string, Eip712Field[]>;
+        primaryType: string;
+        message: Record<string, unknown>;
+      };
+      /** the ordered `2N+3` `bytes32[]` leaf words the on-chain batch arm consumes. */
+      fields: Hex[];
+      /** the EIP-712 digest — equals viem `hashTypedData` of the real PermitBatchTransferFrom by construction. */
+      digest: Hex;
+      spender: string;
+      /** the reviewed on-chain caps to submit alongside the arm (caps-hash commit). */
+      tokenCaps: { token: Hex; cap: string }[];
+      /** the per-token Σ (distinct) the wall will debit — for the classifier/JIT card. */
+      debits: { token: string; amountWei: string }[];
+      deadlineSec: number;
+      humanReadable: string;
+    }
+  | { ok: false; reason: 'no_grant' | 'spender_unresolved' | 'missing_pin' | 'bad_amount' | 'bad_pin' | 'empty_batch' };
+
+/**
+ * FP-4 Slice-5 (§5.3) — the never-guess-money builder for a Permit2 `PermitBatchTransferFrom`. Parallel to
+ * `buildIntent` but for the runtime-variable array: the model contributes ONLY the `(token, amountWei)` pairs
+ * + which granted descriptor; EVERYTHING else is server-pinned. Each token MUST be ∈ the descriptor's reviewed
+ * `tokenCaps` (fail-closed `no_grant` — never a model-supplied token, N-01); the spender is resolved from the
+ * owner grant (`resolveSpender` — pinned/validated, never novel); the nonce is the server-read Permit2 nonce
+ * (`missing_pin` if absent); the deadline is `nowSec + windowSec`. The `2N+3` leaf words + the array-fold
+ * digest mirror the on-chain `structHashBatch`, and the built viem typed-data makes `digest == hashTypedData`
+ * of the REAL `PermitBatchTransferFrom` by construction (the genuine, non-circular oracle).
+ */
+export function buildBatchIntent(
+  descriptor: SigningDescriptor,
+  rule: SigningRule | undefined,
+  input: BuildBatchIntentInput,
+): BuildBatchIntentResult {
+  if (!rule || !rule.active) return { ok: false, reason: 'no_grant' };
+  if (descriptor.kind !== 'batch' || !descriptor.nested) return { ok: false, reason: 'no_grant' };
+  if (input.permits.length === 0) return { ok: false, reason: 'empty_batch' };
+
+  // The reviewed token allowlist — a token outside it is NEVER signable (N-01, never model-supplied).
+  const allow = new Set((descriptor.tokenCaps ?? []).map((c) => c.token.toLowerCase()));
+
+  // Resolve the spender from the owner grant (batch KEEPS the allowlist — unlike order, I-1).
+  const spender = resolveSpender(rule, input.spender);
+  if (spender === null) return { ok: false, reason: 'spender_unresolved' };
+
+  if (input.ctx.nonce === undefined) return { ok: false, reason: 'missing_pin' };
+  let nonce: bigint;
+  try {
+    nonce = BigInt(input.ctx.nonce);
+    if (nonce < 0n) return { ok: false, reason: 'bad_pin' };
+  } catch {
+    return { ok: false, reason: 'bad_pin' };
+  }
+  const deadlineSec = input.ctx.nowSec + input.ctx.windowSec;
+
+  // Build the per-element words + the message array; accumulate per-token Σ for the classifier/card.
+  const messageElems: { token: string; amount: string }[] = [];
+  const elemWords: { token: Hex; amount: Hex }[] = [];
+  const sums = new Map<string, bigint>();
+  for (const p of input.permits) {
+    const token = p.token.toLowerCase();
+    if (!allow.has(token)) return { ok: false, reason: 'no_grant' }; // un-reviewed token — never signed
+    if (!/^0x[0-9a-f]{40}$/.test(token)) return { ok: false, reason: 'bad_pin' };
+    const amt = parseSigningAmount(p.amountWei);
+    if (amt === null || amt <= 0n) return { ok: false, reason: 'bad_amount' };
+    messageElems.push({ token, amount: amt.toString() });
+    elemWords.push({
+      token: encodeAbiParameters([{ type: 'address' }], [token as Hex]),
+      amount: encodeAbiParameters([{ type: 'uint256' }], [amt]),
+    });
+    sums.set(token, (sums.get(token) ?? 0n) + amt);
+  }
+
+  // The 2N+3 leaf words in §3a order: [token0,amount0, …, spender, nonce, deadline].
+  const spenderWord = encodeAbiParameters([{ type: 'address' }], [spender as Hex]);
+  const nonceWord = encodeAbiParameters([{ type: 'uint256' }], [nonce]);
+  const deadlineWord = encodeAbiParameters([{ type: 'uint256' }], [BigInt(deadlineSec)]);
+  const fields: Hex[] = [];
+  for (const e of elemWords) fields.push(e.token, e.amount);
+  fields.push(spenderWord, nonceWord, deadlineWord);
+
+  // Array-fold digest — mirror the on-chain `structHashBatch` EXACTLY (abi.encodePacked of 32-byte words).
+  const nestedTypeHash = keccak256(toBytes(encodeType('TokenPermissions', descriptor.nested.subFields)));
+  const typeHash = descriptorTypeHash(descriptor); // == published PBTF_TYPEHASH (genuine)
+  const elemHashes = elemWords.map((e) => keccak256(concat([nestedTypeHash, e.token, e.amount])));
+  const arrayHash = keccak256(concat(elemHashes));
+  const structHash = keccak256(concat([typeHash, arrayHash, spenderWord, nonceWord, deadlineWord]));
+  const digest = keccak256(concat(['0x1901', descriptorDomainSeparator(descriptor), structHash]));
+
+  const tokenCaps = (descriptor.tokenCaps ?? []).map((c) => ({ token: c.token.toLowerCase() as Hex, cap: c.cap }));
+  const debits = [...sums.entries()].map(([token, sum]) => ({ token, amountWei: sum.toString() }));
+
+  return {
+    ok: true,
+    descriptorId: descriptor.descriptorId,
+    typedData: {
+      domain: toViemDomain(descriptor.domain),
+      types: buildViemTypes(descriptor),
+      primaryType: descriptor.primaryType,
+      message: {
+        permitted: messageElems.map((e) => ({ token: e.token, amount: e.amount })),
+        spender,
+        nonce: nonce.toString(),
+        deadline: deadlineSec.toString(),
+      },
+    },
+    fields,
+    digest,
+    spender,
+    tokenCaps,
+    debits,
+    deadlineSec,
+    humanReadable: decodeBatchForHuman(debits, spender, deadlineSec, input.ctx.nowSec),
+  };
+}
+
+/** FP-4 Slice-5 — the batch JIT-card human decode, composed ENTIRELY from server-held/pinned fields (the
+ *  FP-2 `humanReadable` precondition, M-01): per-token Σ + spender + expiry, never model text. */
+function decodeBatchForHuman(
+  debits: { token: string; amountWei: string }[],
+  spender: string,
+  deadlineSec: number,
+  nowSec: number,
+): string {
+  const mins = Math.max(0, Math.round((deadlineSec - nowSec) / 60));
+  const legs = debits.map((d) => `${d.amountWei} ${short(d.token)}`).join(' + ');
+  return `Sign a Permit2 batch transfer: authorize ${legs} to ${short(spender)}, expires ~${mins} min.`;
 }
 
 /**

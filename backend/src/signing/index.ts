@@ -25,11 +25,23 @@ export {
   foldSpec,
   onChainGrantParams,
   encodeType,
+  tokenCapsHash,
+  TOKEN_PERMISSIONS_TYPE_STRING,
+  PBTF_TYPE_STRING,
   BUILT_IN as BUILT_IN_DESCRIPTORS,
   type SigningRegistry,
   type OnChainGrantParams,
   type FoldSpec,
 } from './intent-registry.js';
 export { classifySigning, type IntendedSigning } from './intent-classify.js';
-export { buildIntent, decodeForHuman, type BuildIntentInput, type BuildIntentResult } from './intent-builder.js';
+export {
+  buildIntent,
+  buildBatchIntent,
+  decodeForHuman,
+  type BuildIntentInput,
+  type BuildIntentResult,
+  type BuildBatchIntentInput,
+  type BuildBatchIntentResult,
+} from './intent-builder.js';
+export { permit2BatchDescriptor, PERMIT2_ADDRESS } from './descriptors.js';
 export { computeSigningRequestHash } from './intent-hash.js';

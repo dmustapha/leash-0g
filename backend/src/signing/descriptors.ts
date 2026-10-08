@@ -158,6 +158,53 @@ function cowOrderDescriptor(
   };
 }
 
+/**
+ * FP-4 Slice-5 — Permit2 `PermitBatchTransferFrom` (SignatureTransfer), the first `kind: 'batch'` family.
+ * The `permitted` member is an ARRAY of `TokenPermissions` (`array: true`); its field `type` is rendered
+ * `TokenPermissions[]` so `descriptorTypeHash` reproduces Permit2's real
+ * `PermitBatchTransferFrom(TokenPermissions[] permitted,address spender,uint256 nonce,uint256 deadline)
+ * TokenPermissions(address token,uint256 amount)` type string (asserted == the published `PBTF_TYPEHASH`).
+ * Roles: spender=`spender`, deadline=`deadline`; `batchRoles` names the element fields; `tokenCaps` is the
+ * reviewed per-token allowlist+caps (committed on-chain as `keccak256(abi.encode(caps))`). No version in the
+ * domain (matches `permit2.single`). `sensitive:false` (parity; the wall hard-bounds it per-token — G4).
+ * The leaf count is runtime-variable (2N+3), so NO fixed `roles`/`expiryRole`/`descriptorLeaves` apply.
+ */
+export function permit2BatchDescriptor(
+  descriptorId: number,
+  key: string,
+  chainId: number,
+  tokenCaps: { token: string; cap: string }[],
+): SigningDescriptor {
+  return {
+    descriptorId,
+    key,
+    label: 'Permit2 batch transfer',
+    protocol: 'Permit2 PermitBatchTransferFrom',
+    domain: { name: 'Permit2', chainId, verifyingContract: PERMIT2_ADDRESS }, // NO version
+    primaryType: 'PermitBatchTransferFrom',
+    kind: 'batch',
+    fields: [
+      { name: 'permitted', type: 'TokenPermissions[]' },
+      { name: 'spender', type: 'address' },
+      { name: 'nonce', type: 'uint256' },
+      { name: 'deadline', type: 'uint256' },
+    ],
+    nested: {
+      memberName: 'permitted',
+      structType: 'TokenPermissions',
+      array: true,
+      subFields: [
+        { name: 'token', type: 'address' },
+        { name: 'amount', type: 'uint256' },
+      ],
+    },
+    roles: { spender: 'spender', amount: 'amount', deadline: 'deadline' },
+    batchRoles: { token: 'token', amount: 'amount' },
+    tokenCaps: tokenCaps.map((c) => ({ token: c.token.toLowerCase(), cap: c.cap })),
+    sensitive: false,
+  };
+}
+
 /** The real FP-3 descriptor seed (appended to the FP-2 built-in id 1). */
 export const FP3_DESCRIPTORS: readonly SigningDescriptor[] = [
   erc2612Descriptor(10, 'erc2612.usdc.base', CHAIN.baseSepolia, USDC.baseSepolia.token, USDC.baseSepolia.name),
@@ -169,6 +216,15 @@ export const FP3_DESCRIPTORS: readonly SigningDescriptor[] = [
   permit2SingleDescriptor(23, 'permit2.single.eth', CHAIN.ethSepolia),
   // FP-4 Slice-4 — CoW GPv2Order; descriptor-id namespace 30..39 (one per chain). Sepolia seeded first (G6).
   cowOrderDescriptor(30, 'cow.order.eth', CHAIN.ethSepolia, SEPOLIA_WETH, SEPOLIA_USDC),
+  // FP-4 Slice-5 — Permit2 PermitBatchTransferFrom; descriptor-id namespace 40..49 (one per chain). Seeded on
+  // ETH Sepolia first (two REAL reviewed tokens — USDC + WETH — so the multi-token happy path is live-
+  // testable, mirroring the Slice-4 CoW single-chain seed, G6). The caps are reviewed per-token base-units
+  // ceilings: 1,000 USDC (6dp) and 1 WETH (18dp). Extending to Base/Arb/0G is trivially additive once their
+  // reviewed second-token addresses are chosen (forward, G7 — live-exec out of scope).
+  permit2BatchDescriptor(40, 'permit2.batch.eth', CHAIN.ethSepolia, [
+    { token: SEPOLIA_USDC, cap: '1000000000' },
+    { token: SEPOLIA_WETH, cap: '1000000000000000000' },
+  ]),
 ];
 
 /** The on-chain `DOMAIN_SEPARATOR()` each USDC token returns (verified live) — asserted in the

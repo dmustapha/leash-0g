@@ -119,7 +119,7 @@ contract LeashAccountV5SigningNestedTest is Test {
 
     function _grant() internal {
         vm.prank(owner);
-        acct.proposeSigningGrantNested(_params(), _spenders(spender));
+        acct.proposeSigningGrantNested(_params(), _spenders(spender), new SigningLib.TokenCap[](0));
         vm.warp(block.timestamp + DELAY);
         vm.prank(owner);
         acct.applySigningGrant();
@@ -167,7 +167,7 @@ contract LeashAccountV5SigningNestedTest is Test {
         bytes32 expected = _canonicalDigest(amount, exp, sig);
         bytes32[] memory f = _leaves(amount, exp, sig);
         vm.prank(session);
-        bytes32 armed = acct.authorizeSigningIntent(DID, f, _sign(expected), "");
+        bytes32 armed = acct.authorizeSigningIntent(DID, f, new SigningLib.TokenCap[](0), _sign(expected), "");
         // the function returns the digest it reconstructed + armed; it MUST equal the oracle.
         assertEq(armed, expected, "nested reconstruction != canonical Permit2 digest");
         assertEq(acct.isValidSignature(expected, ""), ERC1271_MAGIC, "armed digest not valid");
@@ -183,7 +183,7 @@ contract LeashAccountV5SigningNestedTest is Test {
         bytes memory wrong = _sign(_canonicalDigest(amount + 1, exp, sig)); // signs a different amount
         vm.prank(session);
         vm.expectRevert(LeashAccountV5.BadIntentSignature.selector);
-        acct.authorizeSigningIntent(DID, f, wrong, "");
+        acct.authorizeSigningIntent(DID, f, new SigningLib.TokenCap[](0), wrong, "");
     }
 
     // ---------- R-1 / I-2: the per-intent cap binds the NESTED amount leaf ----------
@@ -197,7 +197,7 @@ contract LeashAccountV5SigningNestedTest is Test {
         bytes memory s = _sign(_canonicalDigest(amount, exp, sig));
         vm.prank(session);
         vm.expectRevert(abi.encodeWithSelector(LeashAccountV5.OverPerIntentCap.selector, amount, CAP));
-        acct.authorizeSigningIntent(DID, f, s, "");
+        acct.authorizeSigningIntent(DID, f, new SigningLib.TokenCap[](0), s, "");
     }
 
     function test_nested_debitsSharedBudgetFromNestedAmount() public {
@@ -207,7 +207,7 @@ contract LeashAccountV5SigningNestedTest is Test {
         uint256 sig = block.timestamp + 20 minutes;
         bytes32[] memory f = _leaves(amount, exp, sig);
         vm.prank(session);
-        acct.authorizeSigningIntent(DID, f, _sign(_canonicalDigest(amount, exp, sig)), "");
+        acct.authorizeSigningIntent(DID, f, new SigningLib.TokenCap[](0), _sign(_canonicalDigest(amount, exp, sig)), "");
         (,, uint128 spent,) = acct.spendBudget(address(usd));
         assertEq(spent, uint128(amount), "nested amount not debited to the shared budget");
     }
@@ -223,7 +223,7 @@ contract LeashAccountV5SigningNestedTest is Test {
         bytes memory s = _sign(_canonicalDigest(amount, exp, sig));
         vm.prank(session);
         vm.expectRevert(abi.encodeWithSelector(LeashAccountV5.DeadlineTooFar.selector, exp));
-        acct.authorizeSigningIntent(DID, f, s, "");
+        acct.authorizeSigningIntent(DID, f, new SigningLib.TokenCap[](0), s, "");
     }
 
     // ---------- R-3: fold-spec validation at grant time (in-contract) ----------
@@ -233,7 +233,7 @@ contract LeashAccountV5SigningNestedTest is Test {
         p.nestedLeafCount = 0; // nestedTypeHash set but count 0 ⇒ invalid
         vm.prank(owner);
         vm.expectRevert(LeashAccountV5.InvalidPolicy.selector);
-        acct.proposeSigningGrantNested(p, _spenders(spender));
+        acct.proposeSigningGrantNested(p, _spenders(spender), new SigningLib.TokenCap[](0));
     }
 
     function test_grant_roleLeafOutOfRange_reverts() public {
@@ -241,7 +241,7 @@ contract LeashAccountV5SigningNestedTest is Test {
         p.amountLeafIndex = 9; // totalLeaves == 5 ⇒ out of range
         vm.prank(owner);
         vm.expectRevert(LeashAccountV5.InvalidPolicy.selector);
-        acct.proposeSigningGrantNested(p, _spenders(spender));
+        acct.proposeSigningGrantNested(p, _spenders(spender), new SigningLib.TokenCap[](0));
     }
 
     function test_grant_expiryAliasesAmount_reverts() public {
@@ -249,7 +249,7 @@ contract LeashAccountV5SigningNestedTest is Test {
         p.expiryLeafIndex = AMOUNT_LEAF; // expiry aliases the amount leaf
         vm.prank(owner);
         vm.expectRevert(LeashAccountV5.InvalidPolicy.selector);
-        acct.proposeSigningGrantNested(p, _spenders(spender));
+        acct.proposeSigningGrantNested(p, _spenders(spender), new SigningLib.TokenCap[](0));
     }
 
     function test_grant_nestedStartBeyondTop_reverts() public {
@@ -257,7 +257,7 @@ contract LeashAccountV5SigningNestedTest is Test {
         p.nestedLeafStart = NUM_TOP; // nested member position must be < numTopFields
         vm.prank(owner);
         vm.expectRevert(LeashAccountV5.InvalidPolicy.selector);
-        acct.proposeSigningGrantNested(p, _spenders(spender));
+        acct.proposeSigningGrantNested(p, _spenders(spender), new SigningLib.TokenCap[](0));
     }
 
     // ---------- fail-closed: a mis-shaped leaf array at arm time ----------
@@ -267,7 +267,7 @@ contract LeashAccountV5SigningNestedTest is Test {
         bytes32[] memory f = new bytes32[](4); // totalLeaves must be 5
         vm.prank(session);
         vm.expectRevert(LeashAccountV5.DecodeMismatch.selector);
-        acct.authorizeSigningIntent(DID, f, _sign(bytes32(uint256(1))), "");
+        acct.authorizeSigningIntent(DID, f, new SigningLib.TokenCap[](0), _sign(bytes32(uint256(1))), "");
     }
 
     // ---------- Gate-② R-4: a wrong stored nestedTypeHash folds to a non-canonical digest ----------
@@ -281,14 +281,14 @@ contract LeashAccountV5SigningNestedTest is Test {
         bytes memory s = _sign(_canonicalDigest(amount, exp, sig)); // signs the REAL Permit2 digest
         vm.prank(session);
         vm.expectRevert(LeashAccountV5.BadIntentSignature.selector); // wrong fold ⇒ sig can't recover
-        acct.authorizeSigningIntent(DID, f, s, "");
+        acct.authorizeSigningIntent(DID, f, new SigningLib.TokenCap[](0), s, "");
     }
 
     function LeashAccountV5SigningNestedParams_wrong() internal {
         SigningLib.SigningGrantParams memory p = _params();
         p.nestedTypeHash = TH_SINGLE; // deliberately wrong (should be TH_DETAILS)
         vm.prank(owner);
-        acct.proposeSigningGrantNested(p, _spenders(spender));
+        acct.proposeSigningGrantNested(p, _spenders(spender), new SigningLib.TokenCap[](0));
         vm.warp(block.timestamp + DELAY);
         vm.prank(owner);
         acct.applySigningGrant();
@@ -304,7 +304,7 @@ contract LeashAccountV5SigningNestedTest is Test {
         bytes32 expected = _canonicalDigest(amount, exp, sig);
         bytes32[] memory f = _leaves(amount, exp, sig);
         vm.prank(session);
-        acct.authorizeSigningIntent(DID, f, _sign(expected), "");
+        acct.authorizeSigningIntent(DID, f, new SigningLib.TokenCap[](0), _sign(expected), "");
         assertEq(acct.isValidSignature(expected, ""), ERC1271_MAGIC, "armed before rotation");
 
         vm.prank(owner);
@@ -323,7 +323,7 @@ contract LeashAccountV5SigningNestedTest is Test {
         bytes memory s = _sign(_canonicalDigest(amount, pastExp, sig));
         vm.prank(session);
         vm.expectRevert(LeashAccountV5.DeadlineInPast.selector);
-        acct.authorizeSigningIntent(DID, f, s, "");
+        acct.authorizeSigningIntent(DID, f, new SigningLib.TokenCap[](0), s, "");
     }
 
     // ---------- PermitTransferFrom shape (the other one-level Permit2 struct) ----------
@@ -355,7 +355,7 @@ contract LeashAccountV5SigningNestedTest is Test {
             buyToken: address(0)
         });
         vm.prank(owner);
-        acct.proposeSigningGrantNested(p, _spenders(spender));
+        acct.proposeSigningGrantNested(p, _spenders(spender), new SigningLib.TokenCap[](0));
         vm.warp(block.timestamp + DELAY);
         vm.prank(owner);
         acct.applySigningGrant();
@@ -373,7 +373,7 @@ contract LeashAccountV5SigningNestedTest is Test {
         bytes32 ptfHash = keccak256(abi.encode(thPtf, tokHash, spender, uint256(123), deadline));
         bytes32 expected = keccak256(abi.encodePacked(hex"1901", domainSep, ptfHash));
         vm.prank(session);
-        bytes32 armed = acct.authorizeSigningIntent(did2, f, _sign(expected), "");
+        bytes32 armed = acct.authorizeSigningIntent(did2, f, new SigningLib.TokenCap[](0), _sign(expected), "");
         assertEq(armed, expected, "PermitTransferFrom reconstruction != canonical");
         assertEq(acct.isValidSignature(expected, ""), ERC1271_MAGIC);
     }

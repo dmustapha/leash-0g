@@ -75,6 +75,14 @@ export interface Eip712NestedGroup {
   structType: string;
   /** the sub-struct's ordered static leaf fields. */
   subFields: Eip712Field[];
+  /**
+   * FP-4 Slice-5 (§5.1): the nested member is an ARRAY of the sub-struct (`permitted: TokenPermissions[]`),
+   * not a single sub-struct. When set, `encodeType` renders the member as `${structType}[] ${memberName}`
+   * and the leaf list is runtime-variable (N elements) — the batch build/validate path handles it (the
+   * fixed-leaf `descriptorLeaves`/`foldSpec` helpers THROW on an array group). Batch-only (order's
+   * `preHashedConstant` never combines with this).
+   */
+  array?: boolean;
 }
 
 /**
@@ -121,6 +129,19 @@ export interface SigningDescriptor {
    */
   orderRoles?: { receiver: string; fee: string; sellToken: string };
   /**
+   * FP-4 Slice-5 (§5.1): the element sub-field NAMES for a `batch` descriptor's `TokenPermissions` array
+   * (asserted to the fixed positions token=0, amount=1 within each element). The top-level `spender`/
+   * `deadline` members are named via `roles.spender`/`roles.deadline`; `nonce` is a server-pinned leaf.
+   */
+  batchRoles?: { token: string; amount: string };
+  /**
+   * FP-4 Slice-5 (§5.1): the reviewed per-token allowlist + caps for a `batch` descriptor — the off-chain
+   * mirror of the on-chain `TokenCap[]` the wall commits as `keccak256(abi.encode(caps))` (caps-hash
+   * commit). Lowercased tokens; base-units cap strings. A batch may move ONLY tokens in this set; per-token
+   * Σ ≤ its cap. Must be non-empty, no duplicate token, each cap > 0 (asserted in `assertDescriptor`).
+   */
+  tokenCaps?: { token: string; cap: string }[];
+  /**
    * FP-4 Slice-4 (§5.1): reviewed FIXED leaf values the builder pins with PRECEDENCE over `ctx.pins`
    * (which may NOT override them). For CoW: `appData` (zero-hash bytes32), the pre-image strings
    * `kind='sell'`/`sellTokenBalance='erc20'`/`buyTokenBalance='erc20'` (the builder hashes them to the
@@ -152,6 +173,12 @@ export interface SigningRule {
   maxDeadlineWindow: number;
   /** the per-token budget the amount is bound to (the SAME budget `executeCall` debits). */
   token: string;
+  /**
+   * FP-4 Slice-5 (§5.1): the reviewed per-token cap allowlist for a `batch` descriptor (the owner's standing
+   * grant mirror; the scalar `perIntentCap`/`token` are UNUSED for batch). Lowercased tokens, base-units cap
+   * strings. A batch may move only tokens in this set; per-token Σ ≤ its cap. Absent for non-batch rules.
+   */
+  tokenCaps?: { token: string; cap: string }[];
   /** false ⇒ explicitly removed (default-deny); absent rule ⇒ also default-deny. */
   active: boolean;
 }

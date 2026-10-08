@@ -103,7 +103,8 @@ contract SigningCowOrderTest is Test {
                 address(sellTok), cap, win,
                 KIND_ORDER, address(buyTok)
             ),
-            noSpenders
+            noSpenders,
+            new SigningLib.TokenCap[](0)
         );
         vm.warp(block.timestamp + DELAY);
         vm.prank(owner);
@@ -145,14 +146,14 @@ contract SigningCowOrderTest is Test {
         digest = _digest(f);
         bytes memory sig = _sign(sessionPk, digest);
         vm.prank(session);
-        acct.authorizeSigningIntent(DID, f, sig, "");
+        acct.authorizeSigningIntent(DID, f, new SigningLib.TokenCap[](0), sig, "");
     }
 
     function _submitExpectRevert(bytes32[] memory f, bytes memory expectedRevert) internal {
         bytes memory sig = _sign(sessionPk, _digest(f));
         vm.prank(session);
         vm.expectRevert(expectedRevert);
-        acct.authorizeSigningIntent(DID, f, sig, "");
+        acct.authorizeSigningIntent(DID, f, new SigningLib.TokenCap[](0), sig, "");
     }
 
     function _spent() internal view returns (uint128 spent) {
@@ -299,7 +300,8 @@ contract SigningCowOrderTest is Test {
                 type(uint8).max, 3, 5, type(uint8).max, bytes32(0), 0, 0,
                 address(sellTok), 100 ether, 1 hours, KIND_ORDER, address(0) // buyToken == 0
             ),
-            noSpenders
+            noSpenders,
+            new SigningLib.TokenCap[](0)
         );
     }
 
@@ -359,7 +361,8 @@ contract SigningCowOrderTest is Test {
                 1, 3, 5, type(uint8).max, bytes32(0), 0, 0, // spenderIdx=1 (NOT 0xFF) for an order
                 address(sellTok), 100 ether, 1 hours, KIND_ORDER, address(buyTok)
             ),
-            sp
+            sp,
+            new SigningLib.TokenCap[](0)
         );
     }
 
@@ -375,7 +378,8 @@ contract SigningCowOrderTest is Test {
                 type(uint8).max, 1, 2, type(uint8).max, bytes32(0), 0, 0,
                 address(sellTok), 100 ether, 1 hours, 0, address(0) // kind=STANDARD, spenderIdx=0xFF
             ),
-            sp
+            sp,
+            new SigningLib.TokenCap[](0)
         );
     }
 
@@ -389,7 +393,8 @@ contract SigningCowOrderTest is Test {
                 type(uint8).max, 3, 5, type(uint8).max, bytes32(0), 0, 0,
                 address(sellTok), 100 ether, 1 hours, KIND_ORDER, address(buyTok)
             ),
-            noSpenders
+            noSpenders,
+            new SigningLib.TokenCap[](0)
         );
     }
 

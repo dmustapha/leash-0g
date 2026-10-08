@@ -522,6 +522,13 @@ const signingRuleSchema = z.object({
   perIntentCap: z.string().regex(/^\d{1,40}$/),
   maxDeadlineWindow: z.number().int().nonnegative().max(31_536_000), // ≤ 1 year
   token: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
+  // FP-4 Slice-5 (§5.6): the reviewed per-token cap allowlist for a `batch` descriptor (the owner's standing
+  // grant mirror; scalar `token`/`perIntentCap` unused for batch). Validated against the descriptor allowlist
+  // below (422 on a token not in the descriptor set or a cap ≤ 0). Absent/empty for non-batch rules.
+  tokenCaps: z
+    .array(z.object({ token: z.string().regex(/^0x[0-9a-fA-F]{40}$/), cap: z.string().regex(/^\d{1,40}$/) }))
+    .max(14)
+    .optional(),
 });
 const signingRuleApplySchema = z.object({
   action: z.enum(['set', 'remove']),
@@ -2593,12 +2600,43 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
         return;
       }
     }
+    // FP-4 Slice-5 (§5.6): a `batch` rule's per-token caps MUST be a subset of the descriptor's reviewed
+    // token allowlist, each cap > 0 (fail-closed 422 — a rule can never grant a token the descriptor did not
+    // review, nor a non-positive cap). An empty/absent `tokenCaps` on a batch rule is rejected.
+    let ruleTokenCaps: { token: string; cap: string }[] | undefined;
+    if (descriptor.kind === 'batch') {
+      const allow = new Set((descriptor.tokenCaps ?? []).map((c) => c.token.toLowerCase()));
+      const caps = parsed.data.rule.tokenCaps ?? [];
+      if (caps.length === 0) {
+        res.status(422).json({ error: { message: 'batch rule requires a non-empty tokenCaps allowlist' } });
+        return;
+      }
+      const seen = new Set<string>();
+      for (const c of caps) {
+        const t = c.token.toLowerCase();
+        if (!allow.has(t)) {
+          res.status(422).json({ error: { message: `tokenCaps token ${c.token} is not in the descriptor allowlist` } });
+          return;
+        }
+        if (BigInt(c.cap) <= 0n) {
+          res.status(422).json({ error: { message: `tokenCaps cap for ${c.token} must be positive` } });
+          return;
+        }
+        if (seen.has(t)) {
+          res.status(422).json({ error: { message: `duplicate token ${c.token} in tokenCaps` } });
+          return;
+        }
+        seen.add(t);
+      }
+      ruleTokenCaps = caps.map((c) => ({ token: c.token.toLowerCase(), cap: c.cap }));
+    }
     const rule: SigningRuleType = {
       descriptorId,
       spenderSet: parsed.data.rule.spenderSet.map((s) => s.toLowerCase()),
       perIntentCap: parsed.data.rule.perIntentCap,
       maxDeadlineWindow: parsed.data.rule.maxDeadlineWindow,
       token: parsed.data.rule.token.toLowerCase(),
+      ...(ruleTokenCaps ? { tokenCaps: ruleTokenCaps } : {}),
       active: true,
     };
     await upsertSigningRule(deps.pool, {

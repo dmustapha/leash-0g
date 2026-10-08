@@ -51,7 +51,9 @@ export class DescriptorError extends Error {
       | 'role_type_mismatch'
       | 'role_index_alias'
       | 'order_layout'
-      | 'missing_constant_pin',
+      | 'missing_constant_pin'
+      | 'batch_layout'
+      | 'bad_token_cap',
     message: string,
   ) {
     super(`descriptor ${descriptorKey}: ${message}`);
@@ -76,6 +78,32 @@ export class DescriptorError extends Error {
  */
 function isGatedPreHashedConstant(d: SigningDescriptor, f: Eip712Field): boolean {
   return d.kind === 'order' && f.preHashedConstant === true && d.constantPins?.[f.name] !== undefined;
+}
+
+/** FP-4 Slice-5 — the canonical Permit2 `PermitBatchTransferFrom` + `TokenPermissions` type strings; the
+ *  computed `descriptorTypeHash` of a batch descriptor is asserted == `keccak256(PBTF_TYPE_STRING)` in the
+ *  engine test (a genuine, non-circular oracle vs Permit2's published constant). */
+export const TOKEN_PERMISSIONS_TYPE_STRING = 'TokenPermissions(address token,uint256 amount)';
+export const PBTF_TYPE_STRING =
+  'PermitBatchTransferFrom(TokenPermissions[] permitted,address spender,uint256 nonce,uint256 deadline)' +
+  TOKEN_PERMISSIONS_TYPE_STRING;
+
+/**
+ * FP-4 Slice-5 — validate a batch descriptor's reviewed per-token cap allowlist (N-01 mirror of the on-chain
+ * `validateBatchCaps`): present, non-empty, each a valid lowercased 0x token, each cap a positive base-units
+ * integer, NO duplicate token. A mis-authored allowlist is a LOUD reviewer error PRE-GRANT (never silent).
+ */
+function assertTokenCaps(d: SigningDescriptor): void {
+  const caps = d.tokenCaps;
+  if (!caps || caps.length === 0) throw new DescriptorError(d.key, 'bad_token_cap', 'batch requires a non-empty tokenCaps allowlist');
+  const seen = new Set<string>();
+  for (const c of caps) {
+    const t = c.token.toLowerCase();
+    if (!/^0x[0-9a-f]{40}$/.test(t) || t === ZERO_ADDR) throw new DescriptorError(d.key, 'bad_token_cap', `tokenCaps token "${c.token}" is not a nonzero 0x address`);
+    if (!/^\d{1,40}$/.test(c.cap) || BigInt(c.cap) <= 0n) throw new DescriptorError(d.key, 'bad_token_cap', `tokenCaps cap for "${c.token}" must be a positive base-units integer`);
+    if (seen.has(t)) throw new DescriptorError(d.key, 'bad_token_cap', `duplicate token "${c.token}" in tokenCaps`);
+    seen.add(t);
+  }
 }
 
 export function assertDescriptor(d: SigningDescriptor): void {
@@ -122,6 +150,37 @@ export function assertDescriptor(d: SigningDescriptor): void {
         throw new DescriptorError(d.key, 'dynamic_field', `field "${f.name}" type "${f.type}" is not a static 32-byte word (N-02)`);
       }
     }
+  }
+
+  // FP-4 Slice-5 — Permit2 `PermitBatchTransferFrom` (the first `kind: 'batch'`): the nested member is an
+  // ARRAY of `TokenPermissions`, so the leaf count is runtime-variable (N elements) — the fixed-leaf
+  // helpers (`descriptorLeaves`/`foldSpec`) CANNOT expand it and must not run. Validate the batch shape here
+  // and RETURN (N-02 stays intact — every element leaf is a static word; no `preHashedConstant`, which is
+  // order-only). The caps allowlist is the off-chain mirror of the on-chain committed `TokenCap[]`.
+  if (d.kind === 'batch') {
+    const g = d.nested;
+    if (!g || g.array !== true) throw new DescriptorError(d.key, 'batch_layout', 'batch requires a nested array group (nested.array === true)');
+    if (g.structType !== 'TokenPermissions') throw new DescriptorError(d.key, 'batch_layout', 'batch nested structType must be TokenPermissions');
+    if (g.subFields.length !== 2 || g.subFields[0]?.name !== 'token' || g.subFields[0]?.type !== 'address' || g.subFields[1]?.name !== 'amount' || g.subFields[1]?.type !== 'uint256') {
+      throw new DescriptorError(d.key, 'batch_layout', 'batch TokenPermissions must be [token:address, amount:uint256]');
+    }
+    // Top members: [permitted (the array), spender:address, nonce:uint256, deadline:uint256] (EIP-712 order).
+    const names = d.fields.map((f) => f.name);
+    if (d.fields.length !== 4 || names[0] !== g.memberName || names[1] !== 'spender' || names[2] !== 'nonce' || names[3] !== 'deadline') {
+      throw new DescriptorError(d.key, 'batch_layout', 'batch top fields must be [permitted[], spender, nonce, deadline]');
+    }
+    if (d.fields[1]?.type !== 'address' || d.fields[2]?.type !== 'uint256' || d.fields[3]?.type !== 'uint256') {
+      throw new DescriptorError(d.key, 'batch_layout', 'batch spender must be address, nonce/deadline uint256');
+    }
+    if (d.fields.some((f) => f.preHashedConstant)) throw new DescriptorError(d.key, 'batch_layout', 'batch has no preHashedConstant leaves (order-only)');
+    // Roles: spender/deadline resolve to the top members; batchRoles name the element fields (token, amount).
+    if (d.roles.spender !== 'spender') throw new DescriptorError(d.key, 'batch_layout', 'batch roles.spender must be "spender"');
+    if (d.roles.deadline !== 'deadline') throw new DescriptorError(d.key, 'batch_layout', 'batch roles.deadline must be "deadline"');
+    if (d.batchRoles?.token !== 'token' || d.batchRoles?.amount !== 'amount') {
+      throw new DescriptorError(d.key, 'batch_layout', 'batch batchRoles must name the TokenPermissions fields {token, amount}');
+    }
+    assertTokenCaps(d);
+    return; // batch is fully validated; the fixed-leaf checks below do NOT apply
   }
 
   // Bounds mirror the on-chain `_stageSigningGrant` (1..32 LEAVES).
@@ -218,6 +277,12 @@ export function encodeType(primaryType: string, fields: readonly Eip712Field[]):
  * single leaf), so the leaf list is exactly what the session key submits + what the wall indexes.
  */
 export function descriptorLeaves(d: SigningDescriptor): Eip712Field[] {
+  // FP-4 Slice-5 — a batch descriptor's leaf list is runtime-variable (N array elements); the fixed-leaf
+  // expansion is meaningless for it. Fail LOUD rather than silently mis-expand (the batch build/validate
+  // path never routes through here).
+  if (d.kind === 'batch' || d.nested?.array) {
+    throw new DescriptorError(d.key, 'batch_layout', 'descriptorLeaves is not defined for a batch (array) descriptor');
+  }
   if (!d.nested) return [...d.fields];
   const out: Eip712Field[] = [];
   for (const f of d.fields) {
@@ -236,6 +301,9 @@ export interface FoldSpec {
 }
 
 export function foldSpec(d: SigningDescriptor): FoldSpec {
+  if (d.kind === 'batch' || d.nested?.array) {
+    throw new DescriptorError(d.key, 'batch_layout', 'foldSpec is not defined for a batch (array) descriptor');
+  }
   if (!d.nested) {
     return { numTopFields: d.fields.length, nestedTypeHash: ZERO_WORD, nestedLeafStart: 0, nestedLeafCount: 0 };
   }
@@ -337,12 +405,43 @@ export interface OnChainGrantParams {
   kind: number;
   /** FP-4 Slice-4 (G11(b)): the wall-pinned per-pair proceeds token for order; ZERO_ADDR otherwise. */
   buyToken: Hex;
+  /** FP-4 Slice-5 (caps-hash commit): the reviewed per-token cap allowlist the owner submits to
+   *  `proposeSigningGrantNested` (on-chain shape); empty for non-batch. */
+  tokenCaps: { token: Hex; cap: string }[];
+  /** FP-4 Slice-5: `keccak256(abi.encode(TokenCap[]))` — the commitment the wall stores + the arm re-derives.
+   *  ZERO_WORD for non-batch. Mirrors the on-chain `validateBatchCaps` return exactly. */
+  tokenCapsHash: Hex;
 }
 
 const NO_EXPIRY_LEAF = 255; // 0xFF sentinel — mirrors the on-chain `type(uint8).max`.
 const NO_SPENDER_LEAF = 255; // 0xFF — a CoW order has no spender leaf (I-1).
 
 export function onChainGrantParams(d: SigningDescriptor): OnChainGrantParams {
+  // FP-4 Slice-5 — batch (caps-hash commit): the fixed-leaf `foldSpec` throws for an array descriptor, so
+  // build the grant params directly. All four scalar indices are the 0xFF sentinel (the wall derives
+  // positions from N); the fold spec names `TokenPermissions` (nestedLeafCount=2, start=0); `typeHash` is
+  // the genuine `PBTF_TYPEHASH` (reproduced by `descriptorTypeHash`); the owner submits `tokenCaps` and the
+  // wall stores only `tokenCapsHash = keccak256(abi.encode(caps))`.
+  if (d.kind === 'batch') {
+    const caps = (d.tokenCaps ?? []).map((c) => ({ token: c.token.toLowerCase() as Hex, cap: c.cap }));
+    return {
+      descriptorId: d.descriptorId,
+      domainSeparator: descriptorDomainSeparator(d),
+      typeHash: descriptorTypeHash(d),
+      numFields: 4,
+      spenderIndex: NO_SPENDER_LEAF,
+      amountIndex: NO_EXPIRY_LEAF, // 0xFF — unused for batch
+      deadlineIndex: NO_EXPIRY_LEAF, // 0xFF — unused for batch
+      nestedTypeHash: keccak256(toBytes(encodeType('TokenPermissions', d.nested?.subFields ?? []))),
+      nestedLeafStart: 0,
+      nestedLeafCount: 2,
+      expiryLeafIndex: NO_EXPIRY_LEAF,
+      kind: 2,
+      buyToken: ZERO_ADDR_HEX,
+      tokenCaps: caps,
+      tokenCapsHash: tokenCapsHash(caps),
+    };
+  }
   const fold = foldSpec(d);
   const isOrder = d.kind === 'order';
   return {
@@ -361,7 +460,22 @@ export function onChainGrantParams(d: SigningDescriptor): OnChainGrantParams {
     kind: isOrder ? 1 : 0,
     // G11(b): the reviewed per-pair proceeds token the wall pins `fields[1]` to; ZERO_ADDR for non-order.
     buyToken: isOrder ? (coercePinAddress(d.constantPins?.['buyToken']) ?? ZERO_ADDR_HEX) : ZERO_ADDR_HEX,
+    tokenCaps: [],
+    tokenCapsHash: ZERO_WORD,
   };
+}
+
+/** FP-4 Slice-5 — `keccak256(abi.encode(TokenCap[]))`, the caps commitment the on-chain `validateBatchCaps`
+ *  returns byte-for-byte (TokenCap = `(address token, uint128 cap)`). The owner submits the caps array; the
+ *  wall stores only this hash; the arm re-derives + compares (caps-hash commit, Dami 2026-10-08). */
+export function tokenCapsHash(caps: { token: Hex; cap: string }[]): Hex {
+  // Positional tuple values (unnamed components) — mirrors Solidity `abi.encode(TokenCap[])` where TokenCap
+  // is `(address token, uint128 cap)`, so this hash equals the on-chain `validateBatchCaps` return byte-for-byte.
+  const encoded = encodeAbiParameters(
+    [{ type: 'tuple[]', components: [{ type: 'address' }, { type: 'uint128' }] }],
+    [caps.map((c) => [c.token.toLowerCase() as Hex, BigInt(c.cap)]) as never],
+  );
+  return keccak256(encoded);
 }
 
 const ZERO_ADDR_HEX: Hex = '0x0000000000000000000000000000000000000000';
