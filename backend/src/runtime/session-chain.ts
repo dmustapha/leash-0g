@@ -113,6 +113,13 @@ export interface RuntimeChain {
     descriptorId: number;
     fields: string[];
     digest: string;
+    /**
+     * FP-4 Slice-2 (`07 #15`): the co-signer's second-factor approval bytes, when the account has an
+     * active co-signer. Defaults to empty (`0x`) — the INERT path (`coSigner == address(0)`), which is
+     * every account today. Who holds the co-signer key + the approval-fetch orchestration is DEFERRED to
+     * the `#16` mainnet-legal slice (D-FP4-2e); until then no account sets a co-signer, so `0x` always arms.
+     */
+    coSignerSig?: string;
   }): Promise<{ txHash: string; digest: string; epoch: number }>;
 }
 
@@ -351,6 +358,7 @@ export class SessionChain implements RuntimeChain {
     descriptorId: number;
     fields: string[];
     digest: string;
+    coSignerSig?: string;
   }): Promise<{ txHash: string; digest: string; epoch: number }> {
     const account = privateKeyToAccount(input.sessionPrivateKey as Hex);
     // RAW ECDSA over the EIP-712 digest (the contract does `ECDSA.recover(digest, sig)` — no
@@ -367,7 +375,9 @@ export class SessionChain implements RuntimeChain {
       address: input.accountAddr as Hex,
       abi: leashAccountV5SigningAbi,
       functionName: 'authorizeSigningIntent',
-      args: [BigInt(input.descriptorId), input.fields as Hex[], sessionSig],
+      // coSignerSig defaults to empty (`0x`) — the inert path; every account today has no co-signer
+      // (identity + approval orchestration deferred to the `#16` mainnet-legal slice, D-FP4-2e).
+      args: [BigInt(input.descriptorId), input.fields as Hex[], sessionSig, (input.coSignerSig ?? '0x') as Hex],
     });
     const receipt = await waitReceipt(this.publicClient, txHash);
     assertReceiptSuccess(receipt.status, txHash);
