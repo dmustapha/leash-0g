@@ -1,4 +1,4 @@
-import { encodeAbiParameters, keccak256, concat, type Hex } from 'viem';
+import { encodeAbiParameters, keccak256, concat, toBytes, type Hex } from 'viem';
 import type { Eip712Field, SigningDescriptor, SigningRule } from './types.js';
 import {
   toViemDomain,
@@ -88,7 +88,10 @@ export function buildIntent(descriptor: SigningDescriptor, rule: SigningRule | u
   const amount = parseSigningAmount(input.amountWei);
   if (amount === null) return { ok: false, reason: 'bad_amount' };
 
-  const spender = resolveSpender(rule, input.spender);
+  // FP-4 Slice-4 (I-1): a CoW order has NO spender — the mover is GPv2VaultRelayer, governed OFF the order.
+  // Skip spender resolution for order (no spender leaf); every other kind resolves it from the owner grant.
+  const isOrder = descriptor.kind === 'order';
+  const spender = isOrder ? ZERO_ADDR : resolveSpender(rule, input.spender);
   if (spender === null) return { ok: false, reason: 'spender_unresolved' };
 
   const self = input.ctx.self.toLowerCase();
@@ -111,12 +114,19 @@ export function buildIntent(descriptor: SigningDescriptor, rule: SigningRule | u
       // FP-3 (R-2): the secondary expiry (Permit2 `expiration`) is SERVER-pinned to the same
       // deadline the owner window bounds — never model text, never farther than the signature.
       value = BigInt(deadlineSec);
-    } else if (f.name === descriptor.roles.spender) {
+    } else if (descriptor.roles.spender !== undefined && f.name === descriptor.roles.spender) {
       value = spender;
+    } else if (descriptor.constantPins?.[f.name] !== undefined) {
+      // FP-4 Slice-4 (§5.3): reviewed FIXED constant — PRECEDENCE over `ctx.pins` (checked before the
+      // ctx.pins fallback, so a hostile `ctx.pins[name]` can never override a reviewed pin). Covers CoW's
+      // sellToken/buyToken/feeAmount/appData/kind/partiallyFillable/sellTokenBalance/buyTokenBalance.
+      value = descriptor.constantPins[f.name] as string | bigint | boolean;
     } else if (f.type === 'address' && isOwnerField(f.name)) {
-      // owner/holder/account fields always pin to self (never a confused deputy).
+      // owner/holder/account/receiver fields always pin to self (never a confused deputy).
       value = self;
     } else {
+      // Everything else is a mandatory SERVER pin (CoW `buyAmount` = server min-receive floor; never model
+      // text — fail-closed `missing_pin` if absent, §5.3 G3).
       const pin = input.ctx.pins?.[f.name];
       if (pin === undefined) return { ok: false, reason: 'missing_pin' };
       value = pin;
@@ -124,7 +134,15 @@ export function buildIntent(descriptor: SigningDescriptor, rule: SigningRule | u
     const coerced = coerce(f.type, value);
     if (coerced === null) return { ok: false, reason: 'bad_pin' };
     coercedByName[f.name] = coerced;
-    words.push(encodeAbiParameters([{ type: f.type }], [coerced]));
+    // FP-4 Slice-4 (§3a): a pre-hashed-constant field's SUBMITTED leaf is the EIP-712 word of its pinned
+    // value — for a `string` that is `keccak256(bytes(value))` (e.g. keccak256("sell")), pushed DIRECTLY
+    // (not the dynamic ABI encoding). `coercedByName` keeps the plain string so `buildMessage` +
+    // `buildViemTypes` reconstruct the REAL `Order` typed-data and viem's own keccak matches by construction.
+    words.push(
+      f.preHashedConstant
+        ? keccak256(toBytes(String(coerced)))
+        : encodeAbiParameters([{ type: f.type }], [coerced]),
+    );
   }
 
   const domain = toViemDomain(descriptor.domain);
@@ -157,8 +175,28 @@ export function buildIntent(descriptor: SigningDescriptor, rule: SigningRule | u
     spender,
     amountWei: amount.toString(),
     deadlineSec,
-    humanReadable: decodeForHuman(descriptor, spender, amount, deadlineSec, input.ctx.nowSec, rule.token),
+    humanReadable: isOrder
+      ? decodeOrderForHuman(amount, coercedByName, deadlineSec, input.ctx.nowSec)
+      : decodeForHuman(descriptor, spender, amount, deadlineSec, input.ctx.nowSec, rule.token),
   };
+}
+
+/**
+ * FP-4 Slice-4 (§5.3) — the order JIT-card human decode, composed ENTIRELY from server-held/pinned fields
+ * (never model text — the FP-2 `humanReadable` precondition, M-01). sellAmount = the chargeable; buyAmount =
+ * the server min-receive pin; sellToken/buyToken = reviewed constants; receiver is self by construction.
+ */
+function decodeOrderForHuman(
+  sellAmount: bigint,
+  coercedByName: Record<string, string | bigint | boolean>,
+  deadlineSec: number,
+  nowSec: number,
+): string {
+  const mins = Math.max(0, Math.round((deadlineSec - nowSec) / 60));
+  const buyAmount = String(coercedByName['buyAmount'] ?? '?');
+  const sellToken = short(String(coercedByName['sellToken'] ?? ''));
+  const buyToken = short(String(coercedByName['buyToken'] ?? ''));
+  return `Sign a CoW sell order: sell ≤ ${sellAmount.toString()} ${sellToken} for ≥ ${buyAmount} ${buyToken}, proceeds to this account, expires ~${mins} min.`;
 }
 
 /** The viem `types` map for a descriptor — primary (nested member referencing the sub-struct) +
@@ -238,8 +276,20 @@ function resolveSpender(rule: SigningRule, proposed?: string): string | null {
  * path and stands the build down (`missing_pin`) rather than fabricate self.
  */
 function isOwnerField(name: string): boolean {
-  return name === 'owner' || name === 'holder' || name === 'account' || name === 'from' || name === 'maker';
+  return (
+    name === 'owner' ||
+    name === 'holder' ||
+    name === 'account' ||
+    name === 'from' ||
+    name === 'maker' ||
+    // FP-4 Slice-4 (§5.3 / G9): a CoW order's `receiver` is the proceeds SINK — self-pinned (the primary
+    // confused-deputy guard; the wall also hard-pins `receiver == account`). Added to the enumerated
+    // self-party list so an order's receiver can never be a model-supplied address.
+    name === 'receiver'
+  );
 }
+
+const ZERO_ADDR = '0x0000000000000000000000000000000000000000';
 
 /** Coerce a pinned value to its static field type, or null if it does not fit (fail-closed). */
 function coerce(type: string, value: string | number | bigint | boolean): string | bigint | boolean | null {
@@ -248,6 +298,10 @@ function coerce(type: string, value: string | number | bigint | boolean): string
     return /^0x[0-9a-f]{40}$/.test(s) ? s : null;
   }
   if (type === 'bool') return typeof value === 'boolean' ? value : null;
+  // FP-4 Slice-4 (§5.3): the pre-hashed-constant `string` arm — identity for a string pin, so a pinned
+  // enum value (`'sell'`/`'erc20'`) does not fall through to the `BigInt(...)` path (which would throw →
+  // `bad_pin`). The caller hashes the returned string to the leaf word when `preHashedConstant` is set.
+  if (type === 'string') return typeof value === 'string' ? value : null;
   const bytesN = /^bytes([1-9]|[12][0-9]|3[0-2])$/.exec(type);
   if (bytesN) {
     const s = String(value).toLowerCase();

@@ -94,6 +94,70 @@ function permit2SingleDescriptor(descriptorId: number, key: string, chainId: num
   };
 }
 
+/**
+ * FP-4 Slice-4 — CoW Protocol `GPv2Order` (the FIRST `kind: 'order'` family). GPv2Settlement is the EIP-712
+ * `verifyingContract` and is DETERMINISTIC on every CoW chain. The three enum fields (`kind`/
+ * `sellTokenBalance`/`buyTokenBalance`) are declared EIP-712 `string` with the §3a `preHashedConstant`
+ * override so `descriptorTypeHash` reproduces CoW's real `ORDER_TYPE_HASH` while each submitted leaf stays
+ * the pinned pre-hashed word (`keccak256("sell")`/`keccak256("erc20")`). `appData` is a real `bytes32` pinned
+ * to the ZERO hash ("no appData / no CIP-7 hook"). The wall hard-bounds the order (sellToken==budget token,
+ * buyToken wall-pinned, receiver==self, cap on sellAmount+feeAmount); `sensitive:false` (parity, G10).
+ */
+export const GPV2_SETTLEMENT = '0x9008D19f58AAbD9eD0D60971565AA8510560ab41';
+/** CoW "no appData / no hooks" — the zero bytes32 (asserted == SigningLib `COW_APPDATA_NONE` on-chain). */
+export const COW_APPDATA_NONE = '0x0000000000000000000000000000000000000000000000000000000000000000';
+
+/** Sepolia (11155111) tokens for the seeded pair — sell WETH → buy USDC (G6: live CoW testnet; live-exec
+ *  out of scope — the descriptor is structurally valid regardless of a live settlement on a given chain). */
+const SEPOLIA_WETH = '0xfff9976782d46cc05630d1f6ebab18b2324d6b14';
+const SEPOLIA_USDC = USDC.ethSepolia.token;
+
+function cowOrderDescriptor(
+  descriptorId: number,
+  key: string,
+  chainId: number,
+  sellToken: string,
+  buyToken: string,
+): SigningDescriptor {
+  return {
+    descriptorId,
+    key,
+    label: 'CoW sell order',
+    protocol: 'CoW Protocol GPv2Order',
+    domain: { name: 'Gnosis Protocol', version: 'v2', chainId, verifyingContract: GPV2_SETTLEMENT },
+    primaryType: 'Order',
+    kind: 'order',
+    // GPv2Order — the 12 fields in canonical EIP-712 order (positions are FIXED and asserted on-chain).
+    fields: [
+      { name: 'sellToken', type: 'address' },
+      { name: 'buyToken', type: 'address' },
+      { name: 'receiver', type: 'address' },
+      { name: 'sellAmount', type: 'uint256' },
+      { name: 'buyAmount', type: 'uint256' },
+      { name: 'validTo', type: 'uint32' },
+      { name: 'appData', type: 'bytes32' },
+      { name: 'feeAmount', type: 'uint256' },
+      { name: 'kind', type: 'string', preHashedConstant: true },
+      { name: 'partiallyFillable', type: 'bool' },
+      { name: 'sellTokenBalance', type: 'string', preHashedConstant: true },
+      { name: 'buyTokenBalance', type: 'string', preHashedConstant: true },
+    ],
+    roles: { amount: 'sellAmount', deadline: 'validTo' }, // NO spender (I-1)
+    orderRoles: { receiver: 'receiver', fee: 'feeAmount', sellToken: 'sellToken' },
+    constantPins: {
+      sellToken: sellToken.toLowerCase(),
+      buyToken: buyToken.toLowerCase(),
+      feeAmount: 0n,
+      appData: COW_APPDATA_NONE,
+      kind: 'sell', // pre-image string — hashed to keccak256("sell") == on-chain COW_KIND_SELL
+      partiallyFillable: false,
+      sellTokenBalance: 'erc20', // pre-image string — hashed to keccak256("erc20") == COW_BAL_ERC20
+      buyTokenBalance: 'erc20',
+    },
+    sensitive: false,
+  };
+}
+
 /** The real FP-3 descriptor seed (appended to the FP-2 built-in id 1). */
 export const FP3_DESCRIPTORS: readonly SigningDescriptor[] = [
   erc2612Descriptor(10, 'erc2612.usdc.base', CHAIN.baseSepolia, USDC.baseSepolia.token, USDC.baseSepolia.name),
@@ -103,6 +167,8 @@ export const FP3_DESCRIPTORS: readonly SigningDescriptor[] = [
   permit2SingleDescriptor(21, 'permit2.single.base', CHAIN.baseSepolia),
   permit2SingleDescriptor(22, 'permit2.single.arb', CHAIN.arbSepolia),
   permit2SingleDescriptor(23, 'permit2.single.eth', CHAIN.ethSepolia),
+  // FP-4 Slice-4 — CoW GPv2Order; descriptor-id namespace 30..39 (one per chain). Sepolia seeded first (G6).
+  cowOrderDescriptor(30, 'cow.order.eth', CHAIN.ethSepolia, SEPOLIA_WETH, SEPOLIA_USDC),
 ];
 
 /** The on-chain `DOMAIN_SEPARATOR()` each USDC token returns (verified live) — asserted in the

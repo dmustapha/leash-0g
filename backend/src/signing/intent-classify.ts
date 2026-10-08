@@ -75,10 +75,19 @@ export function classifySigning(
   // Outside-the-standing-grant checks — each would REVERT at `authorizeSigningIntent`;
   // the resolution is a timelocked owner widen (no signing one-shot exists).
   const widen: SigningWidenReason[] = [];
-  const spenders = new Set(rule.spenderSet.map((s) => s.toLowerCase()));
-  if (!spenders.has(intended.spender.toLowerCase())) widen.push('new_spender');
+  const isOrder = descriptor.kind === 'order';
+  // FP-4 Slice-4 (§5.4, I-1): a CoW order has no spender (empty spender set is not a widen) — skip the
+  // new-spender check for order; every other kind keeps it.
+  if (!isOrder) {
+    const spenders = new Set(rule.spenderSet.map((s) => s.toLowerCase()));
+    if (!spenders.has(intended.spender.toLowerCase())) widen.push('new_spender');
+  }
   const cap = parseSigningAmount(rule.perIntentCap);
-  if (cap === null || amount > cap) widen.push('over_cap');
+  // FP-4 Slice-4 (§5.4, I-2): order's chargeable outflow is `sellAmount + feeAmount` (the wall debits the
+  // sum). `feeAmount` is a reviewed pinned constant (0 today); adding it keeps parity if a future reviewed
+  // max fee is pinned. Non-order: chargeable == amount.
+  const fee = isOrder ? orderFeeAmount(descriptor) : 0n;
+  if (cap === null || amount + fee > cap) widen.push('over_cap');
   // deadline beyond the granted window (0 window ⇒ the descriptor is disabled).
   if (intended.deadlineSec > nowSec + rule.maxDeadlineWindow) widen.push('deadline_too_far');
   if (widen.length > 0) return { lane: 'l3_widen', reasons: dedupe(widen) };
@@ -88,4 +97,16 @@ export function classifySigning(
 
 function dedupe<T>(xs: T[]): T[] {
   return [...new Set(xs)];
+}
+
+/** The reviewed pinned `feeAmount` of an order descriptor (0 today), as base-units bigint. Fail-closed to 0
+ *  if absent/unparseable — the on-chain wall still reads `fields[7]` into the debit regardless. */
+function orderFeeAmount(descriptor: SigningDescriptor): bigint {
+  const pin = descriptor.constantPins?.['feeAmount'];
+  if (pin === undefined) return 0n;
+  try {
+    return BigInt(typeof pin === 'bigint' ? pin : String(pin));
+  } catch {
+    return 0n;
+  }
 }

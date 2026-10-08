@@ -137,6 +137,9 @@ contract LeashAccountV5 is ReentrancyGuard {
             // live epoch so a stale arm is invalid in isValidSignature without a per-digest disarm.
     }
 
+    /// @notice FP-4 Slice-4 — mirrors `SigningLib.KIND_ORDER`; a CoW order skips the spender allowlist (I-1).
+    uint8 internal constant KIND_ORDER = 1;
+
     // ---------- errors ----------
     error NotOwner();
     error NotGuardianOrOwner();
@@ -378,6 +381,9 @@ contract LeashAccountV5 is ReentrancyGuard {
         uint8 nestedLeafStart;
         uint8 nestedLeafCount;
         uint8 expiryLeafIndex;
+        // --- FP-4 Slice-4 (CoW order; mirrors SigningIntentPolicy) ---
+        uint8 kind; // KIND_STANDARD (0) / KIND_ORDER (1)
+        address buyToken; // KIND_ORDER only — wall-pinned proceeds token (G11(b)); 0 for standard
     }
 
     PendingSigningGrant public pendingSigningGrant;
@@ -757,9 +763,14 @@ contract LeashAccountV5 is ReentrancyGuard {
         ArmedIntent storage existing = armedIntent[digest]; // storage pointer (EIP-170: no memory copy)
         if (existing.set && existing.epoch == signingEpoch && block.timestamp <= existing.expiry) revert AlreadyArmed();
 
-        if (!signingSpender[descriptorId][spender]) revert SpenderNotAllowlisted(spender);
+        // FP-4 Slice-4 (I-1): a CoW order has NO spender (`spenderIndex==0xFF`, `spender==address(0)`) — the
+        // mover is GPv2VaultRelayer, governed OFF the order via the `approve` CALL surface. Skip the allowlist
+        // for order; every other kind keeps the mandatory spender-allowlist check. The order's outflow is still
+        // hard-bounded (sellToken==s.token, receiver==self, cap on sellAmount+feeAmount) inside reconstructAndBound.
+        if (s.kind != KIND_ORDER && !signingSpender[descriptorId][spender]) revert SpenderNotAllowlisted(spender);
 
-        // signing ≤ calling: debit the SAME per-token budget the executeCall wall uses.
+        // signing ≤ calling: debit the SAME per-token budget the executeCall wall uses. `amount` already carries
+        // sellAmount+feeAmount for order (I-2), so the existing debit-site satisfies the fee-inclusive budget.
         if (amount > 0) {
             _debitSpendBudget(s.token, amount, policy.windowSeconds);
         }
@@ -802,23 +813,26 @@ contract LeashAccountV5 is ReentrancyGuard {
     function _stageSigningGrant(SigningLib.SigningGrantParams memory p, address[] calldata spenders) internal {
         SigningLib(signingHelper).validateGrant(p); // reverts InvalidPolicy/ZeroAddress on any defect — fail-closed
 
-        pendingSigningGrant = PendingSigningGrant({
-            descriptorId: p.descriptorId,
-            domainSeparator: p.domainSeparator,
-            typeHash: p.typeHash,
-            numFields: p.numTopFields,
-            spenderIndex: p.spenderLeafIndex,
-            amountIndex: p.amountLeafIndex,
-            deadlineIndex: p.deadlineLeafIndex,
-            token: p.token,
-            perIntentCap: p.perIntentCap,
-            maxDeadlineWindow: p.maxDeadlineWindow,
-            eta: uint64(block.timestamp) + timelockDelay,
-            nestedTypeHash: p.nestedTypeHash,
-            nestedLeafStart: p.nestedLeafStart,
-            nestedLeafCount: p.nestedLeafCount,
-            expiryLeafIndex: p.expiryLeafIndex
-        });
+        // Direct storage-field writes (not a memory struct literal copied to storage) — the same EIP-170
+        // lever as the storage-pointer read in `applySigningGrant`; avoids building the 16-field struct in memory.
+        PendingSigningGrant storage pg = pendingSigningGrant;
+        pg.descriptorId = p.descriptorId;
+        pg.domainSeparator = p.domainSeparator;
+        pg.typeHash = p.typeHash;
+        pg.numFields = p.numTopFields;
+        pg.spenderIndex = p.spenderLeafIndex;
+        pg.amountIndex = p.amountLeafIndex;
+        pg.deadlineIndex = p.deadlineLeafIndex;
+        pg.token = p.token;
+        pg.perIntentCap = p.perIntentCap;
+        pg.maxDeadlineWindow = p.maxDeadlineWindow;
+        pg.eta = uint64(block.timestamp) + timelockDelay;
+        pg.nestedTypeHash = p.nestedTypeHash;
+        pg.nestedLeafStart = p.nestedLeafStart;
+        pg.nestedLeafCount = p.nestedLeafCount;
+        pg.expiryLeafIndex = p.expiryLeafIndex;
+        pg.kind = p.kind;
+        pg.buyToken = p.buyToken;
         delete pendingSigningSpenders;
         for (uint256 i = 0; i < spenders.length; i++) {
             if (spenders[i] == address(0)) revert ZeroAddress();
@@ -828,7 +842,9 @@ contract LeashAccountV5 is ReentrancyGuard {
     }
 
     function applySigningGrant() external onlyOwner {
-        PendingSigningGrant memory pg = pendingSigningGrant;
+        // Storage pointer (not a memory copy): avoids codegen for a full 16-field struct copy — the
+        // EIP-170 lever Slice-2 used (D-FP4-2f). Each field below is read via a direct SLOAD.
+        PendingSigningGrant storage pg = pendingSigningGrant;
         if (pg.eta == 0) revert NothingPending();
         if (block.timestamp < pg.eta) revert TimelockNotElapsed(pg.eta);
         // clear any prior spender set for this descriptor (a re-grant replaces it).
@@ -848,6 +864,8 @@ contract LeashAccountV5 is ReentrancyGuard {
         s.nestedLeafStart = pg.nestedLeafStart;
         s.nestedLeafCount = pg.nestedLeafCount;
         s.expiryLeafIndex = pg.expiryLeafIndex;
+        s.kind = pg.kind;
+        s.buyToken = pg.buyToken;
         uint256 len = pendingSigningSpenders.length;
         for (uint256 i = 0; i < len; i++) {
             address sp = pendingSigningSpenders[i];
