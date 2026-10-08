@@ -88,7 +88,7 @@ contract LeashAccountV5SigningTest is Test {
         address token, uint128 cap, uint64 win, address[] memory sp
     ) internal {
         acct.proposeSigningGrantNested(
-            SigningLib.SigningGrantParams(id, ds, th, nf, si, ai, di, type(uint8).max, bytes32(0), 0, 0, token, cap, win),
+            SigningLib.SigningGrantParams(id, ds, th, nf, si, ai, di, type(uint8).max, bytes32(0), 0, 0, token, cap, win, 0, address(0)),
             sp
         );
     }

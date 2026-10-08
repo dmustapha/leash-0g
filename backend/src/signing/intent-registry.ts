@@ -49,7 +49,9 @@ export class DescriptorError extends Error {
       | 'too_many_fields'
       | 'unknown_role_field'
       | 'role_type_mismatch'
-      | 'role_index_alias',
+      | 'role_index_alias'
+      | 'order_layout'
+      | 'missing_constant_pin',
     message: string,
   ) {
     super(`descriptor ${descriptorKey}: ${message}`);
@@ -64,6 +66,18 @@ export class DescriptorError extends Error {
  * before it writes a grant. Fail-closed: anything it does not positively accept
  * is rejected.
  */
+/**
+ * FP-4 Slice-4 (§3a/§5.2) — the N-02 override gate. A field whose `.type` is NOT a static word is
+ * accepted ONLY as a gated pre-hashed CONSTANT leaf: `descriptor.kind === 'order'` AND
+ * `field.preHashedConstant === true` AND a FIXED `constantPins[name]` is present. `isStaticWordType`
+ * stays strict (`isStaticWordType('string') === false`), so any ungated/free/dynamic string — including a
+ * `string` without the flag/pin, or a `preHashedConstant` outside an `order` — still fails `dynamic_field`.
+ * The submitted leaf remains a single pinned static word (N-02 preserved as a LEAF invariant).
+ */
+function isGatedPreHashedConstant(d: SigningDescriptor, f: Eip712Field): boolean {
+  return d.kind === 'order' && f.preHashedConstant === true && d.constantPins?.[f.name] !== undefined;
+}
+
 export function assertDescriptor(d: SigningDescriptor): void {
   // N-01: the domain MUST bind chainId + verifyingContract (replay immunity).
   if (!d.domain.chainId || d.domain.chainId <= 0) {
@@ -98,13 +112,13 @@ export function assertDescriptor(d: SigningDescriptor): void {
     }
     for (const f of d.fields) {
       if (f.name === nested.memberName) continue; // the sub-struct member, validated above
-      if (!isStaticWordType(f.type)) {
+      if (!isStaticWordType(f.type) && !isGatedPreHashedConstant(d, f)) {
         throw new DescriptorError(d.key, 'dynamic_field', `field "${f.name}" type "${f.type}" is not a static 32-byte word (N-02)`);
       }
     }
   } else {
     for (const f of d.fields) {
-      if (!isStaticWordType(f.type)) {
+      if (!isStaticWordType(f.type) && !isGatedPreHashedConstant(d, f)) {
         throw new DescriptorError(d.key, 'dynamic_field', `field "${f.name}" type "${f.type}" is not a static 32-byte word (N-02)`);
       }
     }
@@ -114,24 +128,63 @@ export function assertDescriptor(d: SigningDescriptor): void {
   const leaves = descriptorLeaves(d);
   if (leaves.length > 32) throw new DescriptorError(d.key, 'too_many_fields', 'descriptor exceeds 32 leaves');
 
-  // Role fields resolve to LEAF indices + carry the right static type.
-  const si = leaves.findIndex((f) => f.name === d.roles.spender);
+  // Role fields resolve to LEAF indices + carry the right static type. An ORDER has NO spender (I-1 —
+  // `roles.spender` is optional); its spender-present/type/distinctness checks are skipped. Flat/nested
+  // always set `roles.spender`, so their behavior is unchanged (R-6).
   const ai = leaves.findIndex((f) => f.name === d.roles.amount);
   const di = leaves.findIndex((f) => f.name === d.roles.deadline);
-  if (si < 0) throw new DescriptorError(d.key, 'unknown_role_field', `spender role leaf "${d.roles.spender}" absent`);
   if (ai < 0) throw new DescriptorError(d.key, 'unknown_role_field', `amount role leaf "${d.roles.amount}" absent`);
   if (di < 0) throw new DescriptorError(d.key, 'unknown_role_field', `deadline role leaf "${d.roles.deadline}" absent`);
-  if (leaves[si]?.type !== 'address') {
-    throw new DescriptorError(d.key, 'role_type_mismatch', `spender role leaf must be address`);
-  }
   if (!/^uint\d+$/.test(leaves[ai]?.type ?? '')) {
     throw new DescriptorError(d.key, 'role_type_mismatch', `amount role leaf must be uintN`);
   }
   if (!/^uint\d+$/.test(leaves[di]?.type ?? '')) {
     throw new DescriptorError(d.key, 'role_type_mismatch', `deadline role leaf must be uintN`);
   }
-  if (si === ai || si === di || ai === di) {
-    throw new DescriptorError(d.key, 'role_index_alias', 'spender/amount/deadline must map to distinct leaves');
+  if (ai === di) {
+    throw new DescriptorError(d.key, 'role_index_alias', 'amount/deadline must map to distinct leaves');
+  }
+  let si = -1;
+  if (d.roles.spender !== undefined) {
+    si = leaves.findIndex((f) => f.name === d.roles.spender);
+    if (si < 0) throw new DescriptorError(d.key, 'unknown_role_field', `spender role leaf "${d.roles.spender}" absent`);
+    if (leaves[si]?.type !== 'address') {
+      throw new DescriptorError(d.key, 'role_type_mismatch', `spender role leaf must be address`);
+    }
+    if (si === ai || si === di) {
+      throw new DescriptorError(d.key, 'role_index_alias', 'spender/amount/deadline must map to distinct leaves');
+    }
+  }
+
+  // FP-4 Slice-4 (§5.2) — the ORDER layout branch (fail-closed; N-01 unchanged). The on-chain GPv2Order
+  // layout is FIXED, so beyond the generic role checks the descriptor must prove the canonical shape:
+  // 12 leaves, no nesting, NO spender role, sellAmount=3/validTo=5, the three `orderRoles` at their fixed
+  // positions, and every reviewed `constantPins` present (the wall + builder both pin these).
+  if (d.kind === 'order') {
+    if (d.nested) throw new DescriptorError(d.key, 'order_layout', 'order descriptor must not be nested');
+    if (leaves.length !== 12) throw new DescriptorError(d.key, 'order_layout', 'order must have exactly 12 GPv2Order leaves');
+    if (d.roles.spender !== undefined) throw new DescriptorError(d.key, 'order_layout', 'order has no spender role (I-1)');
+    if (ai !== 3) throw new DescriptorError(d.key, 'order_layout', 'order sellAmount must be leaf 3');
+    if (di !== 5) throw new DescriptorError(d.key, 'order_layout', 'order validTo must be leaf 5');
+    const or = d.orderRoles;
+    if (!or) throw new DescriptorError(d.key, 'order_layout', 'order requires orderRoles');
+    const assertLeaf = (name: string, pos: number, kind: 'address' | 'uint'): void => {
+      const idx = leaves.findIndex((f) => f.name === name);
+      if (idx !== pos) throw new DescriptorError(d.key, 'order_layout', `order leaf "${name}" must be at position ${pos}`);
+      const t = leaves[idx]?.type ?? '';
+      const ok = kind === 'address' ? t === 'address' : /^uint\d+$/.test(t);
+      if (!ok) throw new DescriptorError(d.key, 'role_type_mismatch', `order leaf "${name}" must be ${kind}`);
+    };
+    assertLeaf(or.sellToken, 0, 'address');
+    assertLeaf(or.receiver, 2, 'address');
+    assertLeaf(or.fee, 7, 'uint');
+    // `receiver` is NOT a constantPin — it is self-pinned via `isOwnerField` (confused-deputy-safe); the wall
+    // also hard-pins it to the account. Every OTHER order leaf is a reviewed FIXED constant.
+    for (const name of ['sellToken', 'buyToken', 'feeAmount', 'appData', 'kind', 'partiallyFillable', 'sellTokenBalance', 'buyTokenBalance']) {
+      if (d.constantPins?.[name] === undefined) {
+        throw new DescriptorError(d.key, 'missing_constant_pin', `order constantPins["${name}"] is required`);
+      }
+    }
   }
   // FP-3 (R-2): the optional secondary-expiry leaf must exist, be uintN, and be distinct from roles.
   if (d.expiryRole !== undefined) {
@@ -280,25 +333,44 @@ export interface OnChainGrantParams {
   nestedLeafCount: number;
   /** FP-3 (R-2): secondary-expiry leaf index, or 255 (0xFF) sentinel when none. */
   expiryLeafIndex: number;
+  /** FP-4 Slice-4 (§4.1): the on-chain `kind` discriminant — 0 (flat|nested) / 1 (order). */
+  kind: number;
+  /** FP-4 Slice-4 (G11(b)): the wall-pinned per-pair proceeds token for order; ZERO_ADDR otherwise. */
+  buyToken: Hex;
 }
 
 const NO_EXPIRY_LEAF = 255; // 0xFF sentinel — mirrors the on-chain `type(uint8).max`.
+const NO_SPENDER_LEAF = 255; // 0xFF — a CoW order has no spender leaf (I-1).
 
 export function onChainGrantParams(d: SigningDescriptor): OnChainGrantParams {
   const fold = foldSpec(d);
+  const isOrder = d.kind === 'order';
   return {
     descriptorId: d.descriptorId,
     domainSeparator: descriptorDomainSeparator(d),
     typeHash: descriptorTypeHash(d),
     numFields: fold.numTopFields,
-    spenderIndex: leafIndex(d, d.roles.spender),
+    // I-1: order carries `spenderIndex = 0xFF` (no spender leaf); flat/nested resolve the spender role.
+    spenderIndex: isOrder || d.roles.spender === undefined ? NO_SPENDER_LEAF : leafIndex(d, d.roles.spender),
     amountIndex: leafIndex(d, d.roles.amount),
     deadlineIndex: leafIndex(d, d.roles.deadline),
     nestedTypeHash: fold.nestedTypeHash,
     nestedLeafStart: fold.nestedLeafStart,
     nestedLeafCount: fold.nestedLeafCount,
     expiryLeafIndex: d.expiryRole !== undefined ? leafIndex(d, d.expiryRole) : NO_EXPIRY_LEAF,
+    kind: isOrder ? 1 : 0,
+    // G11(b): the reviewed per-pair proceeds token the wall pins `fields[1]` to; ZERO_ADDR for non-order.
+    buyToken: isOrder ? (coercePinAddress(d.constantPins?.['buyToken']) ?? ZERO_ADDR_HEX) : ZERO_ADDR_HEX,
   };
+}
+
+const ZERO_ADDR_HEX: Hex = '0x0000000000000000000000000000000000000000';
+
+/** Lowercased 0x address from a constant pin, or null if absent/malformed (fail-closed at the grant edge). */
+function coercePinAddress(v: string | bigint | boolean | undefined): Hex | null {
+  if (typeof v !== 'string') return null;
+  const s = v.toLowerCase();
+  return /^0x[0-9a-f]{40}$/.test(s) ? (s as Hex) : null;
 }
 
 export interface SigningRegistry {

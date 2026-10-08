@@ -78,7 +78,7 @@ contract LeashAccountV5CoSignerTest is Test {
     function _grantSigning(address token, uint128 cap, uint64 win, address sp) internal {
         vm.prank(owner);
         acct.proposeSigningGrantNested(
-            SigningLib.SigningGrantParams(DESCRIPTOR_ID, domainSep, TYPEHASH, NUM_FIELDS, SPENDER_IDX, AMOUNT_IDX, DEADLINE_IDX, type(uint8).max, bytes32(0), 0, 0, token, cap, win),
+            SigningLib.SigningGrantParams(DESCRIPTOR_ID, domainSep, TYPEHASH, NUM_FIELDS, SPENDER_IDX, AMOUNT_IDX, DEADLINE_IDX, type(uint8).max, bytes32(0), 0, 0, token, cap, win, 0, address(0)),
             _spenders(sp)
         );
         vm.warp(block.timestamp + DELAY);

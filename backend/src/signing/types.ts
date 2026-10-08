@@ -41,12 +41,24 @@ export interface Eip712Domain {
 
 /** One ordered field of a struct. N-02: a LEAF `type` MUST be a static 32-byte word. For the ONE
  * top-level member that is a nested sub-struct (FP-3), `type` names the sub-struct's primaryType and
- * the descriptor's `nested` group supplies its leaf fields. */
+ * the descriptor's `nested` group supplies its leaf fields.
+ *
+ * FP-4 Slice-4 (§3a) — the ONE gated exception to "a LEAF `type` MUST be a static word": a field may
+ * carry `preHashedConstant: true`, whose `.type` is the field's REAL EIP-712 signature type (CoW's
+ * `kind`/`sellTokenBalance`/`buyTokenBalance` are `string`, required VERBATIM by
+ * `encodeType`/`descriptorTypeHash`/`buildViemTypes` to reproduce CoW's `ORDER_TYPE_HASH`), but whose
+ * SUBMITTED leaf is the EIP-712 word of its PINNED value (for `string`: `keccak256(bytes(value))`).
+ * `assertDescriptor` admits this ONLY when `descriptor.kind === 'order'` AND the field has a FIXED
+ * `constantPins[name]` — never a role/owner-field/`ctx.pins`/free string. Every submitted leaf therefore
+ * stays a single reviewed static word; N-02 is never relaxed as a LEAF invariant. */
 export interface Eip712Field {
   name: string;
   /** a STATIC ABI type (address/bool/bytesN≤32/uintN/intN) for a leaf; or a sub-struct type name for
-   * the single nested member (FP-3). N-02 rejects dynamic/array leaves. */
+   * the single nested member (FP-3); or — when `preHashedConstant` — the field's real EIP-712 signature
+   * type (e.g. `string`) whose submitted leaf is a pinned pre-hashed word. N-02 rejects dynamic/array leaves. */
   type: string;
+  /** FP-4 Slice-4 (§3a): the gated pre-hashed-constant type override (see the interface doc-comment). */
+  preHashedConstant?: boolean;
 }
 
 /**
@@ -93,8 +105,29 @@ export interface SigningDescriptor {
   fields: Eip712Field[];
   /** FP-3: the single optional nested sub-struct (at most one — N-02 recurses, one level only). */
   nested?: Eip712NestedGroup;
-  /** which LEAF field NAMES carry the three authority roles (resolved to leaf indices on-chain). */
-  roles: { spender: string; amount: string; deadline: string };
+  /**
+   * FP-4 Slice-4 (§4.1): the descriptor family discriminant (D-FP4-3-R6). Optional, defaults
+   * `nested ? 'nested' : 'flat'`. `order` is the CoW GPv2Order family (nullable spender — `spenderIndex=0xFF`
+   * — + three wall-pinned address leaves + pre-hashed-constant enum leaves). `batch` is reserved (Slice-5).
+   * `onChainGrantParams` maps `flat|nested → kind 0`, `order → kind 1`.
+   */
+  kind?: 'flat' | 'nested' | 'batch' | 'order';
+  /** which LEAF field NAMES carry the three authority roles (resolved to leaf indices on-chain). An ORDER
+   * has NO spender (`spenderIndex=0xFF`, I-1), so `roles.spender` is optional; flat/nested always set it. */
+  roles: { spender?: string; amount: string; deadline: string };
+  /**
+   * FP-4 Slice-4 (§5.1): order-only leaf names (display/validation). The on-chain GPv2Order layout is
+   * FIXED, so these are asserted to the canonical positions (receiver=2, feeAmount=7, sellToken=0).
+   */
+  orderRoles?: { receiver: string; fee: string; sellToken: string };
+  /**
+   * FP-4 Slice-4 (§5.1): reviewed FIXED leaf values the builder pins with PRECEDENCE over `ctx.pins`
+   * (which may NOT override them). For CoW: `appData` (zero-hash bytes32), the pre-image strings
+   * `kind='sell'`/`sellTokenBalance='erc20'`/`buyTokenBalance='erc20'` (the builder hashes them to the
+   * leaf word and asserts `keccak256(toBytes(pin))` == the on-chain SigningLib constant),
+   * `partiallyFillable`, `buyToken`, `feeAmount`, `sellToken`.
+   */
+  constantPins?: Record<string, string | bigint | boolean>;
   /**
    * FP-3 review R-2: the optional secondary-expiry LEAF field name (Permit2 `expiration` — the
    * ALLOWANCE lifetime, distinct from the signature `deadline`). When set, the wall bounds it to the

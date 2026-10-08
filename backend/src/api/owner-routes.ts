@@ -2583,6 +2583,16 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       res.json({ ok: true, action: 'remove' });
       return;
     }
+    // FP-4 Slice-4 (§5.6): a CoW order's budget token (`rule.token`) MUST equal the reviewed
+    // `constantPins.sellToken` the wall pins `fields[0]` to — otherwise the grant would debit a different
+    // token than the order sells. Fail-closed 422 (never a silent token mismatch).
+    if (descriptor.kind === 'order') {
+      const sellToken = String(descriptor.constantPins?.['sellToken'] ?? '').toLowerCase();
+      if (parsed.data.rule.token.toLowerCase() !== sellToken) {
+        res.status(422).json({ error: { message: 'order rule.token must equal the descriptor sellToken' } });
+        return;
+      }
+    }
     const rule: SigningRuleType = {
       descriptorId,
       spenderSet: parsed.data.rule.spenderSet.map((s) => s.toLowerCase()),

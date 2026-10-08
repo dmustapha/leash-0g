@@ -34,6 +34,24 @@ contract SigningLib {
     error BadCoSignerSignature();
     error BadIntentSignature();
 
+    // ---------- Stage F′ FP-4 Slice-4 — CoW GPv2Order `kind` discriminant + pinned constants ----------
+    /// @notice The signing descriptor family discriminant (D-FP4-3-R6). `KIND_STANDARD` is the existing
+    ///         money-triad path (flat OR nested — distinguished as today by `nestedTypeHash`); `KIND_ORDER`
+    ///         is the CoW GPv2Order family (nullable spender — I-1 — + three wall-pinned address leaves).
+    ///         `KIND_BATCH = 2` is RESERVED for Slice-5 (Permit2 batch) and is rejected at grant-time here.
+    uint8 internal constant KIND_STANDARD = 0;
+    uint8 internal constant KIND_ORDER = 1;
+
+    /// @notice CoW protocol-universal pinned leaf words (asserted in-test vs viem keccak + CoW published
+    ///         values — a wrong constant is a LOUD test failure, never a silent ship; §7 / risk §10).
+    ///         `appData` is pinned to the ZERO hash = CoW "no appData / no CIP-7 pre/post-hook" so no hook
+    ///         can ride along (§8). `kind`/`sellTokenBalance`/`buyTokenBalance` are EIP-712 `string` fields
+    ///         whose SUBMITTED leaf is the pre-hashed word `keccak256(bytes(value))` (§3a) — intrinsic to
+    ///         EIP-712, so the wall reads them exactly as these fixed constants (no on-chain decode).
+    bytes32 internal constant COW_APPDATA_NONE = bytes32(0);
+    bytes32 internal constant COW_KIND_SELL = 0xf3b277728b3fee749481eb3e0b3b48980dbbab78658fc419025cb16eee346775; // keccak256("sell")
+    bytes32 internal constant COW_BAL_ERC20 = 0x5a28e9363bb942b639270062aa6bb295f434bcdfc42c97267bf003f272060dc9; // keccak256("erc20")
+
     /// @notice A registered signing descriptor's policy (moved here from LeashAccountV5 so the account can
     ///         hand the whole struct to `reconstructAndBound` in ONE call — field order is VERBATIM, so the
     ///         account's `mapping(uint256 => SigningIntentPolicy)` storage layout is byte-identical).
@@ -52,6 +70,9 @@ contract SigningLib {
         uint8 nestedLeafStart;
         uint8 nestedLeafCount;
         uint8 expiryLeafIndex; // 0xFF ⇒ no secondary expiry field
+        // --- FP-4 Slice-4 (appended — storage-layout-safe; existing descriptors default kind=0/buyToken=0) ---
+        uint8 kind; // KIND_STANDARD (0) / KIND_ORDER (1)
+        address buyToken; // KIND_ORDER only — reviewed per-pair proceeds token, wall-pinned (G11(b)); 0 otherwise
     }
 
     /// @notice The owner grant params for a flat or one-level-nested signing descriptor (moved here so
@@ -71,6 +92,9 @@ contract SigningLib {
         address token;
         uint128 perIntentCap;
         uint64 maxDeadlineWindow;
+        // --- FP-4 Slice-4 (CoW order) ---
+        uint8 kind; // KIND_STANDARD (0) / KIND_ORDER (1); KIND_BATCH (2) reserved — rejected here
+        address buyToken; // KIND_ORDER only — reviewed per-pair proceeds token (G11(b)); 0 for standard
     }
 
     /// @notice Reconstruct the EIP-712 `hashStruct` from the submitted leaf words — verbatim of the
@@ -118,6 +142,24 @@ contract SigningLib {
         if (p.domainSeparator == bytes32(0) || p.typeHash == bytes32(0)) revert InvalidPolicy();
         if (p.token == address(0)) revert ZeroAddress();
         if (p.numTopFields == 0 || p.numTopFields > 32) revert InvalidPolicy();
+
+        // FP-4 Slice-4 — CoW GPv2Order: nullable spender (I-1), fixed 12-field FLAT layout, three
+        // wall-pinned address leaves. Validated here (not the standard path) so a non-order descriptor
+        // can NEVER carry `spenderLeafIndex == 0xFF` (any other kind with 0xFF already reverts below via
+        // the `>= totalLeaves` check since 255 ≥ 32 — made explicit by the discriminant). KIND_BATCH is
+        // reserved for Slice-5 and rejected; any kind > KIND_ORDER is InvalidPolicy (fail-closed).
+        if (p.kind == KIND_ORDER) {
+            if (p.spenderLeafIndex != type(uint8).max) revert InvalidPolicy(); // I-1
+            if (p.nestedTypeHash != bytes32(0) || p.nestedLeafCount != 0 || p.nestedLeafStart != 0) {
+                revert InvalidPolicy(); // order is FLAT — no fold
+            }
+            if (p.numTopFields != 12) revert InvalidPolicy(); // GPv2Order is 12 fields
+            if (p.amountLeafIndex != 3 || p.deadlineLeafIndex != 5) revert InvalidPolicy(); // sellAmount / validTo
+            if (p.expiryLeafIndex != type(uint8).max) revert InvalidPolicy(); // no secondary expiry for order
+            if (p.buyToken == address(0)) revert ZeroAddress(); // G11(b): a wall-pinned order carries its proceeds token
+            return 12;
+        }
+        if (p.kind != KIND_STANDARD) revert InvalidPolicy(); // KIND_BATCH (2) reserved / unknown kind — not built here
 
         if (p.nestedTypeHash == bytes32(0)) {
             if (p.nestedLeafCount != 0 || p.nestedLeafStart != 0) revert InvalidPolicy();
@@ -184,6 +226,34 @@ contract SigningLib {
         // write. SR-1/SR-3: the approval binds chainId + account + signingEpoch (see verifyCoSigner).
         if (coSigner != address(0) && !verifyCoSigner(digest, chainId, account, epoch, coSignerSig, coSigner)) {
             revert BadCoSignerSignature();
+        }
+
+        // FP-4 Slice-4 — CoW GPv2Order order branch. The digest above used the FLAT path (nestedTypeHash==0,
+        // byte-identical to FP-1), with leaves [8]/[10]/[11] being the pre-hashed string words keccak256("sell")
+        // /keccak256("erc20") — the §3a override lives entirely off-chain, so the wall reads them as the fixed
+        // constants below. Fields are the fixed GPv2Order layout (G2). All THREE address leaves are
+        // canonical-masked (I-4) + wall-pinned (confused-deputy guards); every pin is fail-closed DecodeMismatch.
+        if (s.kind == KIND_ORDER) {
+            bytes32 w;
+            w = fields[0]; // sellToken == budget token
+            if (uint256(w) >> 160 != 0 || address(uint160(uint256(w))) != s.token) revert DecodeMismatch();
+            w = fields[1]; // buyToken == reviewed per-pair proceeds token (G11(b))
+            if (uint256(w) >> 160 != 0 || address(uint160(uint256(w))) != s.buyToken) revert DecodeMismatch();
+            w = fields[2]; // receiver == self (proceeds return to the account)
+            if (uint256(w) >> 160 != 0 || address(uint160(uint256(w))) != account) revert DecodeMismatch();
+            if (fields[6] != COW_APPDATA_NONE) revert DecodeMismatch(); // no CIP-7 hook rides along
+            if (fields[8] != COW_KIND_SELL) revert DecodeMismatch(); // sell semantics (pre-hashed string leaf)
+            if (uint256(fields[9]) != 0) revert DecodeMismatch(); // partiallyFillable == false
+            if (fields[10] != COW_BAL_ERC20 || fields[11] != COW_BAL_ERC20) revert DecodeMismatch(); // sell/buy balance = erc20
+            // sellAmount + feeAmount (I-2) — Solidity 0.8 CHECKED add: hostile words near 2²⁵⁶ Panic(0x11)-revert
+            // fail-closed BEFORE the cap check (no arm, no debit — C-2). feeAmount is a separate sellToken outflow.
+            amount = uint256(fields[3]) + uint256(fields[7]);
+            deadline = uint256(fields[5]); // validTo
+            spender = address(0); // no spender for order (I-1)
+            if (amount > s.perIntentCap) revert OverPerIntentCap(amount, s.perIntentCap);
+            if (deadline <= nowTs) revert DeadlineInPast();
+            if (deadline > nowTs + s.maxDeadlineWindow) revert DeadlineTooFar(deadline);
+            return (digest, spender, amount, deadline);
         }
 
         bytes32 word = fields[s.spenderIndex];

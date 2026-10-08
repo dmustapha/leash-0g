@@ -111,7 +111,9 @@ contract LeashAccountV5SigningNestedTest is Test {
             nestedLeafCount: NESTED_COUNT,
             token: address(usd),
             perIntentCap: CAP,
-            maxDeadlineWindow: 1 hours
+            maxDeadlineWindow: 1 hours,
+            kind: 0,
+            buyToken: address(0)
         });
     }
 
@@ -348,7 +350,9 @@ contract LeashAccountV5SigningNestedTest is Test {
             nestedLeafCount: 2,
             token: address(usd),
             perIntentCap: CAP,
-            maxDeadlineWindow: 1 hours
+            maxDeadlineWindow: 1 hours,
+            kind: 0,
+            buyToken: address(0)
         });
         vm.prank(owner);
         acct.proposeSigningGrantNested(p, _spenders(spender));

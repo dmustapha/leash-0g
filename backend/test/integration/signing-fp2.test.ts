@@ -97,6 +97,35 @@ describe('FP-2 owner signing-policy routes (read-model + N-01/N-02 floor)', () =
     expect(res.status).toBe(422);
   });
 
+  // FP-4 Slice-4 — CoW order (descriptor 30): the budget token MUST equal the reviewed sellToken.
+  const COW_DESC_ID = 30;
+  const COW_SELL_TOKEN = '0xfff9976782d46cc05630d1f6ebab18b2324d6b14'; // Sepolia WETH (descriptor 30 sellToken)
+
+  it('sets a CoW order rule (empty spender set) and returns order on-chain grant params (kind=1, spender 0xFF)', async () => {
+    const res = await request(h.t.app)
+      .post(`/api/agents/${h.agentId}/signing/rule`)
+      .set('authorization', ownerAuth(OWNER))
+      .send({
+        action: 'set',
+        rule: { descriptorId: COW_DESC_ID, spenderSet: [], perIntentCap: '1000', maxDeadlineWindow: 3600, token: COW_SELL_TOKEN },
+      });
+    expect(res.status).toBe(200);
+    expect(res.body.onChainGrant).toMatchObject({ kind: 1, spenderIndex: 255, amountIndex: 3, deadlineIndex: 5, numFields: 12 });
+    const rules = await listSigningRules(db.pool, h.agentId);
+    expect(rules.find((r) => r.descriptorId === COW_DESC_ID)).toMatchObject({ spenderSet: [] });
+  });
+
+  it('422s a CoW order rule whose token ≠ the descriptor sellToken (§5.6 fail-closed)', async () => {
+    const res = await request(h.t.app)
+      .post(`/api/agents/${h.agentId}/signing/rule`)
+      .set('authorization', ownerAuth(OWNER))
+      .send({
+        action: 'set',
+        rule: { descriptorId: COW_DESC_ID, spenderSet: [], perIntentCap: '1000', maxDeadlineWindow: 3600, token: TOKEN },
+      });
+    expect(res.status).toBe(422);
+  });
+
   it('GET /signing returns rules + reviewed descriptors with grant params', async () => {
     await request(h.t.app)
       .post(`/api/agents/${h.agentId}/signing/rule`)
