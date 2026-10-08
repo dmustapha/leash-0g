@@ -5,6 +5,15 @@ libs = ["lib"]
 solc_version = "0.8.30"
 evm_version = "cancun"
 optimizer = true
+# FP-4 Slice-2 (determinism hardening, Dami 2026-10-08): strip the solc metadata trailer from bytecode.
+# With the default `ipfs` metadata hash, the CBOR trailer embeds an IPFS hash of the whole-project
+# metadata — so ANY unrelated source edit (e.g. a new import) perturbs EVERY contract's trailer, hence
+# every contract's `keccak256(initcode)`, hence every CREATE2 address cross-chain. That silently
+# re-addressed the UNTOUCHED Create2Deployer during this slice (runtime logic byte-identical 444/487;
+# only the trailer differed). `none` emits PURE bytecode (no trailer) so an address only moves when the
+# executable logic actually moves — restoring the "pin the deployer once, never reopen" FP-4 premise.
+bytecode_hash = "none"
+cbor_metadata = false
 # FP-3 (EIP-170): LeashAccountV5 was already 878B over the 24,576 runtime limit at FP-1 (never live-
 # deployable; Foundry's VM doesn't enforce the limit, so it went unnoticed). FP-3 moved the signing
 # fold + grant validation (SigningLib) and the governed-call decode (DecodeLib) into DEPLOYED stateless

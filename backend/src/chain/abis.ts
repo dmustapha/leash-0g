@@ -222,8 +222,14 @@ export const aggregatorV3Abi = parseAbi([
  */
 export const leashAccountV5SigningAbi = parseAbi([
   // the session-key arm (the runtime write) — returns the armed/reconstructed digest.
-  'function authorizeSigningIntent(uint256 descriptorId, bytes32[] fields, bytes sessionSig) returns (bytes32 digest)',
+  'function authorizeSigningIntent(uint256 descriptorId, bytes32[] fields, bytes sessionSig, bytes coSignerSig) returns (bytes32 digest)',
   'function disarmSigningIntent(bytes32 digest)',
+  // FP-4 Slice-2 co-signer second factor (`07 #15`) — owner setter (instant add / timelocked weaken) + reads.
+  'function setCoSigner(address next)',
+  'function applyCoSigner()',
+  'function coSigner() view returns (address)',
+  'function pendingCoSigner() view returns (address)',
+  'function pendingCoSignerEta() view returns (uint64)',
   // owner grant grammar — flat (FP-1) + nested (FP-3) propose, shared apply (timelocked loosen).
   'function proposeSigningGrant(uint256 descriptorId, bytes32 domainSeparator, bytes32 typeHash, uint8 numFields, uint8 spenderIndex, uint8 amountIndex, uint8 deadlineIndex, address token, uint128 perIntentCap, uint64 maxDeadlineWindow, address[] spenders)',
   'function proposeSigningGrantNested((uint256 descriptorId, bytes32 domainSeparator, bytes32 typeHash, uint8 numTopFields, uint8 spenderLeafIndex, uint8 amountLeafIndex, uint8 deadlineLeafIndex, uint8 expiryLeafIndex, bytes32 nestedTypeHash, uint8 nestedLeafStart, uint8 nestedLeafCount, address token, uint128 perIntentCap, uint64 maxDeadlineWindow) p, address[] spenders)',

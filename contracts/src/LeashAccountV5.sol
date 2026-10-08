@@ -5,7 +5,6 @@ import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol
 import {SigningLib} from "./SigningLib.sol";
 import {DecodeLib} from "./DecodeLib.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
-import {ECDSA} from "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 
 /// @dev Minimal Chainlink feed surface — the ONLY method the oracle-aware wall
 ///      reads. Byte-identical to `AggregatorV3Interface.latestRoundData()` so a
@@ -126,23 +125,8 @@ contract LeashAccountV5 is ReentrancyGuard {
     ///      reverts `OverPerIntentCap`; the deadline/expiry are likewise self-bounded by the uint64
     ///      `maxDeadlineWindow`. High-bit stuffing therefore fails closed at OUR invariant, not the
     ///      downstream protocol's.
-    struct SigningIntentPolicy {
-        bool set;
-        bytes32 domainSeparator;
-        bytes32 typeHash;
-        uint8 numFields;
-        uint8 spenderIndex;
-        uint8 amountIndex;
-        uint8 deadlineIndex;
-        address token;
-        uint128 perIntentCap;
-        uint64 maxDeadlineWindow;
-        // --- FP-3 one-level nested fold (all-zero ⇒ flat FP-1 path) ---
-        bytes32 nestedTypeHash;
-        uint8 nestedLeafStart;
-        uint8 nestedLeafCount;
-        uint8 expiryLeafIndex; // 0xFF ⇒ no secondary expiry field
-    }
+    // `SigningIntentPolicy` moved to SigningLib (FP-4 Slice-2, D-FP4-2d) so the account can hand the whole
+    // policy to `reconstructAndBound` in one call; field order is VERBATIM ⇒ identical storage layout.
 
     /// @notice An armed EIP-712 digest the pre-authorization accepted — the view
     ///         `isValidSignature` returns the magic value ONLY while armed + unexpired.
@@ -207,6 +191,7 @@ contract LeashAccountV5 is ReentrancyGuard {
     // Stage F′ — governed signing + FP-CARRY-2
     error DescriptorNotRegistered(uint256 descriptorId);
     error BadIntentSignature();
+    error BadCoSignerSignature();
     error DeadlineInPast();
     error DeadlineTooFar(uint256 deadline);
     error AssetNotEighteenDecimals(uint8 got);
@@ -230,6 +215,8 @@ contract LeashAccountV5 is ReentrancyGuard {
     event WithdrawExecuted(address indexed to, uint256 amount);
     event SessionKeyChanged(address indexed oldKey, address indexed newKey);
     event GuardianChanged(address indexed oldGuardian, address indexed newGuardian);
+    event CoSignerProposed(address indexed oldCoSigner, address indexed newCoSigner, uint64 eta);
+    event CoSignerChanged(address indexed oldCoSigner, address indexed newCoSigner);
     event Deposited(address indexed from, uint256 amount);
     event CallRuleProposed(address indexed target, bytes4 indexed selector, uint64 eta);
     event CallRuleChanged(address indexed target, bytes4 indexed selector, uint128 perCallCap, uint128 windowCapCall);
@@ -346,7 +333,7 @@ contract LeashAccountV5 is ReentrancyGuard {
     bytes4 internal constant ERC1271_MAGIC = 0x1626ba7e; // bytes4(keccak256("isValidSignature(bytes32,bytes)"))
     bytes4 internal constant ERC1271_INVALID = 0xffffffff;
 
-    mapping(uint256 => SigningIntentPolicy) public signingIntentPolicy; // descriptorId => policy
+    mapping(uint256 => SigningLib.SigningIntentPolicy) public signingIntentPolicy; // descriptorId => policy
     mapping(uint256 => mapping(address => bool)) public signingSpender; // descriptorId => spender => allowed
     mapping(uint256 => address[]) internal signingSpenderList; // descriptorId => spenders (so a re-grant/remove clears cleanly)
     mapping(bytes32 => ArmedIntent) public armedIntent; // eip712 digest => armed
@@ -360,10 +347,19 @@ contract LeashAccountV5 is ReentrancyGuard {
     ///         under the new (tightened) policy.
     uint64 public signingEpoch;
 
-    /// @notice Co-signer seam (FP-4, `07 #15`). INERT in FP-1: `coSigner == address(0)`
-    ///         ⇒ the hook is a no-op. FP-4 adds the owner setter + the second-factor
-    ///         enforcement for cross-chain real value (real value stays gated by `07 #16`).
+    /// @notice Co-signer second factor (FP-4 Slice-2, `07 #15`). `coSigner == address(0)` ⇒ the hook
+    ///         is INERT (one-factor, session-key-only). When set, every `authorizeSigningIntent` arm
+    ///         requires the co-signer's approval over `CoSignerApproval(intentDigest,chainId,account,epoch)`
+    ///         as a second factor (SigningLib.verifyCoSigner). Real cross-chain value stays gated by `07 #16`;
+    ///         the co-signer IDENTITY + timelock duration are ratified at the mainnet-legal gate (D-FP4-2e).
     address public coSigner;
+
+    /// @notice Pending co-signer WEAKENING (remove `X→0` or swap `X→Y≠X`) — timelocked (D-FP4-2c). Those
+    ///         are the loosen-in-disguise moves a compromised owner would use to defeat the factor, so they
+    ///         wait out `timelockDelay`, giving the real owner a window to `revoke`. ADDING the factor
+    ///         (`address(0)→X`) is an instant tighten (no pending slot). `eta == 0` ⇒ nothing pending.
+    address public pendingCoSigner;
+    uint64 public pendingCoSignerEta;
 
     struct PendingSigningGrant {
         uint256 descriptorId;
@@ -629,7 +625,7 @@ contract LeashAccountV5 is ReentrancyGuard {
     /// @dev The band storage read + `set` early-return stay here; the decode + oracle math are in the
     ///      stateless `DecodeLib` helper (STATICCALL — FP-3 EIP-170 extraction; C-03 preserved).
     function _checkPriceBand(bytes32 ruleKey, bytes4 selector, bytes calldata data) internal view {
-        PriceBandPolicy memory band = priceBand[ruleKey];
+        PriceBandPolicy storage band = priceBand[ruleKey]; // storage pointer (EIP-170: no memory copy)
         if (!band.set) return;
         DecodeLib(decodeHelper).checkPriceBand(band.feed, band.asset, band.maxDeviationBps, band.maxStaleness, selector, data);
     }
@@ -683,7 +679,7 @@ contract LeashAccountV5 is ReentrancyGuard {
     ///         on revoke/expiry: an un-armed, revoked, or expired digest is invalid.
     function isValidSignature(bytes32 hash, bytes calldata /*signature*/ ) external view returns (bytes4) {
         if (revoked) return ERC1271_INVALID; // revoke fails-closed
-        ArmedIntent memory a = armedIntent[hash];
+        ArmedIntent storage a = armedIntent[hash]; // storage pointer (EIP-170: no memory copy)
         // FP-CARRY-5: a stale-epoch arm (invalidated by an owner tighten) is INVALID.
         if (a.set && a.epoch == signingEpoch && block.timestamp <= a.expiry) return ERC1271_MAGIC;
         return ERC1271_INVALID;
@@ -723,82 +719,53 @@ contract LeashAccountV5 is ReentrancyGuard {
     ///         armed digest, or `revoke` to fail-close all. M-01 (accepted): an armed permit
     ///         inherits the project's <=2x-cap-across-a-window-boundary burst bound, exactly
     ///         as the calling path does (`00`/LIMITATIONS); bound by the per-window budget.
-    function authorizeSigningIntent(uint256 descriptorId, bytes32[] calldata fields, bytes calldata sessionSig)
-        external
-        nonReentrant
-        returns (bytes32 digest)
-    {
+    function authorizeSigningIntent(
+        uint256 descriptorId,
+        bytes32[] calldata fields,
+        bytes calldata sessionSig,
+        bytes calldata coSignerSig
+    ) external nonReentrant returns (bytes32 digest) {
         if (msg.sender != sessionKey) revert NotSessionKey();
         if (revoked) revert AccountRevoked();
-        Policy memory p = policy;
-        if (block.timestamp > p.expiresAt) revert SessionExpired();
+        // Read the two needed Policy fields directly (EIP-170: avoids a full-struct memory copy).
+        if (block.timestamp > policy.expiresAt) revert SessionExpired();
 
-        SigningIntentPolicy memory s = signingIntentPolicy[descriptorId];
+        SigningLib.SigningIntentPolicy memory s = signingIntentPolicy[descriptorId];
         if (!s.set) revert DescriptorNotRegistered(descriptorId); // default-deny
 
-        // strict-canonical binding: reconstruct the EIP-712 digest from the submitted leaf words.
-        // FLAT (nestedTypeHash==0) is the FP-1 path, byte-identical. NESTED folds one contiguous
-        // sub-struct run back into a single top-level member so the reconstructed digest equals the
-        // real protocol's (Permit2); the nested leaves (incl. the amount) remain readable below.
-        bytes32 structHash =
-            SigningLib(signingHelper).structHash(s.typeHash, s.nestedTypeHash, s.nestedLeafStart, s.nestedLeafCount, s.numFields, fields);
-        digest = keccak256(abi.encodePacked(hex"1901", s.domainSeparator, structHash));
+        // strict-canonical binding + BOTH signature factors + decode + bounds, in ONE SigningLib call
+        // (D-FP4-2d, EIP-170 — the account carries NO ECDSA codegen): the digest is reconstructed from the
+        // submitted leaf words (FLAT nestedTypeHash==0 = FP-1 path, byte-identical; NESTED folds one
+        // contiguous sub-struct run into a single top-level member so the digest equals the real protocol's
+        // — Permit2); factor 1 = the session key signed this digest (`BadIntentSignature`); factor 2 = the
+        // co-signer second factor enforced UNCONDITIONALLY when `coSigner != 0` (SR-4), binding chainId +
+        // this account + signingEpoch (SR-1/SR-3, `BadCoSignerSignature`); spender/amount/deadline(/expiry)
+        // are canonical-decoded + cap/deadline-bounded — all BEFORE any state write (fail-closed, SR-11).
+        // The spender-ALLOWLIST check + the re-arm idempotency guard stay here (storage).
+        address spender;
+        uint256 amount;
+        uint256 deadline;
+        (digest, spender, amount, deadline) = SigningLib(signingHelper).reconstructAndBound(
+            s, fields, block.timestamp, block.chainid, address(this), signingEpoch, coSigner, coSignerSig, sessionSig, sessionKey
+        );
 
         // FP-CARRY-5 (D-FP1-7) re-arm idempotency: a STILL-LIVE armed digest cannot be
         // re-debited (double-charging the shared budget for one authorization). A stale
         // (epoch-invalidated) or expired entry MAY be overwritten — it is re-authorized under
         // current policy. An expired same-fields digest is already blocked below by the
         // deadline check (same fields ⇒ same deadline).
-        ArmedIntent memory existing = armedIntent[digest];
+        ArmedIntent storage existing = armedIntent[digest]; // storage pointer (EIP-170: no memory copy)
         if (existing.set && existing.epoch == signingEpoch && block.timestamp <= existing.expiry) revert AlreadyArmed();
 
-        // the session key must have actually signed this exact digest.
-        if (ECDSA.recover(digest, sessionSig) != sessionKey) revert BadIntentSignature();
-
-        address spender = _fieldAddress(fields, s.spenderIndex);
-        uint256 amount = uint256(fields[s.amountIndex]);
-        uint256 deadline = uint256(fields[s.deadlineIndex]);
-
         if (!signingSpender[descriptorId][spender]) revert SpenderNotAllowlisted(spender);
-        if (amount > s.perIntentCap) revert OverPerIntentCap(amount, s.perIntentCap);
-        if (deadline <= block.timestamp) revert DeadlineInPast();
-        if (deadline > uint256(block.timestamp) + s.maxDeadlineWindow) revert DeadlineTooFar(deadline);
-        // FP-3 review R-2: a secondary expiry leaf (Permit2 `expiration` — the ALLOWANCE lifetime,
-        // distinct from `sigDeadline`) must sit within the SAME governed window, so a long-lived
-        // on-chain allowance cannot outlive the owner's deadline bound. 0xFF ⇒ no such field.
-        if (s.expiryLeafIndex != type(uint8).max) {
-            uint256 expiry = uint256(fields[s.expiryLeafIndex]);
-            // FP-3 Gate-② (L-01): bound BOTH ends — a zero/past expiry would debit the budget for an
-            // allowance that is already void downstream (a budget-drain with no value moved). Fail closed.
-            if (expiry <= block.timestamp) revert DeadlineInPast();
-            if (expiry > uint256(block.timestamp) + s.maxDeadlineWindow) revert DeadlineTooFar(expiry);
-        }
-
-        // co-signer seam (FP-4) — inert while coSigner == address(0).
-        _coSignerHook(descriptorId, digest, amount);
 
         // signing ≤ calling: debit the SAME per-token budget the executeCall wall uses.
         if (amount > 0) {
-            _debitSpendBudget(s.token, amount, p.windowSeconds);
+            _debitSpendBudget(s.token, amount, policy.windowSeconds);
         }
 
         armedIntent[digest] = ArmedIntent({set: true, expiry: uint64(deadline), epoch: signingEpoch});
         emit SigningIntentAuthorized(descriptorId, digest, spender, amount, uint64(deadline));
-    }
-
-    /// @dev Strict canonical address decode of an EIP-712 field word (upper 96 bits zero).
-    function _fieldAddress(bytes32[] calldata fields, uint8 idx) internal pure returns (address) {
-        bytes32 word = fields[idx];
-        if (uint256(word) >> 160 != 0) revert DecodeMismatch();
-        return address(uint160(uint256(word)));
-    }
-
-    /// @dev Co-signer second-factor seam (FP-4, `07 #15`). Inert in FP-1 — there is no
-    ///      setter for `coSigner` in V5, so it is permanently `address(0)` and this hook
-    ///      is provably a no-op. FP-4 adds the owner setter + the activated co-signer's
-    ///      approval enforcement here (cross-chain real value; real value gated by #16).
-    function _coSignerHook(uint256, /*descriptorId*/ bytes32, /*digest*/ uint256 /*amount*/ ) internal view {
-        if (coSigner == address(0)) return;
     }
 
     /// @notice Surgically disarm ONE armed signing intent — owner-only, INSTANT. Lets the
@@ -866,7 +833,7 @@ contract LeashAccountV5 is ReentrancyGuard {
         if (block.timestamp < pg.eta) revert TimelockNotElapsed(pg.eta);
         // clear any prior spender set for this descriptor (a re-grant replaces it).
         _clearSigningSpenders(pg.descriptorId);
-        SigningIntentPolicy storage s = signingIntentPolicy[pg.descriptorId];
+        SigningLib.SigningIntentPolicy storage s = signingIntentPolicy[pg.descriptorId];
         s.set = true;
         s.domainSeparator = pg.domainSeparator;
         s.typeHash = pg.typeHash;
@@ -903,7 +870,7 @@ contract LeashAccountV5 is ReentrancyGuard {
         external
         onlyOwner
     {
-        SigningIntentPolicy storage s = signingIntentPolicy[descriptorId];
+        SigningLib.SigningIntentPolicy storage s = signingIntentPolicy[descriptorId];
         if (!s.set) revert DescriptorNotRegistered(descriptorId);
         if (perIntentCap > s.perIntentCap || maxDeadlineWindow > s.maxDeadlineWindow) revert NotTightening();
         s.perIntentCap = perIntentCap;
@@ -1226,6 +1193,7 @@ contract LeashAccountV5 is ReentrancyGuard {
         _clearPendingRemoteToken();
         _clearPendingBand();
         _clearPendingSigningGrant();
+        _clearPendingCoSigner(); // a tighten/revoke cancels a pending co-signer weakening (FP-CARRY-4).
     }
 
     function revoke() external {
@@ -1258,6 +1226,56 @@ contract LeashAccountV5 is ReentrancyGuard {
     function setGuardian(address g) external onlyOwner {
         emit GuardianChanged(guardian, g);
         guardian = g;
+    }
+
+    /// @notice Set / change / remove the co-signer second factor (FP-4 Slice-2, D-FP4-2c). ASYMMETRIC:
+    ///         - ADD (`coSigner == address(0)`, `next != address(0)`) = a genuine TIGHTEN (arming now needs
+    ///           a second signature) → INSTANT + `_bumpSigningEpoch()` so in-flight single-factor arms die
+    ///           and must re-arm under 2-of-2 (no window where a pre-armed digest bypasses the new factor).
+    ///         - REMOVE (`next == address(0)`) or SWAP (`next != current`) = a loosen-in-disguise (the move
+    ///           a compromised owner makes to defeat the factor) → TIMELOCKED via `pendingCoSigner`/`applyCoSigner`.
+    ///         Re-asserting the SAME value (`next == current`) is a true no-op that CANCELS any pending weakening
+    ///         (no epoch bump, no spurious pending/event). Guardian has NO co-signer authority (owner-only).
+    function setCoSigner(address next) external onlyOwner {
+        address cur = coSigner;
+        if (next == cur) {
+            // No change requested — cancel any pending weakening and return (no epoch bump, no event). This also
+            // keeps a pending swap/remove from being staged under a misleading same-value CoSignerChanged later
+            // (Gate-② FP4-P2 finding): applyCoSigner on a no-op would needlessly bump the epoch + emit X→X.
+            _clearPendingCoSigner();
+            return;
+        }
+        if (cur == address(0)) {
+            // ADD the factor (`0 → X`) — a genuine tighten → INSTANT + epoch bump (in-flight single-factor arms die).
+            coSigner = next;
+            _bumpSigningEpoch();
+            emit CoSignerChanged(address(0), next);
+        } else {
+            // REMOVE (`X → 0`) or SWAP (`X → Y≠X`) — a loosen-in-disguise → TIMELOCKED. (A pending weakening is
+            // also cancelled by `revoke`, which clears every pending slot via `_clearPendingTimelocks`.)
+            pendingCoSigner = next;
+            pendingCoSignerEta = uint64(block.timestamp) + timelockDelay;
+            emit CoSignerProposed(cur, next, pendingCoSignerEta);
+        }
+    }
+
+    /// @notice Execute a pending co-signer weakening (remove/swap) after its timelock elapses. Bumps the
+    ///         signing epoch so an intent armed under the old co-signer regime cannot survive the change
+    ///         (SR-3). Owner-only.
+    function applyCoSigner() external onlyOwner {
+        uint64 eta = pendingCoSignerEta;
+        if (eta == 0) revert NothingPending();
+        if (block.timestamp < eta) revert TimelockNotElapsed(eta);
+        address next = pendingCoSigner;
+        emit CoSignerChanged(coSigner, next);
+        coSigner = next;
+        _clearPendingCoSigner();
+        _bumpSigningEpoch();
+    }
+
+    function _clearPendingCoSigner() internal {
+        delete pendingCoSigner;
+        delete pendingCoSignerEta;
     }
 
     // ---------- native policy: tightening instant, loosening timelocked ----------

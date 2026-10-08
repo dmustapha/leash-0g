@@ -92,7 +92,7 @@ contract SigningHandler is Test {
         bytes32 digest = _digest(f);
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(sessionPk, digest);
         vm.prank(session);
-        try acct.authorizeSigningIntent(descriptorId, f, abi.encodePacked(r, s, v)) {
+        try acct.authorizeSigningIntent(descriptorId, f, abi.encodePacked(r, s, v), "") {
             armedCount++;
             ghostDebited += amount; // amount==0 debits nothing (adds 0) — identity preserved
             hasLast = true;
@@ -111,7 +111,7 @@ contract SigningHandler is Test {
         bool live = acct.isValidSignature(lastDigest, "") == ERC1271_MAGIC;
         (uint8 v, bytes32 r, bytes32 s) = vm.sign(sessionPk, lastDigest);
         vm.prank(session);
-        try acct.authorizeSigningIntent(descriptorId, lastFields, abi.encodePacked(r, s, v)) {
+        try acct.authorizeSigningIntent(descriptorId, lastFields, abi.encodePacked(r, s, v), "") {
             if (live) {
                 rearmGuardBroken = true; // double-debit of a live digest got through
             } else {

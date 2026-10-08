@@ -139,7 +139,7 @@ contract LeashAccountV5SigningTest is Test {
         digest = _digest(f);
         bytes memory sig = _sign(sessionPk, digest);
         vm.prank(session);
-        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig);
+        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig, "");
     }
 
     // ============ FP-a: magic value ONLY for an in-policy armed intent ============
@@ -164,7 +164,7 @@ contract LeashAccountV5SigningTest is Test {
         bytes memory sig = _sign(sessionPk, _digest(f));
         vm.prank(session);
         vm.expectRevert(abi.encodeWithSelector(LeashAccountV5.OverPerIntentCap.selector, 100 ether + 1, uint128(100 ether)));
-        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig);
+        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig, "");
     }
 
     function test_FPa_wrongSpender_revertsAtArm() public {
@@ -174,7 +174,7 @@ contract LeashAccountV5SigningTest is Test {
         bytes memory sig = _sign(sessionPk, _digest(f));
         vm.prank(session);
         vm.expectRevert(abi.encodeWithSelector(LeashAccountV5.SpenderNotAllowlisted.selector, attacker));
-        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig);
+        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig, "");
     }
 
     function test_FPa_expiredDeadline_revertsAtArm() public {
@@ -184,7 +184,7 @@ contract LeashAccountV5SigningTest is Test {
         bytes memory sig = _sign(sessionPk, _digest(f));
         vm.prank(session);
         vm.expectRevert(LeashAccountV5.DeadlineInPast.selector);
-        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig);
+        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig, "");
     }
 
     function test_FPa_deadlineTooFar_revertsAtArm() public {
@@ -195,7 +195,7 @@ contract LeashAccountV5SigningTest is Test {
         bytes memory sig = _sign(sessionPk, _digest(f));
         vm.prank(session);
         vm.expectRevert(abi.encodeWithSelector(LeashAccountV5.DeadlineTooFar.selector, tooFar));
-        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig);
+        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig, "");
     }
 
     function test_FPa_armedIntentExpires_becomesInvalid() public {
@@ -229,7 +229,7 @@ contract LeashAccountV5SigningTest is Test {
         bytes memory sig = _sign(sessionPk, _digest(f));
         vm.prank(session);
         vm.expectRevert(LeashAccountV5.AccountRevoked.selector);
-        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig);
+        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig, "");
     }
 
     // ============ FP-b: signing ≤ calling (shared per-token budget) ============
@@ -266,7 +266,7 @@ contract LeashAccountV5SigningTest is Test {
         bytes memory sig = _sign(sessionPk, _digest(f));
         vm.prank(session);
         vm.expectRevert(abi.encodeWithSelector(LeashAccountV5.BudgetNotSet.selector, address(usd)));
-        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig);
+        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig, "");
     }
 
     // ============ FP-d: replay + laddering ============
@@ -297,7 +297,7 @@ contract LeashAccountV5SigningTest is Test {
         bytes memory sig = _sign(sessionPk, _digest(f));
         vm.prank(session);
         vm.expectRevert(abi.encodeWithSelector(LeashAccountV5.OverCumulativeSpend.selector, 160 ether, uint128(150 ether)));
-        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig);
+        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig, "");
     }
 
     // ============ FP-e: config-extensibility (descriptor-add = no code change) ============
@@ -333,7 +333,7 @@ contract LeashAccountV5SigningTest is Test {
         bytes32 digest = keccak256(abi.encodePacked(hex"1901", domain2, structHash));
         bytes memory sig = _sign(sessionPk, digest);
         vm.prank(session);
-        acct.authorizeSigningIntent(id2, f, sig);
+        acct.authorizeSigningIntent(id2, f, sig, "");
         assertEq(acct.isValidSignature(digest, ""), ERC1271_MAGIC, "second descriptor must work with no code change");
     }
 
@@ -344,7 +344,7 @@ contract LeashAccountV5SigningTest is Test {
         bytes memory sig = _sign(sessionPk, _digest(f));
         vm.prank(session);
         vm.expectRevert(abi.encodeWithSelector(LeashAccountV5.DescriptorNotRegistered.selector, uint256(99)));
-        acct.authorizeSigningIntent(99, f, sig);
+        acct.authorizeSigningIntent(99, f, sig, "");
     }
 
     // ============ FP-h: adversarial ============
@@ -357,7 +357,7 @@ contract LeashAccountV5SigningTest is Test {
         bytes memory sig = _sign(attackerPk, _digest(f)); // signed by the WRONG key
         vm.prank(session);
         vm.expectRevert(LeashAccountV5.BadIntentSignature.selector);
-        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig);
+        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig, "");
     }
 
     function test_FPh_fieldCountMismatch_reverts() public {
@@ -367,7 +367,7 @@ contract LeashAccountV5SigningTest is Test {
         bytes memory sig = _sign(sessionPk, keccak256("x"));
         vm.prank(session);
         vm.expectRevert(LeashAccountV5.DecodeMismatch.selector);
-        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig);
+        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig, "");
     }
 
     function test_FPh_dirtySpenderBits_reverts() public {
@@ -378,7 +378,7 @@ contract LeashAccountV5SigningTest is Test {
         bytes memory sig = _sign(sessionPk, _digest(f));
         vm.prank(session);
         vm.expectRevert(LeashAccountV5.DecodeMismatch.selector);
-        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig);
+        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig, "");
     }
 
     function test_FPh_agentCannotGrantOwnDescriptor() public {
@@ -401,7 +401,7 @@ contract LeashAccountV5SigningTest is Test {
         bytes memory sig = _sign(sessionPk, _digest(f));
         vm.prank(session);
         vm.expectRevert(abi.encodeWithSelector(LeashAccountV5.OverPerIntentCap.selector, 20 ether, uint128(10 ether)));
-        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig);
+        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig, "");
     }
 
     function test_grant_tightenCannotRaise_reverts() public {
@@ -421,7 +421,7 @@ contract LeashAccountV5SigningTest is Test {
         bytes memory sig = _sign(sessionPk, _digest(f));
         vm.prank(session);
         vm.expectRevert(abi.encodeWithSelector(LeashAccountV5.DescriptorNotRegistered.selector, DESCRIPTOR_ID));
-        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig);
+        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig, "");
     }
 
     // ============ edge cases (code-review gate) ============
@@ -441,7 +441,7 @@ contract LeashAccountV5SigningTest is Test {
         bytes memory sig = _sign(sessionPk, _digest(f));
         vm.prank(session);
         vm.expectRevert(LeashAccountV5.DeadlineInPast.selector);
-        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig);
+        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig, "");
     }
 
     function test_edge_validAtExactExpiry() public {
@@ -466,7 +466,7 @@ contract LeashAccountV5SigningTest is Test {
         bytes memory sig = _sign(sessionPk, _digest(f));
         vm.prank(session);
         vm.expectRevert(abi.encodeWithSelector(LeashAccountV5.SpenderNotAllowlisted.selector, spender));
-        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig);
+        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig, "");
     }
 
     function test_edge_ownerDisarmsSingleIntent() public {
@@ -501,9 +501,9 @@ contract LeashAccountV5SigningTest is Test {
         vm.prank(session);
         if (amount > 100 ether) {
             vm.expectRevert(abi.encodeWithSelector(LeashAccountV5.OverPerIntentCap.selector, amount, uint128(100 ether)));
-            acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig);
+            acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig, "");
         } else {
-            bytes32 digest = acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig);
+            bytes32 digest = acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig, "");
             assertEq(acct.isValidSignature(digest, ""), ERC1271_MAGIC);
         }
     }
@@ -525,7 +525,7 @@ contract LeashAccountV5SigningTest is Test {
         bytes memory sig = _sign(sessionPk, _digest(f));
         vm.prank(session);
         vm.expectRevert(LeashAccountV5.AlreadyArmed.selector);
-        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig);
+        acct.authorizeSigningIntent(DESCRIPTOR_ID, f, sig, "");
         assertEq(_spent(), 100 ether, "reverted re-arm must NOT debit again");
     }
 
