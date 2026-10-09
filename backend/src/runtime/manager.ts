@@ -431,7 +431,7 @@ export class LeashRuntimeManager implements RuntimeManager {
       const request = await getSigningRequest(this.deps.pool, requestId);
       if (!request || request.agentId !== agent.id) return;
       if (request.status !== 'approved_once' && request.status !== 'always_allowed') return;
-      const intent = request.intent as { descriptorId?: number; fields?: string[]; digest?: string } | null;
+      const intent = request.intent as { descriptorId?: number; fields?: string[]; digest?: string; caps?: { token: string; cap: string }[] } | null;
       if (!intent || intent.descriptorId === undefined || !intent.fields || !intent.digest) return;
       const sessionPrivateKey = decryptSecret(agent.sessionKeyEnc, this.deps.settings.keyEncryptionSecret);
       const armed = await chain.authorizeSigningIntent({
@@ -440,6 +440,8 @@ export class LeashRuntimeManager implements RuntimeManager {
         descriptorId: intent.descriptorId,
         fields: intent.fields,
         digest: intent.digest,
+        // batch arms submit the reviewed caps; non-batch intents omit it (the arm defaults to `[]`).
+        ...(intent.caps ? { caps: intent.caps } : {}),
       });
       const decoded = request.decoded as Record<string, unknown>;
       await recordSigningArm(this.deps.pool, {

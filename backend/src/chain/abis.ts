@@ -221,8 +221,10 @@ export const aggregatorV3Abi = parseAbi([
  * Reads mirror the on-chain policy + armed read-model. Hand-derived from contracts/src/LeashAccountV5.sol.
  */
 export const leashAccountV5SigningAbi = parseAbi([
-  // the session-key arm (the runtime write) — returns the armed/reconstructed digest.
-  'function authorizeSigningIntent(uint256 descriptorId, bytes32[] fields, bytes sessionSig, bytes coSignerSig) returns (bytes32 digest)',
+  // the session-key arm (the runtime write) — returns the armed/reconstructed digest. FP-4 Slice-5:
+  // `caps` (the reviewed per-token TokenCap[] allowlist) is submitted at arm for `kind==batch` and the
+  // wall verifies `keccak256(abi.encode(caps)) == policy.tokenCapsHash`; EMPTY `[]` for standard/order.
+  'function authorizeSigningIntent(uint256 descriptorId, bytes32[] fields, (address token, uint128 cap)[] caps, bytes sessionSig, bytes coSignerSig) returns (bytes32 digest)',
   'function disarmSigningIntent(bytes32 digest)',
   // FP-4 Slice-2 co-signer second factor (`07 #15`) — owner setter (instant add / timelocked weaken) + reads.
   'function setCoSigner(address next)',
@@ -230,19 +232,22 @@ export const leashAccountV5SigningAbi = parseAbi([
   'function coSigner() view returns (address)',
   'function pendingCoSigner() view returns (address)',
   'function pendingCoSignerEta() view returns (uint64)',
-  // owner grant grammar — flat (FP-1) + nested (FP-3) propose, shared apply (timelocked loosen).
-  'function proposeSigningGrant(uint256 descriptorId, bytes32 domainSeparator, bytes32 typeHash, uint8 numFields, uint8 spenderIndex, uint8 amountIndex, uint8 deadlineIndex, address token, uint128 perIntentCap, uint64 maxDeadlineWindow, address[] spenders)',
-  'function proposeSigningGrantNested((uint256 descriptorId, bytes32 domainSeparator, bytes32 typeHash, uint8 numTopFields, uint8 spenderLeafIndex, uint8 amountLeafIndex, uint8 deadlineLeafIndex, uint8 expiryLeafIndex, bytes32 nestedTypeHash, uint8 nestedLeafStart, uint8 nestedLeafCount, address token, uint128 perIntentCap, uint64 maxDeadlineWindow) p, address[] spenders)',
+  // owner grant grammar — the unified nested propose (flat = zeroed fold), shared apply (timelocked
+  // loosen). FP-4 Slice-4 appended `kind` + `buyToken` to the params; Slice-5 appended the `caps` arg
+  // (the reviewed TokenCap[] for a batch grant — validated + hashed to `tokenCapsHash` at grant time;
+  // empty for standard/order). The pre-Slice-4 flat `proposeSigningGrant` was folded away (no longer on-chain).
+  'function proposeSigningGrantNested((uint256 descriptorId, bytes32 domainSeparator, bytes32 typeHash, uint8 numTopFields, uint8 spenderLeafIndex, uint8 amountLeafIndex, uint8 deadlineLeafIndex, uint8 expiryLeafIndex, bytes32 nestedTypeHash, uint8 nestedLeafStart, uint8 nestedLeafCount, address token, uint128 perIntentCap, uint64 maxDeadlineWindow, uint8 kind, address buyToken) p, address[] spenders, (address token, uint128 cap)[] caps)',
   'function applySigningGrant()',
   'function tightenSigningGrant(uint256 descriptorId, uint128 perIntentCap, uint64 maxDeadlineWindow)',
   'function removeSigningDescriptor(uint256 descriptorId)',
   // reads
   'function isValidSignature(bytes32 hash, bytes signature) view returns (bytes4)',
   'function signingEpoch() view returns (uint64)',
-  'function signingIntentPolicy(uint256) view returns (bool set, bytes32 domainSeparator, bytes32 typeHash, uint8 numFields, uint8 spenderIndex, uint8 amountIndex, uint8 deadlineIndex, address token, uint128 perIntentCap, uint64 maxDeadlineWindow, bytes32 nestedTypeHash, uint8 nestedLeafStart, uint8 nestedLeafCount, uint8 expiryLeafIndex)',
+  // NB: the `signingIntentPolicy` + `pendingSigningGrant` public auto-getters were reclaimed to `internal`
+  // in FP-4 Slice-5 (EIP-170 headroom; they had zero external readers — the read-model is event-driven), so
+  // they are NO LONGER on-chain and must not be declared here. The policy/pending state is read off events.
   'function signingSpender(uint256, address) view returns (bool)',
   'function armedIntent(bytes32) view returns (bool set, uint64 expiry, uint64 epoch)',
-  'function pendingSigningGrant() view returns (uint256 descriptorId, bytes32 domainSeparator, bytes32 typeHash, uint8 numFields, uint8 spenderIndex, uint8 amountIndex, uint8 deadlineIndex, address token, uint128 perIntentCap, uint64 maxDeadlineWindow, uint64 eta, bytes32 nestedTypeHash, uint8 nestedLeafStart, uint8 nestedLeafCount, uint8 expiryLeafIndex)',
   // events
   'event SigningIntentAuthorized(uint256 indexed descriptorId, bytes32 indexed digest, address spender, uint256 amount, uint64 deadline)',
   'event SigningGrantProposed(uint256 indexed descriptorId, uint64 eta)',
