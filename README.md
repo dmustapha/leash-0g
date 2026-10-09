@@ -37,13 +37,14 @@ LEASH lets autonomous AI agents hold and move real funds under limits the agent 
 - **On-chain policy engine.** Each agent's funds live in a self-enforcing `LeashAccount`: per-transfer and rolling-window spend caps, allowlist default-deny, session expiry, and a guardian revoke that fails closed. A fully hijacked agent still cannot exceed a cap, pay a non-allowlisted address, or survive a revoke.
 - **Human-in-the-loop approvals.** Boundary decisions (a settlement, a policy loosening) are pushed to the owner over Telegram and the web cockpit; consent is recorded on the tamper-evident trace before any action.
 - **Agent commerce loop.** A requester agent orders an owner-defined job, a provider delivers work over 0G, an evaluator verifies it, and the fee settles on-chain, each step gated: acceptance floor, then skeptic verdict, then owner approval, any one of which blocks release.
+- **Governed signing (ERC-1271).** Beyond moving funds, an agent can be authorized to *sign* structured EIP-712 messages — Permit2 transfers, CoW orders — under the same wall: the owner grants a per-protocol signing policy on-chain, the agent's session key arms one specific intent, and the account validates it only if it is armed, un-expired, and within per-token caps. An optional co-signer second factor requires a second key to approve each signature. The agent can never sign an amount, spender, or recipient the owner did not pin.
 - **Owner-only audit.** The full reasoning and action trail is hash-chained and encrypted to the owner; anyone can verify integrity on-chain, only the owner can decrypt the contents.
 
 ## Monorepo
 
 | Package | What | Stack |
 |---|---|---|
-| `contracts/` | `LeashAccount` (self-enforcing constrained account: native + governed ERC-20 execute, per-transfer/window caps, expiry, allowlist default-deny, guardian revoke-only, asymmetric timelock) · `AgentRegistry` · `LeashAccountFactory` | Solidity 0.8.30, Foundry, Slither |
+| `contracts/` | `LeashAccount` (self-enforcing constrained account: native + governed ERC-20 execute, per-transfer/window caps, expiry, allowlist default-deny, guardian revoke-only, asymmetric timelock) · `LeashAccountV5` (adds the ERC-1271 governed-signing spine) with `SigningLib`/`DecodeLib` STATICCALL helpers and a generic CREATE2 deployer · `AgentRegistry` · `LeashAccountFactory` | Solidity 0.8.30, Foundry, Slither |
 | `backend/` | Hardened OpenAI-compatible gateway to 0G Compute · hash-chained trace with consent-before-forward · ECIES-encrypted audit batches to 0G Storage · LangGraph agent runtime (treasury + agent-commerce graphs) · owner REST + SSE API (Privy auth) · Telegram approvals | Node 22, TypeScript, Postgres (Neon) |
 | `web/` | Intent-first create funnel (spec elevation → tiered read-back → confirm) over the guided create wizard, live cockpit (stream / approve / revoke), job lifecycle view, audit (owner-client decrypt + chain verify) | Next.js, Tailwind, Privy |
 
