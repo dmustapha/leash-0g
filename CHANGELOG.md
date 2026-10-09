@@ -2,6 +2,19 @@
 
 LEASH is built in phases, each ending in a scope + build review gate and proven on the 0G Galileo testnet (chain 16602) before the next begins. This log tracks those phases.
 
+## Stage F′ — Governed signing (ERC-1271) (2026-10)
+
+- A fourth capability beyond native transfers, governed ERC-20 calls, and external tool-use: an agent can be authorized to **sign** structured EIP-712 messages (Permit2, CoW orders) — under the same never-guess-money wall. A new account, `LeashAccountV5`, adds an ERC-1271 spine: the owner grants a per-protocol signing policy on-chain (timelocked), the agent's session key arms one specific intent, and `isValidSignature` returns valid **only** for an armed, un-expired, un-revoked digest (default-deny, fails closed on revoke/expiry).
+- Never-guess-money for signatures: a descriptor-driven engine reconstructs the exact EIP-712 digest from server-pinned fields; the authority leaves (spender, amounts, recipient) are pinned from the owner's on-chain grant state, never from model text, and every signable amount is bounded by per-token caps the agent cannot exceed.
+- Three protocol families, each proven on a live testnet by arming an intent and reading back the ERC-1271 magic value: **Permit2** (single, nested, and `PermitBatchTransferFrom` with a reviewed per-token cap allowlist committed on-chain as a hash), **CoW Protocol** `GPv2Order` (no-spender role model, proceeds token wall-pinned), and an optional **co-signer second factor** — a second key must approve each arm, bound to chain id + account + signing epoch so an approval cannot be replayed across chains or re-arms.
+- EIP-170-safe by extraction: the signing and calldata-decoding math lives in deployed stateless helper contracts (`SigningLib`, `DecodeLib`) called via `STATICCALL` — never `DELEGATECALL`, so the no-delegatecall wall invariant holds — and a generic CREATE2 deployer pins the account and both helpers at the same address on every home chain.
+
+## Stage F — External capabilities / governed tool-use (2026-10)
+
+- A multi-protocol LLM gateway (an Anthropic adapter alongside the 0G-compatible one) plus an MCP transport, so an agent can reason across providers and call external tools, not only move funds.
+- Tool-use is governed default-deny: every external capability is quarantined behind a just-in-time owner hold, outbound calls pass an I/O guard with SSRF egress controls, and an externally-bound Tier-2 capability must be allowlisted explicitly before it can run.
+- Closes L-01: the independent skeptic evaluator's verdict is verified at the verdict gate before a release can proceed.
+
 ## Stage E — Multichain (2026-10)
 
 - One agent, one address, many chains: the governed account is deployed at the SAME CREATE2 address on every home chain (0G Galileo 16602, Base Sepolia 84532, Arbitrum Sepolia 421614, Ethereum Sepolia 11155111) via the canonical CREATE2 deployer — identical wall bytecode, verified codehash-identical on all four.
