@@ -120,6 +120,12 @@ export interface RuntimeChain {
      * the `#16` mainnet-legal slice (D-FP4-2e); until then no account sets a co-signer, so `0x` always arms.
      */
     coSignerSig?: string;
+    /**
+     * FP-4 Slice-5: the reviewed per-token cap allowlist submitted at arm for a `kind==batch` intent (the
+     * wall verifies `keccak256(abi.encode(caps)) == policy.tokenCapsHash`). EMPTY for standard/order — and
+     * every runtime path today arms via `buildIntent` (non-batch), so this defaults to `[]`.
+     */
+    caps?: { token: string; cap: string }[];
   }): Promise<{ txHash: string; digest: string; epoch: number }>;
 }
 
@@ -359,6 +365,7 @@ export class SessionChain implements RuntimeChain {
     fields: string[];
     digest: string;
     coSignerSig?: string;
+    caps?: { token: string; cap: string }[];
   }): Promise<{ txHash: string; digest: string; epoch: number }> {
     const account = privateKeyToAccount(input.sessionPrivateKey as Hex);
     // RAW ECDSA over the EIP-712 digest (the contract does `ECDSA.recover(digest, sig)` — no
@@ -375,9 +382,16 @@ export class SessionChain implements RuntimeChain {
       address: input.accountAddr as Hex,
       abi: leashAccountV5SigningAbi,
       functionName: 'authorizeSigningIntent',
-      // coSignerSig defaults to empty (`0x`) — the inert path; every account today has no co-signer
-      // (identity + approval orchestration deferred to the `#16` mainnet-legal slice, D-FP4-2e).
-      args: [BigInt(input.descriptorId), input.fields as Hex[], sessionSig, (input.coSignerSig ?? '0x') as Hex],
+      // FP-4 Slice-5: `caps` is the reviewed TokenCap[] for a batch arm; EMPTY for standard/order (every
+      // runtime path today arms a non-batch intent). coSignerSig defaults to empty (`0x`) — the inert path;
+      // every account today has no co-signer (identity + approval orchestration deferred to `#16`, D-FP4-2e).
+      args: [
+        BigInt(input.descriptorId),
+        input.fields as Hex[],
+        (input.caps ?? []).map((c) => ({ token: c.token as Hex, cap: BigInt(c.cap) })),
+        sessionSig,
+        (input.coSignerSig ?? '0x') as Hex,
+      ],
     });
     const receipt = await waitReceipt(this.publicClient, txHash);
     assertReceiptSuccess(receipt.status, txHash);
