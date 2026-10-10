@@ -77,23 +77,9 @@ async function main(): Promise<void> {
   // already ignores TTL-dead rows; this keeps the table honest.
   const staleReservations = await sweepStaleReservations(pool, cfg.RESERVATION_TTL_MS);
   if (staleReservations > 0) console.error(`released ${staleReservations} stale create reservation(s)`);
-  const reservationSweepTimer = setInterval(() => {
-    void sweepStaleReservations(pool, cfg.RESERVATION_TTL_MS).catch((err: unknown) =>
-      console.error('reservation sweep tick failed', err),
-    );
-  }, cfg.RESERVATION_TTL_MS);
-  reservationSweepTimer.unref();
-
-  // C2 (Phase 5.6): periodic prune of abandoned draft directions (moved off the
-  // /direct hot path, mirroring the reservation/delegation sweepers). 1h cadence,
-  // drops never-confirmed drafts older than 24h.
-  const DIRECTIONS_DRAFT_TTL_S = 24 * 3600;
-  const directionsSweepTimer = setInterval(() => {
-    void pruneAllStaleDraftDirections(pool, DIRECTIONS_DRAFT_TTL_S).catch((err: unknown) =>
-      console.error('directions draft sweep tick failed', err),
-    );
-  }, 3600_000);
-  directionsSweepTimer.unref();
+  // SCOPE-I-10: the periodic reservation + directions sweep timers are
+  // lease-gated, so they are constructed AFTER the runtime lease (below) and
+  // short-circuit on a non-holder. Only the one-time boot sweep runs here.
 
   const checkpointer = new PostgresSaver(pool, undefined, { schema: 'public' });
   if (migratePool === pool) {
@@ -161,6 +147,28 @@ async function main(): Promise<void> {
     console.error('runtime lease connection lost — exiting so the supervisor restarts into the retry path', err);
     process.exit(1);
   });
+
+  // SCOPE-I-10: periodic sweepers run ONLY on the lease holder (mirroring
+  // oneShotSweepTimer below) — a second instance (overlapping deploy / stray
+  // boot) must NOT double-run them. The one-time boot sweeps already ran above.
+  const reservationSweepTimer = setInterval(() => {
+    if (!lease.held()) return;
+    void sweepStaleReservations(pool, cfg.RESERVATION_TTL_MS).catch((err: unknown) =>
+      console.error('reservation sweep tick failed', err),
+    );
+  }, cfg.RESERVATION_TTL_MS);
+  reservationSweepTimer.unref();
+
+  // C2 (Phase 5.6): periodic prune of abandoned draft directions (moved off the
+  // /direct hot path). 1h cadence, drops never-confirmed drafts older than 24h.
+  const DIRECTIONS_DRAFT_TTL_S = 24 * 3600;
+  const directionsSweepTimer = setInterval(() => {
+    if (!lease.held()) return;
+    void pruneAllStaleDraftDirections(pool, DIRECTIONS_DRAFT_TTL_S).catch((err: unknown) =>
+      console.error('directions draft sweep tick failed', err),
+    );
+  }, 3600_000);
+  directionsSweepTimer.unref();
 
   const runtime = new LeashRuntimeManager({
     pool,
@@ -371,6 +379,7 @@ async function main(): Promise<void> {
   // Digest scheduler tick (spec §3b): 5-min cadence with a catch-up window —
   // fires when the owner's hour has passed and nothing was sent today.
   const digestTimer = setInterval(() => {
+    if (!lease.held()) return; // SCOPE-I-10: only the holder sends digests (no double-send / double cursor advance)
     void digest
       .scheduledTick(new Date(), async (_ownerAddr, chatId, text) => {
         if (!telegram) return;
