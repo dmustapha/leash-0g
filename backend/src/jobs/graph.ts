@@ -323,6 +323,18 @@ export function buildJobGraph(deps: JobGraphDeps, ctx: JobAgentContext, checkpoi
     if (!job || job.requesterAgentId !== ctx.agentId) {
       return { outcome: { type: 'failed', reason: 'delivery for an unknown job' } };
     }
+    // DM-8 (P5C-2 shape, mirrors the verdict idempotency hoist in verdictGate):
+    // a re-emitted / checkpoint-replayed job.deliver on a job that already left
+    // origination is an idempotent no-op. Without this, recordDelivery+
+    // markEvaluating below unconditionally reset a verdict/awaiting_approval/
+    // settled/rejected job back to delivered→evaluating, clobbering finality and
+    // re-opening an approval card past verdict. A delivery is only ever valid out
+    // of the 'originated' state.
+    if (job.status !== 'originated') {
+      // route:'noop' matches the verdictGate replay-guard idiom — a replay must
+      // never fall through to a default-routed edge if the topology later adds one.
+      return { outcome: { type: 'rejected', jobId: p.jobId, reason: 'duplicate or out-of-state delivery ignored' }, route: 'noop' };
+    }
     const seeded = await getJobSpec(deps.pool, ctx.agentRow.ownerAddr, goal.jobSpecSource);
     if (!seeded) return { outcome: { type: 'failed', reason: 'acceptance rule set unresolved' } };
     // The evaluator will read the plaintext the provider stored; the acceptance

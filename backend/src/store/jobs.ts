@@ -205,10 +205,16 @@ export async function recordDelivery(
     blockedBy?: string;
   },
 ): Promise<void> {
+  // DM-8: a delivery is only ever valid out of 'originated'. The CAS makes the
+  // transition un-driftable at the DB layer (DM-class principle, mirrors
+  // recordVerdict's CAS) so a replayed/out-of-order job.deliver cannot reset a
+  // verdict/awaiting_approval/settling/settled/rejected job back to
+  // delivered → evaluating. The requesterDeliver hoist short-circuits the replay
+  // before this runs; this is the defense-in-depth backstop.
   await pool.query(
     `UPDATE jobs SET deliverable = $2, deliverable_root = $3, deliverable_summary = $4,
        provider_sig = $5, acceptance = $6, status = $7, blocked_by = $8, updated_at = now()
-     WHERE job_id = $1`,
+     WHERE job_id = $1 AND status = 'originated'`,
     [
       jobId,
       JSON.stringify(input.deliverable),
