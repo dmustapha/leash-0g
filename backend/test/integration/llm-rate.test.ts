@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { createTestDb, type TestDb } from '../helpers/db.js';
+import { createTestDb, resolveTestDbUrl, type TestDb } from '../helpers/db.js';
 import { createPool } from '../../src/db/pool.js';
 import { checkGlobalLlmRate } from '../../src/store/llm-rate.js';
 
@@ -25,7 +25,12 @@ describe('checkGlobalLlmRate (H-01 durable global cap)', () => {
   });
 
   it('is DURABLE across a fresh connection pool (survives a "restart")', async () => {
-    const url = process.env['DATABASE_URL'] as string;
+    // TA-HARNESS-1: resolve the SAME (hermetic) db the suite built its schema on.
+    // Reading process.env.DATABASE_URL directly pointed pool2 at Neon when the
+    // hermetic run uses TEST_DATABASE_URL (local) — the test_* schema only exists
+    // locally, so the durability check read an empty/absent table (false-green) and
+    // could run a test pool against prod. resolveTestDbUrl mirrors createTestDb.
+    const url = resolveTestDbUrl();
     const pool2 = createPool(url, db.schema);
     try {
       // The prior test already recorded rows in this schema; a brand-new pool

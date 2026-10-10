@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { Pool } from 'pg';
 import { createPool } from '../../src/db/pool.js';
+import { resolveTestDbUrl } from '../helpers/db.js';
 
 // Regression for the Stage-E deploy blocker: migrations 020 + 024 backfill
 // trace_records.chain_id with an UPDATE, but trace_records carries a BEFORE
@@ -47,13 +48,15 @@ async function runFiles(pool: Pool, files: string[]): Promise<void> {
 }
 
 describe('migration 020/024 — trace_records chain_id backfill on a POPULATED table', () => {
-  const url = process.env['DATABASE_URL'];
+  // TA-HARNESS-1 class: hermetic local db, NOT process.env.DATABASE_URL (which is
+  // Neon in .env) — this test CREATEs a schema + runs migrations, so a remote url
+  // would build the schema and write migration state onto the shared prod cluster.
+  const url = resolveTestDbUrl();
   const schema = `test_${randomBytes(6).toString('hex')}`;
   let pool: Pool;
   let allFiles: string[];
 
   beforeAll(async () => {
-    if (!url) throw new Error('DATABASE_URL required');
     const admin = createPool(url);
     await admin.query(`CREATE SCHEMA ${schema}`);
     await admin.end();
