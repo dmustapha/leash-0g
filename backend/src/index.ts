@@ -23,6 +23,7 @@ import { RuntimeLease } from './runtime/lease.js';
 import { backfillLegacyGuardian } from './store/agents.js';
 import { sweepStaleReservations } from './store/reservations.js';
 import { pruneAllStaleDraftDirections } from './store/directions.js';
+import { pgRevokeCursorStore } from './store/revoke-cursor.js';
 import { sweepOrphanedApprovals } from './approvals/sweep.js';
 import { DelegationCoordinator, runBootSweep } from './coordination/coordinator.js';
 import { onHopSettled } from './coordination/chain.js';
@@ -393,7 +394,16 @@ async function main(): Promise<void> {
     chain: zeroGChain(cfg.ZERO_G_RPC, cfg.ZERO_G_CHAIN_ID),
     transport: http(cfg.ZERO_G_RPC),
   });
-  const watcher = new RevokeWatcher({ pool, hub, runtime, coordinator, alerts, source: viemRevokedLogSource(publicClient) });
+  const watcher = new RevokeWatcher({
+    pool,
+    hub,
+    runtime,
+    coordinator,
+    alerts,
+    source: viemRevokedLogSource(publicClient),
+    cursor: pgRevokeCursorStore(pool), // DM-9: durable resume + reorg rewind
+    chainId: cfg.ZERO_G_CHAIN_ID,
+  });
 
   // F-6: runtime-adjacent services (batchers, revoke watcher, delegation
   // sweeper, one-shot re-drive) start ONLY once this instance holds the
