@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import type { Pool } from 'pg';
-import { createTestDb, seedAgent, type TestDb } from '../helpers/db.js';
+import { createTestDb, resolveTestDbUrl, seedAgent, type TestDb } from '../helpers/db.js';
 import { createPool } from '../../src/db/pool.js';
 import { appendTrace } from '../../src/trace/trace-store.js';
 import { sweepOrphanedApprovals } from '../../src/approvals/sweep.js';
@@ -32,8 +32,11 @@ describe('C-6 trace hardening (migration 007 + restricted role + startup sweep)'
   });
 
   it('provision script creates a runtime role that can run the app but not mutate history or DDL', async () => {
-    const url = process.env['DATABASE_URL'];
-    if (!url) throw new Error('DATABASE_URL required');
+    // TA-HARNESS-1 class: resolve the SAME (hermetic) db the suite built its schema on.
+    // process.env.DATABASE_URL pointed the provision script at Neon — the test_* schema
+    // only exists locally, so it failed "schema does not exist" AND rotated a role
+    // password on the shared prod cluster. resolveTestDbUrl mirrors createTestDb.
+    const url = resolveTestDbUrl();
     // Test-scoped role name — never rotate the real runtime role's password
     // from CI (the cluster is shared with the deployed stack).
     const out = execFileSync(process.execPath, [SCRIPT, url, db.schema], {
