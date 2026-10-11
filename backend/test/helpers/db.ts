@@ -99,5 +99,13 @@ export async function seedAgent(pool: Pool, opts: SeedAgentOptions = {}): Promis
   );
   const row = res.rows[0];
   if (!row) throw new Error('seedAgent failed');
+  // SCOPE-RH2-2: mirror insertAgent — seed the key history at seq 0 so the
+  // seeded agent's audit key covers its trace from the first record.
+  const auditPubkey = opts.auditPubkey ?? '02' + 'd4'.repeat(32);
+  await pool.query(
+    `INSERT INTO agent_audit_keys (agent_id, pubkey, effective_from_seq) VALUES ($1, $2, 0)
+     ON CONFLICT (agent_id, effective_from_seq) DO NOTHING`,
+    [row.id, auditPubkey],
+  );
   return row.id;
 }

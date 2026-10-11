@@ -295,11 +295,22 @@ async function main(): Promise<void> {
       .catch((err: unknown) => console.error('telegram setWebhook failed (alerts still work in-app)', err));
   }
 
+  const batcher = new AuditBatcher({ pool, uploader });
+  // §3d: the owner-stream batcher — same machinery, second source. Defers
+  // per owner until the stream pubkey exists, then drains the full backlog.
+  const ownerBatcher = new StreamBatcher({ pool, uploader }, ownerStreamSource);
+
   const appDeps = {
     pool,
     queue,
     hub,
     broker,
+    // SCOPE-RH2-2: a rotation route clears the quarantine on the right batcher
+    // so a previously-bad key re-flushes under the freshly-rotated one.
+    onAuditKeyRotated: (stream: 'trace' | 'owner', key: string): void => {
+      if (stream === 'owner') ownerBatcher.clearQuarantine(key);
+      else batcher.clearQuarantine(key);
+    },
     privy: createPrivyVerifier(cfg.PRIVY_APP_ID, cfg.PRIVY_APP_SECRET),
     chain,
     runtime,
@@ -383,11 +394,6 @@ async function main(): Promise<void> {
   gatewayServer.requestTimeout = 0;
   gatewayServer.keepAliveTimeout = 65_000;
   phase('listening — ports bound');
-
-  const batcher = new AuditBatcher({ pool, uploader });
-  // §3d: the owner-stream batcher — same machinery, second source. Defers
-  // per owner until the stream pubkey exists, then drains the full backlog.
-  const ownerBatcher = new StreamBatcher({ pool, uploader }, ownerStreamSource);
 
   // Digest scheduler tick (spec §3b): 5-min cadence with a catch-up window —
   // fires when the owner's hour has passed and nothing was sent today.

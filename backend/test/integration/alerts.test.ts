@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import request from 'supertest';
+import { PrivateKey } from 'eciesjs';
 import type { Response } from 'express';
 import { createTestDb, seedAgent, type TestDb } from '../helpers/db.js';
 import { buildTestApp, testSettings, ownerAuth } from '../helpers/app.js';
@@ -377,11 +378,11 @@ describe('§3d — owner-stream records + routes', () => {
 });
 
 describe('owner settings', () => {
-  it('PATCH prefs + digest hour round-trips; stream pubkey is set-once (409 on overwrite)', async () => {
+  it('PATCH prefs + digest hour round-trips; stream pubkey is ROTATABLE (SCOPE-RH2-2)', async () => {
     const owner = uniqueOwner();
     const t = buildTestApp(db.pool);
-    const key1 = '02' + 'aa'.repeat(32);
-    const key2 = '02' + 'bb'.repeat(32);
+    const key1 = new PrivateKey().publicKey.toHex();
+    const key2 = new PrivateKey().publicKey.toHex();
     const first = await request(t.app)
       .patch('/api/owner/settings')
       .set('authorization', ownerAuth(owner))
@@ -391,10 +392,17 @@ describe('owner settings', () => {
     const read = await request(t.app).get('/api/owner/settings').set('authorization', ownerAuth(owner));
     expect(read.body.digestHourUtc).toBe(9);
     expect(read.body.alertPrefs.revoked.telegram).toBe(true);
-    const overwrite = await request(t.app)
+    // SCOPE-RH2-2: a second VALID key now ROTATES (no longer set-once / 409).
+    const rotate = await request(t.app)
       .patch('/api/owner/settings')
       .set('authorization', ownerAuth(owner))
       .send({ streamPubkey: key2 });
-    expect(overwrite.status).toBe(409);
+    expect(rotate.status).toBe(200);
+    // An off-curve key is rejected 422 (validated on the way in).
+    const bad = await request(t.app)
+      .patch('/api/owner/settings')
+      .set('authorization', ownerAuth(owner))
+      .send({ streamPubkey: '02' + 'bb'.repeat(32) });
+    expect(bad.status).toBe(422);
   });
 });

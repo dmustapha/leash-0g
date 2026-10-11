@@ -11,7 +11,7 @@ import { StreamBatcher, ownerStreamSource } from '../src/audit/batcher.js';
 import { AlertService } from '../src/alerts/service.js';
 import { SseHub } from '../src/sse/hub.js';
 import { appendOwnerRecord, listOwnerRecords } from '../src/store/owner-records.js';
-import { patchOwnerSettings } from '../src/store/owner-settings.js';
+import { rotateOwnerStreamKey } from '../src/store/owner-settings.js';
 import { verifyChain, type ChainedRecord } from '../src/crypto/hashchain.js';
 import { eciesDecrypt } from '../src/crypto/ecies.js';
 import { requireEnv, retry } from './helpers.js';
@@ -42,7 +42,7 @@ describe('owner-stream → 0G Storage round-trip (live testnet)', () => {
       expect(a2).not.toBeNull();
       await appendOwnerRecord(db.pool, owner, 'digest', { totals: { spendWei: '0' }, nonce: randomUUID() });
 
-      await patchOwnerSettings(db.pool, owner, { streamPubkey: ownerKey.publicKey.toHex() });
+      await rotateOwnerStreamKey(db.pool, owner, ownerKey.publicKey.toHex());
 
       const uploads: Array<{ root: string; txHash: string; data: Buffer }> = [];
       const storage = new ZeroGStorage({
