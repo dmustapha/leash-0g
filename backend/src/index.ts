@@ -75,9 +75,11 @@ async function main(): Promise<void> {
   // so the tamper-evidence guarantee is NOT enforced against this process. Prod
   // must run as the restricted role (DATABASE_URL=restricted, MIGRATE=admin).
   if (await runtimeRoleCanBypassAudit(pool)) {
-    console.error(
-      'WARNING [INFRA-1]: runtime DB role can TRUNCATE trace_records — the append-only audit guarantee is NOT enforced against this process. Production must connect as the restricted runtime role; see scripts/provision-runtime-role.mjs.',
-    );
+    const msg =
+      'WARNING [INFRA-1]: runtime DB role can TRUNCATE trace_records — the append-only audit guarantee is NOT enforced against this process. Production must connect as the restricted runtime role; see scripts/provision-runtime-role.mjs.';
+    // Strict mode (prod): fail fast rather than run with a vacuous audit trail.
+    if (cfg.REQUIRE_RESTRICTED_AUDIT_ROLE === 'true') throw new Error(msg);
+    console.error(msg);
   }
   // S7: legacy Phase-1 rows get their real (ops-key) guardian recorded so the
   // revoke lane selection is explicit, not inferred from NULL.

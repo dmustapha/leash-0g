@@ -108,6 +108,27 @@ describe('SseHub connection caps (P4C-1)', () => {
     expect(a.ended).toBe(true);
   });
 
+  it('SCOPE-I-3: reaps a zombie within 25s even with a 5-min keepalive idleTimeout', () => {
+    const hub = new SseHub({ maxGlobal: 100, maxPerOwner: 100, idleTimeoutMs: 300_000 });
+    const a = makeRes();
+    hub.attach('a1', a.res, '0xalice');
+    a.writeThrows = true;
+    vi.advanceTimersByTime(24_999); // probe hasn't fired yet
+    expect(hub.totalConnections()).toBe(1);
+    vi.advanceTimersByTime(1); // 25s → liveness probe fires, write throws → reaped
+    expect(hub.totalConnections()).toBe(0);
+    expect(a.ended).toBe(true);
+  });
+
+  it('SCOPE-I-3: honors an explicit heartbeatIntervalMs', () => {
+    const hub = new SseHub({ maxGlobal: 100, maxPerOwner: 100, idleTimeoutMs: 300_000, heartbeatIntervalMs: 5_000 });
+    const a = makeRes();
+    hub.attach('a1', a.res, '0xalice');
+    a.writeThrows = true;
+    vi.advanceTimersByTime(5_000);
+    expect(hub.totalConnections()).toBe(0);
+  });
+
   it('close is idempotent (close + error both fire)', () => {
     const hub = new SseHub({ maxGlobal: 100, maxPerOwner: 100, idleTimeoutMs: 1000 });
     const a = makeRes();

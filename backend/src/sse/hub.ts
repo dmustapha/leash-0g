@@ -25,8 +25,15 @@ export interface SseLimits {
   maxGlobal: number;
   /** Max concurrent connections attributable to a single owner. */
   maxPerOwner: number;
-  /** Heartbeat interval; a failed heartbeat write closes the connection. */
+  /** Keepalive cadence cap; also the upper bound for the liveness probe. */
   idleTimeoutMs: number;
+  /**
+   * SCOPE-I-3: how often the liveness probe writes `: hb` (and thus how fast a
+   * half-open/zombie socket is reaped). Decoupled from idleTimeoutMs so the reap
+   * window is seconds, not the 5-min keepalive cadence. Defaults to
+   * min(idleTimeoutMs, 25s).
+   */
+  heartbeatIntervalMs?: number;
 }
 
 // P5C-3 (I-02): defaults are the REAL production caps, not MAX_SAFE_INTEGER — a
@@ -60,9 +67,13 @@ export class SseHub {
   private readonly perOwnerCount = new Map<string, number>();
   private totalCount = 0;
   private readonly limits: SseLimits;
+  /** SCOPE-I-3: effective liveness-probe cadence (short, ≤25s) — shrinks the
+   * half-open-socket reap window from the 5-min keepalive interval. */
+  private readonly heartbeatMs: number;
 
   constructor(limits?: Partial<SseLimits>) {
     this.limits = { ...DEFAULT_LIMITS, ...limits };
+    this.heartbeatMs = this.limits.heartbeatIntervalMs ?? Math.min(this.limits.idleTimeoutMs, 25_000);
   }
 
   /** Wire the agent→owner resolver (index.ts / test helper). Unset ⇒ no owner fan-out. */
@@ -123,7 +134,7 @@ export class SseHub {
       } catch {
         this.closeConn(key, res);
       }
-    }, this.limits.idleTimeoutMs);
+    }, this.heartbeatMs);
     if (typeof heartbeat.unref === 'function') heartbeat.unref();
 
     this.conns.set(res, { res, ownerAddr: owner, heartbeat });

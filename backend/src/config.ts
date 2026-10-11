@@ -30,6 +30,12 @@ const envSchema = z.object({
   // SCOPE-I-7: which key id seals NEW blobs (default '0' = legacy behavior). Must
   // resolve against {'0': KEY_ENCRYPTION_SECRET, ...KEY_ENCRYPTION_KEYRING}.
   KEY_ENCRYPTION_PRIMARY_ID: z.string().optional(),
+  // INFRA-1: when 'true', boot FAILS (not just warns) if the runtime DB role can
+  // bypass the append-only audit guarantee (can TRUNCATE trace_records = owner/
+  // admin). Prod sets this to self-enforce the restricted-role posture; dev/test/
+  // the tear-apart service leave it unset (admin is expected there).
+  // Only the exact string 'true' enables strict mode (any other value → warn).
+  REQUIRE_RESTRICTED_AUDIT_ROLE: z.string().optional(),
   AGENT_REGISTRY_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
   LEASH_FACTORY_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
   // SE-1 (Stage E): the dedicated V4 (governed-calldata) factory. Governed
