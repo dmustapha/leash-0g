@@ -24,6 +24,7 @@ import { backfillLegacyGuardian } from './store/agents.js';
 import { sweepStaleReservations } from './store/reservations.js';
 import { pruneAllStaleDraftDirections } from './store/directions.js';
 import { pgRevokeCursorStore } from './store/revoke-cursor.js';
+import { runtimeRoleCanBypassAudit } from './db/audit-role.js';
 import { sweepOrphanedApprovals } from './approvals/sweep.js';
 import { DelegationCoordinator, runBootSweep } from './coordination/coordinator.js';
 import { onHopSettled } from './coordination/chain.js';
@@ -69,6 +70,15 @@ async function main(): Promise<void> {
   const applied = await migrate(migratePool);
   if (applied.length > 0) console.error(`migrations applied: ${applied.join(', ')}`);
   phase(`migrations done (${applied.length} applied)`);
+  // INFRA-1: surface a vacuous append-only-audit posture. If the runtime role can
+  // TRUNCATE trace_records it is the owner/admin (can also DISABLE the triggers),
+  // so the tamper-evidence guarantee is NOT enforced against this process. Prod
+  // must run as the restricted role (DATABASE_URL=restricted, MIGRATE=admin).
+  if (await runtimeRoleCanBypassAudit(pool)) {
+    console.error(
+      'WARNING [INFRA-1]: runtime DB role can TRUNCATE trace_records — the append-only audit guarantee is NOT enforced against this process. Production must connect as the restricted runtime role; see scripts/provision-runtime-role.mjs.',
+    );
+  }
   // S7: legacy Phase-1 rows get their real (ops-key) guardian recorded so the
   // revoke lane selection is explicit, not inferred from NULL.
   const backfilled = await backfillLegacyGuardian(pool, opsAddr);
