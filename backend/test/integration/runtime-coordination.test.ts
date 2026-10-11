@@ -5,7 +5,7 @@ import nock from 'nock';
 import { PrivateKey as EciesPrivateKey } from 'eciesjs';
 import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import { createTestDb, seedAgent, type TestDb } from '../helpers/db.js';
-import { buildTestApp, ownerAuth, TEST_KEK, UPSTREAM, type TestApp } from '../helpers/app.js';
+import { buildTestApp, ownerAuth, TEST_KEYRING, UPSTREAM, type TestApp } from '../helpers/app.js';
 import { generateGatewayToken, hashTokenSecret } from '../../src/crypto/token.js';
 import { encryptSecret } from '../../src/crypto/keycrypt.js';
 import { listTraces } from '../../src/trace/trace-store.js';
@@ -130,7 +130,7 @@ beforeEach(() => {
     chain: fakeChain,
     checkpointer,
     settings: {
-      keyEncryptionSecret: TEST_KEK,
+      keyring: TEST_KEYRING,
       approvalTimeoutMs: 20_000,
       gatewayUrl,
       intervalMs: 3_600_000, // one immediate cycle per start; more via nudge()
@@ -173,8 +173,8 @@ async function seedRoleAgent(goal: AgentGoal): Promise<{ id: string; accountAddr
     sessionKeyAddr: `0x${'5e'.repeat(18)}${suffix}`,
     tokenId: gen.tokenId,
     tokenHash: await hashTokenSecret(gen.secret),
-    sessionKeyEnc: encryptSecret('0x' + '7e'.repeat(32), TEST_KEK),
-    gatewayTokenEnc: encryptSecret(gen.token, TEST_KEK),
+    sessionKeyEnc: encryptSecret('0x' + '7e'.repeat(32), TEST_KEYRING),
+    gatewayTokenEnc: encryptSecret(gen.token, TEST_KEYRING),
     goal: goal as unknown as Record<string, unknown>,
     name: `role-agent-${seedSeq}`,
   });

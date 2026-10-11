@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { ChainConfig } from './chain/registry.js';
+import { buildKeyring, type Keyring } from './crypto/keycrypt.js';
 
 const envSchema = z.object({
   DATABASE_URL: z.string().min(1),
@@ -21,6 +22,14 @@ const envSchema = z.object({
   PRIVY_APP_ID: z.string().min(1),
   PRIVY_APP_SECRET: z.string().min(1),
   KEY_ENCRYPTION_SECRET: z.string().regex(/^[0-9a-fA-F]{64}$/),
+  // SCOPE-I-7 (key rotation): optional extra KEKs as a JSON object
+  // `{"<id>":"<64hex>", ...}`. ids are short ascii WITHOUT ':' (the versioned
+  // blob delimiter); '0' is reserved for KEY_ENCRYPTION_SECRET and rejected here.
+  // Parsed+validated fail-loud at boot (resolveKeyring), like parseExtraChains.
+  KEY_ENCRYPTION_KEYRING: z.string().optional(),
+  // SCOPE-I-7: which key id seals NEW blobs (default '0' = legacy behavior). Must
+  // resolve against {'0': KEY_ENCRYPTION_SECRET, ...KEY_ENCRYPTION_KEYRING}.
+  KEY_ENCRYPTION_PRIMARY_ID: z.string().optional(),
   AGENT_REGISTRY_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
   LEASH_FACTORY_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
   // SE-1 (Stage E): the dedicated V4 (governed-calldata) factory. Governed
@@ -212,6 +221,44 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new Error(`Invalid environment configuration: ${missing}`);
   }
   return parsed.data;
+}
+
+/**
+ * SCOPE-I-7: resolve the at-rest encryption keyring. Fail-loud (L-03 posture) —
+ * a malformed KEY_ENCRYPTION_KEYRING or an unresolvable primary id FAILS startup,
+ * never a silent fallback that could wrong-key (or brick) every agent. The
+ * resolved ring = {'0': KEY_ENCRYPTION_SECRET, ...KEY_ENCRYPTION_KEYRING}; '0' is
+ * the legacy id (decrypts pre-rotation pure-hex blobs) and the default primary.
+ */
+export function resolveKeyring(cfg: Config): Keyring {
+  const keys: Record<string, string> = { '0': cfg.KEY_ENCRYPTION_SECRET };
+  if (cfg.KEY_ENCRYPTION_KEYRING) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(cfg.KEY_ENCRYPTION_KEYRING);
+    } catch {
+      throw new Error('KEY_ENCRYPTION_KEYRING is not valid JSON');
+    }
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      throw new Error('KEY_ENCRYPTION_KEYRING must be a JSON object { "<id>": "<64hex>" }');
+    }
+    const entries = Object.entries(parsed as Record<string, unknown>);
+    // L-02: bound the operator-controlled key set.
+    if (entries.length > 16) throw new Error(`KEY_ENCRYPTION_KEYRING has too many keys (${entries.length} > 16)`);
+    for (const [id, hex] of entries) {
+      if (id === '0') throw new Error("KEY_ENCRYPTION_KEYRING id '0' is reserved for KEY_ENCRYPTION_SECRET");
+      if (id.length === 0 || id.includes(':')) throw new Error(`KEY_ENCRYPTION_KEYRING id invalid (empty or contains ':'): "${id}"`);
+      if (typeof hex !== 'string' || !/^[0-9a-fA-F]{64}$/.test(hex)) {
+        throw new Error(`KEY_ENCRYPTION_KEYRING['${id}'] must be 32 bytes of hex`);
+      }
+      keys[id] = hex;
+    }
+  }
+  const primaryId = cfg.KEY_ENCRYPTION_PRIMARY_ID ?? '0';
+  if (!(primaryId in keys)) {
+    throw new Error(`KEY_ENCRYPTION_PRIMARY_ID '${primaryId}' is not in the resolved key set`);
+  }
+  return buildKeyring({ keys, primaryId, legacyId: '0' });
 }
 
 /**

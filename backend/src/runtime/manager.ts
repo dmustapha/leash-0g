@@ -8,7 +8,7 @@ import { getAgentById } from '../store/agents.js';
 import { expireApproval } from '../store/approvals.js';
 import { listResumableOneShots } from '../store/capabilities.js';
 import { awaitApprovalDecision, decidedInDb } from '../approvals/rendezvous.js';
-import { decryptSecret } from '../crypto/keycrypt.js';
+import { decryptSecret, type Keyring } from '../crypto/keycrypt.js';
 import { appendTrace } from '../trace/trace-store.js';
 import { traceEvent } from '../sse/events.js';
 import type { AgentRow } from '../types.js';
@@ -47,7 +47,7 @@ const ONE_SHOT_CONSUME_MAX_ATTEMPTS = 6;
 const ONE_SHOT_CONSUME_RETRY_MS = 2_000;
 
 export interface RuntimeSettings {
-  keyEncryptionSecret: string;
+  keyring: Keyring;
   approvalTimeoutMs: number;
   /** Base URL of OUR OWN gateway (loopback in prod) — set after listen(). */
   gatewayUrl: string;
@@ -274,14 +274,14 @@ export class LeashRuntimeManager implements RuntimeManager {
     // null session key decrypt.
     assertNativeAgent(agent);
     if (!agent.gatewayTokenEnc) throw new Error('agent has no runtime gateway token');
-    const { keyEncryptionSecret } = this.deps.settings;
+    const { keyring } = this.deps.settings;
     const ctx = {
       agentId: agent.id,
       accountAddr: agent.accountAddr,
       goal: agent.goal,
       agentRow: agent,
-      sessionPrivateKey: decryptSecret(agent.sessionKeyEnc, keyEncryptionSecret),
-      gatewayToken: decryptSecret(agent.gatewayTokenEnc, keyEncryptionSecret),
+      sessionPrivateKey: decryptSecret(agent.sessionKeyEnc, keyring),
+      gatewayToken: decryptSecret(agent.gatewayTokenEnc, keyring),
     };
     // Phase-4 dispatch (spec §3b): the ACP job roles run in their OWN graph
     // (jobs/graph.ts); every legacy role stays on the treasury/transfer graph.
@@ -373,7 +373,7 @@ export class LeashRuntimeManager implements RuntimeManager {
       const ctx = {
         agentId: agent.id,
         accountAddr: agent.accountAddr,
-        sessionPrivateKey: decryptSecret(agent.sessionKeyEnc, this.deps.settings.keyEncryptionSecret),
+        sessionPrivateKey: decryptSecret(agent.sessionKeyEnc, this.deps.settings.keyring),
       };
       // SE-7 (carry #2): the consume submits on the AGENT'S chain — resolved
       // per chainId via the registry when wired, defaulting to the single chain.
@@ -433,7 +433,7 @@ export class LeashRuntimeManager implements RuntimeManager {
       if (request.status !== 'approved_once' && request.status !== 'always_allowed') return;
       const intent = request.intent as { descriptorId?: number; fields?: string[]; digest?: string; caps?: { token: string; cap: string }[] } | null;
       if (!intent || intent.descriptorId === undefined || !intent.fields || !intent.digest) return;
-      const sessionPrivateKey = decryptSecret(agent.sessionKeyEnc, this.deps.settings.keyEncryptionSecret);
+      const sessionPrivateKey = decryptSecret(agent.sessionKeyEnc, this.deps.settings.keyring);
       const armed = await chain.authorizeSigningIntent({
         sessionPrivateKey,
         accountAddr: agent.accountAddr,

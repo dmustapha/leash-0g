@@ -27,7 +27,6 @@ export interface BindExternalDeps {
   pool: Pool;
   /** LEASH's own public base URL; '' in dev ⇒ path-only hints. */
   publicBaseUrl: string;
-  keyEncryptionSecret: string;
 }
 
 export interface BindExternalInput {

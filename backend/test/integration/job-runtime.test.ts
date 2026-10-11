@@ -4,7 +4,7 @@ import request from 'supertest';
 import nock from 'nock';
 import { MemorySaver } from '@langchain/langgraph';
 import { createTestDb, seedAgent, type TestDb } from '../helpers/db.js';
-import { buildTestApp, ownerAuth, TEST_KEK, UPSTREAM, type TestApp } from '../helpers/app.js';
+import { buildTestApp, ownerAuth, TEST_KEYRING, UPSTREAM, type TestApp } from '../helpers/app.js';
 import { generateGatewayToken, hashTokenSecret } from '../../src/crypto/token.js';
 import { encryptSecret } from '../../src/crypto/keycrypt.js';
 import { LeashRuntimeManager } from '../../src/runtime/manager.js';
@@ -168,7 +168,7 @@ beforeEach(() => {
     uploader,
     checkpointer,
     settings: {
-      keyEncryptionSecret: TEST_KEK,
+      keyring: TEST_KEYRING,
       approvalTimeoutMs: 20_000,
       gatewayUrl,
       // Small poll interval: the ACP cascade advances envelope-by-envelope as
@@ -225,8 +225,8 @@ async function seedRole(goal: AgentGoal, name: string): Promise<string> {
     sessionKeyAddr: SESSION_ADDR,
     tokenId: gen.tokenId,
     tokenHash: await hashTokenSecret(gen.secret),
-    sessionKeyEnc: encryptSecret(SESSION_PK, TEST_KEK),
-    gatewayTokenEnc: encryptSecret(gen.token, TEST_KEK),
+    sessionKeyEnc: encryptSecret(SESSION_PK, TEST_KEYRING),
+    gatewayTokenEnc: encryptSecret(gen.token, TEST_KEYRING),
     auditPubkey: new PrivateKey().publicKey.toHex(), // valid curve point for ECIES
     goal: goal as unknown as Record<string, unknown>,
     name,

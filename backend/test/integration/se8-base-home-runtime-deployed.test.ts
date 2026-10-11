@@ -7,7 +7,7 @@ import { createPublicClient, createWalletClient, http, getCreate2Address, keccak
 import { privateKeyToAccount } from 'viem/accounts';
 import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import { createTestDb, seedAgent, type TestDb } from '../helpers/db.js';
-import { buildTestApp, TEST_KEK, UPSTREAM, type TestApp } from '../helpers/app.js';
+import { buildTestApp, TEST_KEYRING, UPSTREAM, type TestApp } from '../helpers/app.js';
 import { generateGatewayToken, hashTokenSecret } from '../../src/crypto/token.js';
 import { encryptSecret } from '../../src/crypto/keycrypt.js';
 import { LeashRuntimeManager } from '../../src/runtime/manager.js';
@@ -197,7 +197,7 @@ async function waitFor(cond: () => Promise<boolean>, timeoutMs = 180_000): Promi
       chainRegistry: registry,
       checkpointer,
       alerts: t.alerts,
-      settings: { keyEncryptionSecret: TEST_KEK, approvalTimeoutMs: 600_000, gatewayUrl, intervalMs: 6_000, defaultModel: 'test-model', jitTtlMs: 600_000 },
+      settings: { keyring: TEST_KEYRING, approvalTimeoutMs: 600_000, gatewayUrl, intervalMs: 6_000, defaultModel: 'test-model', jitTtlMs: 600_000 },
     });
   }, 300_000);
 
@@ -216,10 +216,10 @@ async function waitFor(cond: () => Promise<boolean>, timeoutMs = 180_000): Promi
       accountAddr: account,
       chainId: 84532, // BASE-HOME agent
       sessionKeyAddr: OPS.address,
-      sessionKeyEnc: encryptSecret(OPS_PK, TEST_KEK),
+      sessionKeyEnc: encryptSecret(OPS_PK, TEST_KEYRING),
       tokenId: gen.tokenId,
       tokenHash: await hashTokenSecret(gen.secret),
-      gatewayTokenEnc: encryptSecret(gen.token, TEST_KEK),
+      gatewayTokenEnc: encryptSecret(gen.token, TEST_KEYRING),
       goal: { beneficiary: BRIDGE, targetBalanceWei: (10n ** 18n).toString(), topUpWei: (10n ** 13n).toString(), model: 'test-model' },
     });
     // the persisted tuple + salt the pre-routing gate replays (byte-exact mint tuple)

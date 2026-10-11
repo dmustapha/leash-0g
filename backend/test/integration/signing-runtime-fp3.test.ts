@@ -4,7 +4,7 @@ import type { Server } from 'node:http';
 import nock from 'nock';
 import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import { createTestDb, seedAgent, type TestDb } from '../helpers/db.js';
-import { buildTestApp, TEST_KEK, UPSTREAM, type TestApp } from '../helpers/app.js';
+import { buildTestApp, TEST_KEYRING, UPSTREAM, type TestApp } from '../helpers/app.js';
 import { generateGatewayToken, hashTokenSecret } from '../../src/crypto/token.js';
 import { encryptSecret } from '../../src/crypto/keycrypt.js';
 import { LeashRuntimeManager } from '../../src/runtime/manager.js';
@@ -121,7 +121,7 @@ beforeEach(() => {
     checkpointer,
     alerts: t.alerts,
     settings: {
-      keyEncryptionSecret: TEST_KEK,
+      keyring: TEST_KEYRING,
       approvalTimeoutMs: 20_000,
       gatewayUrl,
       intervalMs: 3_600_000,
@@ -151,8 +151,8 @@ async function seedRuntimeAgent(): Promise<string> {
     accountAddr: account,
     tokenId: gen.tokenId,
     tokenHash: await hashTokenSecret(gen.secret),
-    sessionKeyEnc: encryptSecret(SESSION_PK, TEST_KEK),
-    gatewayTokenEnc: encryptSecret(gen.token, TEST_KEK),
+    sessionKeyEnc: encryptSecret(SESSION_PK, TEST_KEYRING),
+    gatewayTokenEnc: encryptSecret(gen.token, TEST_KEYRING),
     goal: {
       beneficiary: BENEFICIARY,
       targetBalanceWei: (50n * CAP).toString(),

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import { encodeFunctionData, encodeErrorResult } from 'viem';
 import { createTestDb, seedAgent, type TestDb } from '../helpers/db.js';
-import { TEST_KEK } from '../helpers/app.js';
+import { TEST_KEYRING } from '../helpers/app.js';
 import { SseHub } from '../../src/sse/hub.js';
 import { generateGatewayToken, hashTokenSecret } from '../../src/crypto/token.js';
 import { encryptSecret } from '../../src/crypto/keycrypt.js';
@@ -118,8 +118,8 @@ async function seedRuntimeAgent(): Promise<string> {
     accountAddr: `0x${randomBytes(20).toString('hex')}`,
     tokenId: gen.tokenId,
     tokenHash: await hashTokenSecret(gen.secret),
-    sessionKeyEnc: encryptSecret(SESSION_PK, TEST_KEK),
-    gatewayTokenEnc: encryptSecret(gen.token, TEST_KEK),
+    sessionKeyEnc: encryptSecret(SESSION_PK, TEST_KEYRING),
+    gatewayTokenEnc: encryptSecret(gen.token, TEST_KEYRING),
     goal: { beneficiary: '0x' + '9c'.repeat(20), targetBalanceWei: (50n * CAP).toString(), topUpWei: (CAP / 2n).toString(), model: 'test-model' },
   });
 }

@@ -3,7 +3,7 @@ import request from 'supertest';
 import nock from 'nock';
 import { PrivateKey } from 'eciesjs';
 import { createTestDb, type TestDb } from '../helpers/db.js';
-import { buildTestApp, testSettings, ownerAuth, UPSTREAM, TEST_KEK, FAKE_GUARDIAN_ADDR, type TestApp } from '../helpers/app.js';
+import { buildTestApp, testSettings, ownerAuth, UPSTREAM, TEST_KEYRING, FAKE_GUARDIAN_ADDR, type TestApp } from '../helpers/app.js';
 import { listTraces } from '../../src/trace/trace-store.js';
 import { decryptSecret } from '../../src/crypto/keycrypt.js';
 
@@ -112,7 +112,7 @@ describe('POST /api/agents', () => {
     // encrypted audit-key blob stored blind, byte-for-byte
     expect(r.encrypted_audit_key).toBe(CREATE_BODY.encryptedAuditKey);
     // stored session key is encrypted, decryptable with the KEK, matches the address
-    const pk = decryptSecret(r.session_key_enc, TEST_KEK);
+    const pk = decryptSecret(r.session_key_enc, TEST_KEYRING);
     expect(pk).toMatch(/^0x[0-9a-f]{64}$/);
     // gas dust was funded to the session key
     expect(t.chain.funded.some((f) => f.addr.toLowerCase() === String(r.session_key_addr).toLowerCase())).toBe(true);
@@ -141,7 +141,7 @@ describe('POST /api/agents', () => {
     const res = await request(t.app).post('/api/agents').set('authorization', ownerAuth(OWNER)).send(CREATE_BODY);
     expect(res.status).toBe(201);
     const row = await db.pool.query(`SELECT gateway_token_enc FROM agents WHERE id = $1`, [res.body.agentId]);
-    expect(decryptSecret(row.rows[0].gateway_token_enc, TEST_KEK)).toBe(res.body.gatewayToken);
+    expect(decryptSecret(row.rows[0].gateway_token_enc, TEST_KEYRING)).toBe(res.body.gatewayToken);
   });
 });
 
