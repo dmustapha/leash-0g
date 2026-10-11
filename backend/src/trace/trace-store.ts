@@ -1,6 +1,7 @@
 import type { Pool, PoolClient } from 'pg';
 import { verifyChain, type VerifyResult } from '../crypto/hashchain.js';
 import { appendChained, TRACE_CHAIN } from '../store/chained.js';
+import { getPruneCheckpoint } from '../store/audit-prune.js';
 import type { Json } from '../crypto/canonical.js';
 import type { TraceKind, TraceRecord, X0gTrace } from '../types.js';
 
@@ -69,13 +70,23 @@ export async function listTraces(pool: Pool, agentId: string, opts: ListOptions 
   return res.rows.map((r) => r.record);
 }
 
-/** Recompute + verify the agent's full stored chain (used by API + tests). */
+/**
+ * Recompute + verify the agent's full stored chain (used by API + tests).
+ * Checkpoint-aware (SCOPE-I-6): if the prefix has been pruned to 0G, an
+ * audit_prune_checkpoint anchors the retained suffix — verify from
+ * checkpoint.seq+1 expecting checkpoint.hash instead of genesis. Rows at or
+ * below the checkpoint are excluded so the anchor lines up even mid-prune.
+ */
 export async function verifyAgentChain(db: Pool | PoolClient, agentId: string): Promise<VerifyResult> {
+  const checkpoint = await getPruneCheckpoint(db, 'trace', agentId);
   const res = await db.query<{ record: TraceRecord }>(
-    'SELECT record FROM trace_records WHERE agent_id = $1 ORDER BY seq ASC',
-    [agentId],
+    'SELECT record FROM trace_records WHERE agent_id = $1 AND seq > $2 ORDER BY seq ASC',
+    [agentId, checkpoint ? checkpoint.seq : -1],
   );
-  return verifyChain(res.rows.map((r) => r.record as unknown as import('../crypto/hashchain.js').ChainedRecord));
+  const records = res.rows.map((r) => r.record as unknown as import('../crypto/hashchain.js').ChainedRecord);
+  return checkpoint
+    ? verifyChain(records, { expectFirstSeq: checkpoint.seq + 1, expectPrevHash: checkpoint.hash })
+    : verifyChain(records);
 }
 
 // L-04: /traces polls verification on every request — O(full chain) per poll
@@ -94,16 +105,24 @@ export async function verifyAgentChainIncremental(
   db: Pool | PoolClient,
   agentId: string,
 ): Promise<VerifyResult> {
-  const head = verifiedHeads.get(agentId);
+  const cached = verifiedHeads.get(agentId);
+  // SCOPE-I-6: anchor from whichever is LATER — the cached verified head or the
+  // durable prune checkpoint. A cached head at/below a pruned prefix is stale
+  // (its row is gone), so fall back to the checkpoint; with no cache (fresh
+  // process) the checkpoint is the genesis-substitute, else a seq-0 scan on a
+  // pruned chain would spuriously fail.
+  const checkpoint = await getPruneCheckpoint(db, 'trace', agentId);
+  const anchor =
+    cached && (!checkpoint || cached.seq >= checkpoint.seq) ? cached : (checkpoint ?? null);
   const res = await db.query<{ record: TraceRecord }>(
     'SELECT record FROM trace_records WHERE agent_id = $1 AND seq > $2 ORDER BY seq ASC',
-    [agentId, head ? head.seq : -1],
+    [agentId, anchor ? anchor.seq : -1],
   );
   const records = res.rows.map(
     (r) => r.record as unknown as import('../crypto/hashchain.js').ChainedRecord,
   );
-  const verdict = head
-    ? verifyChain(records, { expectFirstSeq: head.seq + 1, expectPrevHash: head.hash })
+  const verdict = anchor
+    ? verifyChain(records, { expectFirstSeq: anchor.seq + 1, expectPrevHash: anchor.hash })
     : verifyChain(records);
   if (!verdict.ok) {
     verifiedHeads.delete(agentId); // next call re-scans from genesis
