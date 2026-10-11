@@ -76,3 +76,44 @@ describe('StreamBatcher F-3 bad-key quarantine', () => {
     errSpy.mockRestore();
   });
 });
+
+describe('StreamBatcher drain (SCOPE-SHUTDOWN-1)', () => {
+  it('resolves immediately when idle (nothing in flight)', async () => {
+    const { source } = makeSource({ good: GOOD_KEY });
+    const uploader: StorageUploader = { upload: () => Promise.resolve({ root: '0xr', txHash: '0xt' }) };
+    const batcher = new StreamBatcher({ pool: {} as Pool, uploader }, source);
+    await expect(batcher.drain()).resolves.toBeUndefined();
+  });
+
+  it('awaits an in-flight flush before resolving (so pool.end never races it)', async () => {
+    const { source, committed } = makeSource({ good: GOOD_KEY });
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const uploader: StorageUploader = {
+      upload: async () => {
+        await gate; // hold the flush mid-upload
+        return { root: '0xr', txHash: '0xt' };
+      },
+    };
+    const batcher = new StreamBatcher({ pool: {} as Pool, uploader }, source);
+
+    const flush = batcher.flushOnce(); // in-flight, blocked on the gate
+    await Promise.resolve();
+    expect(committed).toEqual([]); // upload not done → not committed
+
+    let drained = false;
+    const drain = batcher.drain().then(() => {
+      drained = true;
+    });
+    await Promise.resolve();
+    expect(drained).toBe(false); // drain is WAITING on the in-flight flush
+
+    release(); // let the upload complete
+    await drain;
+    await flush;
+    expect(drained).toBe(true);
+    expect(committed).toEqual(['good']); // the flush finished before drain resolved
+  });
+});
