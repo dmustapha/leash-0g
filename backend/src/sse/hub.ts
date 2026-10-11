@@ -47,6 +47,11 @@ interface Conn {
 export class SseHub {
   private readonly clients = new Map<string, Set<Response>>();
   private ownerLookup: ((agentId: string) => Promise<string | null>) | null = null;
+  // agentId -> ownerAddr memo. SAFE only because an agent's owner_addr is
+  // immutable post-insert (no ownership-transfer/edit path exists today).
+  // SCOPE-I-3: if an ownership-transfer feature is ever added, it MUST call
+  // ownerCache.delete(agentId) on transfer, or stale entries route one owner's
+  // agent events to the previous owner's SSE stream (cross-tenant leak).
   private readonly ownerCache = new Map<string, string>();
 
   // P4C-1 bookkeeping: one Conn per live Response; per-owner tallies drive the

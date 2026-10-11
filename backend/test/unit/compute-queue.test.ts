@@ -113,6 +113,32 @@ describe('ComputeQueue', () => {
     expect(fetchFn).toHaveBeenCalledTimes(3);
   });
 
+  it('evicts settled chains so the per-agent map stays bounded (I-4)', async () => {
+    const fetchFn = vi.fn(async () => jsonResponse(200, { ok: true }));
+    const q = makeQueue(fetchFn);
+    // Unique key per call (the internal direct:/elevate: pattern that leaked).
+    await Promise.all(Array.from({ length: 50 }, (_, i) => q.enqueue(`elevate:${i}`, {})));
+    expect(q.trackedAgentCount).toBe(0); // all settled chains evicted — no unbounded growth
+  });
+
+  it('keeps a live chain tracked but still serializes, then evicts (I-4 identity check)', async () => {
+    const order: string[] = [];
+    const fetchFn = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(init?.body as string) as { tag: string };
+      order.push(`start:${body.tag}`);
+      await new Promise((r) => setTimeout(r, body.tag === 'first' ? 30 : 5));
+      order.push(`end:${body.tag}`);
+      return jsonResponse(200, { ok: true });
+    });
+    const q = makeQueue(fetchFn);
+    const p = Promise.all([q.enqueue('a1', { tag: 'first' }), q.enqueue('a1', { tag: 'second' })]);
+    // Both enqueues are synchronous — the map has one key ('a1') before any microtask fires.
+    expect(q.trackedAgentCount).toBe(1); // one live chain while in flight
+    await p;
+    expect(order).toEqual(['start:first', 'end:first', 'start:second', 'end:second']); // serialization intact
+    expect(q.trackedAgentCount).toBe(0); // evicted once the tail settled
+  });
+
   it('retries on network errors', async () => {
     let calls = 0;
     const fetchFn = vi.fn(async () => {
