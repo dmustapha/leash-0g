@@ -5,6 +5,7 @@ import type { Pool } from 'pg';
 import { createTestDb, resolveTestDbUrl, seedAgent, type TestDb } from '../helpers/db.js';
 import { createPool } from '../../src/db/pool.js';
 import { appendTrace } from '../../src/trace/trace-store.js';
+import { runtimeRoleCanBypassAudit } from '../../src/db/audit-role.js';
 import { sweepOrphanedApprovals } from '../../src/approvals/sweep.js';
 import { createApproval } from '../../src/store/approvals.js';
 
@@ -29,6 +30,9 @@ describe('C-6 trace hardening (migration 007 + restricted role + startup sweep)'
     await expect(db.pool.query('TRUNCATE trace_records')).rejects.toThrow(/append-only/);
     const rows = await db.pool.query('SELECT count(*) AS n FROM trace_records');
     expect(Number(rows.rows[0].n)).toBeGreaterThan(0);
+    // INFRA-1: the admin/owner CAN bypass (disable trigger + truncate) → the boot
+    // check flags this posture as a vacuous append-only guarantee.
+    expect(await runtimeRoleCanBypassAudit(db.pool)).toBe(true);
   });
 
   it('provision script creates a runtime role that can run the app but not mutate history or DDL', async () => {
@@ -74,6 +78,10 @@ describe('C-6 trace hardening (migration 007 + restricted role + startup sweep)'
     await expect(rolePool.query('ALTER TABLE trace_records DISABLE TRIGGER ALL')).rejects.toThrow(
       /must be owner|permission denied/,
     );
+
+    // INFRA-1: the restricted role CANNOT bypass → the boot check stays silent for
+    // a correctly-configured prod (DATABASE_URL=restricted). This is the discriminator.
+    expect(await runtimeRoleCanBypassAudit(rolePool)).toBe(false);
   }, 60_000);
 
   it('startup sweep expires orphaned pending approvals chain-visibly', async () => {
