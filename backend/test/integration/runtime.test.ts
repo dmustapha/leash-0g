@@ -5,7 +5,7 @@ import request from 'supertest';
 import nock from 'nock';
 import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import { createTestDb, seedAgent, type TestDb } from '../helpers/db.js';
-import { buildTestApp, ownerAuth, TEST_KEK, UPSTREAM, type TestApp } from '../helpers/app.js';
+import { buildTestApp, ownerAuth, TEST_KEYRING, UPSTREAM, type TestApp } from '../helpers/app.js';
 import { generateGatewayToken, hashTokenSecret } from '../../src/crypto/token.js';
 import { encryptSecret } from '../../src/crypto/keycrypt.js';
 import { listTraces, verifyAgentChain } from '../../src/trace/trace-store.js';
@@ -129,7 +129,7 @@ beforeEach(() => {
     chain: fakeChain,
     checkpointer,
     settings: {
-      keyEncryptionSecret: TEST_KEK,
+      keyring: TEST_KEYRING,
       approvalTimeoutMs: 20_000,
       gatewayUrl,
       intervalMs: 3_600_000, // one immediate cycle per test
@@ -162,8 +162,8 @@ async function seedRuntimeAgent(): Promise<string> {
     accountAddr: account,
     tokenId: gen.tokenId,
     tokenHash: await hashTokenSecret(gen.secret),
-    sessionKeyEnc: encryptSecret(SESSION_PK, TEST_KEK),
-    gatewayTokenEnc: encryptSecret(gen.token, TEST_KEK),
+    sessionKeyEnc: encryptSecret(SESSION_PK, TEST_KEYRING),
+    gatewayTokenEnc: encryptSecret(gen.token, TEST_KEYRING),
     goal: {
       beneficiary: BENEFICIARY,
       targetBalanceWei: (5n * CAP).toString(),
@@ -300,7 +300,7 @@ describe('agent runtime', () => {
       chain: fakeChain,
       checkpointer,
       settings: {
-        keyEncryptionSecret: TEST_KEK,
+        keyring: TEST_KEYRING,
         approvalTimeoutMs: 500, // nobody decides — force the timeout path
         gatewayUrl,
         intervalMs: 3_600_000,

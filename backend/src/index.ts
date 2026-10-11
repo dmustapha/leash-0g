@@ -2,7 +2,7 @@ import 'dotenv/config';
 import { createPublicClient, http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
-import { loadConfig, buildChainConfigs } from './config.js';
+import { loadConfig, buildChainConfigs, resolveKeyring } from './config.js';
 import { ChainRegistry } from './chain/registry.js';
 import { createPool, createDirectPool } from './db/pool.js';
 import { migrate } from './db/migrate.js';
@@ -45,6 +45,8 @@ async function main(): Promise<void> {
     console.error(`[boot +${((Date.now() - bootStart) / 1000).toFixed(1)}s] ${label}`);
 
   const cfg = loadConfig();
+  // SCOPE-I-7: resolve the at-rest encryption keyring (fail-loud at boot).
+  const keyring = resolveKeyring(cfg);
   phase('config loaded');
   // Sanity: the configured ops address must be the ops key's address — a
   // mismatch means the wrong key is deployed (fail fast, before any wiring).
@@ -188,7 +190,7 @@ async function main(): Promise<void> {
     chainRegistry,
     checkpointer,
     settings: {
-      keyEncryptionSecret: cfg.KEY_ENCRYPTION_SECRET,
+      keyring,
       approvalTimeoutMs: cfg.APPROVAL_TIMEOUT_MS,
       gatewayUrl: `http://127.0.0.1:${cfg.GATEWAY_PORT}`, // the runtime is the gateway's only client
       intervalMs: cfg.RUNTIME_INTERVAL_MS,
@@ -296,7 +298,7 @@ async function main(): Promise<void> {
     digest,
     telegram,
     settings: {
-      keyEncryptionSecret: cfg.KEY_ENCRYPTION_SECRET,
+      keyring,
       approvalTimeoutMs: cfg.APPROVAL_TIMEOUT_MS,
       sessionGasDustWei: BigInt(cfg.SESSION_GAS_DUST_WEI),
       defaultTimelockDelay: cfg.DEFAULT_TIMELOCK_DELAY,

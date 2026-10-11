@@ -13,6 +13,7 @@ import type { AlertService } from './alerts/service.js';
 import { telegramWebhookRouter } from './telegram/routes.js';
 import type { TelegramBot } from './telegram/bot.js';
 import type { DigestService } from './digest/service.js';
+import type { Keyring } from './crypto/keycrypt.js';
 import type { PolicyView } from './types.js';
 
 /**
@@ -130,7 +131,7 @@ export interface RuntimeManager {
 }
 
 export interface Settings {
-  keyEncryptionSecret: string;
+  keyring: Keyring;
   approvalTimeoutMs: number;
   sessionGasDustWei: bigint;
   defaultTimelockDelay: number;

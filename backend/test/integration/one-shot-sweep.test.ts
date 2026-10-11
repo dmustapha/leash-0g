@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { encodeFunctionData } from 'viem';
 import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import { createTestDb, seedAgent, type TestDb } from '../helpers/db.js';
-import { TEST_KEK } from '../helpers/app.js';
+import { TEST_KEYRING } from '../helpers/app.js';
 import { SseHub } from '../../src/sse/hub.js';
 import { ApprovalBroker } from '../../src/approvals/broker.js';
 import { LeashRuntimeManager } from '../../src/runtime/manager.js';
@@ -104,8 +104,8 @@ async function seedApprovedOnceAgent(): Promise<{ agentId: string; reqId: string
     accountAddr: ACCOUNT,
     tokenId: gen.tokenId,
     tokenHash: await hashTokenSecret(gen.secret),
-    sessionKeyEnc: encryptSecret(SESSION_PK, TEST_KEK),
-    gatewayTokenEnc: encryptSecret(gen.token, TEST_KEK),
+    sessionKeyEnc: encryptSecret(SESSION_PK, TEST_KEYRING),
+    gatewayTokenEnc: encryptSecret(gen.token, TEST_KEYRING),
     goal: { beneficiary: '0x' + '9c'.repeat(20), targetBalanceWei: (50n * CAP).toString(), topUpWei: (CAP / 2n).toString(), model: 'test-model' },
   });
   const { row } = await insertCapabilityRequest(db.pool, {
@@ -131,7 +131,7 @@ function buildManager(chain: FakeChain): LeashRuntimeManager {
     chain,
     checkpointer: new PostgresSaver(db.pool, undefined, { schema: db.schema }),
     settings: {
-      keyEncryptionSecret: TEST_KEK,
+      keyring: TEST_KEYRING,
       approvalTimeoutMs: 600_000,
       gatewayUrl: 'http://127.0.0.1:0',
       intervalMs: 6_000,

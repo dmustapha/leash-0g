@@ -17,8 +17,11 @@ import { AlertService } from '../../src/alerts/service.js';
 import { DigestService } from '../../src/digest/service.js';
 import type { PrivyVerifier } from '../../src/api/privy.js';
 import type { PolicyView } from '../../src/types.js';
+import { buildKeyring } from '../../src/crypto/keycrypt.js';
 
 export const TEST_KEK = 'ab'.repeat(32);
+/** SCOPE-I-7: the default (no-rotation) keyring used across the test suite. */
+export const TEST_KEYRING = buildKeyring({ keys: { '0': TEST_KEK } });
 export const UPSTREAM = 'http://compute.leash-test.local';
 
 /** Fake Privy verifier: `Bearer owner:<addr>` → that owner. */
@@ -200,7 +203,7 @@ export interface TestApp {
 
 export function testSettings(overrides: Partial<AppDeps['settings']> = {}): AppDeps['settings'] {
   return {
-    keyEncryptionSecret: TEST_KEK,
+    keyring: TEST_KEYRING,
     approvalTimeoutMs: 10_000,
     sessionGasDustWei: 10n ** 15n,
     defaultTimelockDelay: 900,

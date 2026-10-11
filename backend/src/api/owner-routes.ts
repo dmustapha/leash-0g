@@ -770,7 +770,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       ownerAddr,
       accountAddr: deployed.accountAddr,
       sessionKeyAddr,
-      sessionKeyEnc: encryptSecret(sessionPk, deps.settings.keyEncryptionSecret),
+      sessionKeyEnc: encryptSecret(sessionPk, deps.settings.keyring),
       auditPubkey: input.auditPubKey.replace(/^0x/, ''),
       tokenId: token.tokenId,
       tokenHash: await hashTokenSecret(token.secret),
@@ -780,7 +780,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       ...(input.encryptedAuditKey !== undefined ? { encryptedAuditKey: input.encryptedAuditKey } : {}),
       // Runtime copy of the token (encrypted at rest) — the co-located runtime
       // is the gateway's only Phase-1 client and needs it at start().
-      gatewayTokenEnc: encryptSecret(token.token, deps.settings.keyEncryptionSecret),
+      gatewayTokenEnc: encryptSecret(token.token, deps.settings.keyring),
       guardianAddr: deployed.guardianAddr,
       ...(input.capabilityLabel ? { capabilityLabel: input.capabilityLabel } : {}),
       accountVersion: deployed.accountVersion, // SE-1: persist the version actually minted (gate L-01)
@@ -1637,7 +1637,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       agent.id,
       token.tokenId,
       await hashTokenSecret(token.secret),
-      encryptSecret(token.token, deps.settings.keyEncryptionSecret),
+      encryptSecret(token.token, deps.settings.keyring),
     );
     res.json({ gatewayToken: token.token }); // returned once; old token is now invalid
   }));
@@ -1666,7 +1666,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     const d = parsed.data;
     try {
       const result = await bindExternalAgent(
-        { pool: deps.pool, publicBaseUrl: deps.settings.publicBaseUrl, keyEncryptionSecret: deps.settings.keyEncryptionSecret },
+        { pool: deps.pool, publicBaseUrl: deps.settings.publicBaseUrl },
         {
           ownerAddr: req.ownerAddr as string,
           name: d.name,
@@ -1715,7 +1715,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     }
     const token = generateGatewayToken();
     const tHash = await hashTokenSecret(token.secret);
-    await rotateAgentToken(deps.pool, agent.id, token.tokenId, tHash, encryptSecret(token.token, deps.settings.keyEncryptionSecret));
+    await rotateAgentToken(deps.pool, agent.id, token.tokenId, tHash, encryptSecret(token.token, deps.settings.keyring));
     await updateBoundTokenHash(deps.pool, agent.id, tHash);
     res.json({ gatewayToken: token.token }); // returned once
   }));
