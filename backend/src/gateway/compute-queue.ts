@@ -43,15 +43,28 @@ export class ComputeQueue {
     this.fetchFn = options.fetchFn ?? fetch;
   }
 
+  /** Number of agents with a live serialization chain (introspection / tests). */
+  get trackedAgentCount(): number {
+    return this.agentChains.size;
+  }
+
   /** Enqueue a chat-completions call for one agent. */
   async enqueue(agentId: string, body: Json, path = '/chat/completions'): Promise<ComputeResult> {
     const prev = this.agentChains.get(agentId) ?? Promise.resolve();
     const task = prev.then(() => this.withSlot(() => this.callWithRetry(body, path)));
-    // keep the chain alive regardless of task outcome
-    this.agentChains.set(
-      agentId,
-      task.catch(() => undefined),
-    );
+    // Keep the chain alive regardless of task outcome so the next enqueue for this
+    // agent serializes behind it.
+    const chained = task.catch(() => undefined);
+    this.agentChains.set(agentId, chained);
+    // Bound the map: once THIS link settles, drop the agent's entry iff nothing
+    // newer chained on top (identity check preserves per-agent serialization —
+    // a live newer chain is never evicted). Without this, a caller that uses a
+    // unique key per call (the internal direct:/elevate: flows) leaks a Map entry
+    // forever = unbounded memory growth on a long-running instance.
+    // Fire-and-forget: awaiting this would deadlock (enqueue would wait on itself).
+    void chained.finally(() => {
+      if (this.agentChains.get(agentId) === chained) this.agentChains.delete(agentId);
+    });
     return task;
   }
 
