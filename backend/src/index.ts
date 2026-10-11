@@ -433,16 +433,22 @@ async function main(): Promise<void> {
   const shutdown = (signal: string): void => {
     console.error(`${signal} received — shutting down`);
     watcher.stop();
-    batcher.stop();
+    batcher.stop(); // halt NEW flushes immediately; in-flight ones are drained below
     ownerBatcher.stop();
     clearInterval(digestTimer);
+    clearInterval(reservationSweepTimer);
+    clearInterval(directionsSweepTimer); // was previously left running on shutdown
     coordinator.stopSweeper();
     lease.release();
-    clearInterval(reservationSweepTimer);
     broker.cancelAll();
     gatewayServer.close();
     server.close(() => {
-      void Promise.allSettled([pool.end(), leasePool.end()]).finally(() => process.exit(0));
+      // SCOPE-SHUTDOWN-1: drain any in-flight batch flush BEFORE ending the pool —
+      // otherwise the flush's next query throws "Cannot use a pool after calling
+      // end" (seen for every owner on each prior deploy's SIGTERM).
+      void Promise.allSettled([batcher.drain(), ownerBatcher.drain()])
+        .then(() => Promise.allSettled([pool.end(), leasePool.end()]))
+        .finally(() => process.exit(0));
     });
     setTimeout(() => process.exit(1), 10_000).unref();
   };

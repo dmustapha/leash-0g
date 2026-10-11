@@ -185,6 +185,10 @@ export class StreamBatcher {
    * stay durable + hash-chained in Postgres meanwhile. */
   private readonly quarantined = new Set<string>();
   private flushing = false;
+  // SCOPE-SHUTDOWN-1: the promise of the CURRENTLY-running flush (null when idle),
+  // so shutdown can await it before ending the DB pool. Without this, pool.end()
+  // races an in-flight flush → "Cannot use a pool after calling end" per owner.
+  private inFlight: Promise<void> | null = null;
 
   constructor(
     private readonly deps: BatcherDeps,
@@ -215,41 +219,57 @@ export class StreamBatcher {
     this.timer = null;
   }
 
+  /**
+   * SCOPE-SHUTDOWN-1: await any in-flight flush so a caller can safely end the DB
+   * pool. Call stop() first (halts NEW flushes), then drain(), then pool.end().
+   */
+  async drain(): Promise<void> {
+    while (this.inFlight) await this.inFlight.catch(() => undefined);
+  }
+
   /** One flush pass over all keys with pending records (also used by tests). */
   async flushOnce(): Promise<void> {
     if (this.flushing) return;
     this.flushing = true;
-    try {
-      const pending = await this.source.pending(this.deps.pool);
-      const now = Date.now();
-      for (const row of pending) {
-        const due = row.n >= this.opts.maxRecords || now - row.oldest.getTime() >= this.opts.maxAgeMs;
-        if (!due) continue;
-        if (this.quarantined.has(row.key)) continue; // F-3: permanent key defect — no retry
-        const backoff = this.failures.get(row.key);
-        if (backoff && now < backoff.nextAttempt) continue;
-        try {
-          await this.flushKey(row.key);
-          this.failures.delete(row.key);
-        } catch (err) {
-          if (err instanceof BadAuditKeyError) {
-            // F-3: records stay durable + hash-chained in Postgres; only the
-            // 0G Storage batch is withheld until the owner rotates the key.
-            this.quarantined.add(row.key);
-            this.failures.delete(row.key);
-            console.error(`${this.source.name} flush PERMANENTLY skipped for ${row.key}: ${err.message}`);
-            continue;
-          }
-          const count = (backoff?.count ?? 0) + 1;
-          this.failures.set(row.key, {
-            count,
-            nextAttempt: now + this.opts.retryBackoffMs * 2 ** Math.min(count - 1, 6),
-          });
-          console.error(`${this.source.name} flush failed for ${row.key} (attempt ${count})`, err);
-        }
-      }
-    } finally {
+    const run = this.runFlush().finally(() => {
       this.flushing = false;
+      this.inFlight = null;
+    });
+    // runFlush() is async — its body suspends at the first await, so assigning
+    // inFlight synchronously here (after the call) is safe: the `flushing` guard
+    // above means no second flushOnce / drain() can observe the brief null window.
+    this.inFlight = run;
+    return run;
+  }
+
+  private async runFlush(): Promise<void> {
+    const pending = await this.source.pending(this.deps.pool);
+    const now = Date.now();
+    for (const row of pending) {
+      const due = row.n >= this.opts.maxRecords || now - row.oldest.getTime() >= this.opts.maxAgeMs;
+      if (!due) continue;
+      if (this.quarantined.has(row.key)) continue; // F-3: permanent key defect — no retry
+      const backoff = this.failures.get(row.key);
+      if (backoff && now < backoff.nextAttempt) continue;
+      try {
+        await this.flushKey(row.key);
+        this.failures.delete(row.key);
+      } catch (err) {
+        if (err instanceof BadAuditKeyError) {
+          // F-3: records stay durable + hash-chained in Postgres; only the
+          // 0G Storage batch is withheld until the owner rotates the key.
+          this.quarantined.add(row.key);
+          this.failures.delete(row.key);
+          console.error(`${this.source.name} flush PERMANENTLY skipped for ${row.key}: ${err.message}`);
+          continue;
+        }
+        const count = (backoff?.count ?? 0) + 1;
+        this.failures.set(row.key, {
+          count,
+          nextAttempt: now + this.opts.retryBackoffMs * 2 ** Math.min(count - 1, 6),
+        });
+        console.error(`${this.source.name} flush failed for ${row.key} (attempt ${count})`, err);
+      }
     }
   }
 
