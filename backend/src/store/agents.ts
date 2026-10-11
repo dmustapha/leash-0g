@@ -1,5 +1,14 @@
 import type { Pool, PoolClient } from 'pg';
 import type { AgentRow, AgentStatus, GatewayRule, AgentGoal } from '../types.js';
+import { isValidEciesPubkey } from '../crypto/ecies.js';
+
+/** Raised when an audit-pubkey rotation is given a non-secp256k1 point. */
+export class InvalidAuditPubkeyError extends Error {
+  constructor() {
+    super('audit pubkey is not a valid secp256k1 point');
+    this.name = 'InvalidAuditPubkeyError';
+  }
+}
 
 interface DbAgentRow {
   id: string;
@@ -173,6 +182,15 @@ export async function insertAgent(pool: Pool, input: InsertAgentInput): Promise<
   );
   const row = res.rows[0];
   if (!row) throw new Error('agent insert failed');
+  // SCOPE-RH2-2: seed the key history at seq 0 so the agent's register-time key
+  // covers its whole trace from the first record (rotation appends later rows).
+  if (input.auditPubkey) {
+    await pool.query(
+      `INSERT INTO agent_audit_keys (agent_id, pubkey, effective_from_seq) VALUES ($1, $2, 0)
+       ON CONFLICT (agent_id, effective_from_seq) DO NOTHING`,
+      [row.id, input.auditPubkey],
+    );
+  }
   return row.id;
 }
 
@@ -231,6 +249,34 @@ export async function rotateAgentToken(
     tokenHash,
     gatewayTokenEnc ?? null,
   ]);
+}
+
+/**
+ * SCOPE-RH2-2: rotate an agent's audit pubkey. Inserts an agent_audit_keys row
+ * effective at the NEXT trace_records seq (un-batched records keep their key;
+ * batches never span the boundary) and refreshes the agents.audit_pubkey cache.
+ * Owner-scope is enforced at the route; this is the storage write.
+ */
+export async function rotateAgentAuditPubkey(pool: Pool, agentId: string, pubkey: string): Promise<void> {
+  const key = pubkey.replace(/^0x/, '');
+  if (!isValidEciesPubkey(key)) throw new InvalidAuditPubkeyError();
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      `INSERT INTO agent_audit_keys (agent_id, pubkey, effective_from_seq)
+       VALUES ($1, $2, (SELECT COALESCE(MAX(seq), -1) + 1 FROM trace_records WHERE agent_id = $1))
+       ON CONFLICT (agent_id, effective_from_seq) DO UPDATE SET pubkey = EXCLUDED.pubkey`,
+      [agentId, key],
+    );
+    await client.query(`UPDATE agents SET audit_pubkey = $2 WHERE id = $1`, [agentId, key]);
+    await client.query('COMMIT');
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => undefined);
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 export async function listActiveAgents(pool: Pool): Promise<AgentRow[]> {

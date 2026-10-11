@@ -6,7 +6,12 @@ import { buildTestApp, ownerAuth, FakeChainOps } from '../helpers/app.js';
 import { DigestService } from '../../src/digest/service.js';
 import { appendTrace } from '../../src/trace/trace-store.js';
 import { appendOwnerRecord, listOwnerRecords } from '../../src/store/owner-records.js';
-import { patchOwnerSettings, setTelegramChat, getOwnerSettings } from '../../src/store/owner-settings.js';
+import {
+  patchOwnerSettings,
+  rotateOwnerStreamKey,
+  setTelegramChat,
+  getOwnerSettings,
+} from '../../src/store/owner-settings.js';
 import { createLink, createDelegation, transitionDelegation } from '../../src/coordination/store.js';
 import { StreamBatcher, ownerStreamSource, type StorageUploader } from '../../src/audit/batcher.js';
 import { eciesDecrypt } from '../../src/crypto/ecies.js';
@@ -255,7 +260,7 @@ describe('D5 — owner-stream batcher (defer → drain)', () => {
     await batcher.flushOnce();
     expect(uploader.uploads).toHaveLength(0); // deferred, NOT failed
 
-    await patchOwnerSettings(db.pool, owner, { streamPubkey: key.publicKey.toHex() });
+    await rotateOwnerStreamKey(db.pool, owner, key.publicKey.toHex());
     await appendOwnerRecord(db.pool, owner, 'digest', { n: 2 });
     await batcher.flushOnce();
     expect(uploader.uploads).toHaveLength(1);
@@ -288,7 +293,7 @@ describe('D5 — owner-stream batcher (defer → drain)', () => {
       maxRecords: 1,
       maxAgeMs: 0,
     });
-    await patchOwnerSettings(db.pool, owner, { streamPubkey: key.publicKey.toHex() });
+    await rotateOwnerStreamKey(db.pool, owner, key.publicKey.toHex());
     await appendOwnerRecord(db.pool, owner, 'alert', { n: 0 });
     await batcher.flushOnce();
     await appendOwnerRecord(db.pool, owner, 'alert', { n: 1 });

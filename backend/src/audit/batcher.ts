@@ -44,12 +44,62 @@ export interface StreamSource {
   name: string;
   /** Keys with unbatched records: (key, pending count, oldest created_at). */
   pending(pool: Pool): Promise<Array<{ key: string; n: number; oldest: Date }>>;
-  /** ECIES pubkey for the key's records; null = defer this key (no key yet). */
-  pubkeyFor(pool: Pool, key: string): Promise<string | null>;
+  /**
+   * ECIES pubkey effective at `atSeq` — the key with the GREATEST
+   * effective_from_seq <= atSeq (SCOPE-RH2-2 key history). null = defer this
+   * key (no key set yet — the S10 pre-key window).
+   */
+  pubkeyFor(pool: Pool, key: string, atSeq: number): Promise<string | null>;
   cursor(pool: Pool, key: string): Promise<number>;
+  /**
+   * Records at seq > afterSeq, ORDER BY seq ASC, LIMIT limit — BUT never past
+   * the next rotation boundary (the smallest effective_from_seq > afterSeq), so
+   * a batch never spans two keys (SCOPE-RH2-2).
+   */
   records(pool: Pool, key: string, afterSeq: number, limit: number): Promise<Array<{ seq: number; record: Json }>>;
   /** Record the batch + advance the cursor atomically. */
   commit(pool: Pool, key: string, seqFrom: number, seqTo: number, root: string, txHash: string): Promise<void>;
+}
+
+/**
+ * SCOPE-RH2-2 key-history lookups, shared by both stream sources. `table`/`col`
+ * are internal string literals (never user input) — safe to interpolate.
+ */
+async function effectivePubkey(
+  pool: Pool,
+  table: 'owner_audit_keys' | 'agent_audit_keys',
+  col: 'owner_addr' | 'agent_id',
+  key: string,
+  atSeq: number,
+): Promise<string | null> {
+  const res = await pool.query<{ pubkey: string }>(
+    `SELECT pubkey FROM ${table} WHERE ${col} = $1 AND effective_from_seq <= $2
+     ORDER BY effective_from_seq DESC LIMIT 1`,
+    [key, atSeq],
+  );
+  return res.rows[0]?.pubkey ?? null;
+}
+
+/**
+ * The next rotation boundary that caps a batch starting at seq afterSeq+1:
+ * the smallest effective_from_seq strictly greater than that first seq (a key
+ * whose eff == afterSeq+1 is the CURRENT key, not a boundary). null = no
+ * further rotation → the batch is bounded only by the record limit.
+ */
+async function nextBoundary(
+  pool: Pool,
+  table: 'owner_audit_keys' | 'agent_audit_keys',
+  col: 'owner_addr' | 'agent_id',
+  key: string,
+  afterSeq: number,
+): Promise<number | null> {
+  const res = await pool.query<{ boundary: string | null }>(
+    `SELECT min(effective_from_seq) AS boundary FROM ${table}
+     WHERE ${col} = $1 AND effective_from_seq > $2`,
+    [key, afterSeq + 1],
+  );
+  const b = res.rows[0]?.boundary;
+  return b === null || b === undefined ? null : Number(b);
 }
 
 export const traceStreamSource: StreamSource = {
@@ -64,11 +114,8 @@ export const traceStreamSource: StreamSource = {
     );
     return res.rows.map((r) => ({ key: r.agent_id, n: Number(r.n), oldest: r.oldest }));
   },
-  async pubkeyFor(pool, key) {
-    const res = await pool.query<{ audit_pubkey: string }>(`SELECT audit_pubkey FROM agents WHERE id = $1`, [key]);
-    const pubkey = res.rows[0]?.audit_pubkey;
-    if (!pubkey) throw new Error(`agent ${key} not found for audit flush`);
-    return pubkey;
+  async pubkeyFor(pool, key, atSeq) {
+    return effectivePubkey(pool, 'agent_audit_keys', 'agent_id', key, atSeq);
   },
   async cursor(pool, key) {
     const res = await pool.query<{ last_batched_seq: string }>(
@@ -78,9 +125,12 @@ export const traceStreamSource: StreamSource = {
     return res.rows[0] ? Number(res.rows[0].last_batched_seq) : -1;
   },
   async records(pool, key, afterSeq, limit) {
+    const boundary = await nextBoundary(pool, 'agent_audit_keys', 'agent_id', key, afterSeq);
     const res = await pool.query<{ seq: string; record: Json }>(
-      `SELECT seq, record FROM trace_records WHERE agent_id = $1 AND seq > $2 ORDER BY seq ASC LIMIT $3`,
-      [key, afterSeq, limit],
+      `SELECT seq, record FROM trace_records
+       WHERE agent_id = $1 AND seq > $2 AND ($4::bigint IS NULL OR seq < $4)
+       ORDER BY seq ASC LIMIT $3`,
+      [key, afterSeq, limit, boundary],
     );
     return res.rows.map((r) => ({ seq: Number(r.seq), record: r.record }));
   },
@@ -120,14 +170,10 @@ export const ownerStreamSource: StreamSource = {
     );
     return res.rows.map((r) => ({ key: r.owner_addr, n: Number(r.n), oldest: r.oldest }));
   },
-  async pubkeyFor(pool, key) {
-    // S10: null = the owner has not set the stream key yet → DEFER (records
+  async pubkeyFor(pool, key, atSeq) {
+    // S10: null = the owner has not set any stream key yet → DEFER (records
     // keep accumulating hash-chained in Postgres; drained in full later).
-    const res = await pool.query<{ stream_pubkey: string | null }>(
-      `SELECT stream_pubkey FROM owner_settings WHERE owner_addr = $1`,
-      [key],
-    );
-    return res.rows[0]?.stream_pubkey ?? null;
+    return effectivePubkey(pool, 'owner_audit_keys', 'owner_addr', key, atSeq);
   },
   async cursor(pool, key) {
     const res = await pool.query<{ last_batched_seq: string }>(
@@ -137,9 +183,12 @@ export const ownerStreamSource: StreamSource = {
     return res.rows[0] ? Number(res.rows[0].last_batched_seq) : -1;
   },
   async records(pool, key, afterSeq, limit) {
+    const boundary = await nextBoundary(pool, 'owner_audit_keys', 'owner_addr', key, afterSeq);
     const res = await pool.query<{ seq: string; record: Json }>(
-      `SELECT seq, record FROM owner_records WHERE owner_addr = $1 AND seq > $2 ORDER BY seq ASC LIMIT $3`,
-      [key, afterSeq, limit],
+      `SELECT seq, record FROM owner_records
+       WHERE owner_addr = $1 AND seq > $2 AND ($4::bigint IS NULL OR seq < $4)
+       ORDER BY seq ASC LIMIT $3`,
+      [key, afterSeq, limit, boundary],
     );
     return res.rows.map((r) => ({ seq: Number(r.seq), record: r.record }));
   },
@@ -180,9 +229,9 @@ export class StreamBatcher {
   private timer: NodeJS.Timeout | null = null;
   private readonly failures = new Map<string, { count: number; nextAttempt: number }>();
   /** F-3: keys with a permanently unusable audit pubkey — skipped, logged once.
-   * TODO(F-3 follow-up): no audit-key rotation path exists yet; a quarantined
-   * agent needs a DB hotfix until PATCH /agents/:id/audit-pubkey lands. Records
-   * stay durable + hash-chained in Postgres meanwhile. */
+   * SCOPE-RH2-2: a rotation (PATCH /agents/:id/audit-pubkey or the owner
+   * stream-key route) calls clearQuarantine(key) so the next valid key flushes.
+   * Records stay durable + hash-chained in Postgres meanwhile. */
   private readonly quarantined = new Set<string>();
   private flushing = false;
   // SCOPE-SHUTDOWN-1: the promise of the CURRENTLY-running flush (null when idle),
@@ -273,13 +322,25 @@ export class StreamBatcher {
     }
   }
 
+  /**
+   * SCOPE-RH2-2: clear a key's quarantine (+ failure backoff) so a rotated key
+   * is re-tried on the next flush pass. Wired through the rotation routes.
+   */
+  clearQuarantine(key: string): void {
+    this.quarantined.delete(key);
+    this.failures.delete(key);
+  }
+
   private async flushKey(key: string): Promise<void> {
     const pool = this.deps.pool;
-    const pubkey = await this.source.pubkeyFor(pool, key);
+    // SCOPE-RH2-2: resolve the key for the FIRST un-batched seq, so the batch
+    // encrypts under the key effective at its start. `records` caps the batch
+    // at the next rotation boundary → a batch never crosses a key change.
+    const cursor = await this.source.cursor(pool, key);
+    const pubkey = await this.source.pubkeyFor(pool, key, cursor + 1);
     if (pubkey === null) return; // defer (S10 pre-key window) — not a failure
     if (!isValidEciesPubkey(pubkey)) throw new BadAuditKeyError(key);
 
-    const cursor = await this.source.cursor(pool, key);
     const records = await this.source.records(pool, key, cursor, this.opts.maxBatchSize);
     if (records.length === 0) return;
 

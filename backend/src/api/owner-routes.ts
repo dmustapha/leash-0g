@@ -14,6 +14,8 @@ import {
   getAgentById,
   insertAgent,
   rotateAgentToken,
+  rotateAgentAuditPubkey,
+  InvalidAuditPubkeyError,
   updateAgentGuardian,
   listAgentsByOwner,
   updateAgentRules,
@@ -36,7 +38,8 @@ import { acceptanceRuleSetSchema } from '../jobs/acceptance.js';
 import {
   getOwnerSettings,
   patchOwnerSettings,
-  StreamKeyAlreadySetError,
+  rotateOwnerStreamKey,
+  InvalidStreamKeyError,
 } from '../store/owner-settings.js';
 import { getApproval } from '../store/approvals.js';
 import { decideApprovalWithConsent } from '../approvals/decide.js';
@@ -167,6 +170,11 @@ export interface OwnerApiDeps {
    * (503 multichain_unavailable) when absent.
    */
   chainRegistry?: OwnerChainRegistry | undefined;
+  /**
+   * SCOPE-RH2-2: optional hook fired after an audit key rotates, so the running
+   * batchers can clear the key's quarantine. `stream` selects which batcher.
+   */
+  onAuditKeyRotated?: ((stream: 'trace' | 'owner', key: string) => void) | undefined;
 }
 
 const addressSchema = z.string().regex(/^0x[0-9a-fA-F]{40}$/);
@@ -2022,6 +2030,33 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     streamPubkey: z.string().regex(/^(0x)?0[23][0-9a-fA-F]{64}$|^(0x)?04[0-9a-fA-F]{128}$/).optional(),
   });
 
+  const pubkeyRegex = /^(0x)?0[23][0-9a-fA-F]{64}$|^(0x)?04[0-9a-fA-F]{128}$/;
+  const streamKeyBodySchema = z.object({ pubkey: z.string().regex(pubkeyRegex) }).strict();
+  const auditPubkeyBodySchema = z.object({ pubkey: z.string().regex(pubkeyRegex) }).strict();
+
+  // SCOPE-RH2-2: rotate an agent's audit pubkey. Owner-scoped (requireOwnedAgent
+  // → 404 for foreign). New key covers trace records from the next seq onward.
+  router.patch('/api/agents/:id/audit-pubkey', asyncRoute(async (req: OwnerRequest, res) => {
+    const agent = await requireOwnedAgent(req, res);
+    if (!agent) return;
+    const parsed = auditPubkeyBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: { message: 'invalid request body' } });
+      return;
+    }
+    try {
+      await rotateAgentAuditPubkey(deps.pool, agent.id, parsed.data.pubkey);
+      deps.onAuditKeyRotated?.('trace', agent.id);
+      res.json({ ok: true });
+    } catch (err) {
+      if (err instanceof InvalidAuditPubkeyError) {
+        res.status(422).json({ error: { message: 'invalid audit pubkey' } });
+        return;
+      }
+      throw err;
+    }
+  }));
+
   router.get('/api/owner/settings', asyncRoute(async (req: OwnerRequest, res) => {
     const s = await getOwnerSettings(deps.pool, req.ownerAddr as string);
     // telegram_chat_id itself is never exposed — linked-or-not is enough.
@@ -2041,14 +2076,23 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       res.status(400).json({ error: { message: 'invalid request body' } });
       return;
     }
+    const owner = req.ownerAddr as string;
     try {
-      const s = await patchOwnerSettings(deps.pool, req.ownerAddr as string, {
+      // SCOPE-RH2-2: stream key is no longer set-once — set AND rotate flow
+      // through rotateOwnerStreamKey (seq-anchored key history). Clear any
+      // quarantine so a previously-bad key re-flushes under the new one.
+      // NOTE: this rotation commits in its OWN txn, separate from the settings
+      // update below (both are idempotent on retry; the key change is durable
+      // even if the settings patch fails). The dedicated POST /api/owner/stream-key
+      // is the single-purpose atomic path; this is the combined-settings UX path.
+      if (parsed.data.streamPubkey !== undefined) {
+        await rotateOwnerStreamKey(deps.pool, owner, parsed.data.streamPubkey);
+        deps.onAuditKeyRotated?.('owner', owner.toLowerCase());
+      }
+      const s = await patchOwnerSettings(deps.pool, owner, {
         ...(parsed.data.alertPrefs !== undefined ? { alertPrefs: parsed.data.alertPrefs } : {}),
         ...(parsed.data.digestHourUtc !== undefined ? { digestHourUtc: parsed.data.digestHourUtc } : {}),
         ...(parsed.data.digestOptout !== undefined ? { digestOptout: parsed.data.digestOptout } : {}),
-        ...(parsed.data.streamPubkey !== undefined
-          ? { streamPubkey: parsed.data.streamPubkey.replace(/^0x/, '') }
-          : {}),
       });
       res.json({
         ok: true,
@@ -2059,8 +2103,31 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
         streamPubkeySet: s.streamPubkey !== null,
       });
     } catch (err) {
-      if (err instanceof StreamKeyAlreadySetError) {
-        res.status(409).json({ error: { message: 'owner-stream key is already set (rotation is a later slice)' } });
+      if (err instanceof InvalidStreamKeyError) {
+        res.status(422).json({ error: { message: 'invalid stream pubkey' } });
+        return;
+      }
+      throw err;
+    }
+  }));
+
+  // SCOPE-RH2-2: dedicated owner stream-key rotation route. Set OR rotate — a
+  // new key covers all records from the next seq onward; un-batched records
+  // keep their current key (batches never span a boundary).
+  router.post('/api/owner/stream-key', asyncRoute(async (req: OwnerRequest, res) => {
+    const parsed = streamKeyBodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: { message: 'invalid request body' } });
+      return;
+    }
+    const owner = req.ownerAddr as string;
+    try {
+      await rotateOwnerStreamKey(deps.pool, owner, parsed.data.pubkey);
+      deps.onAuditKeyRotated?.('owner', owner.toLowerCase());
+      res.json({ ok: true, streamPubkeySet: true });
+    } catch (err) {
+      if (err instanceof InvalidStreamKeyError) {
+        res.status(422).json({ error: { message: 'invalid stream pubkey' } });
         return;
       }
       throw err;

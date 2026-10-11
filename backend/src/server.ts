@@ -191,6 +191,8 @@ export interface AppDeps {
    * Omitted ⇒ `denyAllProvider` (default-deny; SF-3 injects the governed one).
    */
   mcpProvider?: McpToolProvider | undefined;
+  /** SCOPE-RH2-2: fired after an audit-key rotation so batchers clear quarantine. */
+  onAuditKeyRotated?: ((stream: 'trace' | 'owner', key: string) => void) | undefined;
 }
 
 interface Surfaces {
