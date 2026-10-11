@@ -204,8 +204,18 @@ export async function insertBoundAgentRow(pool: Pool | PoolClient, input: Insert
   return row.id;
 }
 
-export async function setAgentStatus(pool: Pool, id: string, status: AgentStatus): Promise<void> {
-  await pool.query(`UPDATE agents SET status = $2 WHERE id = $1`, [id, status]);
+/**
+ * DM-1: revoke is TERMINAL. The `status <> 'revoked'` CAS makes revoke STICKY at
+ * the data layer — no product path re-activates a revoked agent (AgentStatus is
+ * only 'active'|'revoked'; the sole caller only ever sets 'revoked'), so a raw
+ * UPDATE could only ever be used to illegally resurrect one. Returning whether
+ * the row actually transitioned lets the revoke fan-out run its side effects
+ * EXACTLY ONCE — closing the I-5 duplicate-trace/alert on a guardian-API × on-chain
+ * watcher double-trigger (both read 'active', both would otherwise fan out).
+ */
+export async function setAgentStatus(pool: Pool, id: string, status: AgentStatus): Promise<boolean> {
+  const res = await pool.query(`UPDATE agents SET status = $2 WHERE id = $1 AND status <> 'revoked'`, [id, status]);
+  return (res.rowCount ?? 0) > 0;
 }
 
 export async function rotateAgentToken(

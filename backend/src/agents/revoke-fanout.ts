@@ -32,8 +32,15 @@ export async function applyRevokeFanout(
   agentId: string,
   source: 'guardian-api' | 'onchain-event',
 ): Promise<void> {
+  // haltForRevoke is idempotent (a no-op once the loop is gone) — safe to run on
+  // a repeat trigger, so it stays ahead of the stickiness gate as belt-and-braces.
   await deps.runtime.haltForRevoke(agentId);
-  await setAgentStatus(deps.pool, agentId, 'revoked');
+  // DM-1/I-5: the status flip is the exactly-once gate. If the agent was already
+  // revoked (guardian-API racing the on-chain watcher, or a reorg re-scan), the
+  // CAS no-ops and we skip the trace/SSE/coordination/alert fan-out below — no
+  // duplicate 'revoke' trace row or duplicate owner alert.
+  const transitioned = await setAgentStatus(deps.pool, agentId, 'revoked');
+  if (!transitioned) return;
   // Coordination fan-out BEFORE the revoke trace would also be defensible;
   // after keeps the 'revoke' record first on the chain (cause before effects).
   const rec = await appendTrace(deps.pool, { agentId, kind: 'revoke', detail: { source } });
