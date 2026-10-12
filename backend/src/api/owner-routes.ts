@@ -325,6 +325,27 @@ export function isInsufficientFunds(err: unknown): boolean {
   return false;
 }
 
+/**
+ * A chain-side EXECUTION REVERT (the deploy/call reverted on-chain or in the
+ * pre-send simulation) — distinct from an ops bug or a true internal error.
+ * Surfacing this as a typed 503 instead of an opaque 500 tells the owner the
+ * CHAIN rejected the action (often a transient testnet condition — retry),
+ * not that LEASH is broken. (A 2026-10-12 transient 0G create-revert spent
+ * hours looking like a product bug precisely because it read as "internal error".)
+ */
+export function isChainExecutionRevert(err: unknown): boolean {
+  let cur: unknown = err;
+  for (let depth = 0; depth < 8 && cur instanceof Error; depth++) {
+    const text = `${cur.name} ${cur.message} ${(cur as { shortMessage?: string }).shortMessage ?? ''} ${(cur as { details?: string }).details ?? ''}`;
+    // Revert-SPECIFIC terms only. Deliberately NOT `CallExecutionError` (Gate-②
+    // WARNING): that fires on ANY failed eth_call incl. RPC 429/connectivity, which
+    // would mis-attribute an infra problem as a chain revert.
+    if (/execution reverted|ContractFunctionExecutionError|ContractFunctionRevertedError|ExecutionRevertedError/i.test(text)) return true;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
 // Exported for unit tests (create-input hardening: past expiry, zero-address allowlist).
 export const createAgentSchema = z.object({
   name: z.string().min(1).max(120),
@@ -766,6 +787,20 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     } catch (err) {
       if (isInsufficientFunds(err)) {
         opsUnderfunded();
+        return;
+      }
+      // A chain-side execution revert is NOT an internal LEASH error — surface it
+      // as a typed 503 so the owner sees "the chain rejected the deploy" (often a
+      // transient chain condition → retry), never an opaque "internal error".
+      // NOTE: checked AFTER isInsufficientFunds — a drained ops wallet is a 409,
+      // not a 503 (the two classifiers' terms don't overlap, so order is the guard).
+      if (isChainExecutionRevert(err)) {
+        res.status(503).json({
+          error: {
+            message: `agent creation failed: chain ${createChainId} rejected the account deployment (on-chain execution reverted) — this is usually a transient chain condition, please retry shortly`,
+            reason: 'chain_deploy_reverted',
+          },
+        });
         return;
       }
       throw err;
