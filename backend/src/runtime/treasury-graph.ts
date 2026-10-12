@@ -646,7 +646,7 @@ export function buildTreasuryGraph(
       'approval',
       approvalEvent({
         approvalId: approval.id,
-        summary: `agent wants to send ${verdict.decision.amountWei} wei (over per-transfer cap)`,
+        summary: `agent wants to send ${formatG(verdict.decision.amountWei)} (over per-transfer cap)`,
         to: state.effectiveBeneficiary,
         valueWei: verdict.decision.amountWei,
       }),
@@ -1087,9 +1087,12 @@ export function buildTreasuryGraph(
                 to: o.callTarget ?? state.effectiveBeneficiary,
                 valueWei: o.valueWei,
                 txHash: o.txHash,
+                // Q5 (presentation): human-legible amount (0G) + short address, not raw wei.
                 summary: o.callTarget
-                  ? `governed call to ${o.callTarget}${o.valueWei !== '0' ? ` (${o.valueWei} wei)` : ''}`
-                  : `sent ${o.valueWei} wei to ${state.effectiveBeneficiary}${o.approved ? ' (owner-approved)' : ''}`,
+                  ? `governed call to ${shortAddr(o.callTarget)}${o.valueWei !== '0' ? ` (${formatG(o.valueWei)})` : ''}`
+                  : `sent ${formatG(o.valueWei)} to ${shortAddr(state.effectiveBeneficiary)}${o.approved ? ' (owner-approved)' : ''}`,
+                // Q5: carry the model's own plain-language WHY so the cockpit shows why it acted.
+                ...(state.decision?.reason ? { reason: state.decision.reason } : {}),
               },
             })
           : await appendTrace(deps.pool, {
@@ -1116,8 +1119,8 @@ export function buildTreasuryGraph(
           summary:
             o.type === 'acted'
               ? o.callTarget
-                ? `governed call to ${o.callTarget}`
-                : `sent ${o.valueWei} wei to ${state.effectiveBeneficiary}`
+                ? `governed call to ${shortAddr(o.callTarget)}`
+                : `sent ${formatG(o.valueWei)} to ${shortAddr(state.effectiveBeneficiary)}`
               : outcomeSummary(o),
           reasoning: state.reasoning.slice(0, 2000),
         },

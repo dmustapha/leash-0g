@@ -69,6 +69,9 @@ export function traceEvent(rec: TraceRecord): Json {
   const to = typeof detail['to'] === 'string' ? detail['to'] : undefined;
   const valueWei = typeof detail['valueWei'] === 'string' ? detail['valueWei'] : undefined;
   const txHash = typeof detail['txHash'] === 'string' ? detail['txHash'] : undefined;
+  // Q5 (presentation): the plain-language WHY (model's own decision reason) rides
+  // the live frame so the cockpit shows a legible "why it acted", not just "what".
+  const reason = typeof detail['reason'] === 'string' && detail['reason'] !== '' ? detail['reason'] : undefined;
   // P3C-6(ii): decoded contract errors ride the live frame too — the cockpit
   // shows plain language without waiting for a /traces refetch.
   const decoded = detail['decoded'];
@@ -81,6 +84,7 @@ export function traceEvent(rec: TraceRecord): Json {
     ...(to !== undefined ? { to } : {}),
     ...(valueWei !== undefined ? { valueWei } : {}),
     ...(txHash !== undefined ? { txHash } : {}),
+    ...(reason !== undefined ? { reason } : {}),
     ...(decoded !== undefined && decoded !== null ? { decoded } : {}),
   };
 }

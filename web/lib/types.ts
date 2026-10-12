@@ -221,6 +221,8 @@ export type StreamEvent =
       valueWei?: string;
       txHash?: Hex;
       ts?: string;
+      /** Q5 (presentation): the model's own plain-language WHY for this action/decision. */
+      reason?: string;
       /** P3C-6(ii): decoded LeashAccount error, when the trace carries one. */
       decoded?: DecodedLeashError;
     }
