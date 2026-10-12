@@ -31,9 +31,21 @@ export function moneyPowerOf(role: AgentRole): 'can-move-money' | 'cannot-move-m
     : 'cannot-move-money';
 }
 
-/** Caps elevation may SUGGEST (native). Expiry stays an owner create-time choice. */
+/** Strip any 0x wallet address from free-text the draft echoes back (defense-in-
+ *  depth for the never-guess-money claim: an adversarial intent must not surface a
+ *  wallet address in serviceSpec/rubricRef, even though those are inert text). */
+const ADDRESS_RE = /0x[0-9a-fA-F]{40}/g;
+export function stripAddresses(s: string): string {
+  return s.replace(ADDRESS_RE, '[address removed]');
+}
+
+/** Caps elevation may SUGGEST (native). Expiry stays an owner create-time choice.
+ *  windowSeconds is `z.coerce.number()` — the model, told to emit wei caps AS
+ *  STRINGS, routinely emits windowSeconds as a string too ("86400"); coercing it
+ *  keeps an otherwise-valid treasury/executor draft instead of discarding it
+ *  (AB-ELEV ROOT-1). */
 export const suggestedPolicySchema = z
-  .object({ perTransferCapWei: weiSchema, windowCapWei: weiSchema, windowSeconds: z.number().int().positive() })
+  .object({ perTransferCapWei: weiSchema, windowCapWei: weiSchema, windowSeconds: z.coerce.number().int().positive().max(31_536_000) })
   .strict();
 export type SuggestedPolicy = z.infer<typeof suggestedPolicySchema>;
 
@@ -47,7 +59,16 @@ export const elevationJobSpecSchema = z
         acceptanceRef: z.string().min(1).max(200),
       })
       .strict(),
-    acceptance: z.array(ruleSchema).max(64),
+    // TOLERANT (AB-ELEV ROOT-2): the model frequently emits acceptance as
+    // natural-language strings instead of structured rules. Rather than discard
+    // the WHOLE requester draft, keep only the entries that are valid ruleSchema
+    // objects and drop the prose; the owner completes acceptance on the read-back.
+    // An all-prose array degrades to [] (a valid, editable empty rule set).
+    acceptance: z
+      .array(z.unknown())
+      .max(64)
+      .transform((arr) => arr.filter((x) => ruleSchema.safeParse(x).success))
+      .pipe(z.array(ruleSchema).max(64)), // post-max is defensive-only (pre-filter already bounds ≤64)
   })
   .strict();
 
@@ -119,11 +140,18 @@ Output STRICT JSON only (no prose, no markdown fences). Shape:
   "jobSpec": (ONLY for a "requester") { "fields": {"question","context"?,"deliverableSchemaRef","acceptanceRef"}, "acceptance": [structural rules] },
   "serviceSpec": (ONLY for a "provider") a short description of the service it offers,
   "rubricRef": (ONLY for an "evaluator") a short description of the standard it judges by,
-  "suggestedPolicy": (ONLY for "treasury"|"executor", which move native funds) {"perTransferCapWei","windowCapWei","windowSeconds"} — CONSERVATIVE caps in wei as strings,
+  "suggestedPolicy": (ONLY for "treasury"|"executor", which move native funds) {"perTransferCapWei","windowCapWei","windowSeconds"} — perTransferCapWei and windowCapWei are CONSERVATIVE wei caps AS STRINGS; windowSeconds is a plain NUMBER of seconds (e.g. 86400), NOT a string,
   "suggestedTokenPerTransferWei","suggestedTokenWindowWei": (ONLY for "requester") conservative token base-unit caps as strings,
   "unsureFields": array of field names you were not confident about,
   "confidence": "high" or "low"
 }
+
+For a "requester" jobSpec, "acceptance" MUST be an array of STRUCTURED rule OBJECTS (never plain-language strings). Each rule is one of:
+  {"kind":"required","path":"<field>"}
+  {"kind":"type","path":"<field>","type":"string"|"number"|"boolean"|"object"|"array"}
+  {"kind":"numberRange","path":"<field>","min":<n>,"max":<n>}
+  {"kind":"stringLength","path":"<field>","min":<n>,"max":<n>}
+e.g. [{"kind":"required","path":"probability"},{"kind":"numberRange","path":"probability","min":0,"max":1}]. If unsure, use an empty array [] — do NOT write prose rules.
 
 Role meanings:
 - treasury: watches a wallet and tops it up itself (moves native funds).
@@ -208,8 +236,8 @@ export function safeFallback(req: ElevateRequest): ElevationDraft {
     unsureFields: ['proposedRole'],
     confidence: 'low',
   };
-  if (role === 'provider') draft.serviceSpec = req.intent.trim().slice(0, 2000);
-  if (role === 'evaluator') draft.rubricRef = req.intent.trim().slice(0, 400);
+  if (role === 'provider') draft.serviceSpec = stripAddresses(req.intent.trim().slice(0, 2000));
+  if (role === 'evaluator') draft.rubricRef = stripAddresses(req.intent.trim().slice(0, 400));
   return draft;
 }
 
@@ -231,8 +259,8 @@ function toDraft(model: z.infer<typeof modelDraftSchema>, req: ElevateRequest): 
     confidence: model.confidence ?? 'low',
     ...(model.capabilityLabel ? { capabilityLabel: model.capabilityLabel } : {}),
     ...(model.jobSpec ? { jobSpec: model.jobSpec } : {}),
-    ...(model.serviceSpec ? { serviceSpec: model.serviceSpec } : {}),
-    ...(model.rubricRef ? { rubricRef: model.rubricRef } : {}),
+    ...(model.serviceSpec ? { serviceSpec: stripAddresses(model.serviceSpec) } : {}),
+    ...(model.rubricRef ? { rubricRef: stripAddresses(model.rubricRef) } : {}),
     ...(model.suggestedPolicy ? { suggestedPolicy: model.suggestedPolicy } : {}),
     ...(model.suggestedTokenPerTransferWei ? { suggestedTokenPerTransferWei: model.suggestedTokenPerTransferWei } : {}),
     ...(model.suggestedTokenWindowWei ? { suggestedTokenWindowWei: model.suggestedTokenWindowWei } : {}),
