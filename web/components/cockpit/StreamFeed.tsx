@@ -58,9 +58,16 @@ export function StreamFeed({
         ) : (
           items.map((item) =>
             item.kind === 'reasoning' ? (
-              <p key={item.id} className="code" style={{ color: 'var(--color-ink-dim)' }}>
-                {item.text}
-              </p>
+              // Q5 (presentation): the raw model deliberation is kept available for
+              // transparency/online-eval but NOT dumped at the owner — plain surface,
+              // raw behind progressive disclosure (§2c), mirroring the decoded-error pattern.
+              <div key={item.id} style={{ fontSize: '0.84rem' }}>
+                <Disclosure label="See full thought process">
+                  <p className="code" style={{ color: 'var(--color-ink-dim)', whiteSpace: 'pre-wrap' }}>
+                    {item.text}
+                  </p>
+                </Disclosure>
+              </div>
             ) : item.kind === 'delegation' ? (
               <div key={item.id} className="panel" style={{ padding: '0.6rem 0.8rem', display: 'flex', gap: '0.6rem', alignItems: 'baseline', flexWrap: 'wrap' }}>
                 <span className={`pill ${item.event.status === 'completed' ? 'pill-allow' : item.event.status === 'failed' || item.event.status === 'declined' ? 'pill-deny' : 'pill-accent'}`}>
@@ -85,6 +92,16 @@ export function StreamFeed({
                   <a className="link-tx" href={(chainId !== undefined ? networkTxUrl(chainId, item.event.txHash as string) : null) ?? txUrl(item.event.txHash as Hex)} target="_blank" rel="noreferrer">
                     view tx
                   </a>
+                ) : null}
+                {/* Q5 (presentation): the plain-language WHY, shown when it adds to the
+                    summary (action rows = WHAT + why; decision rows already ARE the reason).
+                    INVARIANT: a decision trace's summary === its reason (backend summarize()
+                    returns detail.reason verbatim for kind 'decision') — this guard dedupes on
+                    that equality; if summarize() ever augments the decision summary, revisit. */}
+                {item.event.reason && item.event.reason !== item.event.summary ? (
+                  <span style={{ flexBasis: '100%', fontSize: '0.84rem', color: 'var(--color-ink-dim)' }}>
+                    {item.event.reason}
+                  </span>
                 ) : null}
                 {item.event.decoded ? (
                   // P3C-6(ii): plain language on the surface, raw error name behind
