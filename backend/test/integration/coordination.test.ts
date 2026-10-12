@@ -1142,6 +1142,34 @@ describe('gate fixes', () => {
     expect(results.filter(Boolean)).toHaveLength(1);
   });
 
+  // P2-BE tear-apart A1: CROSS-TARGET concurrent CAS (not just identical markAccepted).
+  // accept vs decline vs cancel race the SAME pending row → the `WHERE status = ANY($2)`
+  // compare-and-set admits EXACTLY ONE winner and the row lands in exactly that state
+  // (no lost-update, no interleaved double-transition).
+  it('CONCURRENT cross-target transition race: exactly one winner, deterministic final state', async () => {
+    const { a, b, linkId } = await seedPair();
+    const d = await createDelegation(db.pool, {
+      linkId,
+      fromAgentId: a.id,
+      toAgentId: b.id,
+      kind: 'transfer.request',
+      payload: { probe: 'cross-target-race' },
+      status: 'pending',
+      expiresAt: new Date(Date.now() + 600_000),
+    });
+    const targets: DelegationStatus[] = ['accepted', 'declined', 'cancelled'];
+    // All three fire into the same microtask drain → genuinely inflight simultaneously
+    // (do NOT serialize with await-in-loop, or the race coverage is lost).
+    const results = await Promise.all(
+      targets.map((to) => transitionDelegation(db.pool, d.id, ['pending'], to)),
+    );
+    const winners = results.filter(Boolean);
+    expect(winners).toHaveLength(1); // exactly one transition from 'pending' succeeds
+    // Load-bearing: the persisted row IS the winner's target — no lost-update, no third state.
+    const finalStatus = (await getDelegation(db.pool, d.id))?.status;
+    expect(winners[0]!.status).toBe(finalStatus);
+  });
+
   it('M-03: a failed guardian revoke resyncs guardian_addr from chain', async () => {
     const owner = OWNER;
     const res = await request(t.app)
