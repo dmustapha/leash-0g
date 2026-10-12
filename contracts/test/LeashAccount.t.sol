@@ -725,4 +725,47 @@ contract LeashAccountTest is Test {
         }
         startNew; // silence
     }
+
+    // ---------- tear-apart P1-CON gaps (green-on-add, lock existing guards) ----------
+
+    // G1: InvalidPolicy windowSeconds==0 — base LeashAccount ctor + tighten + propose
+    //     (reverts exist at src :134/:295/:303 but had ZERO coverage; V4/SigningLib
+    //      carried the only InvalidPolicy tests).
+    function test_constructor_rejectsZeroWindowSeconds_invalidPolicy() public {
+        address[] memory list = new address[](0);
+        LeashAccount.Policy memory bad = _policy();
+        bad.windowSeconds = 0;
+        vm.expectRevert(LeashAccount.InvalidPolicy.selector);
+        new LeashAccount(owner, guardian, session, bad, list, DELAY, address(0), _tokenNone());
+    }
+
+    function test_tightenPolicy_rejectsZeroWindowSeconds_invalidPolicy() public {
+        LeashAccount.Policy memory bad = _policy();
+        bad.windowSeconds = 0; // InvalidPolicy is checked BEFORE NotTightening (src :295)
+        vm.prank(owner);
+        vm.expectRevert(LeashAccount.InvalidPolicy.selector);
+        acct.tightenPolicy(bad);
+    }
+
+    function test_proposePolicy_rejectsZeroWindowSeconds_invalidPolicy() public {
+        LeashAccount.Policy memory bad = _policy();
+        bad.windowSeconds = 0; // InvalidPolicy is checked BEFORE NotLoosening (src :303)
+        vm.prank(owner);
+        vm.expectRevert(LeashAccount.InvalidPolicy.selector);
+        acct.proposePolicy(bad);
+    }
+
+    // G2: ZeroAddress on the timelocked propose paths (reverts exist at src :359/:383,
+    //     previously untested — execute/token/ctor ZeroAddress were covered, these were not).
+    function test_proposeAllowlist_rejectsZeroAddress() public {
+        vm.prank(owner);
+        vm.expectRevert(LeashAccount.ZeroAddress.selector);
+        acct.proposeAllowlist(address(0));
+    }
+
+    function test_proposeWithdraw_rejectsZeroAddress() public {
+        vm.prank(owner);
+        vm.expectRevert(LeashAccount.ZeroAddress.selector);
+        acct.proposeWithdraw(address(0), 1 ether);
+    }
 }
