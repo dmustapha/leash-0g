@@ -3,7 +3,7 @@
 // render as feed rows. aria-live polite so screen readers hear new activity without spam.
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import type { StreamEvent } from '@/lib/types';
 import { shortAddr, weiToOg } from '@/lib/format';
 import { txUrl } from '@/lib/chain';
@@ -31,6 +31,15 @@ export function StreamFeed({
     endRef.current?.scrollIntoView({ block: 'end' });
   }, [items]);
 
+  // Q5 (presentation): drop the raw gateway `inference` rows (summary = the raw
+  // observation JSON) from the owner feed — the reasoning disclosure restates the
+  // observation in plain terms and the decision rows carry the outcome + why. The
+  // inference record is unchanged in the audit trail.
+  const shown = useMemo(
+    () => items.filter((it) => !(it.kind === 'trace' && it.event.kind === 'inference')),
+    [items],
+  );
+
   return (
     <section aria-label="Live agent activity" className="card" style={{ display: 'grid', gridTemplateRows: 'auto 1fr', minHeight: 0 }}>
       <header style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.8rem 1rem', borderBottom: '1px solid var(--color-line-soft)' }}>
@@ -51,12 +60,12 @@ export function StreamFeed({
         style={{ overflowY: 'auto', maxHeight: '28rem', padding: '0.9rem 1rem', display: 'grid', gap: '0.7rem', alignContent: 'start' }}
         data-testid="stream-feed"
       >
-        {items.length === 0 ? (
+        {shown.length === 0 ? (
           <p style={{ color: 'var(--color-ink-faint)', fontSize: '0.9rem' }}>
             Waiting for your agent to think. Its reasoning will appear here in real time.
           </p>
         ) : (
-          items.map((item) =>
+          shown.map((item) =>
             item.kind === 'reasoning' ? (
               // Q5 (presentation): the raw model deliberation is kept available for
               // transparency/online-eval but NOT dumped at the owner — plain surface,
