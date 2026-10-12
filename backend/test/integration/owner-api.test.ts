@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import request from 'supertest';
 import nock from 'nock';
 import { PrivateKey } from 'eciesjs';
@@ -477,6 +479,102 @@ describe('C-1 create hardening', () => {
       .send({});
     expect(rev.status).toBe(200);
     expect(t.chain.revokeGuardians).toEqual([FAKE_GUARDIAN_ADDR.toLowerCase()]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// P1-BE coverage gaps (tests-only, green-on-add — behavior already correct):
+//   G1 SSE owner-stream route  GET /api/agents/:id/stream
+//   G2 live per-request chain read on  GET /api/agents/:id (no cache)
+//   G3 owner /api 64KB json body cap -> 413
+// ---------------------------------------------------------------------------
+
+describe('G1 — SSE owner-stream route GET /api/agents/:id/stream', () => {
+  it('(a) a FOREIGN owner gets 404 (requireOwnedAgent fails closed, no stream opened)', async () => {
+    const a = await createAgent();
+    const res = await request(t.app).get(`/api/agents/${a.id}/stream`).set('authorization', ownerAuth(OTHER_OWNER));
+    expect(res.status).toBe(404);
+    // The 404 is the load-bearing guard: requireOwnedAgent (owner-routes.ts:1190)
+    // returns before hub.attach (:1194) is ever reached. The hub counts below are
+    // a corroborating sanity check (0 either way), NOT an independent proof of the
+    // ordering — the status-404 assertion carries the weight.
+    expect(t.hub.clientCount(a.id)).toBe(0);
+    expect(t.hub.ownerConnections(OTHER_OWNER)).toBe(0);
+  });
+
+  it('(b) the OWNER gets an SSE head: 200 + text/event-stream (socket destroyed, never hangs)', async () => {
+    const a = await createAgent();
+    // Long-lived stream: drive it over a real listener and abort right after the
+    // head so the open connection cannot hang the test.
+    const server = http.createServer(t.ownerApp).listen(0, '127.0.0.1');
+    await new Promise<void>((resolve) => server.once('listening', () => resolve()));
+    const { port } = server.address() as AddressInfo;
+    try {
+      const { status, contentType } = await new Promise<{ status: number; contentType: string | undefined }>(
+        (resolve, reject) => {
+          const req = http.get(
+            {
+              host: '127.0.0.1',
+              port,
+              path: `/api/agents/${a.id}/stream`,
+              headers: { authorization: ownerAuth(OWNER) },
+            },
+            (res) => {
+              const result = { status: res.statusCode ?? 0, contentType: res.headers['content-type'] };
+              res.destroy(); // tear down the long-lived stream immediately
+              req.destroy();
+              resolve(result);
+            },
+          );
+          req.on('error', (err) => {
+            // destroy() may surface as an aborted error after we already resolved.
+            if ((err as NodeJS.ErrnoException).code !== 'ECONNRESET') reject(err);
+          });
+        },
+      );
+      expect(status).toBe(200);
+      expect(contentType).toContain('text/event-stream');
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  // (c) The P4C-1 per-owner connection cap (429 before the SSE head) is covered
+  // by the sse-hub unit tests; a route-level cap test here is fiddly (needs many
+  // concurrent held-open sockets) and flaky, so it is intentionally omitted.
+});
+
+describe('G2 — GET /api/agents/:id reads policy+balance live per request (no cache)', () => {
+  it('a mutation of the mock chain between two GETs is reflected in the second response', async () => {
+    const a = await createAgent();
+
+    const first = await request(t.app).get(`/api/agents/${a.id}`).set('authorization', ownerAuth(OWNER));
+    expect(first.status).toBe(200);
+    expect(first.body.policy.perTransferCapWei).toBe('10000000000000000');
+    expect(first.body.accountBalance).toBe('0');
+
+    // Mutate the live chain view AFTER the first read. A cached read would still
+    // return the old values; a live per-request read must pick these up.
+    t.chain.policyView = { ...t.chain.policyView, perTransferCap: 42n };
+    t.chain.balances.set(a.accountAddr.toLowerCase(), 777n);
+
+    const second = await request(t.app).get(`/api/agents/${a.id}`).set('authorization', ownerAuth(OWNER));
+    expect(second.status).toBe(200);
+    expect(second.body.policy.perTransferCapWei).toBe('42');
+    expect(second.body.accountBalance).toBe('777');
+  });
+});
+
+describe('G3 — owner /api json body cap (64KB -> 413)', () => {
+  it('a >64KB body to an owner route returns 413', async () => {
+    const a = await createAgent();
+    // One valid rule padded past the 64KB owner-side json limit (owner-routes.ts:605).
+    // The cap fires in the body parser before any route logic runs.
+    const res = await request(t.app)
+      .patch(`/api/agents/${a.id}/rules`)
+      .set('authorization', ownerAuth(OWNER))
+      .send({ rules: [{ action: 'block', match: 'x'.repeat(70 * 1024) }] });
+    expect(res.status).toBe(413);
   });
 });
 
