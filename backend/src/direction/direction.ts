@@ -54,7 +54,18 @@ export interface DirectRequest {
 const modelDirectionSchema = z.object({
   understanding: z.string().min(1).max(2000),
   goalPatch: z.record(z.unknown()).optional(),
-  acceptancePatch: z.array(ruleSchema).max(64).optional(),
+  // TOLERANT (C-ELEV-1, same class as AB ROOT-2): the model often emits
+  // acceptance rules in a non-canonical shape ({field,condition,value}) instead
+  // of the structured ruleSchema. Rather than discard the WHOLE requester
+  // acceptance-tuning directive (safe-but-dumb no-op), keep only the entries that
+  // are valid ruleSchema objects and drop the rest; all-prose degrades to [] (the
+  // owner edits on the read-back). The confirm route re-validates (R-1).
+  acceptancePatch: z
+    .array(z.unknown())
+    .max(64)
+    .transform((arr) => arr.filter((x) => ruleSchema.safeParse(x).success))
+    .pipe(z.array(ruleSchema).max(64))
+    .optional(),
   suggestedPolicy: suggestedPolicySchema.optional(),
   unsureFields: z.array(z.string().max(80)).max(20).optional(),
   confidence: z.enum(['high', 'low']).optional(),
@@ -72,7 +83,7 @@ Output STRICT JSON only (no prose, no markdown fences). Shape:
 {
   "understanding": one short plain-language sentence: how you understand the new task,
   "goalPatch": an object with ONLY the descriptive fields you are changing (see the allowed fields below) — omit it if nothing descriptive changes,
-  "acceptancePatch": (ONLY if the owner is changing what a job must satisfy) an array of structural acceptance rules,
+  "acceptancePatch": (ONLY if the owner is changing what a job must satisfy) an array of STRUCTURED rule OBJECTS — each is {"kind":"required","path":"<field>"} or {"kind":"numberRange","path":"<field>","min":<n>,"max":<n>} or {"kind":"type","path":"<field>","type":"string"|"number"|...} or {"kind":"stringLength","path":"<field>","min":<n>}. e.g. [{"kind":"required","path":"confidence"},{"kind":"numberRange","path":"confidence","min":0,"max":1}]. Never use prose rules; if unsure use [],
   "suggestedPolicy": (ONLY if the owner asked to change spending limits) {"perTransferCapWei","windowCapWei","windowSeconds"} as strings — this is a SUGGESTION the owner must apply separately; it is never armed here,
   "unsureFields": array of field names you were unsure about,
   "confidence": "high" or "low"

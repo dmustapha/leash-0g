@@ -93,4 +93,20 @@ describe('elevateDirection', () => {
     const d = await elevateDirection({ queue: q, model: 'm' }, req(PROVIDER, 'require a probability field'));
     expect(d.acceptancePatch).toEqual([{ kind: 'required', path: 'probability' }]);
   });
+
+  // C-ELEV-1 regression (tear-apart 2026-10-13, same class as AB ROOT-2): a model
+  // that emits acceptance rules in a NON-canonical shape ({field,condition,value})
+  // used to fail modelDirectionSchema → discard the WHOLE directive (safe-but-dumb).
+  it('C-ELEV-1: a prose acceptancePatch does NOT discard the directive (survives, prose dropped to [])', async () => {
+    const q = fakeQueue({ understanding: 'require a confidence field', acceptancePatch: [{ field: 'confidence', condition: 'between', value: '0 and 1' }], confidence: 'high' });
+    const d = await elevateDirection({ queue: q, model: 'm' }, req(PROVIDER, 'require a numeric confidence field'));
+    expect(d.understanding).toBe('require a confidence field'); // NOT the "could not auto-interpret" fallback
+    expect(d.acceptancePatch ?? []).toEqual([]); // the prose entry is dropped, not a hard fail
+  });
+
+  it('C-ELEV-1: mixed acceptancePatch keeps the valid rules, drops the prose', async () => {
+    const q = fakeQueue({ understanding: 'tighten', acceptancePatch: [{ kind: 'required', path: 'confidence' }, { field: 'x', condition: 'y' }, { kind: 'numberRange', path: 'confidence', min: 0, max: 1 }], confidence: 'high' });
+    const d = await elevateDirection({ queue: q, model: 'm' }, req(PROVIDER, 'tighten acceptance'));
+    expect(d.acceptancePatch).toEqual([{ kind: 'required', path: 'confidence' }, { kind: 'numberRange', path: 'confidence', min: 0, max: 1 }]);
+  });
 });
