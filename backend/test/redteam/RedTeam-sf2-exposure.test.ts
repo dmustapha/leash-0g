@@ -37,6 +37,10 @@ describe('SF-2 SD-F7 — SSRF / internal-host egress guard (C-SF3-1)', () => {
       'metadata.google.internal.',
       'foo.internal.',
       '0:0:0:0:0:0:0:1', // non-compressed IPv6 loopback
+      // NAT64 (64:ff9b::/96) regressions — embedded internal IPv4 reaches via NAT64.
+      '64:ff9b::a9fe:a9fe', // 169.254.169.254 (cloud metadata) in NAT64 hex-group form
+      '64:ff9b::169.254.169.254', // dotted NAT64 form
+      '64:ff9b::7f00:1', // 127.0.0.1 via NAT64
       '', // empty → fail-closed internal
     ]) {
       expect(isInternalHost(h)).toBe(true);
@@ -49,7 +53,8 @@ describe('SF-2 SD-F7 — SSRF / internal-host egress guard (C-SF3-1)', () => {
   });
 
   it('classifies real external hosts as NOT internal', () => {
-    for (const h of ['api.openai.com', 'example.com', '8.8.8.8', '172.32.0.1', '172.15.0.1']) {
+    for (const h of ['api.openai.com', 'example.com', '8.8.8.8', '172.32.0.1', '172.15.0.1', '64:ff9b::808:808']) {
+      // last: NAT64-mapped 8.8.8.8 (public) must NOT be over-blocked (0x0808→8.8, 0x0808→8.8)
       expect(isInternalHost(h)).toBe(false);
     }
     expect(isInternalUrl('https://api.anthropic.com/v1/messages')).toBe(false);

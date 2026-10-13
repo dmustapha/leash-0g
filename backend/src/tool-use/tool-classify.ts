@@ -160,6 +160,24 @@ export function isInternalHost(host: string): boolean {
     const lo = parseInt(mappedHex[2], 16);
     return isInternalHost(`${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`);
   }
+  // NAT64 (64:ff9b::/96, RFC 6052, tear-apart 2026-10-13): a public IPv4 embedded
+  // in IPv6; where the deployment routes NAT64, the cloud-metadata IP reaches the
+  // proxy as `64:ff9b::a9fe:a9fe`. Extract the embedded IPv4 (hex-group form that
+  // `new URL().hostname` emits, or dotted) and re-check — mirroring ::ffff:, so a
+  // legit public NAT64 address (64:ff9b::8.8.8.8) is NOT over-blocked.
+  // RELIES ON the WHATWG-URL invariant above: URL.hostname always emits the
+  // compressed `::` form, so these regexes see it; a future caller violating the
+  // invariant with a non-compressed `64:ff9b:0:0:0:0:a9fe:a9fe` would bypass here.
+  // Scoped to the IANA well-known /96 only — network-specific RFC-6052 §2.1
+  // prefixes are not universally routable, intentionally out of scope.
+  const nat64Dotted = /^64:ff9b::(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/.exec(h);
+  if (nat64Dotted?.[1]) return isInternalHost(nat64Dotted[1]);
+  const nat64Hex = /^64:ff9b::([0-9a-f]{1,4}):([0-9a-f]{1,4})$/.exec(h);
+  if (nat64Hex?.[1] && nat64Hex[2]) {
+    const hi = parseInt(nat64Hex[1], 16);
+    const lo = parseInt(nat64Hex[2], 16);
+    return isInternalHost(`${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`);
+  }
   if (h === 'localhost' || h.endsWith('.localhost') || h.endsWith('.internal') || h.endsWith('.local')) return true;
   if (h === 'metadata' || h === 'metadata.google.internal') return true;
   // IPv6 loopback / unspecified / non-compressed loopback / unique-local
