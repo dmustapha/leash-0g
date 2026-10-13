@@ -220,6 +220,22 @@ describe('POST /api/approvals/:id — capability (JIT) decision branch', () => {
     expect(res.body.request.status).toBe('denied');
   });
 
+  it('C-SF3-2 parity: a capability approval whose requestRef points to ANOTHER agent’s request is refused (404)', async () => {
+    // Defense-in-depth (tear-apart 2026-10-13): craft the invariant break the
+    // guard protects against — an approval on agent A whose requestRef.requestId
+    // points at agent B’s capability request. The decide must 404 (not act on B’s
+    // request via A’s approval), mirroring the tool/signing branches.
+    const a = await seedOwned();
+    const b = await seedOwned();
+    const reqB = await seedPending(b, 27n); // capability request belongs to agent B
+    const crafted = await createApproval(db.pool, a.id, { type: 'capability', requestId: reqB.id });
+    const res = await request(t.app)
+      .post(`/api/approvals/${crafted.id}`)
+      .set('authorization', ownerAuth(OWNER))
+      .send({ decision: 'deny' });
+    expect(res.status).toBe(404); // request.agentId (B) !== approval’s agent.id (A)
+  });
+
   it('regression: a NON-capability approval still uses the approve/deny consent path', async () => {
     const a = await seedOwned();
     const approval = await createApproval(db.pool, a.id, { type: 'gateway', ruleIndex: 0 });

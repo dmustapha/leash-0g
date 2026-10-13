@@ -1380,6 +1380,18 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
         res.status(404).json({ error: { message: 'not found' } });
         return;
       }
+      // C-SF3-2 parity (tear-apart 2026-10-13): mirror the tool (:1287) + signing
+      // (:1317) branches — assert the fetched request belongs to THIS approval's
+      // agent before deciding. Defense-in-depth: today approval.agentId ===
+      // request.agentId by construction (createApproval pins both at capability-
+      // request time, capabilities/service.ts:163-165) and requestId is read from
+      // the server-stored approval.requestRef (never client-supplied), so this is
+      // not an attacker vector — but it insures the capability lane against a
+      // future refactor that breaks the invariant. 404 (enumeration-oracle rule).
+      if (request.agentId !== agent.id) {
+        res.status(404).json({ error: { message: 'not found' } });
+        return;
+      }
       const outcome = await decideCapabilityRequest(capabilityDeps, agent, request, parsedCap.data.decision, {
         txHash: parsedCap.data.txHash,
         rule: parsedCap.data.rule ? toCallRule(parsedCap.data.rule) : undefined,
