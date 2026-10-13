@@ -95,6 +95,29 @@ export function networkTxUrl(chainId: number, txHash: string): string | null {
   return prefix !== undefined ? `${prefix}${txHash}` : null;
 }
 
+/**
+ * Drift guard (SCOPE-E-1, tear-apart 2026-10-13): the static per-chain maps
+ * (RPC, display-name, native-symbol, explorer) must cover the SAME chain set.
+ * A chain added to one map but not RPC_URL makes `rpcUrlFor` silently fall back
+ * to the home-chain RPC → a WRONG-CHAIN write. A test asserts this returns [].
+ * (The deeper fix is sourcing RPC from /api/networks; this at least fails loudly
+ * when the mirror drifts.) Returns one string per inconsistent chain.
+ */
+export function staticChainMapDrift(): string[] {
+  const rpc = new Set(Object.keys(RPC_URL));
+  const name = new Set(Object.keys(CHAIN_DISPLAY_NAME));
+  const sym = new Set(Object.keys(NATIVE_SYMBOL));
+  const exp = new Set(Object.keys(EXPLORER_TX_PREFIX));
+  const all = new Set([...rpc, ...name, ...sym, ...exp]);
+  const drift: string[] = [];
+  for (const id of all) {
+    if (!(rpc.has(id) && name.has(id) && sym.has(id) && exp.has(id))) {
+      drift.push(`chain ${id}: rpc=${rpc.has(id)} name=${name.has(id)} symbol=${sym.has(id)} explorer=${exp.has(id)}`);
+    }
+  }
+  return drift;
+}
+
 /** Chain name from the registered-network table, with a legible fallback. */
 export function chainName(chainId: number, networks: { chainId: number; name: string }[]): string {
   return networks.find((n) => n.chainId === chainId)?.name ?? `chain ${chainId}`;

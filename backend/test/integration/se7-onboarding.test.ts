@@ -53,6 +53,12 @@ class FakeOnboardOps {
     this.funded.push({ addr, amountWei });
     return { txHash: '0x' + '55'.repeat(32) };
   }
+  // I-02: sister-chain on-chain revoke (the fan-out target).
+  public revokes: Array<{ addr: string; guardian: string | null }> = [];
+  async revoke(addr: string, guardian?: string | null): Promise<{ txHash: string }> {
+    this.revokes.push({ addr, guardian: guardian ?? null });
+    return { txHash: '0x' + '99'.repeat(32) };
+  }
   async deployAndRegister(input: Record<string, unknown>): Promise<Record<string, unknown>> {
     this.mints.push(input);
     const predicted = fakePredict({
@@ -206,6 +212,28 @@ describe('SE-7 second-chain onboarding (persisted-tuple replay)', () => {
     expect(res.body.chains).toHaveLength(2);
     expect(res.body.chains[0]).toMatchObject({ chainId: HOME_CHAIN, role: 'home', accountAddr: expectedAccount() });
     expect(res.body.chains[1]).toMatchObject({ chainId: BASE_CHAIN, role: 'onboarded', accountAddr: expectedAccount() });
+  });
+
+  it('I-02: revoke FANS OUT the on-chain revoke to every onboarded sister chain', async () => {
+    // Fresh agent under a DISTINCT owner (the deterministic tuple yields the same
+    // account address; a distinct owner avoids the (owner,chain,account) unique
+    // collision with the suite's shared agent). revoke flips status, so isolate it.
+    const OWNER_I02 = '0x' + 'ab'.repeat(20);
+    const fresh = await seedV4Agent({ ownerAddr: OWNER_I02 });
+    await request(app.ownerApp)
+      .post(`/api/agents/${fresh.id}/networks`)
+      .set('Authorization', ownerAuth(OWNER_I02))
+      .send({ chainId: BASE_CHAIN })
+      .expect(201);
+    baseOps.revokes = [];
+    const res = await request(app.ownerApp).post(`/api/agents/${fresh.id}/revoke`).set('Authorization', ownerAuth(OWNER_I02));
+    expect(res.status).toBe(200);
+    expect(res.body.status).toBe('revoked');
+    // the BASE sister account was revoked ON-CHAIN via its own chainOps (I-02 fix)
+    expect(baseOps.revokes.some((r) => r.addr.toLowerCase() === expectedAccount().toLowerCase())).toBe(true);
+    expect(res.body.sisterChainRevokes).toEqual(
+      expect.arrayContaining([expect.objectContaining({ chainId: BASE_CHAIN, ok: true })]),
+    );
   });
 
   it('ADVERSARIAL: a mutated persisted tuple predicts a DIFFERENT address and is REFUSED (no mint, no row)', async () => {
