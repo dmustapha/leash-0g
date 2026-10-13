@@ -4,7 +4,24 @@ import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { NetworksPanel } from '@/components/cockpit/NetworksPanel';
 import { ApiError } from '@/lib/api';
+import { staticChainMapDrift, rpcUrlFor, chainDisplayName } from '@/lib/networks';
+import { config } from '@/lib/config';
 import type { AgentNetworksView, NetworkChain } from '@/lib/types';
+
+// SCOPE-E-1 drift guard (tear-apart 2026-10-13): the static per-chain maps must
+// cover the same chains, or rpcUrlFor silently falls back to the home RPC → a
+// wrong-chain write. These assert the maps stay consistent as chains are added.
+describe('networks.ts static-map drift guard (SCOPE-E-1)', () => {
+  it('RPC / name / symbol / explorer maps cover the SAME chain set', () => {
+    expect(staticChainMapDrift()).toEqual([]);
+  });
+  it('every supported non-home chain resolves to a chain-specific RPC (not the home fallback)', () => {
+    for (const chainId of [84532, 11155111, 421614, 46630]) {
+      expect(chainDisplayName(chainId)).not.toMatch(/^Chain \d+$/);
+      expect(rpcUrlFor(chainId)).not.toBe(config.rpcUrl);
+    }
+  });
+});
 
 const ACCOUNT = '0x1111111111111111111111111111111111111111' as const;
 

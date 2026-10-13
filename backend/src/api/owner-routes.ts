@@ -1860,12 +1860,64 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     assertNativeAgent(agent);
     try {
       const { txHash } = await chainForAgent(agent).revoke(agent.accountAddr, agent.guardianAddr);
+      // I-02 fix (tear-apart 2026-10-13): fan out the on-chain revoke to EVERY
+      // onboarded SISTER chain. Each same-address account (CREATE2) carries the
+      // SAME session key, and revoke's PURPOSE is to contain a compromised key —
+      // so a home-chain-only revoke left sister-chain accounts armed on-chain
+      // (the gateway closes inference globally, but a leaked key could still hit
+      // a sister account's on-chain wall directly). Best-effort per chain: a
+      // failed sister revoke never blocks the (gateway-global) revoke, but is
+      // surfaced so the owner can revoke that chain directly (C-2 honesty).
+      const sisterRevokes: Array<{ chainId: number; ok: boolean; txHash?: string; error?: string }> = [];
+      // Gate-② WARNING fix: if the ENUMERATION itself throws (DB blip — plausible
+      // under the exact key-compromise + load spike this fixes), we must NOT return
+      // a clean-looking success that hides that NO sister was revoked. Track it.
+      let sisterEnumFailed = false;
+      try {
+        for (const d of await listChainDeployments(deps.pool, agent.id)) {
+          if (d.chainId === agent.chainId) continue; // home account already revoked above
+          try {
+            const r = await chainForAgent({ chainId: d.chainId }).revoke(d.accountAddr, agent.guardianAddr);
+            sisterRevokes.push({ chainId: d.chainId, ok: true, txHash: r.txHash });
+          } catch (e) {
+            sisterRevokes.push({ chainId: d.chainId, ok: false, error: e instanceof Error ? e.message : String(e) });
+          }
+        }
+      } catch (e) {
+        sisterEnumFailed = true;
+        console.error(`revoke sister-chain fan-out enumeration failed for agent ${agent.id}`, e);
+      }
       await applyRevokeFanout(
         { pool: deps.pool, hub: deps.hub, runtime: deps.runtime, coordinator: deps.coordinator, alerts: deps.alerts },
         agent.id,
         'guardian-api',
       );
-      res.json({ ok: true, txHash, status: 'revoked' });
+      const failedSisters = sisterRevokes.filter((s) => !s.ok);
+      if (failedSisters.length > 0 || sisterEnumFailed) {
+        // The agent IS revoked (status flipped + gateway 403 global + home account
+        // revoked on-chain), but some/all onboarded chains could not be revoked
+        // on-chain — their same-address accounts stay armed until a direct wallet
+        // revoke. Steer the owner (works even if LEASH is down).
+        const detail = sisterEnumFailed
+          ? 'onboarded chains could not be enumerated — revoke each directly from your owner wallet'
+          : `${failedSisters.length} onboarded chain(s) (${failedSisters.map((s) => s.chainId).join(', ')}) need a direct owner-wallet revoke`;
+        await deps.alerts
+          .emit(agent.ownerAddr, {
+            agentId: agent.id,
+            class: 'info',
+            kind: 'revoke_failed',
+            summary: `${agent.name} was revoked, but ${detail}`,
+            dedupKey: `revoke_sister_failed:${agent.id}`,
+          })
+          .catch(() => {});
+      }
+      res.json({
+        ok: true,
+        txHash,
+        status: 'revoked',
+        ...(sisterRevokes.length > 0 ? { sisterChainRevokes: sisterRevokes } : {}),
+        ...(sisterEnumFailed ? { sisterEnumFailed: true } : {}),
+      });
     } catch (err) {
       // C-2: a reverted/failed guardian revoke is NEVER reported ok and the
       // agent is NOT marked revoked (the hard boundary is still armed).
