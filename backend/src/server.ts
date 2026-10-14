@@ -102,6 +102,13 @@ export interface ChainOps {
   getBalance(addr: string): Promise<bigint>;
   /** Live on-chain guardian (lowercased) — M-03 stale-guardian resync. */
   getGuardian(accountAddr: string): Promise<string>;
+  /**
+   * RH2 (V5 migration): true when this chain has all three V5 singletons wired
+   * (deployer/signingHelper/decodeHelper) so an accountVersion:5 mint can land.
+   * Lets the create route fail-closed with a typed 409 instead of a 500 on a
+   * half-wired chain. Optional — faked ops in tests may omit it.
+   */
+  supportsV5?(): boolean;
 }
 
 export interface RuntimeManager {

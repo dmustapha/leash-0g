@@ -45,6 +45,9 @@ import type {
   NetworkAccountView,
   NetworkChain,
   OnboardNetworkResult,
+  SigningEnvelopeView,
+  SigningRuleView,
+  OnChainSigningGrantView,
 } from './types';
 
 export type TokenGetter = () => Promise<string | null>;
@@ -317,6 +320,34 @@ export function makeApi(getToken: TokenGetter) {
         getToken,
         'POST',
         `/api/approvals/${approvalId}`,
+        body,
+      ),
+
+    // — RH2 B2 (TA-ABI-5 close): governed-signing grants (V5 accounts) —
+    // Read-only signing envelope: reviewed descriptors + standing grants (read-model mirror).
+    listSigning: (agentId: string) =>
+      request<SigningEnvelopeView>(getToken, 'GET', `/api/agents/${agentId}/signing`),
+    // Record the read-model mirror AFTER the owner signed the on-chain grant (set), or remove a
+    // descriptor's grant (the owner's on-chain removeSigningDescriptor bumps the epoch). The
+    // response carries the backend-computed `onChainGrant` params (re-derivable, idempotent).
+    signingRule: (
+      agentId: string,
+      body: {
+        action: 'set' | 'remove';
+        rule: {
+          descriptorId: number;
+          spenderSet: string[];
+          perIntentCap: string;
+          maxDeadlineWindow: number;
+          token: string;
+          tokenCaps?: { token: string; cap: string }[];
+        };
+      },
+    ) =>
+      request<{ ok: true; action: 'set' | 'remove'; rule?: SigningRuleView; onChainGrant?: OnChainSigningGrantView }>(
+        getToken,
+        'POST',
+        `/api/agents/${agentId}/signing/rule`,
         body,
       ),
 

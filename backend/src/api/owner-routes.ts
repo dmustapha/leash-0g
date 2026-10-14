@@ -732,10 +732,25 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       }
       createChain = deps.chainRegistry.getChainOps(createChainId);
     }
-    // RH2 (two-factory): mint through a NAMED secondary wall-capability factory
-    // when asked (e.g. `oracleBand`). Default-deny: the capability must be
-    // configured for THIS chain, and the default chain has no secondary factories.
-    if (input.capability) {
+    // RH2 (V5 migration, A1): the trader/oracleBand lane mints a governed-signing
+    // V5 account (NOT the V4 capability factory) so the swap wall budgets amountIn
+    // + pins the recipient (closes SCOPE-RH2-1 — V4 left amountIn UNBUDGETED). V5
+    // is a strict superset of V4's price-band wall. A V5 account mints EMPTY: its
+    // constructor takes no call-rule/band/budget — the owner arms them post-create
+    // via the grant routes (Phase B), so this lane does NOT pre-wire a band factory.
+    // Trigger = capability==='oracleBand' (explicit), honoring a client-sent
+    // accountVersion:5 too. Every OTHER capability keeps the V4 factory path
+    // (legacy-safe, additive).
+    // RH2 drain (SCOPE-RH2-1): ANY trader does swaps, so ANY trader MUST mint V5 (the V5
+    // wall budgets swap amountIn + pins recipient; V4 does not). Gate-② W1: a trader goal
+    // that omits the oracleBand capability must NOT silently fall back to the V4 drain.
+    const isV5TraderLane =
+      input.capability === 'oracleBand' || input.goal.type === 'trader' || input.accountVersion === 5;
+    const effectiveAccountVersion = isV5TraderLane ? 5 : input.accountVersion;
+    if (input.capability && !isV5TraderLane) {
+      // RH2 (two-factory): a NON-oracleBand named capability still mints through its
+      // operator-configured V4 factory. Default-deny: the capability must be
+      // configured for THIS chain, and the default chain has no secondary factories.
       const capFactory =
         createChainId !== deps.settings.defaultChainId
           ? deps.chainRegistry?.getCapabilityFactory?.(createChainId, input.capability)
@@ -745,6 +760,17 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
         return;
       }
       createChain = deps.chainRegistry.getChainOpsForFactory(createChainId, capFactory);
+    }
+    // Fail-CLOSED (never silently fall back to V4): a V5 lane on a chain missing the
+    // V5 singletons (deployer/signingHelper/decodeHelper) is refused with a typed
+    // 409 BEFORE the mint — `deployAndRegisterV5`/`buildV5Deploy` also throws, but
+    // surfacing it here keeps it a clean 4xx (operator config) not an opaque 500.
+    if (isV5TraderLane && !createChain.supportsV5?.()) {
+      res.status(409).json({
+        error: { message: `chain ${createChainId} is missing the V5 singletons (deployer/signingHelper/decodeHelper)`, reason: 'v5_unavailable' },
+        chainId: createChainId,
+      });
+      return;
     }
     // F-2: an underfunded OPS wallet is an operator-funding condition, not an
     // "internal error" — surface it as a clear 4xx instead of an opaque 500.
@@ -763,7 +789,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
         sessionKeyAddr,
         auditPubKey: input.auditPubKey,
         name: input.name,
-        accountVersion: input.accountVersion, // SE-1: 4 (default) → V4 factory; 2 → legacy
+        accountVersion: effectiveAccountVersion, // SE-1: 4 (default)/2 legacy; RH2: oracleBand→5
         policy: {
           perTransferCap: BigInt(input.policy.perTransferCapWei),
           windowCap: BigInt(input.policy.windowCapWei),
@@ -3108,6 +3134,10 @@ function publicAgent(agent: AgentRow): Record<string, unknown> {
     gatewayRules: agent.gatewayRules,
     // Phase-5 (D-B9): inert freeform label for cockpit display (no discovery).
     capabilityLabel: agent.capabilityLabel,
+    // RH2 (B1): the on-chain account grammar version the owner-arming panels encode
+    // against — 5 = V5 superset (band propose/apply + signing), 4 = V4, 2 = legacy.
+    // Read-model only; the on-chain account stays the sole enforcement authority.
+    accountVersion: agent.accountVersion,
     createdAt: agent.createdAt,
   };
 }

@@ -258,6 +258,9 @@ describe('agent lifecycle routes', () => {
     expect(String(res.body.addresses.account).toLowerCase()).toBe(a.accountAddr.toLowerCase());
     expect(res.body.addresses.owner).toBe(OWNER.toLowerCase());
     expect(res.body.encryptedAuditKey).toBe(CREATE_BODY.encryptedAuditKey);
+    // RH2 (B1): publicAgent surfaces the account grammar version so the FE owner-arming
+    // panels pick the V5-vs-V4 encoding ABI. A default create is V4.
+    expect(res.body.agent.accountVersion).toBe(4);
 
     await request(t.app).post(`/api/agents/${a.id}/start`).set('authorization', ownerAuth(OWNER));
     const running = await request(t.app).get(`/api/agents/${a.id}`).set('authorization', ownerAuth(OWNER));

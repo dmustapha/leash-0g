@@ -74,11 +74,27 @@ import {
   proposeSpendBudgetOnchain,
   removeCallSelectorOnchain,
   tightenCallRuleOnchain,
+  proposeSigningGrantOnchain,
+  applySigningGrantOnchain,
+  tightenSigningGrantOnchain,
+  removeSigningDescriptorOnchain,
   type CallRuleInput,
 } from '@/lib/chain';
+import type { AccountVersion } from '@/lib/abi/leashAccountV5';
+import { SigningGrantPanel, type ProposeGrantArgs } from '@/components/cockpit/SigningGrantPanel';
+import type { SigningEnvelopeView, SigningDescriptorView } from '@/lib/types';
 
 type Approval = Extract<StreamEvent, { type: 'approval' }>;
 type Connection = 'connecting' | 'open' | 'reconnecting' | 'closed';
+
+/** RH2 (B1): the account grammar version the owner-arming txs encode against. The backend
+ *  surfaces `agent.accountVersion` on `GET /:id` (read-model projection); only 4 and 5 expose
+ *  the governed-calldata owner-write grammar these panels drive, so a V5 account encodes against
+ *  the V5 superset ABI and everything else (legacy v2, or an absent field) falls back to V4 —
+ *  byte-identical for the shared call-rule/band/spend selectors. */
+function accountVersionFor(detail: AgentDetail | null): AccountVersion {
+  return detail?.agent?.accountVersion === 5 ? 5 : 4;
+}
 
 export default function CockpitPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -100,6 +116,8 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
   const [chains, setChains] = useState<{ chain: Chain; hops: Delegation[] }[]>([]);
   // Stage D: the capability envelope (grants + presets + recent JIT decisions).
   const [capabilities, setCapabilities] = useState<CapabilityEnvelopeView | null>(null);
+  // RH2 B2 (TA-ABI-5 close): the governed-signing envelope (reviewed descriptors + standing grants).
+  const [signing, setSigning] = useState<SigningEnvelopeView | null>(null);
   // SE-7: registered blockchain networks + this agent's per-chain presence (NOT /api/chains —
   // that is the delegation graph above).
   const [networks, setNetworks] = useState<NetworkChain[]>([]);
@@ -116,6 +134,15 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
       setCapabilities(await api.listCapabilities(id));
     } catch {
       /* non-fatal: the envelope is a read-model convenience */
+    }
+  }, [api, id]);
+
+  // RH2 B2: load the signing envelope (non-fatal — V5-only; absent for V4/legacy).
+  const loadSigning = useCallback(async () => {
+    try {
+      setSigning(await api.listSigning(id));
+    } catch {
+      /* non-fatal: the signing envelope is a read-model convenience (V5 accounts only) */
     }
   }, [api, id]);
 
@@ -156,9 +183,10 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
       }
       void loadChains();
       void loadCapabilities();
+      void loadSigning();
       void loadNetworks();
     })();
-  }, [api, id, loadChains, loadCapabilities, loadNetworks]);
+  }, [api, id, loadChains, loadCapabilities, loadSigning, loadNetworks]);
   const seqRef = useRef(0);
 
   const refresh = useCallback(async () => {
@@ -337,6 +365,11 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
       account: detail.addresses.account,
       // F-11: owner writes must land on the AGENT'S chain, not the platform default.
       chainId: agentNetworks?.homeChainId,
+      // RH2 (B1): the account's on-chain grammar version → the owner-write helpers pick the
+      // V5 superset ABI for a V5 trader (band propose/apply + shared call-rule/spend grammar)
+      // and keep the V4 ABI for V4/legacy. Absent on legacy detail payloads ⇒ V4 fallback
+      // (the shared selectors are byte-identical, so V4 behavior is unchanged).
+      version: accountVersionFor(detail),
     };
   }, [detail, wallet, agentNetworks?.homeChainId]);
 
@@ -357,15 +390,15 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
 
   const grantPresetRule = useCallback(
     async (rule: CallRule): Promise<string> => {
-      const { provider, owner, account, chainId } = await requireProvider();
-      return proposeCallRuleOnchain(provider, owner, account, toChainRule(rule), chainId);
+      const { provider, owner, account, chainId, version } = await requireProvider();
+      return proposeCallRuleOnchain(provider, owner, account, toChainRule(rule), chainId, version);
     },
     [requireProvider],
   );
 
   const applyCallRule = useCallback(async () => {
-    const { provider, owner, account, chainId } = await requireProvider();
-    await applyCallRuleOnchain(provider, owner, account, chainId);
+    const { provider, owner, account, chainId, version } = await requireProvider();
+    await applyCallRuleOnchain(provider, owner, account, chainId, version);
     await loadCapabilities();
   }, [requireProvider, loadCapabilities]);
 
@@ -379,19 +412,19 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
 
   const customRule = useCallback(
     async (action: CapabilityRuleAction, rule: CallRule) => {
-      const { provider, owner, account, chainId } = await requireProvider();
+      const { provider, owner, account, chainId, version } = await requireProvider();
       let txHash: string | undefined;
       if (action === 'propose') {
-        txHash = await proposeCallRuleOnchain(provider, owner, account, toChainRule(rule), chainId);
+        txHash = await proposeCallRuleOnchain(provider, owner, account, toChainRule(rule), chainId, version);
       } else if (action === 'tighten') {
         txHash = await tightenCallRuleOnchain(provider, owner, account, {
           target: rule.target,
           selector: rule.selector,
           perCallCap: rule.perCallCap,
           windowCapCall: rule.windowCapCall,
-        }, chainId);
+        }, chainId, version);
       } else {
-        txHash = await removeCallSelectorOnchain(provider, owner, account, rule.target, rule.selector, chainId);
+        txHash = await removeCallSelectorOnchain(provider, owner, account, rule.target, rule.selector, chainId, version);
       }
       await api.capabilityRule(id, { action, rule, txHash });
       await loadCapabilities();
@@ -402,15 +435,15 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
   // FR3 (F-8b): owner-signed per-token spend budget — propose (timelocked) + apply.
   const proposeBudget = useCallback(
     async (token: string, windowCap: string) => {
-      const { provider, owner, account, chainId } = await requireProvider();
-      await proposeSpendBudgetOnchain(provider, owner, account, token as Address, windowCap, chainId);
+      const { provider, owner, account, chainId, version } = await requireProvider();
+      await proposeSpendBudgetOnchain(provider, owner, account, token as Address, windowCap, chainId, version);
     },
     [requireProvider],
   );
 
   const applyBudget = useCallback(async () => {
-    const { provider, owner, account, chainId } = await requireProvider();
-    await applySpendBudgetOnchain(provider, owner, account, chainId);
+    const { provider, owner, account, chainId, version } = await requireProvider();
+    await applySpendBudgetOnchain(provider, owner, account, chainId, version);
   }, [requireProvider]);
 
   // FR4 (F-9): arm the band wall in-product — two owner txs on the agent's chain.
@@ -452,7 +485,7 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
 
   const bandTighten = useCallback(
     async (band: { feed: string; asset: string; maxDeviationBps: number; maxStalenessSec: number }) => {
-      const { provider, owner, account, chainId } = await requireProvider();
+      const { provider, owner, account, chainId, version } = await requireProvider();
       if (typeof homeNetwork?.router !== 'string') throw new Error('This network has no canonical router configured.');
       const tx = await tightenPriceBandOnchain(
         provider,
@@ -466,6 +499,7 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
           maxStalenessSec: band.maxStalenessSec,
         },
         chainId,
+        version,
       );
       await waitForTx(tx as Hex, chainId);
       setBandSet(true);
@@ -474,8 +508,8 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
   );
 
   const bandEnable = useCallback(async () => {
-    const { provider, owner, account, chainId } = await requireProvider();
-    const tx = await enableRequireBandForSwapOnchain(provider, owner, account, chainId);
+    const { provider, owner, account, chainId, version } = await requireProvider();
+    const tx = await enableRequireBandForSwapOnchain(provider, owner, account, chainId, version);
     await waitForTx(tx as Hex, chainId);
     setBandArmed(await readRequireBandForSwap(account, chainId));
   }, [requireProvider]);
@@ -484,7 +518,7 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
   // flow's missing second half) — sign applyCallRule, then record proposed→active.
   const applyGrant = useCallback(
     async (grant: CapabilityGrantRow) => {
-      const { provider, owner, account, chainId } = await requireProvider();
+      const { provider, owner, account, chainId, version } = await requireProvider();
       // Review fix: the contract holds ONE pending-rule slot and applyCallRule()
       // is argless — a later proposal overwrites the slot. Verify the slot IS
       // this row before signing, or the wrong rule activates while the mirror
@@ -501,7 +535,7 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
           'The pending rule on-chain is a different one (a later proposal replaced this slot). Apply that rule first, then re-propose this one.',
         );
       }
-      const txHash = await applyCallRuleOnchain(provider, owner, account, chainId);
+      const txHash = await applyCallRuleOnchain(provider, owner, account, chainId, version);
       await api.capabilityRule(id, {
         action: 'apply',
         rule: {
@@ -520,12 +554,119 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
     [requireProvider, api, id, loadCapabilities],
   );
 
+  // ── RH2 B2 (TA-ABI-5 close): governed-signing grant handlers ──────────────────
+  // The owner signs every grant tx CLIENT-SIDE via Privy (the SAME non-custodial path
+  // as the capability grants above); the backend only records the read-model mirror
+  // (POST /signing/rule) + returns the onChainGrant params. These helpers encode against
+  // the V5 signing ABI (the panel is shown only for V5 accounts). propose = loosen
+  // (timelocked) → apply; tighten + remove are instant.
+  const proposeSigning = useCallback(
+    async (args: ProposeGrantArgs) => {
+      const { provider, owner, account, chainId } = await requireProvider();
+      // The backend re-derives the exact on-chain grant params (idempotent) — fetch the
+      // canonical struct to sign, never trust a client-computed one.
+      const res = await api.signingRule(id, {
+        action: 'set',
+        rule: {
+          descriptorId: args.descriptor.descriptorId,
+          spenderSet: args.spenders,
+          perIntentCap: args.perIntentCap,
+          maxDeadlineWindow: args.maxDeadlineWindow,
+          token: args.token,
+          ...(args.descriptor.onChainGrant.tokenCaps.length > 0
+            ? { tokenCaps: args.descriptor.onChainGrant.tokenCaps }
+            : {}),
+        },
+      });
+      const grant = res.onChainGrant ?? args.descriptor.onChainGrant;
+      await proposeSigningGrantOnchain(
+        provider,
+        owner,
+        account,
+        {
+          grant,
+          spenders: args.spenders as Address[],
+          perIntentCap: args.perIntentCap,
+          maxDeadlineWindow: args.maxDeadlineWindow,
+          token: args.token as Address,
+        },
+        chainId,
+      );
+      await loadSigning();
+    },
+    [requireProvider, api, id, loadSigning],
+  );
+
+  const applySigning = useCallback(async () => {
+    const { provider, owner, account, chainId } = await requireProvider();
+    await applySigningGrantOnchain(provider, owner, account, chainId);
+    await loadSigning();
+  }, [requireProvider, loadSigning]);
+
+  const tightenSigning = useCallback(
+    async (args: {
+      descriptor: SigningDescriptorView;
+      perIntentCap: string;
+      maxDeadlineWindow: number;
+      token: string;
+      spenders: string[];
+    }) => {
+      const { provider, owner, account, chainId } = await requireProvider();
+      await tightenSigningGrantOnchain(
+        provider,
+        owner,
+        account,
+        {
+          descriptorId: args.descriptor.descriptorId,
+          perIntentCap: args.perIntentCap,
+          maxDeadlineWindow: args.maxDeadlineWindow,
+        },
+        chainId,
+      );
+      // Record the tightened read-model (instant — fail-safe to record eagerly).
+      await api.signingRule(id, {
+        action: 'set',
+        rule: {
+          descriptorId: args.descriptor.descriptorId,
+          spenderSet: args.spenders,
+          perIntentCap: args.perIntentCap,
+          maxDeadlineWindow: args.maxDeadlineWindow,
+          token: args.token,
+          ...(args.descriptor.onChainGrant.tokenCaps.length > 0
+            ? { tokenCaps: args.descriptor.onChainGrant.tokenCaps }
+            : {}),
+        },
+      });
+      await loadSigning();
+    },
+    [requireProvider, api, id, loadSigning],
+  );
+
+  const removeSigning = useCallback(
+    async (descriptor: SigningDescriptorView) => {
+      const { provider, owner, account, chainId } = await requireProvider();
+      await removeSigningDescriptorOnchain(provider, owner, account, descriptor.descriptorId, chainId);
+      await api.signingRule(id, {
+        action: 'remove',
+        rule: {
+          descriptorId: descriptor.descriptorId,
+          spenderSet: [],
+          perIntentCap: '0',
+          maxDeadlineWindow: 0,
+          token: '0x0000000000000000000000000000000000000000',
+        },
+      });
+      await loadSigning();
+    },
+    [requireProvider, api, id, loadSigning],
+  );
+
   // JIT decision handlers — the request row carries its own approvalId + callHash.
   const jitApproveOnce = useCallback(
     async (approvalId: string, callHash: Hex) => {
-      const { provider, owner, account, chainId } = await requireProvider();
+      const { provider, owner, account, chainId, version } = await requireProvider();
       const expiry = Math.floor(Date.now() / 1000) + 15 * 60; // ~15 min JIT window
-      const txHash = await authorizeOnceOnchain(provider, owner, account, callHash, expiry, chainId);
+      const txHash = await authorizeOnceOnchain(provider, owner, account, callHash, expiry, chainId, version);
       await api.decideCapability(approvalId, { decision: 'approve_once', txHash });
       await loadCapabilities();
     },
@@ -534,8 +675,8 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
 
   const jitAlwaysAllow = useCallback(
     async (approvalId: string, rule: CallRule) => {
-      const { provider, owner, account, chainId } = await requireProvider();
-      const txHash = await proposeCallRuleOnchain(provider, owner, account, toChainRule(rule), chainId);
+      const { provider, owner, account, chainId, version } = await requireProvider();
+      const txHash = await proposeCallRuleOnchain(provider, owner, account, toChainRule(rule), chainId, version);
       await api.decideCapability(approvalId, { decision: 'always_allow', txHash, rule });
       await loadCapabilities();
     },
@@ -771,6 +912,23 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
             </div>
           ) : null}
           {capabilities ? <CapabilityEnvelope envelope={capabilities} onApplyGrant={applyGrant} /> : null}
+          {/* RH2 B2 (TA-ABI-5 close): the owner governed-signing grant surface — V5 accounts only.
+              This is the shipped arm path that did not exist (previously only the [DEPLOY] script). */}
+          {detail &&
+          detail.status !== 'revoked' &&
+          accountVersionFor(detail) === 5 &&
+          signing ? (
+            <div id="signing-grant">
+              <SigningGrantPanel
+                available={signing.available}
+                rules={signing.rules}
+                onProposeGrant={proposeSigning}
+                onApplyGrant={applySigning}
+                onTightenGrant={tightenSigning}
+                onRemoveGrant={removeSigning}
+              />
+            </div>
+          ) : null}
           <RevokeButton
             revoked={detail?.status === 'revoked'}
             onRevoke={revokeGuardian}

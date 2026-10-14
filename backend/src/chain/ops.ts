@@ -457,6 +457,11 @@ export class LeashChainOps implements ChainOps {
     return { create2DeployerAddr, signingHelperAddr, decodeHelperAddr };
   }
 
+  /** RH2 (V5 migration): all three V5 singletons wired ⇒ an accountVersion:5 mint can land. */
+  supportsV5(): boolean {
+    return this.v5Singletons !== null;
+  }
+
   /** Cross-check: the on-chain deployer.predict must agree with our off-chain CREATE2. */
   private async crossCheckOnChainPredict(deployerAddr: Hex, salt: Hex, initCodeHash: Hex, predicted: Hex): Promise<void> {
     const onchain = (await this.publicClient.readContract({
