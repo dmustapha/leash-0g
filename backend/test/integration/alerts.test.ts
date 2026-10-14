@@ -11,6 +11,8 @@ import { createApproval, getApproval } from '../../src/store/approvals.js';
 import { createLink } from '../../src/coordination/store.js';
 import { getAgentById } from '../../src/store/agents.js';
 import { SseHub } from '../../src/sse/hub.js';
+import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
+import { SET_AUDIT_PUBKEY_TYPES, OWNER_STREAM_TARGET } from '../../src/signing/audit-pubkey-auth.js';
 
 /**
  * D2 alert engine (spec §8 "Alert engine" row): taxonomy from real sources,
@@ -378,15 +380,30 @@ describe('§3d — owner-stream records + routes', () => {
 });
 
 describe('owner settings', () => {
-  it('PATCH prefs + digest hour round-trips; stream pubkey is ROTATABLE (SCOPE-RH2-2)', async () => {
-    const owner = uniqueOwner();
+  it('PATCH prefs + digest hour round-trips; stream pubkey is ROTATABLE (SCOPE-RH2-2) with owner EIP-712 sig (NC-2)', async () => {
+    const ownerPk = generatePrivateKey();
+    const account = privateKeyToAccount(ownerPk);
+    const owner = account.address.toLowerCase();
     const t = buildTestApp(db.pool);
     const key1 = new PrivateKey().publicKey.toHex();
     const key2 = new PrivateKey().publicKey.toHex();
+    const sign = (pubkey: string, nonce: bigint) =>
+      account.signTypedData({
+        domain: { name: 'LEASH', version: '1', chainId: testSettings().defaultChainId },
+        types: SET_AUDIT_PUBKEY_TYPES,
+        primaryType: 'SetAuditPubkey',
+        message: { owner: account.address, target: OWNER_STREAM_TARGET, pubkey, nonce },
+      });
     const first = await request(t.app)
       .patch('/api/owner/settings')
       .set('authorization', ownerAuth(owner))
-      .send({ alertPrefs: { revoked: { telegram: true } }, digestHourUtc: 9, streamPubkey: key1 });
+      .send({
+        alertPrefs: { revoked: { telegram: true } },
+        digestHourUtc: 9,
+        streamPubkey: key1,
+        signature: await sign(key1, 0n),
+        nonce: '0',
+      });
     expect(first.status).toBe(200);
     expect(first.body.streamPubkeySet).toBe(true);
     const read = await request(t.app).get('/api/owner/settings').set('authorization', ownerAuth(owner));
@@ -396,13 +413,20 @@ describe('owner settings', () => {
     const rotate = await request(t.app)
       .patch('/api/owner/settings')
       .set('authorization', ownerAuth(owner))
-      .send({ streamPubkey: key2 });
+      .send({ streamPubkey: key2, signature: await sign(key2, 1n), nonce: '1' });
     expect(rotate.status).toBe(200);
-    // An off-curve key is rejected 422 (validated on the way in).
+    // NC-2: the same rotation without a signature is refused 403.
+    const noSig = await request(t.app)
+      .patch('/api/owner/settings')
+      .set('authorization', ownerAuth(owner))
+      .send({ streamPubkey: key1 });
+    expect(noSig.status).toBe(403);
+    // An off-curve key is rejected 422 (validated on the way in; sig valid first).
+    const badKey = '02' + 'bb'.repeat(32);
     const bad = await request(t.app)
       .patch('/api/owner/settings')
       .set('authorization', ownerAuth(owner))
-      .send({ streamPubkey: '02' + 'bb'.repeat(32) });
+      .send({ streamPubkey: badKey, signature: await sign(badKey, 2n), nonce: '2' });
     expect(bad.status).toBe(422);
   });
 });

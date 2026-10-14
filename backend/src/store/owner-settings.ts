@@ -1,4 +1,4 @@
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import type { Json } from '../crypto/canonical.js';
 import { isValidEciesPubkey } from '../crypto/ecies.js';
 
@@ -137,6 +137,9 @@ export async function rotateOwnerStreamKey(
   pool: Pool,
   ownerAddr: string,
   pubkey: string,
+  // NC-2: runs inside the rotation txn BEFORE commit (the monotonic replay-nonce
+  // consume), so the nonce only advances when the key write commits.
+  inTx?: (client: PoolClient) => Promise<void>,
 ): Promise<void> {
   const key = pubkey.replace(/^0x/, '');
   if (!isValidEciesPubkey(key)) throw new InvalidStreamKeyError();
@@ -144,6 +147,7 @@ export async function rotateOwnerStreamKey(
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    if (inTx) await inTx(client);
     await client.query(
       `INSERT INTO owner_settings (owner_addr) VALUES ($1) ON CONFLICT (owner_addr) DO NOTHING`,
       [owner],

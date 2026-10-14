@@ -80,6 +80,12 @@ import {
 } from '../store/tools.js';
 import { decideSigningRequest, type SigningServiceDeps } from '../signing/signing-service.js';
 import {
+  recoverSetAuditPubkeySigner,
+  consumeRotationNonce,
+  RotationSignatureError,
+  OWNER_STREAM_TARGET,
+} from '../signing/audit-pubkey-auth.js';
+import {
   defaultSigningRegistry,
   assertDescriptor,
   onChainGrantParams,
@@ -2153,11 +2159,22 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     digestOptout: z.boolean().optional(),
     // Same accepted pubkey shapes as the agent audit key.
     streamPubkey: z.string().regex(/^(0x)?0[23][0-9a-fA-F]{64}$|^(0x)?04[0-9a-fA-F]{128}$/).optional(),
+    // NC-2: when streamPubkey is present, the owner EIP-712 SetAuditPubkey
+    // signature + its monotonic replay nonce are required (enforced at route).
+    signature: z.string().regex(/^0x[0-9a-fA-F]+$/).optional(),
+    nonce: z.string().regex(/^[0-9]{1,78}$/).optional(),
   });
 
   const pubkeyRegex = /^(0x)?0[23][0-9a-fA-F]{64}$|^(0x)?04[0-9a-fA-F]{128}$/;
-  const streamKeyBodySchema = z.object({ pubkey: z.string().regex(pubkeyRegex) }).strict();
-  const auditPubkeyBodySchema = z.object({ pubkey: z.string().regex(pubkeyRegex) }).strict();
+  // NC-2: rotation now carries an owner EIP-712 signature + monotonic nonce.
+  const sigSchema = z.string().regex(/^0x[0-9a-fA-F]+$/);
+  const nonceSchema = z.string().regex(/^[0-9]{1,78}$/);
+  const streamKeyBodySchema = z
+    .object({ pubkey: z.string().regex(pubkeyRegex), signature: sigSchema, nonce: nonceSchema })
+    .strict();
+  const auditPubkeyBodySchema = z
+    .object({ pubkey: z.string().regex(pubkeyRegex), signature: sigSchema, nonce: nonceSchema })
+    .strict();
 
   // SCOPE-RH2-2: rotate an agent's audit pubkey. Owner-scoped (requireOwnedAgent
   // → 404 for foreign). New key covers trace records from the next seq onward.
@@ -2169,11 +2186,35 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       res.status(400).json({ error: { message: 'invalid request body' } });
       return;
     }
+    // NC-2: the authenticated owner must ALSO prove the rotation with an EIP-712
+    // signature over SetAuditPubkey(owner,target,pubkey,nonce). target = agentId.
     try {
-      await rotateAgentAuditPubkey(deps.pool, agent.id, parsed.data.pubkey);
+      await recoverSetAuditPubkeySigner({
+        chainId: deps.settings.defaultChainId,
+        ownerAddr: agent.ownerAddr,
+        target: agent.id,
+        pubkey: parsed.data.pubkey,
+        nonce: BigInt(parsed.data.nonce),
+        signature: parsed.data.signature,
+      });
+    } catch (err) {
+      if (err instanceof RotationSignatureError) {
+        res.status(403).json({ error: { message: err.message } });
+        return;
+      }
+      throw err;
+    }
+    try {
+      await rotateAgentAuditPubkey(deps.pool, agent.id, parsed.data.pubkey, (client) =>
+        consumeRotationNonce(client, agent.ownerAddr, agent.id, BigInt(parsed.data.nonce)),
+      );
       deps.onAuditKeyRotated?.('trace', agent.id);
       res.json({ ok: true });
     } catch (err) {
+      if (err instanceof RotationSignatureError) {
+        res.status(403).json({ error: { message: err.message } });
+        return;
+      }
       if (err instanceof InvalidAuditPubkeyError) {
         res.status(422).json({ error: { message: 'invalid audit pubkey' } });
         return;
@@ -2211,7 +2252,23 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       // even if the settings patch fails). The dedicated POST /api/owner/stream-key
       // is the single-purpose atomic path; this is the combined-settings UX path.
       if (parsed.data.streamPubkey !== undefined) {
-        await rotateOwnerStreamKey(deps.pool, owner, parsed.data.streamPubkey);
+        // NC-2: the owner must sign SetAuditPubkey(owner,'owner-stream',pubkey,nonce).
+        if (parsed.data.signature === undefined || parsed.data.nonce === undefined) {
+          res.status(403).json({ error: { message: 'rotation signature required' } });
+          return;
+        }
+        const streamNonce = BigInt(parsed.data.nonce);
+        await recoverSetAuditPubkeySigner({
+          chainId: deps.settings.defaultChainId,
+          ownerAddr: owner,
+          target: OWNER_STREAM_TARGET,
+          pubkey: parsed.data.streamPubkey,
+          nonce: streamNonce,
+          signature: parsed.data.signature,
+        });
+        await rotateOwnerStreamKey(deps.pool, owner, parsed.data.streamPubkey, (client) =>
+          consumeRotationNonce(client, owner, OWNER_STREAM_TARGET, streamNonce),
+        );
         deps.onAuditKeyRotated?.('owner', owner.toLowerCase());
       }
       const s = await patchOwnerSettings(deps.pool, owner, {
@@ -2228,6 +2285,10 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
         streamPubkeySet: s.streamPubkey !== null,
       });
     } catch (err) {
+      if (err instanceof RotationSignatureError) {
+        res.status(403).json({ error: { message: err.message } });
+        return;
+      }
       if (err instanceof InvalidStreamKeyError) {
         res.status(422).json({ error: { message: 'invalid stream pubkey' } });
         return;
@@ -2246,11 +2307,35 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       return;
     }
     const owner = req.ownerAddr as string;
+    const streamNonce = BigInt(parsed.data.nonce);
+    // NC-2: the owner must sign SetAuditPubkey(owner,'owner-stream',pubkey,nonce).
     try {
-      await rotateOwnerStreamKey(deps.pool, owner, parsed.data.pubkey);
+      await recoverSetAuditPubkeySigner({
+        chainId: deps.settings.defaultChainId,
+        ownerAddr: owner,
+        target: OWNER_STREAM_TARGET,
+        pubkey: parsed.data.pubkey,
+        nonce: streamNonce,
+        signature: parsed.data.signature,
+      });
+    } catch (err) {
+      if (err instanceof RotationSignatureError) {
+        res.status(403).json({ error: { message: err.message } });
+        return;
+      }
+      throw err;
+    }
+    try {
+      await rotateOwnerStreamKey(deps.pool, owner, parsed.data.pubkey, (client) =>
+        consumeRotationNonce(client, owner, OWNER_STREAM_TARGET, streamNonce),
+      );
       deps.onAuditKeyRotated?.('owner', owner.toLowerCase());
       res.json({ ok: true, streamPubkeySet: true });
     } catch (err) {
+      if (err instanceof RotationSignatureError) {
+        res.status(403).json({ error: { message: err.message } });
+        return;
+      }
       if (err instanceof InvalidStreamKeyError) {
         res.status(422).json({ error: { message: 'invalid stream pubkey' } });
         return;
