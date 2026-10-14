@@ -118,7 +118,15 @@ export async function upsertGrant(pool: Pool, input: UpsertGrantInput): Promise<
   return mapGrant(row);
 }
 
-/** Flip a grant's read-model status (e.g. proposed→active on apply, →removed on tighten). */
+/**
+ * Flip a grant's read-model status (e.g. proposed→active on apply, →removed on
+ * tighten). DM-1: 'removed' is TERMINAL — a removed grant can never be flipped
+ * back to 'active' by a bare status change (that would resurrect a grant the
+ * cockpit shows as dead/removed-on-chain). The `status <> 'removed'` from-guard
+ * on the active path is the defense-in-depth floor under the route's own guard;
+ * re-granting a removed capability must go through a fresh on-chain propose/apply
+ * (the upsertGrant txHash path), never here. Returns null when the guard blocks.
+ */
 export async function setGrantStatus(
   pool: Pool,
   agentId: string,
@@ -126,9 +134,10 @@ export async function setGrantStatus(
   selector: string,
   status: GrantStatus,
 ): Promise<GrantRow | null> {
+  const fromGuard = status === 'active' ? " AND status <> 'removed'" : '';
   const res = await pool.query<DbGrantRow>(
     `UPDATE capability_grants SET status = $4, updated_at = now()
-     WHERE agent_id = $1 AND target = $2 AND selector = $3 RETURNING *`,
+     WHERE agent_id = $1 AND target = $2 AND selector = $3${fromGuard} RETURNING *`,
     [agentId, target.toLowerCase(), selector.toLowerCase(), status],
   );
   return res.rows[0] ? mapGrant(res.rows[0]) : null;

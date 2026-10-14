@@ -139,6 +139,27 @@ describe('capability_grants store', () => {
     expect(await listGrants(db.pool, agent.id, true)).toHaveLength(1);
   });
 
+  it('setGrantStatus refuses removed→active (DM-1: removed is terminal)', async () => {
+    const agent = await seedOwnedAgent();
+    if (!agent) throw new Error('agent');
+    await upsertGrant(db.pool, { agentId: agent.id, ownerAddr: agent.ownerAddr, rule: approveRule, source: 'custom', status: 'active' });
+    await setGrantStatus(db.pool, agent.id, approveRule.target, approveRule.selector, 'removed');
+    // the SQL from-guard blocks the resurrection and returns null
+    const blocked = await setGrantStatus(db.pool, agent.id, approveRule.target, approveRule.selector, 'active');
+    expect(blocked).toBeNull();
+    // read-model stays removed (hidden from the default envelope)
+    expect(await listGrants(db.pool, agent.id)).toHaveLength(0);
+    expect((await listGrants(db.pool, agent.id, true))[0]?.status).toBe('removed');
+  });
+
+  it('setGrantStatus still flips proposed→active (legitimate apply)', async () => {
+    const agent = await seedOwnedAgent();
+    if (!agent) throw new Error('agent');
+    await upsertGrant(db.pool, { agentId: agent.id, ownerAddr: agent.ownerAddr, rule: approveRule, source: 'custom', status: 'proposed' });
+    const applied = await setGrantStatus(db.pool, agent.id, approveRule.target, approveRule.selector, 'active');
+    expect(applied?.status).toBe('active');
+  });
+
   it('records applied presets distinctly', async () => {
     const agent = await seedOwnedAgent();
     if (!agent) throw new Error('agent');

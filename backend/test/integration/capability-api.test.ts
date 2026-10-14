@@ -158,6 +158,44 @@ describe('POST /api/agents/:id/capabilities/rule', () => {
     expect(env.body.grants).toHaveLength(0);
   });
 
+  it('apply on a removed grant → 409, read-model stays removed (DM-1: no resurrection)', async () => {
+    const a = await seedOwned();
+    // propose → remove: the grant is now terminal.
+    await request(t.app)
+      .post(`/api/agents/${a.id}/capabilities/rule`)
+      .set('authorization', ownerAuth(OWNER))
+      .send({ action: 'propose', rule: customRule, txHash: TX_PROPOSE });
+    await request(t.app)
+      .post(`/api/agents/${a.id}/capabilities/rule`)
+      .set('authorization', ownerAuth(OWNER))
+      .send({ action: 'remove', rule: customRule });
+    // a bare apply must NOT flip it back to active.
+    const res = await request(t.app)
+      .post(`/api/agents/${a.id}/capabilities/rule`)
+      .set('authorization', ownerAuth(OWNER))
+      .send({ action: 'apply', rule: customRule });
+    expect(res.status).toBe(409);
+    expect(res.body.error.message).toBe('grant is removed');
+    // read-model honesty: still hidden (removed), never resurrected to active.
+    const env = await request(t.app).get(`/api/agents/${a.id}/capabilities`).set('authorization', ownerAuth(OWNER));
+    expect(env.body.grants).toHaveLength(0);
+  });
+
+  it('apply on a proposed grant still flips it to active (legitimate matured apply)', async () => {
+    const a = await seedOwned();
+    await request(t.app)
+      .post(`/api/agents/${a.id}/capabilities/rule`)
+      .set('authorization', ownerAuth(OWNER))
+      .send({ action: 'propose', rule: customRule, txHash: TX_PROPOSE });
+    const res = await request(t.app)
+      .post(`/api/agents/${a.id}/capabilities/rule`)
+      .set('authorization', ownerAuth(OWNER))
+      .send({ action: 'apply', rule: customRule });
+    expect(res.status).toBe(200);
+    const env = await request(t.app).get(`/api/agents/${a.id}/capabilities`).set('authorization', ownerAuth(OWNER));
+    expect(env.body.grants[0].status).toBe('active');
+  });
+
   it('rejects a malformed rule (400)', async () => {
     const a = await seedOwned();
     const res = await request(t.app)

@@ -122,9 +122,13 @@ export async function setSigningRuleStatus(
   descriptorId: number,
   status: SigningGrantStatus,
 ): Promise<SigningRuleRow | null> {
+  // DM-1 parity: 'removed' is terminal — never resurrect a removed signing rule
+  // to active by a bare status flip (defense-in-depth; the route reaches active
+  // via upsertSigningRule, never through this setter).
+  const fromGuard = status === 'active' ? " AND status <> 'removed'" : '';
   const res = await pool.query<DbSigningRuleRow>(
     `UPDATE signing_rules SET status = $3, updated_at = now()
-     WHERE agent_id = $1 AND descriptor_id = $2 RETURNING *`,
+     WHERE agent_id = $1 AND descriptor_id = $2${fromGuard} RETURNING *`,
     [agentId, descriptorId, status],
   );
   return res.rows[0] ? mapRule(res.rows[0]) : null;
