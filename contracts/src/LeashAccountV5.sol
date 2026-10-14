@@ -728,8 +728,14 @@ contract LeashAccountV5 is ReentrancyGuard {
     ///         Permit2 allowance, CoW/HL orders) enforce their own on-chain nonce / total
     ///         allowance, so one armed digest moves at most `amount`. A descriptor for a
     ///         protocol that would honor one signature for repeated full-`amount` fills
-    ///         without its own nonce is OUT OF SCOPE and must not be registered (the FP-2
-    ///         engine asserts this at descriptor-review time). `amount == 0` arms a
+    ///         without its own nonce is OUT OF SCOPE and must not be registered. The FP-2
+    ///         engine CODE-ENFORCES this replay guard at descriptor-review time
+    ///         (`assertDescriptor`, F′-SIGN-1): a flat/nested descriptor MUST declare a
+    ///         `nonceRole` resolving to a distinct uintN nonce LEAF (ERC-2612 `nonce`,
+    ///         Permit2 nested `nonce`); a `batch` descriptor structurally requires its
+    ///         `nonce` top field; an `order` is exempt because GPv2Settlement tracks the
+    ///         nonce externally to the descriptor. A nonce-less flat/nested permit therefore
+    ///         cannot be registered. `amount == 0` arms a
     ///         zero-notional intent (e.g. a cancel/zero-approval) and skips the budget debit
     ///         by design — it moves no value. The owner can `disarmSigningIntent` a single
     ///         armed digest, or `revoke` to fail-close all. M-01 (accepted): an armed permit

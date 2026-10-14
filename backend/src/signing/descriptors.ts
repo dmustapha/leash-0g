@@ -54,6 +54,7 @@ function erc2612Descriptor(
       { name: 'deadline', type: 'uint256' },
     ],
     roles: { spender: 'spender', amount: 'value', deadline: 'deadline' },
+    nonceRole: 'nonce', // F′-SIGN-1: the ERC-2612 `nonce` leaf is the replay guard (code-enforced).
     sensitive: false,
   };
 }
@@ -90,6 +91,7 @@ function permit2SingleDescriptor(descriptorId: number, key: string, chainId: num
     },
     roles: { spender: 'spender', amount: 'amount', deadline: 'sigDeadline' },
     expiryRole: 'expiration',
+    nonceRole: 'nonce', // F′-SIGN-1: the nested PermitDetails.nonce leaf is the replay guard (code-enforced).
     sensitive: false,
   };
 }

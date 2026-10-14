@@ -156,6 +156,14 @@ export interface SigningDescriptor {
    */
   expiryRole?: string;
   /**
+   * F′-SIGN-1: the LEAF field name carrying the descriptor's own replay guard (the permit nonce). REQUIRED
+   * for flat/nested descriptors — `assertDescriptor` asserts it resolves to a distinct uintN leaf, so a
+   * nonce-less flat/nested permit (one signature → repeated full-`amount` fills) can never be registered.
+   * `order` is exempt (GPv2Settlement nonce is external to the descriptor); `batch` is exempt (its `nonce`
+   * top field is structurally required). ERC-2612 ⇒ `nonce`; Permit2 single ⇒ the nested `nonce`.
+   */
+  nonceRole?: string;
+  /**
    * sensitive = ALWAYS requires owner approval (L2) regardless of grant-state or
    * what the model decided (00 §6c). A sensitive descriptor can never classify L1.
    */
