@@ -105,9 +105,13 @@ export async function setToolRuleStatus(
   toolId: string,
   status: ToolGrantStatus,
 ): Promise<ToolRuleRow | null> {
+  // DM-1 parity: 'removed' is terminal — never resurrect a removed tool rule to
+  // active by a bare status flip (defense-in-depth; the route reaches active via
+  // upsertToolRule, never through this setter).
+  const fromGuard = status === 'active' ? " AND status <> 'removed'" : '';
   const res = await pool.query<DbToolRuleRow>(
     `UPDATE tool_rules SET status = $3, updated_at = now()
-     WHERE agent_id = $1 AND tool_id = $2 RETURNING *`,
+     WHERE agent_id = $1 AND tool_id = $2${fromGuard} RETURNING *`,
     [agentId, toolId.toLowerCase(), status],
   );
   return res.rows[0] ? mapRule(res.rows[0]) : null;

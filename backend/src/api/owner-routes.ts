@@ -2701,7 +2701,24 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     // read-model to active. No allowlist re-check: the target was checked at
     // propose, and the on-chain timelock/apply is the enforcement regardless.
     if (parsed.data.action === 'apply') {
-      await setGrantStatus(deps.pool, agent.id, rule.target, rule.selector, 'active');
+      // DM-1: 'removed' is terminal (mirrors the link route §4 guard). A removed
+      // grant is dead/removed-on-chain; a bare apply must NOT resurrect it to
+      // active in the read-model (cockpit-honesty drift). Re-granting goes through
+      // a fresh on-chain propose/apply (the upsertGrant txHash path), not here.
+      const existing = (await listGrants(deps.pool, agent.id, true)).find(
+        (g) => g.target === rule.target && g.selector === rule.selector,
+      );
+      if (existing?.status === 'removed') {
+        res.status(409).json({ error: { message: 'grant is removed' } });
+        return;
+      }
+      const applied = await setGrantStatus(deps.pool, agent.id, rule.target, rule.selector, 'active');
+      if (!applied) {
+        // The removed→active case is already 409'd above; a null here means the row
+        // vanished between read and write (rare race) or never existed → not found.
+        res.status(404).json({ error: { message: 'grant not found' } });
+        return;
+      }
       res.json({ ok: true, action: 'apply' });
       return;
     }

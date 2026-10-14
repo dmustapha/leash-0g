@@ -126,7 +126,14 @@ export async function setLinkStatus(
   id: string,
   status: 'active' | 'paused' | 'removed',
 ): Promise<Link | null> {
-  const res = await pool.query<DbLinkRow>(`UPDATE links SET status = $2 WHERE id = $1 RETURNING *`, [id, status]);
+  // DM-1 parity: 'removed' is terminal (spec §4) — a dead channel can never be
+  // resumed/re-moded/re-paused. The route already 409s a removed link; this SQL
+  // from-guard is the defense-in-depth floor so no path flips removed→active/paused.
+  const fromGuard = status === 'removed' ? '' : " AND status <> 'removed'";
+  const res = await pool.query<DbLinkRow>(
+    `UPDATE links SET status = $2 WHERE id = $1${fromGuard} RETURNING *`,
+    [id, status],
+  );
   return res.rows[0] ? mapLink(res.rows[0]) : null;
 }
 
