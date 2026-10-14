@@ -32,6 +32,7 @@ const erc2612: SigningDescriptor = {
     { name: 'deadline', type: 'uint256' },
   ],
   roles: { spender: 'spender', amount: 'value', deadline: 'deadline' },
+  nonceRole: 'nonce', // F′-SIGN-1: the ERC-2612 `nonce` leaf is the replay guard (code-enforced).
   sensitive: false,
 };
 

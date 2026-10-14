@@ -8,6 +8,7 @@ import {
   onChainGrantParams,
   defaultSigningRegistry,
   type SigningRule,
+  type SigningDescriptor,
 } from '../../src/signing/index.js';
 import { FP3_DESCRIPTORS, USDC_ONCHAIN_DOMAIN_SEPARATOR, PERMIT2_ADDRESS } from '../../src/signing/descriptors.js';
 
@@ -122,5 +123,65 @@ describe('FP-3 real descriptor seed', () => {
       expiryLeafIndex: 2,
     });
     expect(p.nestedTypeHash).toBe(keccak256(toBytes('PermitDetails(address token,uint160 amount,uint48 expiration,uint48 nonce)')));
+  });
+});
+
+/**
+ * F′-SIGN-1 — the single-use/replay invariant is CODE-enforced at descriptor-review time. A flat/nested
+ * descriptor must carry its own nonce LEAF (`nonceRole` → a distinct uintN leaf). This closes the softest
+ * point of the governed-signing stage: a nonce-less flat permit descriptor could otherwise pass review and
+ * let one armed ERC-1271 signature authorize repeated full-`amount` fills.
+ */
+describe('F′-SIGN-1 — flat/nested descriptors must carry a nonce replay guard', () => {
+  const flatBase = (): SigningDescriptor => ({
+    descriptorId: 777,
+    key: 'test.flat.permit',
+    label: 'test flat permit',
+    protocol: 'Test Permit',
+    domain: { name: 'T', version: '1', chainId: 1, verifyingContract: '0x000000000000000000000000000000000000beef' },
+    primaryType: 'Permit',
+    fields: [
+      { name: 'owner', type: 'address' },
+      { name: 'spender', type: 'address' },
+      { name: 'value', type: 'uint256' },
+      { name: 'nonce', type: 'uint256' },
+      { name: 'deadline', type: 'uint256' },
+    ],
+    roles: { spender: 'spender', amount: 'value', deadline: 'deadline' },
+    sensitive: false,
+  });
+
+  it('a FLAT descriptor with NO nonceRole throws missing_nonce_role', () => {
+    const d = flatBase(); // no nonceRole
+    expect(() => assertDescriptor(d)).toThrow(/missing_nonce_role|nonceRole/);
+  });
+
+  it('a nonceRole naming a non-existent leaf throws unknown_role_field', () => {
+    const d = { ...flatBase(), nonceRole: 'ghost' };
+    expect(() => assertDescriptor(d)).toThrow(/nonce role leaf "ghost" absent/);
+  });
+
+  it('a nonceRole naming a non-uint leaf throws role_type_mismatch', () => {
+    const d = { ...flatBase(), nonceRole: 'spender' }; // spender is address, not uintN
+    expect(() => assertDescriptor(d)).toThrow(/nonce role leaf must be uintN/);
+  });
+
+  it('a nonceRole aliasing an authority-role leaf throws role_index_alias', () => {
+    const d = { ...flatBase(), nonceRole: 'value' }; // value is the amount role leaf
+    expect(() => assertDescriptor(d)).toThrow(/nonce must map to a leaf distinct from the roles/);
+  });
+
+  it('a well-formed nonceRole passes', () => {
+    const d = { ...flatBase(), nonceRole: 'nonce' };
+    expect(() => assertDescriptor(d)).not.toThrow();
+  });
+
+  it('an expiryRole aliasing the nonce leaf throws role_index_alias (Gate-②)', () => {
+    const d = { ...flatBase(), nonceRole: 'nonce', expiryRole: 'nonce' }; // same leaf as replay guard
+    expect(() => assertDescriptor(d)).toThrow(/distinct from the roles\/nonce/);
+  });
+
+  it('regression — every shipped seed descriptor still passes assertDescriptor', () => {
+    for (const d of defaultSigningRegistry.list()) expect(() => assertDescriptor(d)).not.toThrow();
   });
 });

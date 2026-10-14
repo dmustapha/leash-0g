@@ -50,6 +50,7 @@ export class DescriptorError extends Error {
       | 'unknown_role_field'
       | 'role_type_mismatch'
       | 'role_index_alias'
+      | 'missing_nonce_role'
       | 'order_layout'
       | 'missing_constant_pin'
       | 'batch_layout'
@@ -245,6 +246,24 @@ export function assertDescriptor(d: SigningDescriptor): void {
       }
     }
   }
+  // F′-SIGN-1: flat/nested descriptors MUST carry their own replay guard — a nonce LEAF (uintN) distinct
+  // from the authority-role leaves. This CODE-enforces the load-bearing single-use invariant the contract
+  // docstring claims (one armed signature → at most `amount`). `order` is EXEMPT (GPv2Settlement tracks the
+  // nonce externally, off-descriptor); `batch` already returned above (its `nonce` top field is structurally
+  // required at the batch branch). Runs only for flat/nested (the kinds reaching here that are not `order`).
+  if (d.kind !== 'order') {
+    if (d.nonceRole === undefined) {
+      throw new DescriptorError(d.key, 'missing_nonce_role', 'flat/nested descriptor must set a nonceRole (replay guard)');
+    }
+    const ni = leaves.findIndex((f) => f.name === d.nonceRole);
+    if (ni < 0) throw new DescriptorError(d.key, 'unknown_role_field', `nonce role leaf "${d.nonceRole}" absent`);
+    if (!/^uint\d+$/.test(leaves[ni]?.type ?? '')) {
+      throw new DescriptorError(d.key, 'role_type_mismatch', `nonce role leaf must be uintN`);
+    }
+    if (ni === si || ni === ai || ni === di) {
+      throw new DescriptorError(d.key, 'role_index_alias', 'nonce must map to a leaf distinct from the roles');
+    }
+  }
   // FP-3 (R-2): the optional secondary-expiry leaf must exist, be uintN, and be distinct from roles.
   if (d.expiryRole !== undefined) {
     const ei = leaves.findIndex((f) => f.name === d.expiryRole);
@@ -252,8 +271,11 @@ export function assertDescriptor(d: SigningDescriptor): void {
     if (!/^uint\d+$/.test(leaves[ei]?.type ?? '')) {
       throw new DescriptorError(d.key, 'role_type_mismatch', `expiry role leaf must be uintN`);
     }
-    if (ei === si || ei === ai || ei === di) {
-      throw new DescriptorError(d.key, 'role_index_alias', 'expiry must map to a leaf distinct from the roles');
+    // F′-SIGN-1 (Gate-②): expiry must also be distinct from the nonce replay-guard leaf (flat/nested set
+    // nonceRole above; order has neither so the lookup is a harmless -1 that never aliases a real leaf).
+    const ni = leaves.findIndex((f) => f.name === d.nonceRole);
+    if (ei === si || ei === ai || ei === di || ei === ni) {
+      throw new DescriptorError(d.key, 'role_index_alias', 'expiry must map to a leaf distinct from the roles/nonce');
     }
   }
 }
@@ -543,6 +565,7 @@ export const BUILT_IN: readonly SigningDescriptor[] = [
       { name: 'deadline', type: 'uint256' },
     ],
     roles: { spender: 'spender', amount: 'value', deadline: 'deadline' },
+    nonceRole: 'nonce', // F′-SIGN-1: the ERC-2612 `nonce` leaf is the replay guard (code-enforced).
     sensitive: false,
   },
   ...FP3_DESCRIPTORS,
