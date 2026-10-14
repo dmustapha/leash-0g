@@ -19,8 +19,18 @@ export type OwnerWallet = {
   logout: () => void;
   getToken: () => Promise<string | null>;
   signMessage: (message: string) => Promise<string>;
+  // NC-2: owner EIP-712 signature over the audit/stream pubkey rotation.
+  signTypedData: SignTypedData;
   getProvider: () => Promise<EIP1193Provider>;
 };
+
+/** NC-2: minimal EIP-712 signer shape (both wallet backends implement it). */
+export type SignTypedData = (args: {
+  domain: { name: string; version: string; chainId: number };
+  types: Record<string, readonly { name: string; type: string }[]>;
+  primaryType: string;
+  message: Record<string, unknown>;
+}) => Promise<string>;
 
 const Ctx = createContext<OwnerWallet | null>(null);
 
@@ -38,6 +48,7 @@ function useE2eWallet(): OwnerWallet {
       logout: () => undefined,
       getToken: async () => 'e2e-test-token',
       signMessage: (message: string) => account.signMessage({ message }),
+      signTypedData: (args) => account.signTypedData(args as never),
       getProvider: async () => {
         throw new Error('No injected provider in E2E mode');
       },
@@ -66,6 +77,15 @@ function usePrivyWallet(): OwnerWallet {
           account: wallet.address as Address,
         });
         return client.signMessage({ message });
+      },
+      signTypedData: async (args) => {
+        if (!wallet) throw new Error('Connect a wallet first');
+        const provider = (await wallet.getEthereumProvider()) as EIP1193Provider;
+        const client = createWalletClient({
+          transport: custom(provider),
+          account: wallet.address as Address,
+        });
+        return client.signTypedData(args as never);
       },
       getProvider: async () => {
         if (!wallet) throw new Error('Connect a wallet first');

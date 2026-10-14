@@ -12,6 +12,8 @@ import { AlertPrefsPanel } from '@/components/settings/AlertPrefs';
 import { TelegramPanel } from '@/components/settings/TelegramPanel';
 import { StreamKeySetup } from '@/components/settings/StreamKeySetup';
 import { OwnerAuditSection } from '@/components/settings/OwnerAuditSection';
+import { config } from '@/lib/config';
+import { signSetAuditPubkey, OWNER_STREAM_TARGET } from '@/lib/crypto/audit-pubkey-sig';
 
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
 
@@ -72,10 +74,23 @@ export default function AlertSettingsPage() {
 
   const submitStreamKey = useCallback(
     async (pubKeyHex: string) => {
-      await api.patchOwnerSettings({ streamPubkey: pubKeyHex });
+      // NC-2: prove the rotation with an owner EIP-712 signature (session alone
+      // is no longer enough — a forged session can't forge this signature).
+      if (!wallet.address) throw new Error('Connect your wallet first.');
+      const { signature, nonce } = await signSetAuditPubkey(wallet.signTypedData, {
+        owner: wallet.address,
+        chainId: config.chainId,
+        target: OWNER_STREAM_TARGET,
+        pubkey: pubKeyHex,
+        // ms-timestamp nonce: monotonic across human-paced rotations (the backend rejects
+        // nonce<=last). Two rotations in the SAME ms would 403 the 2nd — impossible for a
+        // manual owner action; a programmatic caller should fetch+increment the stored nonce.
+        nonce: BigInt(Date.now()),
+      });
+      await api.patchOwnerSettings({ streamPubkey: pubKeyHex, signature, nonce });
       setSettings((prev) => (prev ? { ...prev, streamPubkeySet: true } : prev));
     },
-    [api],
+    [api, wallet.address, wallet.signTypedData],
   );
 
   if (!wallet.ready) {

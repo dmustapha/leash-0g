@@ -257,12 +257,20 @@ export async function rotateAgentToken(
  * batches never span the boundary) and refreshes the agents.audit_pubkey cache.
  * Owner-scope is enforced at the route; this is the storage write.
  */
-export async function rotateAgentAuditPubkey(pool: Pool, agentId: string, pubkey: string): Promise<void> {
+export async function rotateAgentAuditPubkey(
+  pool: Pool,
+  agentId: string,
+  pubkey: string,
+  // NC-2: runs inside the rotation txn BEFORE commit (the monotonic replay-nonce
+  // consume), so the nonce only advances when the key write commits.
+  inTx?: (client: PoolClient) => Promise<void>,
+): Promise<void> {
   const key = pubkey.replace(/^0x/, '');
   if (!isValidEciesPubkey(key)) throw new InvalidAuditPubkeyError();
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    if (inTx) await inTx(client);
     await client.query(
       `INSERT INTO agent_audit_keys (agent_id, pubkey, effective_from_seq)
        VALUES ($1, $2, (SELECT COALESCE(MAX(seq), -1) + 1 FROM trace_records WHERE agent_id = $1))

@@ -460,8 +460,12 @@ export type OwnerSettingsPatch = {
   alertPrefs?: AlertPrefs;
   digestHourUtc?: number;
   digestOptout?: boolean;
-  /** Set-once — the backend answers 409 on overwrite. */
+  /** Rotatable — requires the NC-2 owner EIP-712 signature + nonce below. */
   streamPubkey?: string;
+  /** NC-2: owner SetAuditPubkey signature; required when streamPubkey is set. */
+  signature?: string;
+  /** NC-2: monotonic replay nonce bound into the signature. */
+  nonce?: string;
 };
 
 /** Owner-stream hash-chained record (spec §3d) — mirrors TraceRecord discipline. */

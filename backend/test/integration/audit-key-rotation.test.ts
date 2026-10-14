@@ -20,10 +20,31 @@ import {
   type StorageUploader,
 } from '../../src/audit/batcher.js';
 import { rotateOwnerStreamKey } from '../../src/store/owner-settings.js';
+import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
+import type { Hex } from 'viem';
+import { SET_AUDIT_PUBKEY_TYPES, OWNER_STREAM_TARGET } from '../../src/signing/audit-pubkey-auth.js';
 
 let db: TestDb;
 
 const BAD_KEY = '04' + 'ab'.repeat(64); // regex-shaped, NOT on the curve
+
+const TEST_CHAIN_ID = 16602; // testSettings().defaultChainId
+
+/** NC-2: sign SetAuditPubkey with an owner EOA (the EIP-712 rotation proof). */
+async function signRotation(
+  pk: Hex,
+  target: string,
+  pubkey: string,
+  nonce: bigint,
+): Promise<string> {
+  const account = privateKeyToAccount(pk);
+  return account.signTypedData({
+    domain: { name: 'LEASH', version: '1', chainId: TEST_CHAIN_ID },
+    types: SET_AUDIT_PUBKEY_TYPES,
+    primaryType: 'SetAuditPubkey',
+    message: { owner: account.address, target, pubkey, nonce },
+  });
+}
 
 class FakeUploader implements StorageUploader {
   public uploads: Buffer[] = [];
@@ -123,26 +144,29 @@ describe('SCOPE-RH2-2 owner stream-key rotation (seq boundary)', () => {
 
 describe('SCOPE-RH2-2 agent audit-pubkey rotation route', () => {
   it('PATCH rotates the key for future flushes; foreign owner → 404', async () => {
-    const owner = ('0x' + 'b1'.repeat(20)).toLowerCase();
+    const ownerPk = generatePrivateKey();
+    const owner = privateKeyToAccount(ownerPk).address.toLowerCase();
     const foreign = ('0x' + 'b2'.repeat(20)).toLowerCase();
     const keyA = new PrivateKey();
     const keyB = new PrivateKey();
     const agentId = await seedAgent(db.pool, { ownerAddr: owner, auditPubkey: keyA.publicKey.toHex() });
     const t: TestApp = buildTestApp(db.pool);
+    const pubB = keyB.publicKey.toHex();
 
-    // Foreign owner is refused with 404 (enumeration-oracle discipline).
+    // Foreign owner is refused with 404 (enumeration-oracle discipline) — the
+    // owner-scope 404 precedes the signature wall (no enumeration oracle).
     const foreignRes = await request(t.app)
       .patch(`/api/agents/${agentId}/audit-pubkey`)
       .set('authorization', ownerAuth(foreign))
-      .send({ pubkey: keyB.publicKey.toHex() });
+      .send({ pubkey: pubB, signature: await signRotation(ownerPk, agentId, pubB, 0n), nonce: '0' });
     expect(foreignRes.status).toBe(404);
 
-    // Owner rotation succeeds.
+    // Owner rotation succeeds with a valid EIP-712 signature.
     await appendTrace(db.pool, { agentId, kind: 'inference', detail: { i: 0 } });
     const ok = await request(t.app)
       .patch(`/api/agents/${agentId}/audit-pubkey`)
       .set('authorization', ownerAuth(owner))
-      .send({ pubkey: keyB.publicKey.toHex() });
+      .send({ pubkey: pubB, signature: await signRotation(ownerPk, agentId, pubB, 0n), nonce: '0' });
     expect(ok.status).toBe(200);
 
     // The new key covers seq 1 onward; seq 0 keeps key A.
@@ -151,14 +175,116 @@ describe('SCOPE-RH2-2 agent audit-pubkey rotation route', () => {
   });
 
   it('422 for an invalid (not-on-curve) pubkey', async () => {
-    const owner = ('0x' + 'b3'.repeat(20)).toLowerCase();
+    const ownerPk = generatePrivateKey();
+    const owner = privateKeyToAccount(ownerPk).address.toLowerCase();
     const agentId = await seedAgent(db.pool, { ownerAddr: owner, auditPubkey: new PrivateKey().publicKey.toHex() });
     const t: TestApp = buildTestApp(db.pool);
     const res = await request(t.app)
       .patch(`/api/agents/${agentId}/audit-pubkey`)
       .set('authorization', ownerAuth(owner))
-      .send({ pubkey: BAD_KEY });
+      .send({ pubkey: BAD_KEY, signature: await signRotation(ownerPk, agentId, BAD_KEY, 0n), nonce: '0' });
     expect(res.status).toBe(422);
+  });
+});
+
+describe('NC-2 rotation requires an owner EIP-712 signature', () => {
+  it('valid owner sig rotates; wrong-signer → 403 no rotation; replay → 403; missing sig → 403', async () => {
+    const ownerPk = generatePrivateKey();
+    const owner = privateKeyToAccount(ownerPk).address.toLowerCase();
+    const attackerPk = generatePrivateKey();
+    const keyA = new PrivateKey();
+    const keyB = new PrivateKey();
+    const keyC = new PrivateKey();
+    const agentId = await seedAgent(db.pool, { ownerAddr: owner, auditPubkey: keyA.publicKey.toHex() });
+    const t: TestApp = buildTestApp(db.pool);
+    const auth = ownerAuth(owner);
+    const pubB = keyB.publicKey.toHex();
+    const pubC = keyC.publicKey.toHex();
+
+    // Missing signature → 403 (fail-closed), key unchanged.
+    const noSig = await request(t.app)
+      .patch(`/api/agents/${agentId}/audit-pubkey`)
+      .set('authorization', auth)
+      .send({ pubkey: pubB });
+    expect(noSig.status).toBe(400); // schema rejects missing signature/nonce
+    expect(await traceStreamSource.pubkeyFor(db.pool, agentId, 0)).toBe(keyA.publicKey.toHex());
+
+    // Wrong signer (attacker holds a valid Privy session but NOT the owner key) → 403.
+    const wrong = await request(t.app)
+      .patch(`/api/agents/${agentId}/audit-pubkey`)
+      .set('authorization', auth)
+      .send({ pubkey: pubB, signature: await signRotation(attackerPk, agentId, pubB, 0n), nonce: '0' });
+    expect(wrong.status).toBe(403);
+    expect(await traceStreamSource.pubkeyFor(db.pool, agentId, 0)).toBe(keyA.publicKey.toHex());
+
+    // Valid owner sig → rotates.
+    const ok = await request(t.app)
+      .patch(`/api/agents/${agentId}/audit-pubkey`)
+      .set('authorization', auth)
+      .send({ pubkey: pubB, signature: await signRotation(ownerPk, agentId, pubB, 0n), nonce: '0' });
+    expect(ok.status).toBe(200);
+    expect(await traceStreamSource.pubkeyFor(db.pool, agentId, 0)).toBe(pubB);
+
+    // Replay: reusing nonce 0 (even validly re-signed) → 403, no rotation to C.
+    const replay = await request(t.app)
+      .patch(`/api/agents/${agentId}/audit-pubkey`)
+      .set('authorization', auth)
+      .send({ pubkey: pubC, signature: await signRotation(ownerPk, agentId, pubC, 0n), nonce: '0' });
+    expect(replay.status).toBe(403);
+    expect(await traceStreamSource.pubkeyFor(db.pool, agentId, 0)).toBe(pubB);
+
+    // A fresh, larger nonce rotates again.
+    const next = await request(t.app)
+      .patch(`/api/agents/${agentId}/audit-pubkey`)
+      .set('authorization', auth)
+      .send({ pubkey: pubC, signature: await signRotation(ownerPk, agentId, pubC, 1n), nonce: '1' });
+    expect(next.status).toBe(200);
+    expect(await traceStreamSource.pubkeyFor(db.pool, agentId, 0)).toBe(pubC);
+  });
+
+  it('owner stream-key route enforces the same signature + nonce wall', async () => {
+    const ownerPk = generatePrivateKey();
+    const owner = privateKeyToAccount(ownerPk).address.toLowerCase();
+    const attackerPk = generatePrivateKey();
+    const keyA = new PrivateKey();
+    const keyB = new PrivateKey();
+    const t: TestApp = buildTestApp(db.pool);
+    const auth = ownerAuth(owner);
+    const pubA = keyA.publicKey.toHex();
+    const pubB = keyB.publicKey.toHex();
+    const tgt = OWNER_STREAM_TARGET;
+
+    // Wrong signer → 403, no key set.
+    const wrong = await request(t.app)
+      .post('/api/owner/stream-key')
+      .set('authorization', auth)
+      .send({ pubkey: pubA, signature: await signRotation(attackerPk, tgt, pubA, 0n), nonce: '0' });
+    expect(wrong.status).toBe(403);
+    expect(await ownerStreamSource.pubkeyFor(db.pool, owner, 0)).toBeNull();
+
+    // Valid owner sig → sets key A.
+    const ok = await request(t.app)
+      .post('/api/owner/stream-key')
+      .set('authorization', auth)
+      .send({ pubkey: pubA, signature: await signRotation(ownerPk, tgt, pubA, 0n), nonce: '0' });
+    expect(ok.status).toBe(200);
+    expect(await ownerStreamSource.pubkeyFor(db.pool, owner, 0)).toBe(pubA);
+
+    // Replayed nonce → 403, still key A.
+    const replay = await request(t.app)
+      .post('/api/owner/stream-key')
+      .set('authorization', auth)
+      .send({ pubkey: pubB, signature: await signRotation(ownerPk, tgt, pubB, 0n), nonce: '0' });
+    expect(replay.status).toBe(403);
+    expect(await ownerStreamSource.pubkeyFor(db.pool, owner, 0)).toBe(pubA);
+
+    // Fresh nonce → rotates to B.
+    const next = await request(t.app)
+      .post('/api/owner/stream-key')
+      .set('authorization', auth)
+      .send({ pubkey: pubB, signature: await signRotation(ownerPk, tgt, pubB, 1n), nonce: '1' });
+    expect(next.status).toBe(200);
+    expect(await ownerStreamSource.pubkeyFor(db.pool, owner, 0)).toBe(pubB);
   });
 });
 
