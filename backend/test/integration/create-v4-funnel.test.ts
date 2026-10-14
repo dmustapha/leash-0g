@@ -81,3 +81,57 @@ describe('SE-1 create funnel → version selection', () => {
     expect(res.status).toBe(400);
   });
 });
+
+/**
+ * RH2 (V5 migration, A1): the trader/oracleBand lane mints a governed-signing V5
+ * account (NOT the V4 capability factory) so the swap wall budgets amountIn + pins
+ * the recipient (closes SCOPE-RH2-1 — V4 left amountIn UNBUDGETED). Non-oracleBand
+ * creates still mint V4 (legacy-safe, additive). A V5 lane on a chain missing the
+ * V5 singletons fails-CLOSED with a typed 409 — never a silent V4 fallback.
+ */
+describe('RH2 — oracleBand create → V5 migration', () => {
+  it("capability:'oracleBand' → mints accountVersion:5, persists account_version=5", async () => {
+    const owner = uniqueOwner();
+    const t = buildTestApp(db.pool);
+    const { row } = await createAndFetch(t, owner, createBody('band-trader', { capability: 'oracleBand' }));
+    expect(t.chain.createdVersions.at(-1)).toBe(5);
+    expect(row?.accountVersion).toBe(5);
+  });
+
+  it('a trader goal WITHOUT the oracleBand capability STILL mints V5 (Gate-② W1 — any trader swaps, so no V4 drain)', async () => {
+    const owner = uniqueOwner();
+    const t = buildTestApp(db.pool);
+    const traderGoal = {
+      type: 'trader',
+      holdToken: '0x' + 'aa'.repeat(20),
+      spendToken: '0x' + 'bb'.repeat(20),
+      targetHoldWei: '1000000000000000000',
+      clipWei: '100000000000000000',
+    };
+    const { row } = await createAndFetch(t, owner, createBody('bare-trader', { goal: traderGoal }));
+    expect(t.chain.createdVersions.at(-1)).toBe(5);
+    expect(row?.accountVersion).toBe(5);
+  });
+
+  it('a non-oracleBand create (no capability) still mints V4', async () => {
+    const owner = uniqueOwner();
+    const t = buildTestApp(db.pool);
+    const { row } = await createAndFetch(t, owner, createBody('plain-v4'));
+    expect(t.chain.createdVersions.at(-1)).toBe(4);
+    expect(row?.accountVersion).toBe(4);
+  });
+
+  it('a V5-trader create on a chain missing V5 singletons fails-CLOSED (409, never V4)', async () => {
+    const owner = uniqueOwner();
+    const t = buildTestApp(db.pool);
+    t.chain.v5Supported = false;
+    const res = await request(t.app)
+      .post('/api/agents')
+      .set('authorization', ownerAuth(owner))
+      .send(createBody('band-no-singletons', { capability: 'oracleBand' }));
+    expect(res.status).toBe(409);
+    expect(res.body.error?.reason).toBe('v5_unavailable');
+    // No silent fallback: nothing was minted.
+    expect(t.chain.createdVersions).toHaveLength(0);
+  });
+});

@@ -48,6 +48,8 @@ export class FakeChainOps implements ChainOps {
   public funded: Array<{ addr: string; amountWei: bigint }> = [];
   /** C-2: set to make revoke() reject like a reverted tx. */
   public revokeError: Error | null = null;
+  /** RH2 (V5 migration): toggle the V5-singleton availability for fail-closed tests. */
+  public v5Supported = true;
   /** Per-account forced revert (lowercased addrs) — revoke-batch partial failure. */
   public revokeErrorFor = new Set<string>();
   private nextAgentId = 100n;
@@ -148,6 +150,11 @@ export class FakeChainOps implements ChainOps {
 
   async getBalance(addr: string): Promise<bigint> {
     return this.balances.get(addr.toLowerCase()) ?? 0n;
+  }
+
+  /** RH2 (V5 migration): the create route fails-closed when this is false. */
+  supportsV5(): boolean {
+    return this.v5Supported;
   }
 }
 

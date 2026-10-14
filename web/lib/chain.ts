@@ -20,6 +20,7 @@ import { config } from './config';
 import { chainDisplayName, nativeSymbol, rpcUrlFor } from './networks';
 import leashAccountAbi from './abi/LeashAccount.json';
 import { LEASH_ACCOUNT_V4_ABI } from './abi/leashAccountV4';
+import { accountAbiForVersion, LEASH_ACCOUNT_V5_SIGNING_ABI, type AccountVersion } from './abi/leashAccountV5';
 
 export const zeroGGalileo = defineChain({
   id: config.chainId,
@@ -280,19 +281,28 @@ export function recipientModeToUint(mode: RecipientMode): 0 | 1 {
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 const V4_ABI_LOOSE = LEASH_ACCOUNT_V4_ABI as any;
 
-async function writeAccountV4(
+// RH2 (B1): the owner-arming helpers below encode the SHARED governed-calldata grammar
+// (call rules, spend budget, price band) that LeashAccountV5 inherits byte-identically from
+// V4. Threading the account's `version` lets a V5 account encode against the full V5 superset
+// ABI while a V4/legacy account keeps the V4 ABI — additive, version-gated, no V4 behavior
+// change (the shared selectors are identical, so this is correctness + unblocking V5-only
+// accounts, not a V4 regression). `version` omitted ⇒ V4 (the historical default).
+async function writeAccountVersioned(
   provider: EIP1193Provider,
   owner: Address,
   accountAddr: Address,
   functionName: string,
   args: readonly unknown[] = [],
   chainId?: number,
+  version?: AccountVersion,
 ): Promise<Hex> {
   await ensureWalletChain(provider, chainId ?? config.chainId);
   const wallet = walletClientFor(provider, owner, chainId);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const abi = (version === undefined ? V4_ABI_LOOSE : (accountAbiForVersion(version) as any));
   const { request } = await publicClientFor(chainId).simulateContract({
     address: accountAddr,
-    abi: V4_ABI_LOOSE,
+    abi,
     functionName,
     args: args as unknown[],
     account: owner,
@@ -319,8 +329,9 @@ export function proposeCallRuleOnchain(
   account: Address,
   rule: CallRuleInput,
   chainId?: number,
+  version?: AccountVersion,
 ) {
-  return writeAccountV4(provider, owner, account, 'proposeCallRule', [
+  return writeAccountVersioned(provider, owner, account, 'proposeCallRule', [
     rule.target,
     rule.selector,
     recipientModeToUint(rule.recipientMode),
@@ -328,12 +339,18 @@ export function proposeCallRuleOnchain(
     BigInt(rule.perCallCap),
     BigInt(rule.windowCapCall),
     rule.codehash ?? ZERO_CODEHASH,
-  ], chainId);
+  ], chainId, version);
 }
 
 /** Apply the single pending call-rule once its eta has passed. */
-export function applyCallRuleOnchain(provider: EIP1193Provider, owner: Address, account: Address, chainId?: number) {
-  return writeAccountV4(provider, owner, account, 'applyCallRule', [], chainId);
+export function applyCallRuleOnchain(
+  provider: EIP1193Provider,
+  owner: Address,
+  account: Address,
+  chainId?: number,
+  version?: AccountVersion,
+) {
+  return writeAccountVersioned(provider, owner, account, 'applyCallRule', [], chainId, version);
 }
 
 /** Tighten a (target,selector) rule's caps. INSTANT. */
@@ -343,13 +360,14 @@ export function tightenCallRuleOnchain(
   account: Address,
   args: { target: Address; selector: Hex; perCallCap: string; windowCapCall: string },
   chainId?: number,
+  version?: AccountVersion,
 ) {
-  return writeAccountV4(provider, owner, account, 'tightenCallRule', [
+  return writeAccountVersioned(provider, owner, account, 'tightenCallRule', [
     args.target,
     args.selector,
     BigInt(args.perCallCap),
     BigInt(args.windowCapCall),
-  ], chainId);
+  ], chainId, version);
 }
 
 /** Remove one selector under a target. INSTANT. */
@@ -360,8 +378,9 @@ export function removeCallSelectorOnchain(
   target: Address,
   selector: Hex,
   chainId?: number,
+  version?: AccountVersion,
 ) {
-  return writeAccountV4(provider, owner, account, 'removeCallSelector', [target, selector], chainId);
+  return writeAccountVersioned(provider, owner, account, 'removeCallSelector', [target, selector], chainId, version);
 }
 
 /** Remove an entire target (all its selectors). INSTANT. */
@@ -371,8 +390,9 @@ export function removeCallTargetOnchain(
   account: Address,
   target: Address,
   chainId?: number,
+  version?: AccountVersion,
 ) {
-  return writeAccountV4(provider, owner, account, 'removeCallTarget', [target], chainId);
+  return writeAccountVersioned(provider, owner, account, 'removeCallTarget', [target], chainId, version);
 }
 
 /** One-shot JIT approve-once for a specific decoded call hash. INSTANT. */
@@ -383,8 +403,9 @@ export function authorizeOnceOnchain(
   callHash: Hex,
   expiryUnixSec: number,
   chainId?: number,
+  version?: AccountVersion,
 ) {
-  return writeAccountV4(provider, owner, account, 'authorizeOnce', [callHash, BigInt(expiryUnixSec)], chainId);
+  return writeAccountVersioned(provider, owner, account, 'authorizeOnce', [callHash, BigInt(expiryUnixSec)], chainId, version);
 }
 
 /** Propose a per-token cumulative outflow budget. TIMELOCKED — apply after its eta. */
@@ -395,8 +416,9 @@ export function proposeSpendBudgetOnchain(
   token: Address,
   windowCap: string,
   chainId?: number,
+  version?: AccountVersion,
 ) {
-  return writeAccountV4(provider, owner, account, 'proposeSpendBudget', [token, BigInt(windowCap)], chainId);
+  return writeAccountVersioned(provider, owner, account, 'proposeSpendBudget', [token, BigInt(windowCap)], chainId, version);
 }
 
 /** FR4 (F-9): the band wall only ever governs the router's swap selector.
@@ -410,15 +432,16 @@ export function tightenPriceBandOnchain(
   account: Address,
   band: { target: Address; feed: Address; asset: Address; maxDeviationBps: number; maxStalenessSec: number },
   chainId?: number,
+  version?: AccountVersion,
 ) {
-  return writeAccountV4(provider, owner, account, 'tightenPriceBand', [
+  return writeAccountVersioned(provider, owner, account, 'tightenPriceBand', [
     band.target,
     BAND_SWAP_SELECTOR,
     band.feed,
     band.asset,
     band.maxDeviationBps,
     BigInt(band.maxStalenessSec),
-  ], chainId);
+  ], chainId, version);
 }
 
 /** Latch band-required-for-every-swap — one-way owner opt-in (fail-closed). */
@@ -427,8 +450,9 @@ export function enableRequireBandForSwapOnchain(
   owner: Address,
   account: Address,
   chainId?: number,
+  version?: AccountVersion,
 ) {
-  return writeAccountV4(provider, owner, account, 'enableRequireBandForSwap', [], chainId);
+  return writeAccountVersioned(provider, owner, account, 'enableRequireBandForSwap', [], chainId, version);
 }
 
 /** FR4 (review fix): is a band ALREADY SET for router.swap on this account? Read on-chain
@@ -454,8 +478,14 @@ export async function readRequireBandForSwap(account: Address, chainId?: number)
 }
 
 /** Apply the pending spend budget once its eta has passed. */
-export function applySpendBudgetOnchain(provider: EIP1193Provider, owner: Address, account: Address, chainId?: number) {
-  return writeAccountV4(provider, owner, account, 'applySpendBudget', [], chainId);
+export function applySpendBudgetOnchain(
+  provider: EIP1193Provider,
+  owner: Address,
+  account: Address,
+  chainId?: number,
+  version?: AccountVersion,
+) {
+  return writeAccountVersioned(provider, owner, account, 'applySpendBudget', [], chainId, version);
 }
 
 /**
@@ -499,4 +529,152 @@ export async function readPendingBudgetEta(account: Address, chainId?: number): 
       functionName: 'pendingBudgetEta',
     })) as bigint,
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Phase B2 (TA-ABI-5 close) — governed-SIGNING grants (LeashAccountV5 only).
+// The owner arms a session-key signing authority through the SAME owner-signed,
+// client-side, timelocked grammar as the V4 calldata grants: proposeSigningGrantNested
+// is a LOOSEN (timelocked ~15 min) → applySigningGrant after the eta; tightenSigningGrant
+// and removeSigningDescriptor are INSTANT restrictions. The on-chain V5 account is the
+// sole enforcement wall; the read-model (`POST /signing/rule`) only mirrors these writes.
+// These are NEW exported helpers — they never touch the V4 writeAccount path above.
+// ─────────────────────────────────────────────────────────────────────────────
+
+// The V5 signing fragments are heavily overloaded tuples; a dynamic functionName defeats
+// viem's strict per-function arg inference, so we narrow to a loose abi at the call boundary
+// (the human-readable signatures in leashAccountV5.ts stay the single source of truth).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const V5_SIGNING_ABI_LOOSE = LEASH_ACCOUNT_V5_SIGNING_ABI as any;
+
+async function writeAccountV5Signing(
+  provider: EIP1193Provider,
+  owner: Address,
+  accountAddr: Address,
+  functionName: string,
+  args: readonly unknown[] = [],
+  chainId?: number,
+): Promise<Hex> {
+  await ensureWalletChain(provider, chainId ?? config.chainId);
+  const wallet = walletClientFor(provider, owner, chainId);
+  const { request } = await publicClientFor(chainId).simulateContract({
+    address: accountAddr,
+    abi: V5_SIGNING_ABI_LOOSE,
+    functionName,
+    args: args as unknown[],
+    account: owner,
+  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return wallet.writeContract(request as any);
+}
+
+/** The on-chain grant parameters the backend `/signing/rule` returns (byte-exact to the
+ *  wall's stored `proposeSigningGrantNested` struct). The owner signs the tx with exactly
+ *  these — the backend computes them so the wall and the engine reconstruct identically. */
+export type OnChainSigningGrant = {
+  descriptorId: number;
+  domainSeparator: Hex;
+  typeHash: Hex;
+  numFields: number;
+  spenderIndex: number;
+  amountIndex: number;
+  deadlineIndex: number;
+  nestedTypeHash: Hex;
+  nestedLeafStart: number;
+  nestedLeafCount: number;
+  expiryLeafIndex: number;
+  kind: number;
+  buyToken: Hex;
+  tokenCaps: { token: Hex; cap: string }[];
+  tokenCapsHash: Hex;
+};
+
+/** The owner-authored per-descriptor budget the grant pins (scalar `token`/`perIntentCap`
+ *  for flat/nested/order; the `spenders` allowlist; `caps` the batch per-token allowlist). */
+export type SigningGrantInput = {
+  grant: OnChainSigningGrant;
+  spenders: Address[];
+  /** Base-unit per-intent cap (ignored for batch, which uses `grant.tokenCaps`). */
+  perIntentCap: string;
+  /** Max deadline window seconds the armed intent may carry. */
+  maxDeadlineWindow: number;
+  /** Budget token (the pinned sell/spend token). */
+  token: Address;
+};
+
+/**
+ * Loosen: propose a governed-signing grant for one descriptor. TIMELOCKED — the owner
+ * applies it after its eta. Encodes the backend-computed grant params into the V5
+ * `proposeSigningGrantNested((...) p, address[] spenders, (address,uint128)[] caps)` tuple.
+ */
+export function proposeSigningGrantOnchain(
+  provider: EIP1193Provider,
+  owner: Address,
+  account: Address,
+  input: SigningGrantInput,
+  chainId?: number,
+) {
+  const g = input.grant;
+  const p = {
+    descriptorId: BigInt(g.descriptorId),
+    domainSeparator: g.domainSeparator,
+    typeHash: g.typeHash,
+    numTopFields: g.numFields,
+    spenderLeafIndex: g.spenderIndex,
+    amountLeafIndex: g.amountIndex,
+    deadlineLeafIndex: g.deadlineIndex,
+    expiryLeafIndex: g.expiryLeafIndex,
+    nestedTypeHash: g.nestedTypeHash,
+    nestedLeafStart: g.nestedLeafStart,
+    nestedLeafCount: g.nestedLeafCount,
+    token: input.token,
+    perIntentCap: BigInt(input.perIntentCap),
+    maxDeadlineWindow: BigInt(input.maxDeadlineWindow),
+    kind: g.kind,
+    buyToken: g.buyToken,
+  };
+  const caps = g.tokenCaps.map((c) => ({ token: c.token, cap: BigInt(c.cap) }));
+  return writeAccountV5Signing(provider, owner, account, 'proposeSigningGrantNested', [
+    p,
+    input.spenders,
+    caps,
+  ], chainId);
+}
+
+/** Apply the single pending signing grant once its eta has passed. */
+export function applySigningGrantOnchain(
+  provider: EIP1193Provider,
+  owner: Address,
+  account: Address,
+  chainId?: number,
+) {
+  return writeAccountV5Signing(provider, owner, account, 'applySigningGrant', [], chainId);
+}
+
+/** Tighten a descriptor's per-intent cap / deadline window. INSTANT. */
+export function tightenSigningGrantOnchain(
+  provider: EIP1193Provider,
+  owner: Address,
+  account: Address,
+  args: { descriptorId: number; perIntentCap: string; maxDeadlineWindow: number },
+  chainId?: number,
+) {
+  return writeAccountV5Signing(provider, owner, account, 'tightenSigningGrant', [
+    BigInt(args.descriptorId),
+    BigInt(args.perIntentCap),
+    BigInt(args.maxDeadlineWindow),
+  ], chainId);
+}
+
+/** Remove a signing descriptor entirely (bumps the signing epoch → stales its arms). INSTANT. */
+export function removeSigningDescriptorOnchain(
+  provider: EIP1193Provider,
+  owner: Address,
+  account: Address,
+  descriptorId: number,
+  chainId?: number,
+) {
+  return writeAccountV5Signing(provider, owner, account, 'removeSigningDescriptor', [
+    BigInt(descriptorId),
+  ], chainId);
 }

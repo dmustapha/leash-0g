@@ -207,8 +207,70 @@ export type AgentDetail = {
     createdAt?: string;
     /** Phase-5 (D-B9): freeform "what it's for" label (publicAgent). Inert — display only. */
     capabilityLabel?: string;
+    /** RH2 (B1): on-chain account grammar version — the owner-arming panels pick the
+     *  encoding ABI from this (5 = V5 superset, 4 = V4, 2 = legacy). Absent on legacy
+     *  detail payloads → the owner-write path falls back to V4 (byte-identical for the
+     *  shared call-rule/band/spend fragments). */
+    accountVersion?: number;
   };
 };
+
+// ── RH2 B2 (TA-ABI-5 close): governed-signing grant read-model (V5 accounts) ──
+// Mirrors the backend `GET /api/agents/:id/signing` envelope + the on-chain grant
+// params the owner signs. The on-chain V5 account stays authoritative; these shapes
+// are the read-model view the SigningGrantPanel renders.
+
+/** The on-chain grant params the owner's `proposeSigningGrantNested` tx must store —
+ *  byte-exact to the backend `onChainGrantParams(descriptor)`. */
+export type OnChainSigningGrantView = {
+  descriptorId: number;
+  domainSeparator: Address;
+  typeHash: Address;
+  numFields: number;
+  spenderIndex: number;
+  amountIndex: number;
+  deadlineIndex: number;
+  nestedTypeHash: Address;
+  nestedLeafStart: number;
+  nestedLeafCount: number;
+  expiryLeafIndex: number;
+  kind: number;
+  buyToken: Address;
+  tokenCaps: { token: Address; cap: string }[];
+  tokenCapsHash: Address;
+};
+
+/** One reviewed, grantable signing descriptor (the registry entries the owner can arm). */
+export type SigningDescriptorView = {
+  descriptorId: number;
+  key: string;
+  label: string;
+  protocol: string;
+  sensitive: boolean;
+  onChainGrant: OnChainSigningGrantView;
+};
+
+/** A standing signing grant the owner already armed (read-model mirror of the wall). */
+export type SigningRuleView = {
+  descriptorId: number;
+  spenderSet: Address[];
+  perIntentCap: string;
+  maxDeadlineWindow: number;
+  token: Address;
+  tokenCaps?: { token: Address; cap: string }[];
+  active: boolean;
+};
+
+/** The read-only signing envelope the cockpit panel loads. */
+export type SigningEnvelopeView = {
+  rules: SigningRuleView[];
+  recentRequests: unknown[];
+  arms: unknown[];
+  available: SigningDescriptorView[];
+};
+
+/** propose = loosen (timelocked) / tighten (instant) / remove (instant). */
+export type SigningGrantAction = 'propose' | 'tighten' | 'remove';
 
 export type StreamEvent =
   | { type: 'reasoning'; text: string; seq?: number; ts?: string }
