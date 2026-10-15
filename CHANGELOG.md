@@ -2,6 +2,13 @@
 
 LEASH is built in phases, each ending in a scope + build review gate and proven on the 0G Galileo testnet (chain 16602) before the next begins. This log tracks those phases.
 
+## Whole-project tear-apart — safety floor proven (2026-10)
+
+- Every product stage (P1→RH2) plus four adversarial waves driven against the walls, live on testnet: stolen ops keys, hijacked session keys, forged consent, cross-chain replay, SSRF egress, grant resurrection. Verdict: **zero exploitable custody bugs; the non-custodial thesis holds live.**
+- What the tear-apart proved, in one line each: funds move only via the account's own session key under on-chain caps (stolen ops key → revert on every privileged call); the audit trail is ECIES-encrypted to the owner (LEASH cannot read it); a fully prompt-injected agent cannot exceed the leash (all six money paths terminate at a contract wall); delegation carries zero on-chain authority; owner approval is causally bound to the act; a grant on chain A never authorizes chain B.
+- Eight fixes shipped from the findings: owner-signed audit-pubkey rotation (NC-2), terminal `removed` grants (DM-1), signing descriptor-nonce enforcement (F′-SIGN-1), trader V4→V5 migration closing the swap-drain, cross-chain revoke fan-out (I-02), NAT64 SSRF completeness, capability cross-agent parity (D-SF3-2), elevation/direction schema-drift tolerance.
+- Accepted residual (bounded, documented): off-chain consent is session-authenticated, not EVM-signed — but forged consent cannot manufacture on-chain authority; custody stays crypto-gated on-chain.
+
 ## Stage F′ — Governed signing (ERC-1271) (2026-10)
 
 - A fourth capability beyond native transfers, governed ERC-20 calls, and external tool-use: an agent can be authorized to **sign** structured EIP-712 messages (Permit2, CoW orders) — under the same never-guess-money wall. A new account, `LeashAccountV5`, adds an ERC-1271 spine: the owner grants a per-protocol signing policy on-chain (timelocked), the agent's session key arms one specific intent, and `isValidSignature` returns valid **only** for an armed, un-expired, un-revoked digest (default-deny, fails closed on revoke/expiry).

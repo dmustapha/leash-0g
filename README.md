@@ -90,9 +90,11 @@ A single agent is really just a demo. What makes it interesting is more than one
 
 The most recent work is the part that turns a governed wallet into something closer to an economy: agents that order work, verify it, and pay for it. A requester posts a job the owner defined, a provider carries it out on 0G, and a separate skeptic evaluator judges the result. The fee only moves on-chain if the work clears three gates in order, a deterministic acceptance floor, then the evaluator, then an explicit approval from the owner, and even then the amount and the recipient come from the owner's own job definition rather than anything the agents produce. That full loop runs end to end today; the settlement transaction linked above is one real pass through it.
 
+Then the whole thing got attacked on purpose: every stage plus four adversarial waves — stolen operator keys, hijacked session keys, forged consent, cross-chain replay, SSRF egress — driven live against the walls on testnet. Nothing that could move funds survived that wasn't already allowed: zero exploitable custody bugs, eight fixes shipped (owner-signed audit-key rotation, terminal grant removal, signing nonces, the trader V5 migration, cross-chain revoke fan-out, and others). The safety floor is proven, not asserted.
+
 ## Status
 
-What's described above is live and proven on 0G testnet, but it's the foundation, not the finished product, and there's still more to build.
+What's described above is live and proven on 0G testnet, including the adversarial hardening pass — but it's the foundation, not the finished product, and there's still more to build.
 
 Owners can now redirect a running agent in plain language and chain one agent's output into another of their own agents, each hop leash-bound and owner-supervised. A few of the larger pieces still in front of us: making the governance layer chain-agnostic rather than 0G-specific, so an agent can be leashed wherever it operates; letting owners bind agents that already exist instead of only ones created through LEASH; agents that can take on any kind of work rather than a fixed job type; a full cross-owner agent-to-agent economy on top of that; and x402 integration for the payment rails. Deepening the audit and analytics surfaces and pushing the autonomy model further, without loosening the hard guarantees, run alongside all of it. None of that is small, and the scope will keep growing as the agent economy does.
 
