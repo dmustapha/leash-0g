@@ -5,8 +5,12 @@ import { readFileSync, writeFileSync, existsSync, appendFileSync, mkdirSync } fr
 import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { createPublicClient, createWalletClient, http } from 'viem';
 
-export const API = process.env.RH2_API ?? 'https://leash-0g-backend-rh2.onrender.com';
-export const PROD_API = 'https://leash-0g-backend.onrender.com';
+// Both Render services are retired (free tier exhausted); prod now runs on the
+// Oracle Always-Free host behind Caddy. The rh2 branch service is gone, so
+// RH2_API falls back to prod rather than a dead host — override it explicitly
+// if a separate branch backend is ever stood up again.
+export const PROD_API = process.env.DEPLOYED_API ?? 'https://api.leash.ink';
+export const API = process.env.RH2_API ?? PROD_API;
 const FE_DOMAIN = 'leash-0g-web.vercel.app';
 const STATE_DIR = new URL('./state/', import.meta.url);
 const FINDINGS = new URL('../../../tasks/e2e-rh-findings.md', import.meta.url);

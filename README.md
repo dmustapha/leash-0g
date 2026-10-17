@@ -8,8 +8,8 @@ LEASH lets autonomous AI agents hold and move real funds under limits the agent 
 
 ## Live on 0G (Galileo testnet, chain 16602)
 
-- **Web cockpit:** https://leash-0g-web.vercel.app
-- **Backend API:** https://leash-0g-backend.onrender.com
+- **Web cockpit:** https://leash.ink (also https://leash-0g-web.vercel.app)
+- **Backend API:** https://api.leash.ink
 - **Contracts (Sourcify-verified):**
   - `AgentRegistry` `0xA74d573F43CFDA890713Bd348186ab80736642C3`
   - `LeashAccountFactory` (v3, token-capable) `0xcD7818673238E2703585CF96658FeBf1a10f8105`
