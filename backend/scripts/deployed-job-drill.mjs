@@ -28,7 +28,7 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { createPublicClient, createWalletClient, http, parseEther, encodeFunctionData } from 'viem';
 import { PrivateKey } from 'eciesjs';
 
-const API = process.env.DEPLOYED_API ?? 'https://leash-0g-backend.onrender.com';
+const API = process.env.DEPLOYED_API ?? 'https://api.leash.ink';
 const FE_DOMAIN = 'leash-0g-web.vercel.app';
 // Deployed 2026-09-23 (docs/DEPLOYMENTS.md → v3 redeploy). The backend's own
 // LEASH_FACTORY_ADDR is authoritative for account creation; this is the token.
@@ -39,7 +39,7 @@ const TEST_USD = (process.env.SETTLEMENT_TOKEN ?? '0xbeeA96c7614ebc46760B442068E
 // poisoned env can't redirect the ops key's funds to an attacker contract or
 // address. `--i-understand-override` is required to point elsewhere.
 const OVERRIDE = process.argv.includes('--i-understand-override');
-const ALLOWED_API_HOSTS = ['leash-0g-backend.onrender.com'];
+const ALLOWED_API_HOSTS = ['api.leash.ink'];
 const KNOWN_TEST_USD = '0xbeea96c7614ebc46760b442068e359e51e7c4e52';
 const isAddress = (a) => typeof a === 'string' && /^0x[0-9a-fA-F]{40}$/.test(a);
 if (!OVERRIDE) {

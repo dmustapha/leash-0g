@@ -26,7 +26,7 @@ Evidence output: `docs/evidence/phase4-d-job-10.json` (untruncated hashes).
 cd backend
 node scripts/deployed-job-drill.mjs
 # optional overrides:
-#   DEPLOYED_API=https://leash-0g-backend.onrender.com
+#   DEPLOYED_API=https://api.leash.ink
 #   SETTLEMENT_TOKEN=0xbeeA96c7614ebc46760B442068E359e51e7c4e52   (v3 TestUSD)
 ```
 

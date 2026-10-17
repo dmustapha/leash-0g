@@ -23,7 +23,7 @@ import { generatePrivateKey, privateKeyToAccount } from 'viem/accounts';
 import { createPublicClient, createWalletClient, http, parseEther } from 'viem';
 import { PrivateKey } from 'eciesjs';
 
-const API = process.env.DEPLOYED_API ?? 'https://leash-0g-backend.onrender.com';
+const API = process.env.DEPLOYED_API ?? 'https://api.leash.ink';
 const FE_DOMAIN = 'leash-0g-web.vercel.app';
 
 const env = {};
