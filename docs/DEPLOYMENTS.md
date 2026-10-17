@@ -36,14 +36,27 @@ Deployer: ops key `0xc211C942946011859ca634F22400d80570ED12A5`. Chain 16602. Sou
 - v1 proof: create `0x95f707762f089dc7878ed9aa79e9ebfc023a042233b3b6b3d4727d574a0b1bd9` · account `0x24bB3B7CE50A0B6133F60D6CA3cd45269DE9c6Af` · execute `0x2126e0f49e336a774599549a0114f5da3b7b7585200580f03907db62ef17d2fa` · revoke `0x3f933efea8ed257bd99585b883880f5a5ae363f1eb292b4804300ff1825b44f3` · post-revoke revert `AccountRevoked`.
 
 ## Services
-- Backend (Render, free tier — stateless, all state in Neon): `https://leash-0g-backend.onrender.com`
-  - **Deploy strategy (P3C-5/S13, pinned): NON-OVERLAPPING.** On the free tier Render stops the
-    old instance before starting the new one (zero-downtime overlap is a paid-tier feature), so
-    two instances never run at once — the boot-sweep cannot fail a delegation genuinely in flight
-    on a draining instance. **If the service is ever upgraded to a paid tier, Render defaults to
-    overlapping zero-downtime deploys — re-evaluate this pin (or accept the traced boot-sweep
-    artifact) before upgrading.** Recorded in `07` S13.
-- Frontend (Vercel): project `leash-0g-web` (stable alias on promote)
+- Backend (Oracle Cloud Always-Free — stateless, all state in Neon): `https://api.leash.ink`
+  - Host `leash-backend-micro`, VM.Standard.E2.1.Micro (1 OCPU / 1 GB + 4 GB swap), `ca-toronto-1`,
+    Ubuntu 24.04. App at `~/run`; `systemd` unit `leash-backend.service` (`Restart=always`,
+    `EnvironmentFile=~/run/.env`, log `~/run/leash.log`). Caddy terminates TLS on
+    `api.leash.ink` and reverse-proxies `127.0.0.1:8080`; the gateway stays on `127.0.0.1:8081`
+    and is never publicly bound (M-01). `HOST=0.0.0.0` is REQUIRED (config default is 127.0.0.1).
+  - **Build off-box:** `pnpm --filter ./backend build` on a dev machine, then ship
+    `dist` + `package.json` + `migrations` (the migration runner resolves `../../migrations`
+    relative to `dist/db/`). On-box `tsc` OOMs at 1 GB — that, not argon2, was the Docker build
+    failure; argon2 ships a `linux-x64` prebuild so `npm install --omit=dev` needs no compiler.
+  - **Deploy strategy: NON-OVERLAPPING** (single systemd unit, restart-in-place), so two instances
+    never run at once and the boot-sweep cannot fail a delegation genuinely in flight. This
+    preserves the P3C-5/S13 pin that the retired Render free tier provided incidentally — if this
+    ever becomes a rolling/multi-instance deploy, re-evaluate the pin. Recorded in `07` S13.
+  - **DB role (C-6/INFRA-1):** the app connects as the restricted `leash_runtime` role
+    (no DDL; `trace_records`/`owner_records` are SELECT+INSERT only, UPDATE/DELETE/TRUNCATE
+    revoked), with the Neon admin URL kept migration-only in `MIGRATE_DATABASE_URL` and
+    `REQUIRE_RESTRICTED_AUDIT_ROLE=true` so a regression fails the boot instead of warning.
+  - **Retired:** Render `leash-0g-backend` + `-rh2`, Fly, Railway (free tiers exhausted).
+- Frontend (Vercel): project `leash-0g-web` — `leash.ink`, `www.leash.ink`, and the
+  `leash-0g-web.vercel.app` alias (stable alias on promote)
 - CI wallet (GitHub secrets, low-value): `0x277cD0ee8e22dF1249D315d2e3e0FeBa70017375` (funded 0.3 0G, tx `0xa4ecfb2d8f987d0e248bcd8be021fc97471c76aff483574abfcac6c883dc02c5`)
 
 ## Phase 2 — Second Agent + Coordination (2026-09-21, commit 0b00891)
