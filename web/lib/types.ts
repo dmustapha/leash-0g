@@ -709,6 +709,12 @@ export type JobStatus =
   | 'evaluating'
   | 'verdict'
   | 'awaiting_approval'
+  // The backend has had 'settling' since the double-settle claim landed, but
+  // this mirror omitted it — so such a job fell out of every
+  // Record<JobStatus, …> lookup in the cockpit and crashed the render. It is
+  // now the NORMAL state of a broadcast-but-unconfirmed fee transfer rather
+  // than a blink between two writes, so the gap stops being latent.
+  | 'settling'
   | 'settled'
   | 'rejected'
   | 'denied'
@@ -815,6 +821,8 @@ export type JobView = {
   rationaleRef: string | null;
   approvalId: string | null;
   settlementTx: string | null;
+  /** Broadcast, receipt not yet resolved. Non-null means value may have moved. */
+  settlementTxPending: string | null;
   poa: PoaRecord | null;
   blockedBy: string | null;
   createdAt: string;

@@ -79,6 +79,44 @@ export function buildPoaRecord(input: {
 }
 
 /**
+ * The job row → PoA fallback table, in ONE place.
+ *
+ * A job row carries nullable columns that the PoA requires as present, so every
+ * caller has to choose the same defaults. Two callers now assemble a PoA for the
+ * same job — the graph on the happy path (`jobs/graph.ts`) and the settlement
+ * sweep when a receipt resolves late (`jobs/settlement-sweep.ts`) — and if their
+ * fallbacks diverge they mint two DIFFERENT permanent records for one job. The
+ * defaults are not arbitrary and must not be re-chosen at a call site:
+ *   - `verdict ?? 'accept'`: settlement is only ever reached through an accepted
+ *     verdict, so a null here is a projection gap, not a rejection.
+ *   - `acceptance ?? { passed: true, checked: 0 }`: "no structural check ran",
+ *     which `checked: 0` states honestly rather than claiming checks passed.
+ *   - empty-string sigs/roots: absence, recorded as absence.
+ *
+ * `import type` only — erased at compile time, so this is not an import cycle
+ * with `store/jobs.ts` (which imports `PoaRecord` from here, also type-only).
+ */
+export function poaFromJobRow(
+  job: Pick<
+    import('../store/jobs.js').JobRow,
+    'jobId' | 'jobSpecHash' | 'requesterSig' | 'deliverableRoot' | 'providerSig' | 'verdict' | 'evaluatorSig' | 'acceptance'
+  >,
+  settlementTx: string,
+): PoaRecord {
+  return buildPoaRecord({
+    jobId: job.jobId,
+    jobSpecHash: job.jobSpecHash,
+    requesterSig: job.requesterSig,
+    deliverableRoot: job.deliverableRoot ?? '',
+    providerSig: job.providerSig ?? '',
+    verdict: job.verdict ?? 'accept',
+    evaluatorSig: job.evaluatorSig ?? '',
+    acceptance: job.acceptance ?? { passed: true, failures: [], checked: 0 },
+    settlementTx,
+  });
+}
+
+/**
  * SF-0 / L-01 (F-0b): the sender of a `job.verdict` MUST be the job's bound
  * evaluator. Delegation provenance is server-authored (the coordinator stamps
  * `fromAgentId` from the issuing agent's row, never from untrusted payload), so

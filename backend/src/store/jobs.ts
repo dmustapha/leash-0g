@@ -49,6 +49,14 @@ export interface JobRow {
   evaluatorSig: string | null;
   approvalId: string | null;
   settlementTx: string | null;
+  /**
+   * The hash of a BROADCAST but not-yet-confirmed fee transfer, written ahead of
+   * the receipt wait. Non-null on a 'settling' row means real value may already
+   * have moved — treat it as unresolved, never as failed. Promoted into
+   * `settlementTx` only by `jobs/settlement-sweep.ts`, on a successful receipt.
+   */
+  settlementTxPending: string | null;
+  settlementSubmittedAt: string | null;
   poa: PoaRecord | null;
   blockedBy: string | null;
   createdAt: string;
@@ -80,6 +88,8 @@ interface JobDbRow {
   evaluator_sig: string | null;
   approval_id: string | null;
   settlement_tx: string | null;
+  settlement_tx_pending: string | null;
+  settlement_submitted_at: string | null;
   poa: PoaRecord | null;
   blocked_by: string | null;
   created_at: string;
@@ -112,6 +122,8 @@ function toRow(r: JobDbRow): JobRow {
     evaluatorSig: r.evaluator_sig,
     approvalId: r.approval_id,
     settlementTx: r.settlement_tx,
+    settlementTxPending: r.settlement_tx_pending,
+    settlementSubmittedAt: r.settlement_submitted_at,
     poa: r.poa,
     blockedBy: r.blocked_by,
     createdAt: r.created_at,
@@ -124,7 +136,8 @@ const COLS =
    job_spec_hash, requester_sig, fee_token, fee_amount_wei, fee_recipient, fee_token_symbol,
    fee_token_decimals, deliverable,
    deliverable_root, deliverable_summary, provider_sig, acceptance, verdict, rationale_ref,
-   evaluator_sig, approval_id, settlement_tx, poa, blocked_by, created_at, updated_at`;
+   evaluator_sig, approval_id, settlement_tx, settlement_tx_pending, settlement_submitted_at,
+   poa, blocked_by, created_at, updated_at`;
 
 export interface CreateJobInput {
   jobId: string;
@@ -288,17 +301,57 @@ export async function claimSettlement(pool: Pool, jobId: string): Promise<boolea
   return (r.rowCount ?? 0) === 1;
 }
 
+/**
+ * WRITE-AHEAD the broadcast tx hash, before the receipt is waited on. This is
+ * the whole fix for the settlement-loss class: once this row is written, a
+ * receipt we cannot read is a reconcilable state (the sweep owns it) rather
+ * than a paid transfer with no record of itself.
+ *
+ * Same CAS discipline as `recordSettlement`: only a job THIS caller claimed
+ * (status='settling') may be stamped, so a stale interrupt or a checkpoint
+ * replay cannot overwrite a live pending hash with its own.
+ */
+export async function recordSettlementSubmitted(pool: Pool, jobId: string, txHash: string): Promise<void> {
+  await pool.query(
+    `UPDATE jobs SET settlement_tx_pending = $2, settlement_submitted_at = now(), updated_at = now()
+       WHERE job_id = $1 AND status = 'settling'`,
+    [jobId, txHash],
+  );
+}
+
+/** The settlement sweep's work set: claimed, broadcast, receipt still unresolved. */
+export async function listSettlingWithPendingTx(pool: Pool, limit = 50): Promise<JobRow[]> {
+  const res = await pool.query<JobDbRow>(
+    `SELECT ${COLS} FROM jobs
+       WHERE status = 'settling' AND settlement_tx_pending IS NOT NULL
+       ORDER BY settlement_submitted_at ASC
+       LIMIT $1`,
+    [limit],
+  );
+  return res.rows.map(toRow);
+}
+
+/**
+ * Returns whether the CAS took. Two writers can now reach a settled job — the
+ * graph when its receipt wait resolves, and the settlement sweep when it
+ * confirms the same hash later — so the loser must learn it lost and skip the
+ * PoA / owner-record / fee-trace appends instead of duplicating them.
+ */
 export async function recordSettlement(
   pool: Pool,
   jobId: string,
   input: { settlementTx: string; poa: PoaRecord },
-): Promise<void> {
+): Promise<boolean> {
   // Only a job THIS caller claimed (status='settling') may be marked settled.
-  await pool.query(
-    `UPDATE jobs SET status = 'settled', settlement_tx = $2, poa = $3, updated_at = now()
+  // Clearing the pending hash keeps the invariant the sweep relies on: pending
+  // is non-null for exactly as long as the receipt is unresolved.
+  const res = await pool.query(
+    `UPDATE jobs SET status = 'settled', settlement_tx = $2, poa = $3,
+            settlement_tx_pending = NULL, updated_at = now()
        WHERE job_id = $1 AND status = 'settling'`,
     [jobId, input.settlementTx, JSON.stringify(input.poa)],
   );
+  return (res.rowCount ?? 0) > 0;
 }
 
 export async function markJobStatus(

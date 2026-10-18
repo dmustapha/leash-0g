@@ -41,6 +41,12 @@ export interface RuntimeChain {
    * Phase-4 governed ERC-20 settlement (F9): the contract builds the transfer
    * calldata — the agent supplies only (token, to, amount). A reverted settle
    * must never be recorded as a completed settlement.
+   *
+   * `onSubmitted` fires with the hash the instant the tx is BROADCAST, before
+   * the receipt is waited on. It exists because the wait can throw for a tx
+   * that landed, and this is the only moment at which the hash is knowable but
+   * not yet at risk — a caller that moves value must persist it here or it can
+   * pay and have no record of having paid.
    */
   executeTokenTransfer(input: {
     sessionPrivateKey: string;
@@ -48,6 +54,7 @@ export interface RuntimeChain {
     token: string;
     to: string;
     amountWei: bigint;
+    onSubmitted?: (txHash: string) => Promise<void>;
   }): Promise<{ txHash: string }>;
   /**
    * Stage D (D-10): the generic governed-call path. The agent's scoped session
@@ -127,6 +134,17 @@ export interface RuntimeChain {
      */
     caps?: { token: string; cap: string }[];
   }): Promise<{ txHash: string; digest: string; epoch: number }>;
+  /**
+   * A SINGLE receipt probe — no waiting, no retry. The settlement sweep's only
+   * chain question: "has the network made up its mind about this hash yet?"
+   *   'success' | 'reverted' → terminal, the sweep writes the outcome
+   *   'pending'              → not indexed yet, ask again next tick
+   * It is deliberately NOT `waitReceipt`: a sweep that blocks 3 minutes per row
+   * would serialise the whole work set behind the slowest unknown tx, and the
+   * tick IS the retry loop. Optional so coordination-free fakes need not
+   * implement it; prod SessionChain does.
+   */
+  getReceiptStatus?(txHash: string): Promise<'success' | 'reverted' | 'pending'>;
 }
 
 export class SessionChain implements RuntimeChain {
@@ -145,6 +163,18 @@ export class SessionChain implements RuntimeChain {
 
   async getPolicyView(accountAddr: string, allowlistCandidates: string[]): Promise<PolicyView> {
     return readPolicyView(this.publicClient, accountAddr, allowlistCandidates);
+  }
+
+  async getReceiptStatus(txHash: string): Promise<'success' | 'reverted' | 'pending'> {
+    try {
+      const r = await this.publicClient.getTransactionReceipt({ hash: txHash as Hex });
+      return r.status === 'success' ? 'success' : 'reverted';
+    } catch {
+      // Any read failure is 'pending', not 'failed'. On 0G an unindexed receipt
+      // and an RPC hiccup are indistinguishable from here, and the only safe
+      // default for a tx that may have moved value is "still don't know".
+      return 'pending';
+    }
   }
 
   private readonly metaCache = new Map<string, { symbol: string; decimals: number }>();
@@ -241,6 +271,7 @@ export class SessionChain implements RuntimeChain {
     token: string;
     to: string;
     amountWei: bigint;
+    onSubmitted?: (txHash: string) => Promise<void>;
   }): Promise<{ txHash: string }> {
     const account = privateKeyToAccount(input.sessionPrivateKey as Hex);
     const wallet = createWalletClient({
@@ -258,6 +289,11 @@ export class SessionChain implements RuntimeChain {
       functionName: 'executeTokenTransfer',
       args: [input.token as Hex, input.to as Hex, input.amountWei],
     });
+    // Write-ahead, and NOT swallowed: if the caller cannot persist the hash we
+    // must not proceed into a wait that can lose it. Throwing here is the safe
+    // direction — the tx is already broadcast either way, but a loud failure at
+    // this point is diagnosable, whereas a silent one reproduces the bug.
+    if (input.onSubmitted) await input.onSubmitted(txHash);
     const receipt = await waitReceipt(this.publicClient, txHash);
     assertReceiptSuccess(receipt.status, txHash);
     return { txHash };

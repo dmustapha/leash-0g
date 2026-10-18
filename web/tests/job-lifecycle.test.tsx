@@ -29,6 +29,7 @@ const BASE: JobView = {
   rationaleRef: `0x${'cd'.repeat(32)}`,
   approvalId: 'apr-9',
   settlementTx: null,
+  settlementTxPending: null,
   poa: null,
   blockedBy: null,
   createdAt: '2026-09-22T00:00:00Z',

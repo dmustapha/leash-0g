@@ -12,6 +12,7 @@ const STATUS_TONE: Record<JobStatus, 'idle' | 'accent' | 'allow' | 'deny'> = {
   evaluating: 'accent',
   verdict: 'accent',
   awaiting_approval: 'accent',
+  settling: 'accent',
   settled: 'allow',
   rejected: 'deny',
   denied: 'deny',

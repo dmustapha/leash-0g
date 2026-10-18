@@ -30,6 +30,10 @@ const STATUS_COPY: Record<JobStatus, { label: string; tone: 'idle' | 'accent' | 
   evaluating: { label: 'Evaluating', tone: 'accent' },
   verdict: { label: 'Verdict in', tone: 'accent' },
   awaiting_approval: { label: 'Awaiting your approval', tone: 'accent' },
+  // You approved it and the fee transfer is on the network; nobody is waiting
+  // on you. Deliberately not 'allow' — it is not money confirmed yet — and
+  // deliberately not 'deny' — nothing has gone wrong.
+  settling: { label: 'Paying — waiting for the network', tone: 'accent' },
   settled: { label: 'Settled', tone: 'allow' },
   rejected: { label: 'Rejected', tone: 'deny' },
   denied: { label: 'Denied', tone: 'deny' },
@@ -92,7 +96,11 @@ export function JobLifecycle({
   const sym = job.feeTokenSymbol ?? tokenSymbol ?? 'tokens';
   const dec = job.feeTokenDecimals ?? 6;
   const fee = (base: string) => formatToken(base, dec);
-  const status = STATUS_COPY[job.status];
+  // Defensive: a status the backend has and this mirror does not must degrade to
+  // a readable row, never a crash. STATUS_COPY omitting 'settling' is exactly
+  // how a live job blanked this panel, and the next status added backend-side
+  // would do it again.
+  const status = STATUS_COPY[job.status] ?? { label: job.status, tone: 'idle' as const };
   const delivered = job.deliverableRoot !== null;
   const verdictIn = job.verdict !== null;
   const settled = job.status === 'settled';
@@ -176,7 +184,12 @@ export function JobLifecycle({
         </Stage>
 
         {/* 4 — settle (owner-supervised, verdict-bound) */}
-        <Stage n={4} title="Settled — governed on-chain fee" done={settled} active={job.status === 'awaiting_approval'}>
+        <Stage
+          n={4}
+          title="Settled — governed on-chain fee"
+          done={settled}
+          active={job.status === 'awaiting_approval' || job.status === 'settling'}
+        >
           {job.status === 'awaiting_approval' && job.approvalId ? (
             <div style={{ display: 'grid', gap: '0.5rem' }} data-testid="settlement-approval">
               <p style={{ margin: 0, fontSize: '0.86rem', color: 'var(--color-ink-dim)' }}>
@@ -202,6 +215,14 @@ export function JobLifecycle({
                 </div>
               ) : null}
             </div>
+          ) : job.status === 'settling' ? (
+            <p style={{ margin: 0, fontSize: '0.86rem', color: 'var(--color-ink-dim)' }} data-testid="settlement-pending">
+              Sent <strong>{fee(job.feeAmountWei)} {sym}</strong> to {shortAddr(job.feeRecipient)} — waiting for the
+              network to confirm it.
+              {job.settlementTxPending ? (
+                <> Tx <code className="code">{shortAddr(job.settlementTxPending)}</code>.</>
+              ) : null}
+            </p>
           ) : settled && job.settlementTx ? (
             <p style={{ margin: 0, fontSize: '0.86rem', color: 'var(--color-ink-dim)' }} data-testid="settlement-tx">
               Paid <strong>{fee(job.feeAmountWei)} {sym}</strong> — tx{' '}

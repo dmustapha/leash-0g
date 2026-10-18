@@ -13,6 +13,9 @@ import { createLink } from '../../src/coordination/store.js';
 import { upsertJobSpec } from '../../src/store/job-specs.js';
 import { getJob, listJobsForOwner } from '../../src/store/jobs.js';
 import { listOwnerRecords } from '../../src/store/owner-records.js';
+import { ReceiptUnconfirmedError } from '../../src/chain/wait-receipt.js';
+import { sweepPendingSettlements } from '../../src/jobs/settlement-sweep.js';
+import { DigestService } from '../../src/digest/service.js';
 import { PrivateKey } from 'eciesjs';
 import { privateKeyToAccount } from 'viem/accounts';
 import type { Hex } from 'viem';
@@ -54,6 +57,15 @@ const JOB_SPEC = {
 class FakeChain implements RuntimeChain {
   public tokenTransfers: Array<{ token: string; to: string; amountWei: bigint; sessionPrivateKey: string }> = [];
   public failToken: string | null = null;
+  /**
+   * Simulate the loss window: the transfer IS broadcast (onSubmitted fires) and
+   * only then does the receipt read fail. One-shot, like `failToken`.
+   */
+  public unconfirmAfterBroadcast = false;
+  /** What a later `getReceiptStatus` probe reports — i.e. what the sweep sees. */
+  public receiptStatus: 'success' | 'reverted' | 'pending' = 'success';
+  /** Ordering evidence: 'submitted' must be recorded BEFORE the receipt is read. */
+  public callOrder: string[] = [];
   async getBalance(): Promise<bigint> {
     return 10n ** 18n;
   }
@@ -78,7 +90,10 @@ class FakeChain implements RuntimeChain {
     token: string;
     to: string;
     amountWei: bigint;
+    onSubmitted?: (txHash: string) => Promise<void>;
   }): Promise<{ txHash: string }> {
+    // A pre-broadcast refusal (revert/decode): nothing was sent, so onSubmitted
+    // must NOT fire. This is the only case that may still be booked 'failed'.
     if (this.failToken) {
       const m = this.failToken;
       this.failToken = null;
@@ -90,7 +105,26 @@ class FakeChain implements RuntimeChain {
       amountWei: input.amountWei,
       sessionPrivateKey: input.sessionPrivateKey,
     });
-    return { txHash: '0x' + 'dd'.repeat(32) };
+    const txHash = '0x' + 'dd'.repeat(32);
+    // Mirrors the real SessionChain: write-ahead first, then read the receipt.
+    if (input.onSubmitted) {
+      this.callOrder.push('submitted');
+      await input.onSubmitted(txHash);
+    }
+    this.callOrder.push('receipt');
+    if (this.unconfirmAfterBroadcast) {
+      this.unconfirmAfterBroadcast = false;
+      throw new ReceiptUnconfirmedError({
+        hash: txHash as Hex,
+        attempts: 4,
+        quirk: true,
+        cause: new Error('transaction receipt not found'),
+      });
+    }
+    return { txHash };
+  }
+  async getReceiptStatus(): Promise<'success' | 'reverted' | 'pending'> {
+    return this.receiptStatus;
   }
   async executeCall(_input: {
     sessionPrivateKey: string;
@@ -310,6 +344,46 @@ async function pendingSettlementApproval(requester: string): Promise<string> {
   return approvalId;
 }
 
+/**
+ * Count the `category: 'jobFee'` action traces for a job — the owner digest's
+ * only input for a settled fee. Asserting on this (not on the job row) is what
+ * proves the fix is not cosmetic.
+ */
+async function feeTraceCount(jobId: string): Promise<number> {
+  const res = await db.pool.query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM trace_records
+       WHERE kind = 'action'
+         AND record->'detail'->>'category' = 'jobFee'
+         AND record->'detail'->>'jobId' = $1`,
+    [jobId],
+  );
+  return Number(res.rows[0]?.n ?? '0');
+}
+
+/**
+ * What the OWNER actually reads, through the real DigestService — not the trace
+ * table. The digest applies its own filter to a fee trace (`feeToken` and
+ * `feeAmountWei` must both be strings, the amount digit-shaped) and aggregates
+ * per agent, so a sweep that wrote the amount as a bigint or credited the wrong
+ * agentId would leave a perfectly good trace row that the digest still ignores.
+ */
+async function ownerJobFees(requesterId: string): Promise<{
+  count: number;
+  tokenTotal: bigint;
+  requesterCount: number;
+  requesterSpendWei: string;
+}> {
+  const svc = new DigestService({ pool: db.pool, chain: t.chain, settings: { digestDefaultHourUtc: 8 } });
+  const { digest } = await svc.compute(OWNER);
+  const mine = digest.agents.find((a) => a.agentId === requesterId);
+  return {
+    count: digest.totals.jobFees.count,
+    tokenTotal: BigInt(digest.totals.jobFees.byToken[TOKEN.toLowerCase()] ?? '0'),
+    requesterCount: mine?.jobFees.count ?? 0,
+    requesterSpendWei: mine?.spendWei ?? '0',
+  };
+}
+
 describe('ACP job runtime — full lifecycle', () => {
   it('request → deliver → accept → owner approve → governed ERC-20 settle + PoA', { timeout: 200_000 }, async () => {
     const { requester, provider, evaluator } = await seedTriangle();
@@ -417,6 +491,113 @@ describe('ACP job runtime — full lifecycle', () => {
     const job = (await listJobsForOwner(db.pool, OWNER))[0];
     expect(job?.status).toBe('denied');
     expect(chain.tokenTransfers).toHaveLength(0);
+    void provider;
+    void evaluator;
+  });
+
+  /**
+   * The settlement-loss class. Before the write-ahead fix, a receipt read that
+   * threw AFTER the transfer was broadcast made the catch mark the job 'failed'
+   * and discard the hash: money moved, settlement_tx NULL, no jobFee trace, and
+   * the owner digest — which keys on that trace — reported nothing.
+   */
+  it('a receipt that cannot be read after broadcast leaves the job settling, and the sweep settles it', { timeout: 200_000 }, async () => {
+    const { requester, provider, evaluator } = await seedTriangle();
+    mockInference({ probability: 0.62, rationale: 'sound' }, { verdict: 'accept', rationale: 'fine' });
+    chain.unconfirmAfterBroadcast = true;
+
+    await startAll([provider, evaluator, requester]);
+    const approvalId = await pendingSettlementApproval(requester);
+    const res = await request(t.app)
+      .post(`/api/approvals/${approvalId}`)
+      .set('authorization', ownerAuth(OWNER))
+      .send({ decision: 'approve', reason: 'looks good' });
+    expect(res.status).toBe(200);
+
+    await waitFor(() => chain.tokenTransfers.length === 1);
+    await manager.settle(requester);
+
+    const txHash = '0x' + 'dd'.repeat(32);
+    const jobId = (await listJobsForOwner(db.pool, OWNER))[0]?.jobId as string;
+    const unresolved = await getJob(db.pool, jobId);
+    // NOT 'failed'. "We could not read the receipt" is not "the transfer failed".
+    expect(unresolved?.status).toBe('settling');
+    expect(unresolved?.settlementTxPending).toBe(txHash);
+    expect(unresolved?.settlementSubmittedAt).toBeTruthy();
+    expect(unresolved?.settlementTx).toBeNull(); // pending is never promoted early
+    // Write-ahead ordering: the hash was persisted BEFORE the receipt was read.
+    expect(chain.callOrder.indexOf('submitted')).toBeLessThan(chain.callOrder.indexOf('receipt'));
+
+    // No fee trace yet — the settlement is genuinely unresolved, so the digest
+    // must not report a payment it cannot confirm.
+    expect(await feeTraceCount(jobId)).toBe(0);
+
+    // Digest baseline. The digest is OWNER-cumulative over a shared per-run
+    // schema, so earlier cases in this describe (and vitest retries) contribute
+    // fees too; an absolute `count === 1` would be asserting test-ordering, not
+    // behaviour. The delta across the sweep is the real claim.
+    const feesBefore = await ownerJobFees(requester);
+
+    // Now the network makes up its mind and the sweep reconciles.
+    chain.receiptStatus = 'success';
+    const swept = await sweepPendingSettlements({ pool: db.pool, chain, hub: t.hub });
+    expect(swept).toMatchObject({ checked: 1, settled: 1, failed: 0 });
+
+    const settled = await getJob(db.pool, jobId);
+    expect(settled?.status).toBe('settled');
+    expect(settled?.settlementTx).toBe(txHash);
+    expect(settled?.settlementTxPending).toBeNull();
+    expect(settled?.poa?.settlementTx).toBe(txHash);
+    expect((await listOwnerRecords(db.pool, OWNER)).some((r) => r.kind === 'poa')).toBe(true);
+    // The digest's ONLY input for a job fee. The sweep produced it — it is not
+    // pre-seeded anywhere in this test.
+    expect(await feeTraceCount(jobId)).toBe(1);
+
+    // The actual CONSUMER, not just the trace row. "Money moved, unreported" is
+    // a claim about the digest, so a passing trace assertion alone would leave
+    // the thing the owner reads unproven — the fee has to survive the digest's
+    // own filter (`typeof feeAmountWei === 'string'` + digit-shape) and land
+    // against the right agent. A sweep that credited the wrong agentId, or wrote
+    // the amount as a bigint, would pass every assertion above and still report
+    // nothing here.
+    const feesAfter = await ownerJobFees(requester);
+    expect(feesAfter.count - feesBefore.count).toBe(1);
+    expect(feesAfter.tokenTotal - feesBefore.tokenTotal).toBe(BigInt(FEE));
+    // Credited to the REQUESTER (the payer), and not conflated with a native 0G
+    // outflow — a 6dp token fee is reported on its own line, never in spendWei.
+    expect(feesAfter.requesterCount - feesBefore.requesterCount).toBe(1);
+    expect(feesAfter.requesterSpendWei).toBe(feesBefore.requesterSpendWei);
+
+    // A second tick is a no-op: the row is no longer in the work set.
+    expect(await sweepPendingSettlements({ pool: db.pool, chain, hub: t.hub })).toMatchObject({ checked: 0 });
+    expect(await feeTraceCount(jobId)).toBe(1);
+    void provider;
+    void evaluator;
+  });
+
+  it('the sweep leaves a settling job with no pending hash alone', { timeout: 200_000 }, async () => {
+    const { requester, provider, evaluator } = await seedTriangle();
+    mockInference({ probability: 0.62, rationale: 'sound' }, { verdict: 'accept', rationale: 'fine' });
+    chain.unconfirmAfterBroadcast = true;
+
+    await startAll([provider, evaluator, requester]);
+    const approvalId = await pendingSettlementApproval(requester);
+    await request(t.app)
+      .post(`/api/approvals/${approvalId}`)
+      .set('authorization', ownerAuth(OWNER))
+      .send({ decision: 'approve' });
+    await waitFor(() => chain.tokenTransfers.length === 1);
+    await manager.settle(requester);
+
+    const jobId = (await listJobsForOwner(db.pool, OWNER))[0]?.jobId as string;
+    // Erase the hash to reproduce the one state the sweep must NOT act on: the
+    // claim won, the broadcast outcome unknown. Auto-failing would book a
+    // possibly-paid transfer as failed — the very bug being fixed.
+    await db.pool.query(`UPDATE jobs SET settlement_tx_pending = NULL WHERE job_id = $1`, [jobId]);
+
+    chain.receiptStatus = 'reverted'; // would fail the job if it were ever probed
+    expect(await sweepPendingSettlements({ pool: db.pool, chain, hub: t.hub })).toMatchObject({ checked: 0 });
+    expect((await getJob(db.pool, jobId))?.status).toBe('settling');
     void provider;
     void evaluator;
   });
