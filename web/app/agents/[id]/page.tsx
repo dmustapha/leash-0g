@@ -236,7 +236,7 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
         const ev = data as StreamEvent;
         const nid = `ev-${seqRef.current++}`;
         if (ev.type === 'reasoning') {
-          setItems((prev) => [...prev.slice(-199), { kind: 'reasoning', text: ev.text, id: nid }]);
+          setItems((prev) => [...prev.slice(-199), { kind: 'reasoning', text: ev.text, id: nid, ...(ev.meta ? { meta: ev.meta } : {}) }]);
         } else if (ev.type === 'trace') {
           setItems((prev) => [...prev.slice(-199), { kind: 'trace', event: ev, id: nid }]);
         } else if (ev.type === 'approval') {

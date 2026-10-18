@@ -273,7 +273,22 @@ export type SigningEnvelopeView = {
 export type SigningGrantAction = 'propose' | 'tighten' | 'remove';
 
 export type StreamEvent =
-  | { type: 'reasoning'; text: string; seq?: number; ts?: string }
+  | {
+      type: 'reasoning';
+      text: string;
+      seq?: number;
+      ts?: string;
+      /**
+       * AQ-A0-Q2VIS D-2: health of the cycle that produced `text`, so the feed can degrade
+       * instead of rendering 64 KB of repetition when the model loops.
+       */
+      meta?: {
+        truncated: boolean;
+        loopCount: number;
+        decisionSource: 'content' | 'scavenge' | 'empty';
+        clipped: boolean;
+      };
+    }
   | {
       type: 'trace';
       kind: string;
@@ -285,6 +300,15 @@ export type StreamEvent =
       ts?: string;
       /** Q5 (presentation): the model's own plain-language WHY for this action/decision. */
       reason?: string;
+      /**
+       * AQ-A0-Q2VIS D-4 owner layer: the agent's OWN WORDS about this decision. Sanitized
+       * server-side, but NEVER verified — render it as attributed, quarantined agent voice beside
+       * the authoritative `summary`, never as a fact in its own right. (Three Gate-② rounds proved
+       * no lexical check can certify that free prose entails a decision.)
+       */
+      rationale?: string;
+      /** Quality signal only: the backend's lexical agreement check passed. NOT a trust claim. */
+      rationaleAgrees?: boolean;
       /** P3C-6(ii): decoded LeashAccount error, when the trace carries one. */
       decoded?: DecodedLeashError;
     }

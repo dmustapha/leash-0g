@@ -81,7 +81,7 @@ export default function PairViewPage({ params }: { params: Promise<{ id: string 
           if (ev.type === 'reasoning') {
             setFeeds((prev) => ({
               ...prev,
-              [agentId]: [...(prev[agentId] ?? []).slice(-199), { kind: 'reasoning', text: ev.text, id: nid }],
+              [agentId]: [...(prev[agentId] ?? []).slice(-199), { kind: 'reasoning', text: ev.text, id: nid, ...(ev.meta ? { meta: ev.meta } : {}) }],
             }));
           } else if (ev.type === 'trace') {
             setFeeds((prev) => ({
