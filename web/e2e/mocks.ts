@@ -65,6 +65,8 @@ export type MockOwnerSettings = {
 };
 
 export type MockState = {
+  /** AQ-A0-Q2VIS: emit the D-4 rationale + degenerate-cycle frames (opt-in, so existing specs are unaffected). */
+  q2vis?: boolean;
   agentId: string;
   status: 'running' | 'paused' | 'revoked';
   approvalPending: boolean;
@@ -224,13 +226,78 @@ function agentDetail(state: MockState) {
   };
 }
 
+/**
+ * AQ-A0-Q2VIS D-2: a realistic DELIBERATION frame. The old mock sent a single tidy sentence, which
+ * is exactly what hid the Q2 defect — in production this channel carried the decision JSON, and at
+ * 4 230 median chars (p100 13 818) of model-voice prose with markdown headers and self-corrections.
+ * The mock now reflects that shape so the surface is exercised against what it will really receive.
+ */
+const DELIBERATION = [
+  'Okay, let me work through this carefully.',
+  '',
+  '## Step 1 — read the observation',
+  'The beneficiary holds 0.012 0G and the target is 0.05 0G, so it is short by 0.038 0G.',
+  'The configured top-up is 0.01 0G and the per-transfer cap is 0.02 0G.',
+  '',
+  '## Step 2 — check the policy',
+  'Remaining window allowance is 0.1 0G, which comfortably covers 0.01 0G.',
+  'The session is not expired and not revoked. The beneficiary IS on the allowlist.',
+  '',
+  'Wait — I should double-check the cap. 0.01 0G is below 0.02 0G, so it is fine.',
+  'Actually let me reconsider whether to send the full shortfall of 0.038 0G instead...',
+  'No. The rule says prefer the configured top-up amount, capped at what the target still needs.',
+  '0.01 0G is the configured amount and it is less than the shortfall, so 0.01 0G it is.',
+  '',
+  'I will output the JSON now.',
+].join('\n');
+
 function sseBody(state: MockState, agentId: string): string {
   const frames: unknown[] = [
     { type: 'status', status: state.status },
-    { type: 'reasoning', text: 'Checking the beneficiary balance before deciding whether to top up.' },
+    {
+      type: 'reasoning',
+      text: DELIBERATION,
+      meta: { truncated: false, loopCount: 3, decisionSource: 'content', clipped: false },
+    },
     { type: 'trace', kind: 'inference', seq: 1, summary: 'Reasoned via 0G Compute' },
     ...(state.delegationEvents[agentId] ?? []),
   ];
+  // D-4 owner layer + D-2 degenerate-cycle degradation, opt-in per spec so existing specs are
+  // untouched by the new frames.
+  if (state.q2vis) {
+    frames.push({
+      type: 'trace',
+      kind: 'action',
+      seq: 3,
+      summary: 'sent 0.01 0G to 0x9c9c…9c9c',
+      to: PAYEE,
+      valueWei: '10000000000000000',
+      txHash: '0x' + 'ab'.repeat(32),
+      reason: 'beneficiary below target; within caps',
+      rationale:
+        'I topped up your beneficiary with 0.01 0G because its balance had fallen to 0.012 0G, below the 0.05 0G you asked me to keep it at.',
+    });
+    // A SERVER-COMPOSED stand-down: the runtime synthesizes these when the leash binds (window
+    // exhausted, boundary active, tool rail gone), so `reason` is the server's sentence and the
+    // agent authored nothing — no `rationale`. summarize() prefixes it, which is exactly what
+    // defeated the old `why === summary` dedupe and let the server's words be quoted back as the
+    // agent's. Shape copied from treasury-graph.ts `outcomeSummary` + the OverWindowCap branch.
+    frames.push({
+      type: 'trace',
+      kind: 'decision',
+      seq: 4,
+      summary: 'stood down: spending window exhausted — standing down until it resets',
+      reason: 'spending window exhausted — standing down until it resets',
+    });
+    frames.push({
+      type: 'reasoning',
+      text:
+        '[degenerate cycle: the model restated its answer 40x until it hit the token cap '
+        + '(finish_reason=length, 64254 chars). Head and tail kept; the repetition is not stored.]\n'
+        + '--- head ---\nLet me decide. {"action":"send"}\n--- tail ---\n{"action":"send"}',
+      meta: { truncated: true, loopCount: 40, decisionSource: 'scavenge', clipped: true },
+    });
+  }
   if (state.approvalPending) {
     frames.push({
       type: 'approval',
@@ -251,6 +318,29 @@ function sseBody(state: MockState, agentId: string): string {
 }
 
 export async function installMockApi(page: Page, state: MockState): Promise<void> {
+  // NOTE on the SSE routes below, and why they REPLAY their frames on every request.
+  //
+  // A mocked SSE route can only fulfil a FINITE body, so each stream "ends" the moment its last
+  // frame is written. `connectSse` correctly reads a clean body end as a dropped connection and
+  // reconnects with 1s/2s/4s backoff (lib/sse.ts:43-71), and these handlers then serve the same
+  // canned frames again. Two consequences, and they pull in opposite directions:
+  //
+  //  - The replay is LOAD-BEARING. It is the only push channel this mock has. A spec that POSTs
+  //    /pause or /revoke and then expects the cockpit to show the new state depends on the next
+  //    reconnect re-serving `sseBody` with the mutated `state`. Suppressing the replay to match
+  //    the real hub (which sends no history on connect — backend/src/sse/hub.ts:111-117) was
+  //    tried and reverted: it took out 19 specs across a11y/direct/funnel/happy-path/phase2/
+  //    phase3, because "faithful to the hub" and "able to push a state change" are the same
+  //    mechanism here. Do not re-attempt without giving the mock a real push channel first.
+  //  - The replay DUPLICATES feed rows. The feed appends with a fresh id per event and has no
+  //    dedupe key (app/agents/[id]/page.tsx:237-241), so the row count grows with how long a
+  //    spec RUNS: measured 1x in the fast specs and 3x in the slower screenshot-taking evidence
+  //    run. Mock-only — the real hub does not replay, so production never sees this.
+  //
+  // So the duplication is a property of the harness that specs must be written around:
+  // **never assert a COUNT over feed rows, and never leave a feed locator unqualified.** Use
+  // `.first()`/`.last()` and `toBeVisible()`, or scope the count to a single row.
+  // Root cause write-up: docs/evidence/aq-a0-q2vis/N-FEED-TRIPLICATION-ROOT-CAUSE.md (0g-fleet).
   await page.route('**/mock-api/**', async (route: Route) => {
     const url = new URL(route.request().url());
     const path = url.pathname.replace(/^.*\/mock-api/, '');

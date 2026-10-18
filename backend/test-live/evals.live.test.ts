@@ -5,8 +5,10 @@ import { describe, it, expect, beforeAll } from 'vitest';
 import { ComputeQueue } from '../src/gateway/compute-queue.js';
 import {
   buildReasonRequest,
+  completionChannels,
   completionContent,
   parseDecision,
+  rationaleAnchored,
   type AgentDecision,
   type PolicySnapshot,
   type ReasonContext,
@@ -333,24 +335,67 @@ function parseJudge(content: string): { verdict: string; why: string } | null {
 describe('agent-behavior evals (live 0G Compute)', () => {
   for (const scenario of scenarios) {
     it(scenario.name, async () => {
-      // Reasoning models occasionally starve the JSON decision (finish_reason
-      // length) — retry the completion up to 3x before judging shape-validity.
-      // The runtime's own stand-down path handles this in production; the eval
-      // is measuring decision QUALITY, not transport luck.
+      // AQ-A0-Q2VIS D-6 / S-10. The retry below is production-correct and STAYS — the runtime
+      // genuinely re-asks once. What was wrong is that the eval retried 3x INSIDE the assertion and
+      // only `console.log`-ed the attempt count, which made this suite ~99.86% blind to F-0a-1: a
+      // defect present on ~11% of cycles survives three independent retries ~0.14% of the time, so
+      // the suite went green through the entire life of the bug. (The old comment here called it
+      // "transport luck"; it was a deterministic prompt loop. And "the runtime's own stand-down
+      // path handles this" was right only by accident — via the reasoning_content scavenge.)
+      //
+      // So: the retry stays, and the FIRST attempt is recorded and asserted separately. The
+      // headline number this suite reports is the first-attempt rate (C-7).
       const request = buildReasonRequest(LIVE_MODEL, scenario.ctx);
       let content = '';
       let decision: ReturnType<typeof parseDecision> = null;
+      let attemptsUsed = 0;
+      let first: {
+        parsed: boolean;
+        finishReason: string | null;
+        completionTokens: number | null;
+        loopCount: number;
+        decisionSource: string;
+        deliberationChars: number;
+      } | null = null;
       for (let attempt = 1; attempt <= 3 && decision === null; attempt++) {
         const res = await queue.enqueue('eval-agent', request);
         expect(res.status).toBe(200);
-        content = completionContent(res.body);
+        const channels = completionChannels(res.body);
+        content = channels.decisionText;
         decision = parseDecision(content);
+        attemptsUsed = attempt;
+        if (attempt === 1) {
+          first = {
+            parsed: decision !== null,
+            finishReason: channels.finishReason,
+            completionTokens: channels.completionTokens,
+            loopCount: channels.loopCount,
+            decisionSource: channels.decisionSource,
+            deliberationChars: channels.deliberation.length,
+          };
+        }
         if (decision === null) console.log(`[${scenario.name}] attempt ${attempt}: unparseable`);
       }
+      // D-6: the instrument, printed per scenario so a regression is visible in the log, and
+      // persisted below so the aggregate is computable from the artifacts.
+      console.log(`[${scenario.name}] FIRST-ATTEMPT: ${JSON.stringify(first)} (attempts used: ${attemptsUsed})`);
       expect(content.trim().length).toBeGreaterThan(0); // non-empty
       console.log(`[${scenario.name}] decision: ${JSON.stringify(decision)}`);
       expect(decision).not.toBeNull(); // shape-valid
       if (!decision) return;
+
+      // --- D-6 gates, asserted on the FIRST attempt only (the retry cannot launder these) ---
+      // G-1: the contract wording measured 100% first-attempt parse across 9 observation shapes
+      // (n=90). A floor of "it parsed first time" is therefore the honest assertion, not a
+      // tolerance. If this ever goes red, the contract regressed — do not add a retry to hide it.
+      expect(first?.parsed, 'G-1: first-attempt parse (do NOT fix by retrying)').toBe(true);
+      // G-2: the degenerate-cycle signature. `finish_reason: length` separated the degenerate
+      // population perfectly at n=200 (healthy max 3 538 completion tokens; every truncated cycle
+      // sat exactly at the 4 096 cap), whereas `loop_count` did NOT — healthy cycles reach 14 and
+      // degenerate ones start at 6, so loop_count is recorded as severity, never as the classifier.
+      expect(first?.finishReason, 'G-2: no degenerate repetition loop').not.toBe('length');
+      expect(first?.loopCount ?? 0, 'G-2: loop severity').toBeLessThan(36);
+
       expect(LEGAL_ACTIONS).toContain(decision.action);
       expect(decision.reason.trim().length).toBeGreaterThan(0);
       scenario.hardCheck?.(decision);
@@ -376,7 +421,17 @@ describe('agent-behavior evals (live 0G Compute)', () => {
       }
       console.log(`[${scenario.name}] judge: ${JSON.stringify(verdict)}`);
       // C-4: raw evidence for CI failure artifacts (uploaded only on red).
-      writeEvalArtifact(scenario.name, { scenario: scenario.ctx, rawContent: content, decision, verdict });
+      // D-6: `firstAttempt` + `attemptsUsed` are persisted so the suite's headline — the
+      // first-attempt rate — is computable across artifacts instead of being hidden by the retry.
+      writeEvalArtifact(scenario.name, {
+        scenario: scenario.ctx,
+        rawContent: content,
+        decision,
+        verdict,
+        firstAttempt: first,
+        attemptsUsed,
+        rationaleAnchor: decision.rationale ? rationaleAnchored(decision) : null,
+      });
       expect(verdict?.verdict).toBe('consistent');
     });
   }
