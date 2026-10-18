@@ -17,6 +17,10 @@ async function expectNoSeriousViolations(page: Page) {
 test('create page has no serious/critical a11y violations', async ({ page }) => {
   await installMockApi(page, freshState());
   await page.goto('/create');
+  // /create opens on the intent FUNNEL (app/create/page.tsx:181); the wizard sits behind
+  // "Set it up manually". The funnel's own a11y is covered by funnel.spec.ts — this test
+  // audits the wizard, so skip straight to it.
+  await page.getByTestId('funnel-manual').click();
   await expect(page.getByLabel('Agent name')).toBeVisible();
   await expectNoSeriousViolations(page);
 });
