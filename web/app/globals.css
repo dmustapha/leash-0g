@@ -20,7 +20,7 @@
    variables it cannot see referenced in scanned source, and it dropped
    `--color-surface-3` entirely — computed style read EMPTY in real Chrome while
    every sibling alias resolved. That is invisible today only because the sole
-   consumer, `.leash-landing` in landing.css, declares its own scoped copy; it
+   consumer, `.leash-landing` in marketing.css, declares its own scoped copy; it
    would surface as a silent blank the moment G-1.4 removes that file. `static`
    emits every alias declared below regardless of detected usage, which is what a
    declaration site needs. Measured cost: +170 bytes of built CSS (26131 -> 26301),

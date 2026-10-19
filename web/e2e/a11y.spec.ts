@@ -88,18 +88,26 @@ test('fleet list (/app) has no serious/critical a11y violations', async ({ page 
 test('landing (/) has no serious/critical a11y violations', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
-  // The hero rises in on a staggered `lp-rise` animation (landing.css `.reveal` /
-  // `.reveal-1` / `.reveal-2`: 700ms each, 90ms apart), so an h1 that is merely
-  // *visible* is still mid-fade. axe composites a partly-transparent element against
-  // what shows through it, so auditing here measured `#cta-watch` at `bgColor:
-  // #596b27` — lime blended down by the near-black canvas — and reported 3.35:1 on a
-  // pill that settles at ~16:1. That made this test fail roughly 2 runs in 5, on the
-  // pre-G-1.2 baseline as much as after it: a long-standing flake, not a regression.
-  // Waiting for the last-staggered reveal to reach opacity 1 audits the page the
+  // The hero rises in on a staggered reveal, so an h1 that is merely *visible* is still
+  // mid-fade. axe composites a partly-transparent element against what shows through it,
+  // so auditing here once measured the primary CTA at `bgColor: #596b27` — lime blended
+  // down by the near-black canvas — and reported 3.35:1 on a control that settles at
+  // ~16:1. That made this test fail roughly 2 runs in 5: a long-standing flake, not a
+  // regression. Waiting for the hero's reveals to reach opacity 1 audits the page the
   // owner actually reads, which is the only state this test means to assert.
+  //
+  // STAGE G-2.0 re-pointed this from `.reveal-2` (retired with landing.css) onto the
+  // imported build's own mechanism. We wait on the h1's `.reveal-swipe` lines, NOT the
+  // `.reveal-up` blocks: reveal-swipe runs a load-time mask animation (opacity 0→1,
+  // `forwards`) and the headline is always above the fold, so it reliably settles to 1.
+  // reveal-up, by contrast, only reveals when its IntersectionObserver fires — and at
+  // Playwright's 1280×720 viewport the hero's CTA sits below the ~800px fold, so it never
+  // intersects and stays at opacity 0 (which axe skips as invisible — not a violation; the
+  // flake this guard exists for was a *mid-fade* element, and settling the headline past
+  // its animation window is what proves nothing in the hero is caught mid-transition).
   await page.waitForFunction(() => {
-    const el = document.querySelector('.reveal-2');
-    return !!el && getComputedStyle(el).opacity === '1';
+    const els = [...document.querySelectorAll('#hero .reveal-swipe')];
+    return els.length > 0 && els.every((el) => getComputedStyle(el).opacity === '1');
   });
   await expectNoSeriousViolations(page);
 });

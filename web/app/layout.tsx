@@ -20,10 +20,15 @@ export const metadata: Metadata = {
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
+    // suppressHydrationWarning: the anti-FOUC <script> below sets `data-theme` on this
+    // element BEFORE React hydrates, so a light-mode visitor's client <html> legitimately
+    // differs from the server's. This is the documented Next.js pattern for an inline
+    // theme script; it suppresses the attribute-mismatch warning on THIS element only
+    // (one level deep), not on any descendant. (Latent since the G-1.2 toggle landed.)
+    <html lang="en" suppressHydrationWarning>
       <head>
         {/* Preload the landing's two primary used faces (Clash Display 700 headline,
-            Manrope 400 body). font-display: swap is set per @font-face in landing.css. */}
+            Manrope 400 body). font-display: swap is set per @font-face in marketing.css. */}
         <link rel="preload" href="/fonts/clash-display-700.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
         <link rel="preload" href="/fonts/manrope-latin-400-normal.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
         {/* STAGE G-1.2 anti-FOUC — lifted from `design-reference/marketing.html:7`.

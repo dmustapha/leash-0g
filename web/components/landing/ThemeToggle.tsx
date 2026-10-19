@@ -13,7 +13,7 @@
 // Two implementation choices are load-bearing:
 //
 //  1. No render-time state. Both glyphs are in the DOM and CSS picks one
-//     (`.leash-landing .theme-toggle` rules in landing.css keyed off
+//     (`.leash-landing .theme-toggle` rules in marketing.css keyed off
 //     `:root[data-theme="light"]`). A React-state-driven icon would either mismatch
 //     on hydration or flash the wrong glyph on a hard load in light mode, because the
 //     anti-FOUC script in app/layout.tsx sets `data-theme` BEFORE React ever runs.
