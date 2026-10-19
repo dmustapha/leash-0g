@@ -89,6 +89,11 @@
 .console-shell .live { display: flex; align-items: center; gap: 7px; font-family: var(--font-mono);
   font-size: 11px; color: var(--allow); letter-spacing: .08em; }
 .console-shell .live .live-dot { width: 7px; height: 7px; border-radius: var(--r-full); background: var(--allow); }
+.console-shell .live .live-sub { color: var(--ink-faint); letter-spacing: .04em; }
+/* G-2.5/SSE: the stream is still settling (connecting/reconnecting) — the dot + label go accent,
+   so the topbar never claims a steady LIVE stream that is not actually open. */
+.console-shell .live.settling { color: var(--accent-ink); }
+.console-shell .live.settling .live-dot { background: var(--accent); }
 @media (prefers-reduced-motion: no-preference) {
   .console-shell .live .live-dot { animation: shellLivePulse 2s var(--ease-in-out) infinite; }
   @keyframes shellLivePulse { 0%,100% { opacity: 1; box-shadow: 0 0 0 0 var(--allow-24); }

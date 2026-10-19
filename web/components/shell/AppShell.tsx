@@ -27,6 +27,7 @@ import { useOwnerWallet } from '@/lib/owner-wallet';
 import { useAgentId } from '@/lib/use-agent-id';
 import { shortAddr } from '@/lib/format';
 import { UnreadBadge } from '@/components/inbox/UnreadBadge';
+import { useOwnerStreamStatus } from '@/lib/use-owner-stream';
 import ThemeToggle from '@/components/ThemeToggle';
 import CommandPalette from '@/components/shell/CommandPalette';
 
@@ -141,6 +142,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const path = usePathname() ?? '';
   const wallet = useOwnerWallet();
   const { agentId } = useAgentId();
+  // The topbar LIVE indicator reflects the REAL owner-stream transport state (not just auth).
+  const streamStatus = useOwnerStreamStatus();
 
   // Marketing `/` brings its own chrome; pass through as the primary landmark.
   if (path === '/') return <main id="main">{children}</main>;
@@ -203,14 +206,23 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           <div className="right">
             <ThemeToggle />
             <CommandPalette />
-            {/* LIVE indicator — shown only when there's a real authenticated owner session.
-                The artifact's "· rail settling" sub-status and the binding to the actual SSE
-                stream (lib/sse.ts / use-owner-stream) land in G-2.2 with live-data wiring; a
-                standing "LIVE" with no stream behind it would be a false claim. */}
+            {/* LIVE indicator — bound to the REAL owner-stream transport (use-owner-stream →
+                lib/sse.ts). `open` = a live stream ("LIVE"); `connecting`/`reconnecting` = the
+                rail is settling (the reference's "· rail settling" sub-status); only rendered
+                for an authenticated owner — a standing "LIVE" with no stream would be a false
+                claim. The dot + copy are driven by status, never by auth alone. */}
             {wallet.authenticated ? (
-              <span className="live">
+              <span
+                className={`live${streamStatus === 'open' ? '' : ' settling'}`}
+                role="status"
+                aria-live="polite"
+                title={streamStatus === 'open' ? 'Owner event stream connected' : 'Reconnecting to the owner event stream'}
+              >
                 <span className="live-dot" aria-hidden="true" />
                 LIVE
+                {streamStatus === 'connecting' || streamStatus === 'reconnecting' ? (
+                  <span className="live-sub"> · rail settling</span>
+                ) : null}
               </span>
             ) : null}
           </div>
