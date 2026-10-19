@@ -1,0 +1,160 @@
+/* File: web/app/console.css
+   STAGE G-2.2 — console VIEW styles (fleet first; inbox/digest follow in this slice),
+   imported app-wide after shell.css. Everything is scoped under `.console-view` (the shell's
+   main content area, AppShell.tsx) so it never collides with the marketing `.leash-landing`
+   scope or globals.css's `@layer components` (whose bare `.meter` is an 8px progress bar —
+   unlayered rules here win, and the scope keeps them apart regardless).
+
+   Ported verbatim from the owner-locked build (design-reference/console.html:74-105, 170-171,
+   and the leash/chip/skel primitives marketing.css already carries under .leash-landing),
+   re-homed to `.console-view`. Raw tokens throughout → re-themes for free in light. */
+
+/* ---- status chips (console.html uses `.chip`, not globals' `.pill`) ---- */
+.console-view .chip { font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+  letter-spacing: .04em; padding: 3px 9px; border-radius: var(--r-sm);
+  display: inline-flex; align-items: center; gap: 6px; text-transform: uppercase; white-space: nowrap; }
+.console-view .chip::before { content: ""; width: 6px; height: 6px; flex: none; }
+.console-view .chip-allow { color: var(--allow); background: var(--allow-14); border: 1px solid var(--allow-24); }
+.console-view .chip-allow::before { border-radius: var(--r-full); background: var(--allow); }
+.console-view .chip-deny  { color: var(--deny);  background: var(--deny-14);  border: 1px solid var(--deny-24); }
+.console-view .chip-deny::before  { background: var(--deny); }
+.console-view .chip-pend  { color: var(--accent-ink); background: var(--accent-12); border: 1px solid var(--accent-24); }
+.console-view .chip-pend::before  { border-radius: var(--r-full); background: transparent; border: 1.5px solid var(--accent); }
+
+/* role chip (reconciled from the artifact's invented protocol chip — carries the REAL
+   runtime role: treasury/sentinel/executor/trader/requester/provider/evaluator). */
+.console-view .role-chip { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono);
+  font-size: 11px; color: var(--accent-ink); border: 1px solid var(--accent-24); background: var(--accent-12);
+  border-radius: var(--r-full); padding: 3px 10px; text-transform: capitalize; white-space: nowrap; }
+
+/* ---- leash-svg meter primitives (restraint motion profile, P4) ---- */
+.console-view .leash-svg .leash-path { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round;
+  transition: d var(--t-slow) var(--ease-out-cubic), stroke var(--t-base) var(--ease-out-cubic); }
+.console-view .leash-svg .leash-clasp { fill: none; stroke: var(--accent); stroke-width: 2; }
+.console-view .leash-svg.taut .leash-path { stroke: var(--accent-hi); }
+.console-view .leash-svg.cut  .leash-path { stroke: var(--deny); stroke-dasharray: 3 5; }
+.console-view .signal-pulse { fill: var(--allow); r: 3.2; filter: drop-shadow(0 0 5px var(--allow)); opacity: 0; }
+@media (prefers-reduced-motion: no-preference) {
+  /* the ONE live pulse the console keeps (console.html P4) — a signal riding the catenary */
+  .console-view .signal-pulse.run { animation: consoleSignalRide 3.6s var(--ease-in-out) infinite; }
+  @keyframes consoleSignalRide { 0% { offset-distance: 0%; opacity: 0; } 8% { opacity: 1; }
+    82% { opacity: 1; } 92%,100% { offset-distance: 100%; opacity: 0; } }
+}
+
+/* ---- skeleton load ---- */
+.console-view .skel { background: linear-gradient(100deg, var(--surface-2) 30%, var(--surface-3) 50%, var(--surface-2) 70%);
+  background-size: 220% 100%; border-radius: 4px; }
+@media (prefers-reduced-motion: no-preference) {
+  .console-view .skel { animation: consoleSkel 1.3s linear infinite; }
+  @keyframes consoleSkel { from { background-position: 120% 0 } to { background-position: -120% 0 } }
+}
+.console-view .skel-card { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--r-lg); padding: var(--s-5); }
+.console-view .skel-line { height: 12px; margin-bottom: 10px; }
+
+/* ---- branded empty / error states ---- */
+.console-view .deadstate { text-align: center; padding: var(--s-9) var(--s-5); border: 1px dashed var(--border-strong);
+  border-radius: var(--r-lg); color: var(--ink-faint); }
+.console-view .deadstate svg { width: 64px; height: 44px; margin: 0 auto var(--s-4); display: block; overflow: visible; opacity: .6; }
+.console-view .deadstate h4 { font-family: var(--font-display); font-weight: 500; font-size: 1.1rem; color: var(--ink-dim); margin: 0 0 var(--s-2); }
+.console-view .deadstate p { font-size: var(--t-small); margin: 0 auto; max-width: 40ch; }
+.console-view .deadstate.error { border-color: var(--deny-24); color: var(--deny); }
+.console-view .deadstate .btn { margin-top: var(--s-5); }
+
+/* ---- section title ---- */
+.console-view .section-title { font-family: var(--font-mono); font-size: 11px; text-transform: uppercase;
+  letter-spacing: .16em; color: var(--ink-faint); margin: 0 0 var(--s-4); display: flex; align-items: center; gap: 10px; }
+.console-view .section-title .n { color: var(--ink-dim); }
+
+/* ============ FLEET ============ */
+.console-view .fleet-summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--s-4); margin-bottom: var(--s-5); }
+.console-view .sum { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--r-lg);
+  padding: var(--s-4) var(--s-5); position: relative; overflow: hidden; }
+.console-view .sum .k { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: .12em; color: var(--ink-faint); }
+.console-view .sum .v { font-family: var(--font-mono); font-size: 1.7rem; color: var(--ink); margin-top: 8px; line-height: 1; }
+.console-view .sum .v small { color: var(--ink-faint); font-size: .6em; }
+.console-view .sum .v.accent { color: var(--accent-ink); }
+.console-view .sum .v.deny { color: var(--deny); }
+.console-view .sum .v.allow { color: var(--allow); }
+@media (max-width: 900px) { .console-view .fleet-summary { grid-template-columns: repeat(2, 1fr); } }
+
+.console-view .fleet { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: var(--s-4); }
+.console-view .agent { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--r-lg);
+  padding: var(--s-5); display: block; text-decoration: none; color: inherit;
+  transition: transform var(--t-base) var(--ease-out-cubic), border-color var(--t-base); }
+.console-view a.agent:hover { border-color: var(--ink-24); transform: translateY(-2px); }
+.console-view a.agent:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.console-view .agent .row1 { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--s-3); margin-bottom: var(--s-4); }
+.console-view .agent .name { font-family: var(--font-display); font-weight: 500; font-size: 1.05rem; letter-spacing: -0.01em; color: var(--ink); }
+.console-view .agent .addr { font-family: var(--font-mono); font-size: 11px; color: var(--ink-faint); margin-top: 2px; }
+.console-view .agent .tags { display: flex; gap: var(--s-2); align-items: center; flex: none; }
+.console-view .agent .meter { margin: var(--s-2) 0 var(--s-4); height: auto; background: none; border: 0; overflow: visible; }
+.console-view .agent .meter svg { width: 100%; height: 56px; display: block; overflow: visible; }
+.console-view .agent .cap-label { display: flex; justify-content: space-between; font-family: var(--font-mono);
+  font-size: 11px; color: var(--ink-dim); margin-top: 6px; }
+.console-view .agent .cap-label b { color: var(--ink); font-weight: 500; }
+.console-view .agent .cap-label .v-accent { color: var(--accent-ink); }
+.console-view .agent .facts { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--s-3);
+  border-top: 1px solid var(--border); padding-top: var(--s-4); }
+.console-view .fact .k { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: .1em; color: var(--ink-faint); }
+.console-view .fact .v { font-family: var(--font-mono); font-size: var(--t-data); color: var(--ink); margin-top: 3px; }
+.console-view .fact .v.v-deny { color: var(--deny); }
+.console-view .fact .v .faint { color: var(--ink-faint); }
+
+/* fleet toolbar (show-revoked toggle, load-more) */
+.console-view .fleet-head { display: flex; align-items: center; gap: var(--s-3); margin-bottom: var(--s-4); flex-wrap: wrap; }
+.console-view .fleet-head .grow { flex: 1; }
+
+/* ---- shared view toolbar + filters ---- */
+.console-view .view-toolbar { display: flex; align-items: center; gap: var(--s-3); margin-bottom: var(--s-4); flex-wrap: wrap; }
+.console-view .view-toolbar .grow { flex: 1; }
+.console-view .filters { display: flex; gap: var(--s-3); flex-wrap: wrap; margin-bottom: var(--s-4); }
+.console-view .filters label { display: grid; gap: 4px; }
+.console-view .filters .label { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: .1em; color: var(--ink-faint); }
+.console-view .filters select { background: var(--surface-1); color: var(--ink); border: 1px solid var(--border); border-radius: var(--r-sm);
+  padding: 6px 10px; font: inherit; font-family: var(--font-mono); font-size: 12px; }
+
+/* ---- panel title + badge-pill (reference primitives) ---- */
+.console-view .p-title { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: .14em;
+  color: var(--ink-faint); display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); margin: 0 0 var(--s-4); }
+.console-view .badge-pill { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 11px;
+  color: var(--ink-dim); border: 1px solid var(--border); border-radius: var(--r-full); padding: 3px 10px; }
+.console-view .row-btns { display: flex; gap: var(--s-3); flex-wrap: wrap; }
+.console-view .mini-list { display: flex; flex-direction: column; gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; }
+.console-view .mini-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: var(--surface-1);
+  padding: 11px var(--s-4); font-size: var(--t-small); }
+.console-view .mini-row .lead { color: var(--ink); font-weight: 500; }
+.console-view .mini-row .lead small { color: var(--ink-faint); font-weight: 400; }
+.console-view .mini-row .faint { color: var(--ink-faint); }
+
+/* ============ INBOX ============ */
+.console-view .alert { display: grid; grid-template-columns: auto 1fr auto; gap: var(--s-4); align-items: start;
+  background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--r-lg); padding: var(--s-4) var(--s-5); margin-bottom: var(--s-3); }
+.console-view .alert.unread { border-left: 2px solid var(--accent); }
+.console-view .alert.decision.unread { border-left: 2px solid var(--ember); }
+.console-view .alert.read { opacity: .72; }
+.console-view .alert .a-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+.console-view .alert .a-agent { font-family: var(--font-display); font-weight: 500; font-size: .95rem; color: var(--ink-dim); }
+.console-view .alert.unread .a-agent { color: var(--ink); }
+.console-view .alert .a-intent { font-family: var(--font-sans); font-size: 12.5px; line-height: 1.45; color: var(--ink-dim); margin: 0; }
+.console-view .alert .a-intent b { font-family: var(--font-mono); font-size: 11.5px; font-weight: 600; color: var(--ink); }
+.console-view .alert .a-sub { display: grid; gap: .2rem; border-left: 2px solid var(--border); padding-left: .7rem; margin-top: 6px; }
+.console-view .alert .a-sub .a-sub-k { font-size: .7rem; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-faint); font-family: var(--font-mono); }
+.console-view .alert .a-sub .a-sub-v { font-size: .86rem; color: var(--ink-dim); font-style: italic; }
+.console-view .alert .a-meta { font-family: var(--font-mono); font-size: 11px; color: var(--ink-faint); margin-top: 5px; display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+.console-view .alert .a-actions { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
+.console-view .kind-chip { font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; letter-spacing: .06em; font-weight: 600;
+  padding: 2px 8px; border-radius: 4px; color: var(--ink-dim); background: var(--ink-06); white-space: nowrap; }
+.console-view .kind-chip.approval_required { color: var(--ember); background: var(--ember-16); }
+.console-view .kind-chip.limit_hit, .console-view .kind-chip.revoked, .console-view .kind-chip.revoke_failed { color: var(--deny); background: var(--deny-14); }
+.console-view .kind-chip.runtime_error, .console-view .kind-chip.throttle, .console-view .kind-chip.alert_storm, .console-view .kind-chip.delegation_terminal { color: var(--ember); background: var(--ember-16); }
+.console-view .unverified { font-family: var(--font-mono); font-size: 9px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--ink-faint); border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; }
+.console-view .dot-live { width: 7px; height: 7px; border-radius: var(--r-full); background: var(--accent); display: inline-block; }
+@media (max-width: 640px) {
+  .console-view .alert { grid-template-columns: 1fr; }
+  .console-view .alert .a-actions { flex-direction: row; align-items: flex-start; }
+}
+
+/* ============ DIGEST ============ */
+.console-view .digest-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--s-4); margin-bottom: var(--s-5); }
+@media (max-width: 900px) { .console-view .digest-grid { grid-template-columns: repeat(2, 1fr); } }

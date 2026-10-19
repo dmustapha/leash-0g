@@ -40,6 +40,12 @@ export function InboxView({
   const [agentId, setAgentId] = useState<string>('all');
   const [marking, setMarking] = useState(false);
 
+  const nameById = useMemo(() => {
+    const m: Record<string, string> = {};
+    for (const a of agents) m[a.agentId] = a.name;
+    return m;
+  }, [agents]);
+
   const filtered = useMemo(
     () =>
       [...alerts]
@@ -51,18 +57,13 @@ export function InboxView({
   );
 
   return (
-    <div style={{ display: 'grid', gap: '1rem' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.7rem', flexWrap: 'wrap' }}>
-        {unread > 0 ? (
-          <span className="pill pill-accent" data-testid="inbox-unread-pill">
-            {unread} unread
-          </span>
-        ) : (
-          <span className="pill pill-idle" data-testid="inbox-caught-up-pill">
-            All caught up
-          </span>
-        )}
-        <span style={{ flex: 1 }} />
+    <div>
+      {/* reference toolbar (console.html:497-502) — "Attention queue · N unread" + Mark all read */}
+      <div className="view-toolbar">
+        <span className="section-title" style={{ margin: 0 }} data-testid={unread > 0 ? 'inbox-unread-pill' : 'inbox-caught-up-pill'}>
+          Attention queue · <span className="n">{unread > 0 ? `${unread} unread` : 'all caught up'}</span>
+        </span>
+        <span className="grow" />
         <button
           type="button"
           className="btn btn-ghost btn-sm"
@@ -77,28 +78,18 @@ export function InboxView({
         </button>
       </div>
 
-      <div role="group" aria-label="Filter alerts" style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
-        <label style={{ display: 'grid', gap: '0.25rem' }}>
+      <div className="filters" role="group" aria-label="Filter alerts">
+        <label>
           <span className="label">Type</span>
-          <select
-            className="field"
-            value={klass}
-            data-testid="filter-class"
-            onChange={(e) => setKlass(e.target.value as 'all' | AlertClass)}
-          >
+          <select value={klass} data-testid="filter-class" onChange={(e) => setKlass(e.target.value as 'all' | AlertClass)}>
             <option value="all">All</option>
             <option value="decision">Needs you</option>
             <option value="info">For your information</option>
           </select>
         </label>
-        <label style={{ display: 'grid', gap: '0.25rem' }}>
+        <label>
           <span className="label">What happened</span>
-          <select
-            className="field"
-            value={kind}
-            data-testid="filter-kind"
-            onChange={(e) => setKind(e.target.value as 'all' | AlertKind)}
-          >
+          <select value={kind} data-testid="filter-kind" onChange={(e) => setKind(e.target.value as 'all' | AlertKind)}>
             <option value="all">Everything</option>
             {KIND_OPTIONS.map((o) => (
               <option key={o.value} value={o.value}>
@@ -107,14 +98,9 @@ export function InboxView({
             ))}
           </select>
         </label>
-        <label style={{ display: 'grid', gap: '0.25rem' }}>
+        <label>
           <span className="label">Agent</span>
-          <select
-            className="field"
-            value={agentId}
-            data-testid="filter-agent"
-            onChange={(e) => setAgentId(e.target.value)}
-          >
+          <select value={agentId} data-testid="filter-agent" onChange={(e) => setAgentId(e.target.value)}>
             <option value="all">All agents</option>
             {agents.map((a) => (
               <option key={a.agentId} value={a.agentId}>
@@ -126,14 +112,24 @@ export function InboxView({
       </div>
 
       {filtered.length === 0 ? (
-        <p style={{ color: 'var(--color-ink-faint)', fontSize: '0.92rem' }} data-testid="inbox-empty">
-          Nothing here. When an agent needs you — or something worth knowing happens — it lands
-          in this inbox.
-        </p>
+        <div className="deadstate" data-testid="inbox-empty">
+          <svg className="leash-svg" viewBox="0 0 80 44" aria-hidden="true">
+            <circle className="leash-clasp" cx="10" cy="22" r="6" />
+            <path className="leash-path" d="M16 22 Q 40 30 74 22" />
+          </svg>
+          <h4>All caught up</h4>
+          <p>When an agent needs you — or something worth knowing happens — it lands here.</p>
+        </div>
       ) : (
-        <div style={{ display: 'grid', gap: '0.7rem' }} data-testid="inbox-list">
+        <div aria-live="polite" data-testid="inbox-list">
           {filtered.map((a) => (
-            <AlertCard key={a.id} alert={a} onDecide={onDecide} onDismiss={onDismiss} />
+            <AlertCard
+              key={a.id}
+              alert={a}
+              agentName={a.agentId ? nameById[a.agentId] : undefined}
+              onDecide={onDecide}
+              onDismiss={onDismiss}
+            />
           ))}
         </div>
       )}

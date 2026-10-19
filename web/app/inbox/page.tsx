@@ -87,54 +87,51 @@ export default function InboxPage() {
     await refresh();
   }, [api, refresh]);
 
+  // The page title ("Inbox") lives in the shell topbar now, so the view renders straight
+  // into the content area — no page-level hero.
   if (!wallet.ready) {
     return (
-      <Shell>
-        <p role="status" style={{ color: 'var(--color-ink-dim)' }}>Loading…</p>
-      </Shell>
+      <p role="status" style={{ color: 'var(--ink-dim)' }}>
+        Loading…
+      </p>
     );
   }
   if (!wallet.authenticated) {
     return (
-      <Shell>
-        <div className="card" style={{ padding: '1.4rem', display: 'grid', gap: '0.8rem', justifyItems: 'start' }}>
-          <p>Connect your wallet to see your inbox.</p>
-          <button type="button" className="btn btn-primary" onClick={wallet.login}>
-            Connect wallet
-          </button>
-        </div>
-      </Shell>
+      <div className="deadstate">
+        <svg className="leash-svg" viewBox="0 0 80 44" aria-hidden="true">
+          <circle className="leash-clasp" cx="10" cy="22" r="6" />
+          <path className="leash-path" d="M16 22 Q 40 30 74 22" />
+        </svg>
+        <h4>Connect your wallet</h4>
+        <p>Sign in to see the attention queue — approvals waiting on you and what your agents flagged.</p>
+        <button type="button" className="btn btn-primary" onClick={wallet.login}>
+          Connect wallet
+        </button>
+      </div>
+    );
+  }
+
+  if (loadError && !loaded) {
+    return (
+      <div className="deadstate error" role="alert">
+        <h4>Could not load your inbox</h4>
+        <p>{loadError}</p>
+        <button type="button" className="btn btn-ghost" onClick={() => void refresh()}>
+          Retry
+        </button>
+      </div>
     );
   }
 
   return (
-    <Shell>
-      {loadError && !loaded ? (
-        <div className="toast toast-err" role="alert">
-          <p>We could not load your inbox ({loadError}).</p>
-          <button type="button" className="btn btn-sm" onClick={() => void refresh()}>
-            Retry
-          </button>
-        </div>
-      ) : (
-        <InboxView
-          alerts={alerts}
-          unread={unread}
-          agents={agents}
-          onDecide={onDecide}
-          onDismiss={onDismiss}
-          onMarkAllRead={onMarkAllRead}
-        />
-      )}
-    </Shell>
-  );
-}
-
-function Shell({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="wrap" style={{ paddingBlock: 'clamp(1.5rem, 4vw, 3rem)', display: 'grid', gap: '1.1rem', maxWidth: '860px' }}>
-      <h1 style={{ fontSize: 'var(--text-h1)' }}>Inbox</h1>
-      {children}
-    </div>
+    <InboxView
+      alerts={alerts}
+      unread={unread}
+      agents={agents}
+      onDecide={onDecide}
+      onDismiss={onDismiss}
+      onMarkAllRead={onMarkAllRead}
+    />
   );
 }
