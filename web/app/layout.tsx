@@ -4,6 +4,7 @@ import type { Metadata } from 'next';
 import './globals.css';
 import './shell.css';
 import './console.css';
+import './create.css';
 import { Providers } from './providers';
 import AppShell from '@/components/shell/AppShell';
 

@@ -38,47 +38,48 @@ export function FunnelEntry({ onElevate, onPick, onManual }: FunnelEntryProps) {
   }
 
   return (
-    <section className="card" data-testid="funnel-entry" style={{ padding: 'clamp(1.2rem, 3vw, 2rem)', display: 'grid', gap: '1.2rem' }}>
-      <header style={{ display: 'grid', gap: '0.4rem' }}>
-        <h1 style={{ fontSize: 'var(--text-h1)' }}>Create an agent</h1>
-        <p style={{ color: 'var(--color-ink-dim)', fontSize: '0.95rem', margin: 0 }}>
-          Describe what you want it to do, in plain words. I’ll set it up and show you exactly what
-          I understood before anything is created.
-        </p>
-      </header>
+    <section data-testid="funnel-entry">
+      <h1>Create an agent</h1>
+      <p className="lede">
+        Describe what you want it to do, in plain words. I’ll set it up and show you{' '}
+        <b>exactly what I understood</b> before anything is created.
+      </p>
 
       <form
+        className="panel"
         onSubmit={(e) => {
           e.preventDefault();
           void submit();
         }}
-        style={{ display: 'grid', gap: '0.7rem' }}
       >
-        <label className="label" htmlFor="funnel-intent" style={{ color: 'var(--color-ink)' }}>
-          What do you want your agent to do?
-        </label>
-        <textarea
-          id="funnel-intent"
-          data-testid="funnel-intent"
-          className="field"
-          rows={3}
-          value={intent}
-          onChange={(e) => setIntent(e.target.value)}
-          placeholder="e.g. give me calibrated odds on market questions"
-          disabled={busy}
-          autoFocus
-        />
+        <div className="field-group">
+          <label className="label" htmlFor="funnel-intent">
+            What it should do <span className="req">· required</span>
+          </label>
+          <textarea
+            id="funnel-intent"
+            data-testid="funnel-intent"
+            className="field"
+            rows={3}
+            value={intent}
+            onChange={(e) => setIntent(e.target.value)}
+            placeholder="e.g. give me calibrated odds on market questions"
+            disabled={busy}
+            autoFocus
+          />
+          <p className="fhint">Plain words are fine — I’ll translate it into a role, a budget, and an allowlist you can review.</p>
+        </div>
         {error ? (
-          <p role="alert" data-testid="funnel-error" style={{ color: 'var(--color-deny)', fontSize: '0.85rem', margin: 0 }}>
+          <p role="alert" data-testid="funnel-error" style={{ color: 'var(--deny)', fontSize: '0.85rem', margin: '0 0 var(--s-3)' }}>
             {error}
           </p>
         ) : null}
-        <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center' }}>
+        <div className="row-btns" style={{ alignItems: 'center' }}>
           <button type="submit" className="btn btn-primary" data-testid="funnel-elevate" disabled={busy || !intent.trim()}>
             {busy ? 'Reading…' : error ? 'Try again' : 'Continue'}
           </button>
           {busy ? (
-            <span role="status" aria-live="polite" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--color-ink-dim)' }}>
+            <span role="status" aria-live="polite" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.85rem', color: 'var(--ink-dim)' }}>
               <span className="dot-live" aria-hidden="true" />
               Working out what you need…
             </span>
@@ -88,7 +89,7 @@ export function FunnelEntry({ onElevate, onPick, onManual }: FunnelEntryProps) {
 
       <TemplateStrip onPick={onPick} />
 
-      <div style={{ borderTop: '1px solid var(--color-line-soft)', paddingTop: '0.9rem' }}>
+      <div className="funnel-escape">
         <button type="button" className="btn btn-ghost btn-sm" data-testid="funnel-manual" onClick={onManual}>
           I know what I want — set it up manually
         </button>
