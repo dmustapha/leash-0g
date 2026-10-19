@@ -40,26 +40,28 @@
   --color-surface-1: var(--surface-1);
   --color-surface-2: var(--surface-2);
   --color-surface-3: var(--surface-3);
-  /* NOT aliased — the reference replaced these opaque mix-downs with
-     alpha-over-role ladders (`--border` = `--ink-08`, `--accent-soft` -> `--accent-12`,
-     `--allow-soft` -> `--allow-14`, `--deny-soft` -> `--deny-14`). Retargeting them
-     would restyle every console surface, which is G-2+ work, not G-1. They stay
-     literal and dark on purpose; G-1 light mode is the MARKETING page's light mode.
-     Reconcile point: STAGE-G scope §6 (G-2+). */
-  --color-line: #2a2a2e;
-  --color-line-soft: #1e1e21;
+  /* STAGE G-2.1 — RETARGETED (§0d). These five were the last literal-dark holdouts, kept
+     opaque while the console wasn't themeable. They now point at the same alpha-over-role
+     ladders the reference uses, so every console surface (.nav/.card/.panel/.btn/.pill/
+     .badge/.meter/.field/.toast) re-themes for free under `:root[data-theme="light"]` —
+     the D1(c) mechanism, verified by getComputedStyle in both themes in real Chrome (the
+     oracle that caught the G-1.2 half-theme bug). `--border` = `--ink-08`; `--ink-06` is the
+     softer hairline. Dark values shift imperceptibly (opaque #2a2a2e -> ink at 8% over the
+     near-black base); light is now correct instead of a dark hairline on a light surface. */
+  --color-line: var(--border);
+  --color-line-soft: var(--ink-06);
   --color-ink: var(--ink);
   --color-ink-dim: var(--ink-dim);
   --color-ink-faint: var(--ink-faint); /* raised from #64645f for WCAG AA contrast on dark surfaces (axe) */
 
   --color-accent: var(--accent);  /* electric lime signal */
   --color-accent-hi: var(--accent-hi);
-  --color-accent-soft: #1e2410;   /* see the NOT-aliased note above */
+  --color-accent-soft: var(--accent-12);   /* retargeted — see §0d note above */
 
   --color-allow: var(--allow);    /* jade - ALLOW / active / paid */
-  --color-allow-soft: #0e2a1c;    /* see the NOT-aliased note above */
+  --color-allow-soft: var(--allow-14);    /* retargeted — see §0d note above */
   --color-deny: var(--deny);      /* coral - DENY / REVOKED / blocked */
-  --color-deny-soft: #2a1418;     /* see the NOT-aliased note above */
+  --color-deny-soft: var(--deny-14);    /* retargeted — see §0d note above */
 
   --color-amber: var(--color-accent);
   --color-amber-soft: var(--color-accent-soft);

@@ -24,7 +24,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import './marketing.css';
 import { LandingRoot } from '@/components/landing/LandingRoot';
-import ThemeToggle from '@/components/landing/ThemeToggle';
+import ThemeToggle from '@/components/ThemeToggle';
 
 export const metadata: Metadata = {
   title: 'LEASH · Let your AI agent spend real money. Keep the leash.',

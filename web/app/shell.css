@@ -1,0 +1,136 @@
+/* File: web/app/shell.css
+   STAGE G-2.1 — the console SHELL, imported from the owner-locked build
+   (web/design-reference/console.html:18-60, 173-197). Grouped sidebar + sticky glass
+   topbar + ⌘K command palette — the chrome that wraps every console route, replacing
+   the SiteNav placeholder.
+
+   SCOPE TRANSFORM: the artifact puts the grid on `body` and uses bare `aside`/`.top`/
+   `.navitem` selectors, because console.html is a standalone page. Here the shell wraps
+   only console routes (not marketing `/`), so the grid lives on `.console-shell` and every
+   selector is scoped under it. The rules themselves are the artifact's, verbatim, using the
+   raw tokens from tokens.css (loaded app-wide via globals.css) — so the shell re-themes for
+   free under `:root[data-theme="light"]`, once globals.css's five literal-dark console
+   tokens are retargeted (that retarget ships in this same slice; see globals.css §0d). */
+
+.console-shell { display: grid; grid-template-columns: 236px 1fr; min-height: 100vh; }
+
+/* ---- left rail ---- */
+.console-shell aside {
+  background: var(--surface-1); border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; padding: var(--s-4) var(--s-3);
+  position: sticky; top: 0; height: 100vh;
+}
+.console-shell aside .brand {
+  display: flex; align-items: center; gap: 8px; font-family: var(--font-display);
+  font-weight: 600; font-size: 16px; padding: 8px 10px var(--s-5); color: var(--ink);
+  text-decoration: none;
+}
+.console-shell .navitem {
+  display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: var(--r-sm);
+  color: var(--ink-dim); font-size: var(--t-small); text-decoration: none; cursor: pointer;
+  transition: background var(--t-fast), color var(--t-fast); border: none; background: none;
+  width: 100%; text-align: left; font-family: var(--font-sans);
+}
+.console-shell .navitem:hover { background: var(--hover-fill); color: var(--ink); }
+/* `aria-current="page"` (not the artifact's `"true"`): `page` is the correct token for a
+   link that IS the current page — an a11y correctness fix over the static artifact. */
+.console-shell .navitem[aria-current="page"] {
+  background: var(--accent-12); color: var(--ink); box-shadow: inset 2px 0 0 var(--accent);
+}
+.console-shell .navitem svg { width: 16px; height: 16px; opacity: .8; flex: none; }
+.console-shell .navitem .badge { margin-left: auto; font-family: var(--font-mono); font-size: 10px; color: var(--ink-faint); }
+.console-shell aside .spacer { flex: 1; }
+.console-shell .nav-group {
+  font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; letter-spacing: .18em;
+  color: var(--ink-faint); margin: var(--s-4) 10px 4px;
+}
+.console-shell .nav-group:first-of-type { margin-top: 0; }
+
+/* account footer — the artifact prints a static ENS ("Owner · org.leash.eth"); here it
+   carries the REAL owner identity (Privy wallet short-address) or the connect control. */
+.console-shell .acct { border-top: 1px solid var(--border); padding: var(--s-4) 10px 4px;
+  font-size: var(--t-small); color: var(--ink-dim); }
+.console-shell .acct .mono { color: var(--ink); font-size: 11px; display: block; margin-top: 2px;
+  font-family: var(--font-mono); }
+.console-shell .acct .acct-btn { all: unset; cursor: pointer; color: var(--ink); font-family: var(--font-mono);
+  font-size: 11px; margin-top: 2px; display: block; border-bottom: 1px solid var(--accent-24); width: fit-content; }
+.console-shell .acct .acct-btn:hover { border-color: var(--accent); }
+.console-shell .acct .acct-btn:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+
+/* ---- main column ---- */
+.console-shell .console-main { display: flex; flex-direction: column; min-width: 0; }
+
+/* top bar (glass) */
+.console-shell .top {
+  position: sticky; top: 0; z-index: 20; height: 58px; display: flex; align-items: center;
+  justify-content: space-between; padding: 0 var(--s-6); border-bottom: 1px solid var(--border);
+  background: var(--glass-bg-strong); backdrop-filter: blur(var(--glass-blur)); box-shadow: var(--glass-hi);
+}
+.console-shell .top .crumb { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.console-shell .top h1 { font-family: var(--font-display); font-weight: 500; font-size: 1.1rem; margin: 0;
+  letter-spacing: -0.01em; color: var(--ink); white-space: nowrap; }
+.console-shell .top .sub { font-family: var(--font-mono); font-size: 11px; color: var(--ink-faint);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.console-shell .top .right { display: flex; align-items: center; gap: var(--s-4); }
+.console-shell .kbd { font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim);
+  border: 1px solid var(--border-strong); border-radius: 6px; padding: 5px 9px; background: var(--surface-1);
+  cursor: pointer; transition: border-color var(--t-fast), color var(--t-fast); }
+.console-shell .kbd:hover { border-color: var(--ink-24); color: var(--ink); }
+.console-shell .kbd:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.console-shell .theme-toggle { display: grid; place-items: center; width: 32px; height: 32px;
+  border-radius: var(--r-full); border: 1px solid var(--border-strong); background: var(--surface-1);
+  color: var(--ink-dim); cursor: pointer; transition: border-color var(--t-fast), color var(--t-fast), background var(--t-fast); }
+.console-shell .theme-toggle:hover { border-color: var(--ink-24); color: var(--ink); background: var(--hover-fill); }
+.console-shell .theme-toggle:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.console-shell .theme-toggle svg { width: 15px; height: 15px; }
+.console-shell .theme-icon-sun { display: none; }
+:root[data-theme="light"] .console-shell .theme-icon-sun { display: block; }
+:root[data-theme="light"] .console-shell .theme-icon-moon { display: none; }
+.console-shell .live { display: flex; align-items: center; gap: 7px; font-family: var(--font-mono);
+  font-size: 11px; color: var(--allow); letter-spacing: .08em; }
+.console-shell .live .live-dot { width: 7px; height: 7px; border-radius: var(--r-full); background: var(--allow); }
+@media (prefers-reduced-motion: no-preference) {
+  .console-shell .live .live-dot { animation: shellLivePulse 2s var(--ease-in-out) infinite; }
+  @keyframes shellLivePulse { 0%,100% { opacity: 1; box-shadow: 0 0 0 0 var(--allow-24); }
+    50% { opacity: .55; box-shadow: 0 0 0 4px transparent; } }
+}
+
+/* the route content area — keeps #main as the primary landmark */
+.console-shell .console-view { padding: var(--s-6); min-width: 0; }
+
+/* ---- ⌘K command palette — the ONLY drop shadow (overlay-only, CORE-ELEV-1) ----
+   PORTALED to document.body (CommandPalette.tsx), so it sits OUTSIDE the inert `.console-main`
+   while open — hence these rules are un-scoped, not under `.console-shell`. Distinctive
+   `cmdk-` names keep them from colliding with any future `.palette`/`.scrim`. */
+.cmdk-scrim { position: fixed; inset: 0; background: color-mix(in oklab, var(--bg-base) 55%, transparent);
+  backdrop-filter: blur(3px); z-index: 40; }
+.cmdk-palette {
+  position: fixed; top: 13vh; left: 50%; transform: translateX(-50%); width: min(580px, 92vw);
+  background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--r-lg);
+  box-shadow: var(--shadow-overlay); z-index: 41; overflow: hidden;
+}
+.cmdk-palette input { width: 100%; background: transparent; border: none; color: var(--ink);
+  font-size: 15px; font-family: var(--font-sans); padding: var(--s-5); border-bottom: 1px solid var(--border); }
+.cmdk-palette input:focus { outline: none; }
+.cmdk-palette .grp { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+  letter-spacing: .12em; color: var(--ink-faint); padding: 10px var(--s-5) 4px; }
+.cmdk-palette .opt { display: flex; align-items: center; gap: 10px; padding: 11px var(--s-5);
+  width: 100%; text-align: left; font-family: var(--font-sans); font-size: var(--t-small); color: var(--ink-dim);
+  cursor: pointer; background: transparent; border: none; }
+.cmdk-palette .opt[aria-selected="true"] { background: var(--accent-12); color: var(--ink); }
+.cmdk-palette .opt .ic { color: var(--ink-faint); display: inline-flex; width: 16px; justify-content: center; }
+.cmdk-palette .opt[aria-selected="true"] .ic { color: var(--accent-ink); }
+.cmdk-palette .empty { padding: var(--s-6) var(--s-5); color: var(--ink-faint);
+  font-size: var(--t-small); text-align: center; }
+
+/* ---- responsive: collapse the rail to an icon strip, then to a top row ---- */
+@media (max-width: 900px) {
+  .console-shell { grid-template-columns: 64px 1fr; }
+  .console-shell aside .brand { justify-content: center; padding: 8px 0 var(--s-5); }
+  .console-shell aside .brand .brand-text,
+  .console-shell .nav-group,
+  .console-shell .navitem span:not(.badge),
+  .console-shell .acct { display: none; }
+  .console-shell .navitem { justify-content: center; padding: 10px 0; }
+  .console-shell .top .sub { display: none; }
+}
