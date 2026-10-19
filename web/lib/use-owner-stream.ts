@@ -100,6 +100,8 @@ export function useOwnerStreamStatus(): StreamStatus {
     listeners.add(noop); // hold the refcount so the connection stays up for the indicator
     statusListeners.add(onStatus);
     ensureConnected(wallet.getToken);
+    // Sync-read: reconcile to the manager's status NOW, in case the connection was already open
+    // (another subscriber) or onStatusChange fired synchronously during ensureConnected.
     setLocal(currentStatus);
     return () => {
       statusListeners.delete(onStatus);

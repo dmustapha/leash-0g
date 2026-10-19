@@ -212,15 +212,15 @@
 .console-view :is(.ops-view, .trust-view, .cockpit-view) .hash a:hover { text-decoration: underline; }
 
 /* ---- status pill (console.html .spill) ---- */
-.console-view .ops-view .spill { display: inline-flex; align-items: center; gap: 7px; font-family: var(--font-mono);
+.console-view :is(.ops-view, .cockpit-view) .spill { display: inline-flex; align-items: center; gap: 7px; font-family: var(--font-mono);
   font-size: 11px; font-weight: 600; padding: 4px 11px; border-radius: var(--r-full); text-transform: uppercase; letter-spacing: .06em; }
-.console-view .ops-view .spill::before { content: ""; width: 6px; height: 6px; border-radius: var(--r-full); }
-.console-view .ops-view .spill.running { color: var(--allow); background: var(--allow-14); border: 1px solid var(--allow-24); }
-.console-view .ops-view .spill.running::before { background: var(--allow); }
-.console-view .ops-view .spill.paused { color: var(--accent-ink); background: var(--accent-12); border: 1px solid var(--accent-24); }
-.console-view .ops-view .spill.paused::before { background: var(--accent); }
-.console-view .ops-view .spill.revoked { color: var(--deny); background: var(--deny-14); border: 1px solid var(--deny-24); }
-.console-view .ops-view .spill.revoked::before { background: var(--deny); }
+.console-view :is(.ops-view, .cockpit-view) .spill::before { content: ""; width: 6px; height: 6px; border-radius: var(--r-full); }
+.console-view :is(.ops-view, .cockpit-view) .spill.running { color: var(--allow); background: var(--allow-14); border: 1px solid var(--allow-24); }
+.console-view :is(.ops-view, .cockpit-view) .spill.running::before { background: var(--allow); }
+.console-view :is(.ops-view, .cockpit-view) .spill.paused { color: var(--accent-ink); background: var(--accent-12); border: 1px solid var(--accent-24); }
+.console-view :is(.ops-view, .cockpit-view) .spill.paused::before { background: var(--accent); }
+.console-view :is(.ops-view, .cockpit-view) .spill.revoked { color: var(--deny); background: var(--deny-14); border: 1px solid var(--deny-24); }
+.console-view :is(.ops-view, .cockpit-view) .spill.revoked::before { background: var(--deny); }
 
 /* ---- mode-chip (console.html .mode-chip) — auto/supervised, toggles in place ---- */
 .console-view .ops-view .mode-chip { font-family: var(--font-mono); font-size: 10px; padding: 3px 10px; border-radius: var(--r-full);
@@ -358,6 +358,7 @@
 .console-view .cockpit-view .sf-tag.inference { color: var(--ink-dim); background: var(--ink-06); }
 .console-view .cockpit-view .sf-tag.action { color: var(--accent-ink); background: var(--accent-12); }
 .console-view .cockpit-view .sf-tag.decision { color: var(--ink); background: var(--ink-08); }
+.console-view .cockpit-view .sf-tag.modify { color: var(--accent-ink); background: var(--accent-12); }
 .console-view .cockpit-view .sf-tag.consent { color: var(--allow); background: var(--allow-14); }
 .console-view .cockpit-view .sf-tag.block,
 .console-view .cockpit-view .sf-tag.revoke { color: var(--deny); background: var(--deny-14); }
