@@ -33,34 +33,41 @@ export default function AuditPage({ params }: { params: Promise<{ id: string }> 
     if (wallet.authenticated) void load();
   }, [load, wallet.authenticated]);
 
+  // G-2.4: the shell topbar owns the "Audit" title; `.trust-view` scopes the TRUST styles.
   return (
-    <div className="wrap" style={{ paddingBlock: 'clamp(1.5rem, 4vw, 3rem)', display: 'grid', gap: '1.1rem' }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: '1rem' }}>
-        <h1 style={{ fontSize: 'var(--text-h1)' }}>Audit trail</h1>
-        <span style={{ flex: 1 }} />
-        <Link href={`/agents/${id}`} className="nav-link">
-          ← Cockpit
-        </Link>
+    <div className="trust-view">
+      <div className="fleet-head">
+        <p className="section-title" style={{ margin: 0 }}>
+          Hash-chained trace batches · <span className="n">0G Storage</span>
+        </p>
+        <span className="grow" />
+        <span className="hash"><Link href={`/agents/${id}`}>← Cockpit</Link></span>
       </div>
 
       {!wallet.ready ? (
-        <p role="status" style={{ color: 'var(--color-ink-dim)' }}>Loading…</p>
+        <p role="status" style={{ color: 'var(--ink-dim)' }}>Loading…</p>
       ) : !wallet.authenticated ? (
-        <div className="card" style={{ padding: '1.4rem', display: 'grid', gap: '0.8rem', justifyItems: 'start' }}>
-          <p>Connect your wallet to read your agent&apos;s audit trail.</p>
+        <div className="deadstate">
+          <svg className="leash-svg" viewBox="0 0 80 44" aria-hidden="true">
+            <circle className="leash-clasp" cx="10" cy="22" r="6" />
+            <path className="leash-path" d="M16 22 Q 40 30 74 22" />
+          </svg>
+          <h4>Connect your wallet</h4>
+          <p>Sign in to read your agent&apos;s audit trail — the hash-chained record of everything it did.</p>
           <button type="button" className="btn btn-primary" onClick={wallet.login}>
             Connect wallet
           </button>
         </div>
       ) : error && !batches ? (
-        <div className="toast toast-err" role="alert">
+        <div className="deadstate error" role="alert">
+          <h4>Could not load the audit trail</h4>
           <p>{error}</p>
-          <button type="button" className="btn btn-sm" onClick={() => void load()}>
+          <button type="button" className="btn btn-ghost" onClick={() => void load()}>
             Retry
           </button>
         </div>
       ) : batches === null ? (
-        <p role="status" style={{ color: 'var(--color-ink-dim)' }}>Loading batches…</p>
+        <p role="status" style={{ color: 'var(--ink-dim)' }}>Loading batches…</p>
       ) : (
         <AuditView
           batches={batches}

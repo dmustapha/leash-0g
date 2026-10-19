@@ -49,7 +49,7 @@ export function AlertPrefsPanel({
 
   return (
     <section aria-label="Alert preferences" className="card" style={{ padding: '1rem 1.1rem', display: 'grid', gap: '0.7rem' }}>
-      <h2 style={{ fontSize: '1rem', margin: 0 }}>What reaches you where</h2>
+      <h2>What reaches you where</h2>
       <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--color-ink-dim)' }}>
         Everything always lands in your in-app inbox — decisions can never be muted there.
         Telegram is up to you, per kind.
@@ -69,7 +69,7 @@ export function AlertPrefsPanel({
               <tr key={kind} style={{ borderTop: '1px solid var(--color-line-soft)' }}>
                 <td style={{ padding: '0.45rem 0.6rem 0.45rem 0' }}>{label}</td>
                 <td style={{ padding: '0.45rem 0.6rem 0.45rem 0' }}>
-                  <label style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem', color: 'var(--color-ink-dim)' }}>
+                  <label className="switch" data-on="true" style={{ cursor: 'default' }}>
                     <input
                       type="checkbox"
                       checked
@@ -77,20 +77,27 @@ export function AlertPrefsPanel({
                       aria-label={`In-app alerts for “${label}” — always on`}
                       data-testid={`inapp-${kind}`}
                     />
-                    <span style={{ fontSize: '0.8rem' }}>
+                    <span className="track" aria-hidden="true" />
+                    <span className="knob" aria-hidden="true" />
+                    <span className="slabel" style={{ textTransform: 'none', fontWeight: 400, color: 'var(--ink-faint)' }}>
                       {klass === 'decision' ? 'always on (needs you)' : 'always on'}
                     </span>
                   </label>
                 </td>
                 <td style={{ padding: '0.45rem 0' }}>
-                  <input
-                    type="checkbox"
-                    checked={telegramOn}
-                    disabled={busyKind !== null}
-                    aria-label={`Telegram alerts for “${label}”`}
-                    data-testid={`telegram-${kind}`}
-                    onChange={() => void toggle(kind, klass)}
-                  />
+                  <label className="switch" data-on={telegramOn ? 'true' : 'false'}>
+                    <input
+                      type="checkbox"
+                      checked={telegramOn}
+                      disabled={busyKind !== null}
+                      aria-label={`Telegram alerts for “${label}”`}
+                      data-testid={`telegram-${kind}`}
+                      onChange={() => void toggle(kind, klass)}
+                    />
+                    <span className="track" aria-hidden="true" />
+                    <span className="knob" aria-hidden="true" />
+                    <span className="slabel">{telegramOn ? 'on' : 'off'}</span>
+                  </label>
                 </td>
               </tr>
             );

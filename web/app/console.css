@@ -187,26 +187,29 @@
      list-chip idiom is applied; the preset cards themselves are omitted.
    ============================================================================ */
 
-/* ---- panel (console.html .panel) — restyles the components' globals `.panel` in place ---- */
-.console-view .ops-view .panel { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--r-md);
+/* ---- panel (console.html .panel) — restyles the components' globals `.panel` AND `.card`
+   in place. SHARED across OPERATE + TRUST via :is() (G-2.4 broadened the scope). ---- */
+.console-view :is(.ops-view, .trust-view) .panel,
+.console-view .trust-view .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--r-md);
   padding: var(--s-5); margin-bottom: var(--s-4); box-shadow: none; }
-.console-view .ops-view .panel-hi { border-color: var(--accent-24); box-shadow: inset 3px 0 0 var(--accent); }
+.console-view :is(.ops-view, .trust-view) .panel-hi,
+.console-view .trust-view .raised { border-color: var(--accent-24); box-shadow: inset 3px 0 0 var(--accent); }
 
 /* ---- lede prose (tools.html .lede) ---- */
-.console-view .ops-view .lede { font-size: var(--t-small); color: var(--ink-dim); max-width: 64ch; margin: 0 0 var(--s-5); line-height: 1.6; }
-.console-view .ops-view .lede b { color: var(--ink); font-weight: 600; }
-.console-view .ops-view .lede code, .console-view .ops-view .code { font-family: var(--font-mono); font-size: .92em; color: var(--ink); }
+.console-view :is(.ops-view, .trust-view) .lede { font-size: var(--t-small); color: var(--ink-dim); max-width: 64ch; margin: 0 0 var(--s-5); line-height: 1.6; }
+.console-view :is(.ops-view, .trust-view) .lede b { color: var(--ink); font-weight: 600; }
+.console-view :is(.ops-view, .trust-view) .lede code, .console-view :is(.ops-view, .trust-view) .code { font-family: var(--font-mono); font-size: .92em; color: var(--ink); }
 
 /* ---- badge-pill / hash (console.html) ---- */
-.console-view .ops-view .badge-pill { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono);
+.console-view :is(.ops-view, .trust-view) .badge-pill { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono);
   font-size: 11px; color: var(--ink-dim); background: var(--surface-2); border: 1px solid var(--border);
   border-radius: var(--r-full); padding: 4px 11px; }
-.console-view .ops-view .badge-pill.jade { color: var(--allow); border-color: var(--allow-24); background: var(--allow-14); }
-.console-view .ops-view .badge-pill.accent { color: var(--accent-ink); border-color: var(--accent-24); background: var(--accent-12); }
-.console-view .ops-view .tnum { font-variant-numeric: tabular-nums; }
-.console-view .ops-view .hash { font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim); }
-.console-view .ops-view .hash a { color: var(--accent-ink); text-decoration: none; }
-.console-view .ops-view .hash a:hover { text-decoration: underline; }
+.console-view :is(.ops-view, .trust-view) .badge-pill.jade { color: var(--allow); border-color: var(--allow-24); background: var(--allow-14); }
+.console-view :is(.ops-view, .trust-view) .badge-pill.accent { color: var(--accent-ink); border-color: var(--accent-24); background: var(--accent-12); }
+.console-view :is(.ops-view, .trust-view) .tnum { font-variant-numeric: tabular-nums; }
+.console-view :is(.ops-view, .trust-view) .hash { font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim); }
+.console-view :is(.ops-view, .trust-view) .hash a { color: var(--accent-ink); text-decoration: none; }
+.console-view :is(.ops-view, .trust-view) .hash a:hover { text-decoration: underline; }
 
 /* ---- status pill (console.html .spill) ---- */
 .console-view .ops-view .spill { display: inline-flex; align-items: center; gap: 7px; font-family: var(--font-mono);
@@ -257,17 +260,70 @@
 @media (max-width: 560px) { .console-view .ops-view .poa { grid-template-columns: 1fr; gap: 2px var(--s-4); }
   .console-view .ops-view .poa .pv { margin-bottom: 6px; } }
 
-/* ---- job-spec editor fields (tools.html .label + .inp + .list-chip) — restyles the
-   editor's existing .label + .field in place; .list-chip is the acceptance-rule token ---- */
-.console-view .ops-view .label { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: .1em;
+/* ---- form fields (tools.html .label + .inp + .list-chip) — restyles existing .label +
+   .field in place. SHARED across OPERATE (job-spec editor) + TRUST (alert settings). ---- */
+.console-view :is(.ops-view, .trust-view) .label { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: .1em;
   color: var(--ink-faint); margin-bottom: 7px; display: block; }
-.console-view .ops-view .field { width: 100%; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--r-sm);
+.console-view :is(.ops-view, .trust-view) .field { width: 100%; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--r-sm);
   color: var(--ink); padding: 10px 12px; font: inherit; font-family: var(--font-sans); font-size: var(--t-small); }
-.console-view .ops-view textarea.field { font-family: var(--font-mono); font-size: 12px; line-height: 1.5; resize: vertical; }
-.console-view .ops-view select.field { font-family: var(--font-mono); font-size: 12px; }
-.console-view .ops-view .field:focus { outline: none; border-color: var(--accent-24); box-shadow: 0 0 0 3px var(--accent-08); }
+.console-view :is(.ops-view, .trust-view) textarea.field { font-family: var(--font-mono); font-size: 12px; line-height: 1.5; resize: vertical; }
+.console-view :is(.ops-view, .trust-view) select.field { font-family: var(--font-mono); font-size: 12px; width: auto; }
+.console-view :is(.ops-view, .trust-view) .field:focus { outline: none; border-color: var(--accent-24); box-shadow: 0 0 0 3px var(--accent-08); }
 .console-view .ops-view .list-chip { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 11px;
   color: var(--ink); background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-full); padding: 5px 11px; }
 .console-view .ops-view .list-chip .x { all: unset; cursor: pointer; width: 15px; height: 15px; display: grid; place-items: center;
   border-radius: var(--r-full); color: var(--ink-faint); line-height: 1; }
 .console-view .ops-view .list-chip .x:hover { color: var(--deny); background: var(--deny-14); }
+
+/* ============================================================================
+   TRUST — audit (/agents/[id]/audit) + alert settings (/settings/alerts).
+   STAGE G-2.4. Scoped under `.console-view .trust-view` — both pages wrap their
+   content root in `.trust-view`. Shares panel/lede/badge-pill/hash/label/field
+   with OPERATE (see :is() rules above); adds the TRUST-only primitives below.
+
+   Ported VERBATIM: batch / batch-head / events / ev-row / chain-pill →
+   console.html:366-379; switch / track / knob / slabel → tools.html:84-95.
+
+   RECONCILED (discipline #3): the reference audit toolbar's filter pills
+   (Revocations / Policy edits) have no analog in the real AuditView (it has no
+   filters) → omitted. The reference shows chain-ok/broken on every batch row,
+   but the live app only KNOWS the chain result after an owner-side decrypt
+   (verifyBatch) → the chain-pill appears in the decrypted-records view where it
+   is real, never guessed on the sealed-batch row.
+   ============================================================================ */
+
+/* section eyebrow headings — the settings panels keep their semantic <h2> for a11y
+   heading nav, but wear the mono-uppercase p-title eyebrow look (tools.html). */
+.console-view .trust-view .panel h2,
+.console-view .trust-view .card h2 { font-family: var(--font-mono); font-size: 10px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: .14em; color: var(--ink-faint); margin: 0 0 var(--s-4); }
+
+/* toggle switch (tools.html .switch) — the per-kind Telegram alert toggle */
+.console-view .trust-view .switch { position: relative; display: inline-flex; align-items: center; gap: 9px; cursor: pointer; user-select: none; }
+/* the real checkbox stays in the a11y tree (aria-label, focusable) but is visually hidden by
+   opacity — sized to COVER the whole switch so the whole control is the click target (and so
+   Playwright, which treats a zero-box element as not actionable, can click it). */
+.console-view .trust-view .switch input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.console-view .trust-view .switch input:disabled { cursor: default; }
+.console-view .trust-view .switch .track { width: 38px; height: 21px; border-radius: var(--r-full); background: var(--ink-10);
+  border: 1px solid var(--border-strong); transition: background var(--t-fast), border-color var(--t-fast); }
+.console-view .trust-view .switch .knob { position: absolute; top: 3px; left: 3px; width: 15px; height: 15px; border-radius: var(--r-full);
+  background: var(--ink-dim); transition: transform var(--t-fast), background var(--t-fast); }
+.console-view .trust-view .switch input:checked + .track { background: var(--allow-24); border-color: var(--allow-40); }
+.console-view .trust-view .switch input:checked + .track + .knob { transform: translateX(17px); background: var(--allow); }
+.console-view .trust-view .switch input:disabled + .track { opacity: .55; }
+.console-view .trust-view .switch input:focus-visible + .track { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.console-view .trust-view .switch .slabel { font-family: var(--font-mono); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.console-view .trust-view .switch[data-on="true"] .slabel { color: var(--allow); }
+.console-view .trust-view .switch[data-on="false"] .slabel { color: var(--ink-faint); }
+
+/* audit batches (console.html .batch / .chain-pill) */
+.console-view .trust-view .batch { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--r-lg);
+  margin-bottom: var(--s-3); overflow: hidden; }
+.console-view .trust-view .batch-head { display: grid; grid-template-columns: 1fr auto auto auto; gap: var(--s-4); align-items: center;
+  padding: var(--s-4) var(--s-5); }
+.console-view .trust-view .chain-pill { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono);
+  font-size: 10px; padding: 3px 9px; border-radius: var(--r-full); white-space: nowrap; }
+.console-view .trust-view .chain-pill.ok { color: var(--allow); background: var(--allow-14); border: 1px solid var(--allow-24); }
+.console-view .trust-view .chain-pill.broken { color: var(--deny); background: var(--deny-14); border: 1px solid var(--deny-24); }
+@media (max-width: 640px) { .console-view .trust-view .batch-head { grid-template-columns: 1fr; gap: var(--s-3); } }

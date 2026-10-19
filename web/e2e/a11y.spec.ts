@@ -47,7 +47,8 @@ test('cockpit direction surfaces (DirectBox read-back + StatusChat answer) have 
 test('audit page has no serious/critical a11y violations', async ({ page }) => {
   await installMockApi(page, freshState());
   await page.goto('/agents/agent-1/audit');
-  await expect(page.getByRole('heading', { name: 'Audit trail' })).toBeVisible();
+  // G-2.4: the shell topbar owns the page title ("Audit"); the view opens on a section eyebrow.
+  await expect(page.getByRole('heading', { name: 'Audit', exact: true })).toBeVisible();
   await expectNoSeriousViolations(page);
 });
 
