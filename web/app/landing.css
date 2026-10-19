@@ -387,21 +387,48 @@
 @media (hover: hover) {
   .leash-landing .pill-line:hover { border-color: var(--color-ink-dim); background: var(--color-surface-1); }
 }
-.leash-landing .pill-beat { background: transparent; color: var(--color-accent-ink); border-color: var(--color-accent); }
-@media (hover: hover) {
-  .leash-landing .pill-beat:hover { background: var(--color-accent-soft); }
-}
+/* G-1.3 removed `.pill-beat`: the beat is no longer a pill in the CTA row. It is the
+   reference's own `.ll-beat` control, styled below. */
 
 /* ---- hero ---- */
+/* `position: relative` + the `> *` z-index lift are what let `.motes` sit behind the hero's
+   own content (marketing.html:45-47). Without them the motes would paint over the h1. */
 .leash-landing .hero {
   text-align: center;
   padding-top: var(--space-6);
   padding-bottom: var(--space-section);
+  position: relative;
 }
+.leash-landing .hero > * { position: relative; z-index: 1; }
+
+/* G-1.3 M-1 · ambient motes (tokens.css:442-448, marketing.html:46) */
+.leash-landing .motes { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 0; }
+.leash-landing .mote {
+  position: absolute;
+  bottom: 0;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--accent);
+  filter: blur(0.5px);
+  opacity: 0;
+  will-change: transform, opacity;
+  animation: lp-mote-rise var(--mdur, 15s) linear infinite;
+  animation-delay: var(--d, 0s);
+}
+@keyframes lp-mote-rise {
+  0% { transform: translateY(30px) scale(0.5); opacity: 0; }
+  12% { opacity: 0.55; }
+  88% { opacity: 0.4; }
+  100% { transform: translateY(-320px) scale(1); opacity: 0; }
+}
+
 .leash-landing .object-stage {
   display: flex;
   justify-content: center;
   margin-bottom: var(--space-2);
+  position: relative; /* the `.ll-verdict` pop is absolutely placed against this */
+  perspective: 900px; /* M-6: without a perspective the rotateX/rotateY lean is flat */
 }
 .leash-landing .looplink {
   width: min(82vw, 480px);
@@ -411,7 +438,94 @@
   stroke-linecap: round;
   overflow: visible;
   filter: drop-shadow(0 0 24px var(--color-accent-soft));
+  /* G-1.3 M-6 · pointer parallax. The locals are set per-element by HeroBeat; the 0deg
+     fallbacks are what make the object render correctly before any pointer event and
+     under reduced motion, where the listener is never attached. */
+  transform: rotateX(var(--rx, 0deg)) rotateY(var(--ry, 0deg));
+  transition: transform var(--t-slow) var(--ease-out-quart);
+  will-change: transform;
 }
+
+/* G-1.3 M-2 · the snap spark at the tether's end (marketing.html:111) */
+.leash-landing .ll-spark {
+  fill: var(--accent-hi);
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+/* G-1.3 M-3 · verdict pop above the object (marketing.html:88-93) */
+.leash-landing .ll-verdict {
+  position: absolute;
+  top: 8px;
+  left: 50%;
+  transform: translateX(-50%) translateY(6px);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  font-weight: 600;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  opacity: 0;
+  pointer-events: none;
+  white-space: nowrap;
+  transition: opacity var(--t-base), transform var(--t-base);
+}
+.leash-landing .ll-verdict.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.leash-landing .ll-verdict.refused { color: var(--deny); background: var(--deny-14); border: 1px solid var(--deny-24); }
+.leash-landing .ll-verdict.revoked { color: var(--allow); background: var(--allow-14); border: 1px solid var(--allow-24); }
+
+/* G-1.3 M-4 · the beat control — the caption IS the button (marketing.html:69-87) */
+.leash-landing .ll-beat {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0 auto var(--space-6);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--color-ink-dim);
+  background: var(--glass-bg-strong);
+  backdrop-filter: blur(10px);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
+  padding: 8px 16px 8px 12px;
+  cursor: pointer;
+  transition:
+    color var(--t-base),
+    border-color var(--t-base),
+    background var(--t-base),
+    box-shadow var(--t-base);
+}
+@media (hover: hover) {
+  .leash-landing .ll-beat:hover { color: var(--color-ink); border-color: var(--accent-24); box-shadow: 0 0 0 3px var(--accent-08); }
+}
+.leash-landing .ll-beat .ll-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--radius-full);
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+  transition: background var(--t-base), box-shadow var(--t-base);
+}
+.leash-landing .ll-beat .ll-play {
+  font-size: 8px;
+  color: var(--color-accent-ink);
+  transition: color var(--t-base);
+  margin-right: -2px;
+}
+.leash-landing.is-taut .ll-beat { color: var(--deny); border-color: var(--deny-24); }
+.leash-landing.is-taut .ll-beat .ll-dot { background: var(--deny); box-shadow: 0 0 8px var(--deny); }
+.leash-landing.is-taut .ll-beat .ll-play,
+.leash-landing.is-snapped .ll-beat .ll-play { color: currentColor; }
+.leash-landing.is-snapped .ll-beat { color: var(--allow); border-color: var(--allow-24); }
+.leash-landing.is-snapped .ll-beat .ll-dot { background: var(--allow); box-shadow: 0 0 8px var(--allow); }
+
+/* refusal tint: on "refused" the tether snaps straight AND flushes coral for the beat */
+.leash-landing.is-taut .ll-tether { stroke: var(--deny); }
+.leash-landing.is-taut .looplink { filter: drop-shadow(0 0 20px var(--deny-24)) drop-shadow(0 0 3px var(--deny-14)); }
 
 @media (prefers-reduced-motion: no-preference) {
   .leash-landing.will-draw .ll-loop { stroke-dasharray: 70; stroke-dashoffset: 70; }
@@ -422,6 +536,8 @@
   .leash-landing.is-drawing .ll-link1 { animation: lp-draw calc(var(--dur-draw) * 0.22) ease-out calc(var(--dur-draw) * 0.625) forwards; }
   .leash-landing.is-drawing .ll-link2 { animation: lp-draw calc(var(--dur-draw) * 0.22) ease-out calc(var(--dur-draw) * 0.78) forwards; }
   .leash-landing.is-alive .ll-sway { animation: lp-sway 4.6s ease-in-out infinite; transform-origin: 28px 24px; }
+  /* G-1.3 M-2 · the spark fires only on the snap, and only when motion is welcome */
+  .leash-landing.is-snapped .ll-spark { animation: lp-spark 0.6s var(--ease-out-expo) both; }
 
   .leash-landing .reveal { animation: lp-rise var(--dur-spring) var(--ease-morph) both; }
   .leash-landing .reveal-1 { animation-delay: var(--stagger); }
@@ -441,6 +557,11 @@
 @keyframes lp-rise {
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: none; }
+}
+@keyframes lp-spark {
+  0% { opacity: 0; transform: scale(0.4); }
+  40% { opacity: 1; transform: scale(1.5); }
+  100% { opacity: 0; transform: scale(2.3); }
 }
 
 .leash-landing .ll-tether { transition: d var(--dur-spring) var(--ease-spring); }
@@ -463,35 +584,9 @@
   margin-bottom: var(--space-6);
 }
 
-.leash-landing .outcomes {
-  display: flex;
-  gap: var(--space-4);
-  justify-content: center;
-  flex-wrap: wrap;
-  min-height: 132px;
-}
-.leash-landing .outcome-card {
-  width: min(100%, 330px);
-  background: var(--color-surface-1);
-  border: 1px solid var(--color-line);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-card);
-  padding: var(--space-5);
-  text-align: left;
-  opacity: 0;
-  transform: translateY(6px);
-  transition:
-    opacity var(--dur-spring) var(--ease-spring),
-    transform var(--dur-spring) var(--ease-spring),
-    border-color var(--dur-spring) var(--ease-spring);
-}
-.leash-landing .outcome-card[data-shown='true'] { opacity: 1; transform: none; }
-.leash-landing .outcome-deny[data-shown='true'] { border-color: var(--color-deny); }
-.leash-landing .outcome-allow[data-shown='true'] { border-color: var(--color-allow); }
-.leash-landing .outcome-title { font-weight: 600; margin-bottom: var(--space-1); }
-.leash-landing .outcome-deny .outcome-title { color: var(--color-deny); }
-.leash-landing .outcome-allow .outcome-title { color: var(--color-allow); }
-.leash-landing .outcome-body { color: var(--color-ink-dim); font-size: var(--text-small); }
+/* G-1.3 R-1 · `.outcomes` / `.outcome-card` deleted with the markup they styled. The copy is
+   relocated to `#how`'s bento as `.hcard`s in G-1.4 — which is a reference class with its own
+   reference styling, so none of this is reusable there. See page.tsx's R-1 note. */
 
 .leash-landing .sim-note {
   color: var(--color-ink-faint);
@@ -634,6 +729,11 @@
     transition-duration: 0.01ms !important;
   }
   .leash-landing .reveal { opacity: 1; transform: none; }
+  /* G-1.3 · the universal `animation: none` above stops these but does not hide them, and a
+     stalled mote/spark would sit frozen mid-flight at whatever opacity it holds. Pin both to
+     invisible, exactly as the reference does (tokens.css:494, marketing.html:118). */
+  .leash-landing .mote { animation: none !important; opacity: 0 !important; }
+  .leash-landing .ll-spark { opacity: 0 !important; }
 }
 
 /* ---- mobile ---- */
@@ -642,7 +742,6 @@
   .leash-landing .how, .leash-landing .receipts, .leash-landing .closing { padding-bottom: var(--space-7); }
   .leash-landing .daily { padding-block: var(--space-7); margin-bottom: var(--space-7); }
   .leash-landing .number-late { margin-top: 0; }
-  .leash-landing .outcomes { min-height: 264px; }
   .leash-landing .how-steps { grid-template-columns: 1fr; gap: var(--space-6); }
   .leash-landing .receipt-name { min-width: 0; width: 100%; }
 }

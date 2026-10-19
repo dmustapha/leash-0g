@@ -43,6 +43,27 @@ export default function LandingPage() {
       <div>
         {/* 1 · HERO */}
         <section className="hero container" aria-labelledby="hero-title">
+          {/* G-1.3 M-1 · ambient motes (marketing.html:324, JS :638-647, tokens.css:442-444).
+              The values are deterministic, so they render server-side instead of via innerHTML:
+              the reference's own i*61%100 / 11+i%7 / i*0.9%12 table, rounded to kill float noise
+              (i=3 would emit 2.7000000000000002s). Suppressed by the `reduce` block in CSS, and
+              by `hidden` under saveData in HeroBeat — matching the reference's `if(reduceMo) return`. */}
+          <div className="motes" id="motes" aria-hidden="true">
+            {Array.from({ length: 16 }, (_, i) => (
+              <span
+                key={i}
+                className="mote"
+                style={
+                  {
+                    left: `${(i * 61) % 100}%`,
+                    '--mdur': `${11 + (i % 7)}s`,
+                    '--d': `${((i * 0.9) % 12).toFixed(1)}s`,
+                  } as React.CSSProperties
+                }
+              />
+            ))}
+          </div>
+
           <div className="object-stage" id="demo">
             <svg
               className="looplink"
@@ -76,8 +97,25 @@ export default function LandingPage() {
                 fill="none"
                 transform="rotate(14 106 24)"
               />
+              {/* G-1.3 M-2 · the snap spark at the tether's end (marketing.html:333, CSS :111/:115). */}
+              <circle className="ll-spark" cx="77" cy="24" r="2.6" />
             </svg>
+            {/* G-1.3 M-3 · verdict pop (marketing.html:335). aria-hidden by design — the
+                announcement lives on the .ll-beat button's aria-live, exactly as the reference
+                has it (:336), so one live region speaks, not two. */}
+            <div className="ll-verdict mono" id="ll-verdict" aria-hidden="true" />
           </div>
+
+          {/* G-1.3 M-4 · the beat is its own centered control directly under the object
+              (marketing.html:336-338), not one pill in a row of three. The caption IS the button
+              that plays the refusal; the dot and ▶ carry the state colour. */}
+          <button className="ll-beat mono" id="btn-beat" type="button" aria-live="polite">
+            <span className="ll-dot" aria-hidden="true" />
+            <span className="ll-play" aria-hidden="true">
+              ▶
+            </span>
+            <span id="ll-state">Try to overspend</span>
+          </button>
 
           <h1 id="hero-title" className="reveal">
             Let your AI agent spend real&nbsp;money. Keep the&nbsp;leash.
@@ -91,25 +129,22 @@ export default function LandingPage() {
             <a className="pill pill-primary" id="cta-watch" href="#demo">
               Watch a leash hold
             </a>
-            <button className="pill pill-beat" id="btn-beat" type="button">
-              Try to overspend
-            </button>
             <Link className="pill pill-line" href="/app">
               Open the cockpit
             </Link>
           </div>
 
-          {/* the ONE carded element: the hero decision moment. Reserved boxes, zero layout shift. */}
-          <div className="outcomes" aria-live="polite">
-            <div className="outcome-card outcome-deny" id="outcome-refused" data-shown="false">
-              <p className="outcome-title">Refused. Over the per-transfer cap.</p>
-              <p className="outcome-body">The contract held. You didn&apos;t have to be awake.</p>
-            </div>
-            <div className="outcome-card outcome-allow" id="outcome-revoked" data-shown="false">
-              <p className="outcome-title">Revoked in one move.</p>
-              <p className="outcome-body">The record stays: hash-chained, yours alone.</p>
-            </div>
-          </div>
+          {/* G-1.3 R-1 · the two `.outcome-card`s are GONE from the hero: the locked build states
+              the verdict in the `.ll-verdict` pill above the object, and its hero proportions
+              depend on no cards sitting below the CTAs. The prose is NOT lost — it is relocated
+              verbatim into the `#how` bento as two `.hcard`s (REFUSED / REVOKED, with the
+              data-leash="taut"/"cut" mini-leashes that already depict those outcomes). That is a
+              BINDING G-1.4 obligation, recorded in STAGE-G-1.3-HERO-RECONCILE-PLAN.md §5.
+
+              `.sim-note` STAYS, as a stated deviation under scope §0(a): the reference is a
+              static artifact, but this hero ships above a real product, and the note is what
+              stops a visitor reading a scripted animation as live fleet data. The force is
+              truthfulness, not taste. */}
           <p className="sim-note">Simulated. The real leash lives in the cockpit.</p>
         </section>
 
