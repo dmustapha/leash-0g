@@ -12,10 +12,12 @@ import { Disclosure } from '@/components/ui/Disclosure';
 
 /** Labeled wrapper that accepts any control (input OR textarea), unlike ui/Field. */
 function Labeled({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+  // G-2.3b: the label wears the ops-view mono-uppercase-faint treatment (tools.html .label);
+  // the hint sits under it as dim prose, then the control.
   return (
-    <div style={{ display: 'grid', gap: '0.3rem' }}>
-      <span className="label" style={{ color: 'var(--color-ink)' }}>{label}</span>
-      {hint ? <p style={{ fontSize: '0.8rem', color: 'var(--color-ink-dim)', margin: 0 }}>{hint}</p> : null}
+    <div style={{ display: 'grid', gap: '0.3rem', marginBottom: 'var(--s-3)' }}>
+      <span className="label" style={{ marginBottom: 0 }}>{label}</span>
+      {hint ? <p style={{ fontSize: '0.8rem', color: 'var(--ink-dim)', margin: 0 }}>{hint}</p> : null}
       {children}
     </div>
   );
@@ -121,14 +123,14 @@ export function JobSpecEditor({
   }
 
   return (
-    <section className="panel" data-testid="job-spec-editor" style={{ display: 'grid', gap: '0.9rem' }}>
-      <header style={{ display: 'grid', gap: '0.2rem' }}>
-        <strong style={{ fontSize: '1rem' }}>Define a job</strong>
-        <span style={{ fontSize: '0.82rem', color: 'var(--color-ink-faint)' }}>
-          The requester runs this exact spec. The fee and the pass/fail rules live here, on your side — the agents
-          never invent them.
-        </span>
-      </header>
+    <section className="panel" data-testid="job-spec-editor">
+      <p className="p-title">
+        <span>Job spec</span>
+      </p>
+      <p className="lede" style={{ marginTop: 0 }}>
+        The requester runs this exact spec. <b>The fee and the pass/fail rules live here, on your side</b> — the agents
+        never invent them.
+      </p>
 
       <Labeled label="Handle" hint="A short id the requester points at (e.g. eth-4000).">
         <input className="field" data-testid="js-ref" value={sourceRef} onChange={(e) => setSourceRef(e.target.value)} />
@@ -149,18 +151,18 @@ export function JobSpecEditor({
         <input className="field" data-testid="js-fee" value={feeAmount} onChange={(e) => setFeeAmount(e.target.value)} inputMode="numeric" />
       </Labeled>
 
-      <div style={{ display: 'grid', gap: '0.5rem' }}>
-        <strong style={{ fontSize: '0.9rem' }}>Acceptance floor</strong>
-        <span style={{ fontSize: '0.8rem', color: 'var(--color-ink-faint)' }}>
+      <div style={{ display: 'grid', gap: '0.5rem', marginTop: 'var(--s-3)' }}>
+        <span className="label" style={{ marginBottom: 0 }}>Acceptance floor</span>
+        <span style={{ fontSize: '0.8rem', color: 'var(--ink-dim)' }}>
           Automatic structural checks — a garbage answer never reaches the evaluator. This is not a quality judge
           (that is the evaluator&apos;s job); it just enforces shape and ranges.
         </span>
-        <ul data-testid="js-rules" style={{ display: 'grid', gap: '0.3rem', listStyle: 'none', margin: 0, padding: 0 }}>
+        <ul data-testid="js-rules" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.4rem', listStyle: 'none', margin: 0, padding: 0 }}>
           {rules.map((r, i) => (
-            <li key={i} style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', fontSize: '0.82rem' }}>
+            <li key={i} className="list-chip">
               <span>{ruleSummary(r)}</span>
-              <button className="btn btn-ghost btn-sm" data-testid={`js-rule-remove-${i}`} onClick={() => setRules((rs) => rs.filter((_, j) => j !== i))}>
-                remove
+              <button type="button" className="x" aria-label={`Remove ${ruleSummary(r)}`} data-testid={`js-rule-remove-${i}`} onClick={() => setRules((rs) => rs.filter((_, j) => j !== i))}>
+                ×
               </button>
             </li>
           ))}

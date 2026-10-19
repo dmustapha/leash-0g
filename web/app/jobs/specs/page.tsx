@@ -20,16 +20,17 @@ export default function JobSpecsPage() {
     [api],
   );
 
+  // G-2.3b: the shell topbar owns the "Jobs" title; `.ops-view` scopes the OPERATE styles.
   return (
-    <main style={{ display: 'grid', gap: '1rem', maxWidth: 720, margin: '0 auto', padding: '1.5rem' }}>
-      <header style={{ display: 'grid', gap: '0.25rem' }}>
-        <h1 style={{ margin: 0, fontSize: '1.2rem' }}>Define a job</h1>
-        <p style={{ margin: 0, fontSize: '0.86rem', color: 'var(--color-ink-faint)' }}>
-          Seed the work a requester agent will run. Point the requester&apos;s <code className="code">jobSpecSource</code>{' '}
-          at the handle you save here. <Link href="/jobs">Back to jobs</Link>
-        </p>
-      </header>
+    <div className="ops-view">
+      <p className="section-title">
+        Define a job · <span className="n">owner-seeded spec</span>
+      </p>
+      <p className="lede">
+        Seed the work a requester agent will run. Point the requester&apos;s <code>jobSpecSource</code> at the handle
+        you save here. <span className="hash"><Link href="/jobs">Back to jobs</Link></span>
+      </p>
       <JobSpecEditor onSave={onSave} />
-    </main>
+    </div>
   );
 }

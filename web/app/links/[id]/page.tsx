@@ -113,13 +113,18 @@ export default function PairViewPage({ params }: { params: Promise<{ id: string 
   );
 
   if (!wallet.ready) {
-    return <Shell><p role="status" style={{ color: 'var(--color-ink-dim)' }}>Loading…</p></Shell>;
+    return <Shell><p role="status" style={{ color: 'var(--ink-dim)' }}>Loading…</p></Shell>;
   }
   if (!wallet.authenticated) {
     return (
       <Shell>
-        <div className="card" style={{ padding: '1.4rem', display: 'grid', gap: '0.8rem', justifyItems: 'start' }}>
-          <p>Connect your wallet to watch this pair.</p>
+        <div className="deadstate">
+          <svg className="leash-svg" viewBox="0 0 80 44" aria-hidden="true">
+            <circle className="leash-clasp" cx="10" cy="22" r="6" />
+            <path className="leash-path" d="M16 22 Q 40 30 74 22" />
+          </svg>
+          <h4>Connect your wallet</h4>
+          <p>Sign in to watch this pair — both agents&apos; live streams and their shared handoff history.</p>
           <button type="button" className="btn btn-primary" onClick={wallet.login}>
             Connect wallet
           </button>
@@ -130,9 +135,10 @@ export default function PairViewPage({ params }: { params: Promise<{ id: string 
   if (error && !link) {
     return (
       <Shell>
-        <div className="toast toast-err" role="alert">
-          <p>We could not load this pair ({error}).</p>
-          <button type="button" className="btn btn-sm" onClick={() => void load()}>
+        <div className="deadstate error" role="alert">
+          <h4>Could not load this pair</h4>
+          <p>{error}</p>
+          <button type="button" className="btn btn-ghost" onClick={() => void load()}>
             Retry
           </button>
         </div>
@@ -140,7 +146,7 @@ export default function PairViewPage({ params }: { params: Promise<{ id: string 
     );
   }
   if (!link) {
-    return <Shell><p role="status" style={{ color: 'var(--color-ink-dim)' }}>Loading this pair…</p></Shell>;
+    return <Shell><p role="status" style={{ color: 'var(--ink-dim)' }}>Loading this pair…</p></Shell>;
   }
 
   const name = (id: string) => agentNames[id] ?? `${id.slice(0, 8)}…`;
@@ -150,8 +156,8 @@ export default function PairViewPage({ params }: { params: Promise<{ id: string 
       title={`${name(link.fromAgentId)} → ${name(link.toAgentId)}`}
       aside={
         <span style={{ display: 'inline-flex', gap: '0.5rem', alignItems: 'center' }}>
-          <span className="badge">{link.mode === 'auto' ? 'automatic' : 'supervised'}</span>
-          <span className={`pill ${link.status === 'active' ? 'pill-allow' : link.status === 'paused' ? 'pill-idle' : 'pill-deny'}`}>
+          <span className={`mode-chip ${link.mode}`}>{link.mode}</span>
+          <span className={`spill ${link.status === 'active' ? 'running' : link.status === 'paused' ? 'paused' : 'revoked'}`}>
             {link.status}
           </span>
         </span>
@@ -177,16 +183,17 @@ export default function PairViewPage({ params }: { params: Promise<{ id: string 
   );
 }
 
+// G-2.3b: the shell topbar owns the "Links" group title; this pair view carries its own
+// section eyebrow (the pair's names) + the mode/status aside. `.ops-view` scopes OPERATE styles.
 function Shell({ title = 'Pair view', aside, children }: { title?: string; aside?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div className="wrap" style={{ paddingBlock: 'clamp(1.5rem, 4vw, 3rem)', display: 'grid', gap: '1.1rem' }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: '1rem', flexWrap: 'wrap' }}>
-        <h1 style={{ fontSize: 'var(--text-h1)' }}>{title}</h1>
+    <div className="ops-view" style={{ display: 'grid', gap: '1.1rem' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.9rem', flexWrap: 'wrap' }}>
+        {/* The shell topbar h1 is "Links"; the pair name is this page's entity sub-heading (h2). */}
+        <h2 style={{ fontFamily: 'var(--font-display)', fontWeight: 500, fontSize: '1.15rem', letterSpacing: '-0.01em', color: 'var(--ink)', margin: 0 }}>{title}</h2>
         {aside}
         <span style={{ flex: 1 }} />
-        <Link href="/links" className="nav-link">
-          ← Links
-        </Link>
+        <span className="hash"><Link href="/links">← Links</Link></span>
       </div>
       {children}
     </div>

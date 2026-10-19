@@ -7,10 +7,11 @@ import Link from 'next/link';
 import { useState } from 'react';
 import type { Link as AgentLink, LinkMode } from '@/lib/types';
 
-const STATUS_PILL: Record<AgentLink['status'], string> = {
-  active: 'pill-allow',
-  paused: 'pill-idle',
-  removed: 'pill-deny',
+// G-2.3b: console.html .spill status family (running/paused/revoked).
+const STATUS_SPILL: Record<AgentLink['status'], string> = {
+  active: 'running',
+  paused: 'paused',
+  removed: 'revoked',
 };
 
 export function LinkList({
@@ -60,16 +61,18 @@ export function LinkList({
         {links.map((l) => {
           const busy = busyId === l.id;
           return (
-            <li key={l.id} className="panel" data-testid={`link-row-${l.id}`} style={{ padding: '0.85rem 1rem', display: 'grid', gap: '0.6rem' }}>
-              <div style={{ display: 'flex', gap: '0.7rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                <Link href={`/links/${l.id}`} className="link-tx" style={{ fontSize: '0.95rem', fontFamily: 'var(--font-sans)' }}>
+            <li key={l.id} className="panel" data-testid={`link-row-${l.id}`} style={{ display: 'grid', gap: '0.6rem' }}>
+              <p className="p-title" style={{ margin: 0, textTransform: 'none', letterSpacing: 0 }}>
+                <Link href={`/links/${l.id}`} className="link-tx" style={{ fontSize: '0.95rem', fontFamily: 'var(--font-display)', fontWeight: 500, color: 'var(--ink)' }}>
                   {name(l.fromAgentId)} → {name(l.toAgentId)}
                 </Link>
-                <span className={`pill ${STATUS_PILL[l.status]}`}>{l.status}</span>
-                <span className="badge">{l.mode === 'auto' ? 'automatic' : 'supervised'}</span>
-                <span className="badge" title="Handoffs sent over this link">
-                  {l.delegationCount ?? 0} handoff{(l.delegationCount ?? 0) === 1 ? '' : 's'}
+                <span style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <span className={`mode-chip ${l.mode}`}>{l.mode}</span>
+                  <span className={`spill ${STATUS_SPILL[l.status]}`}>{l.status}</span>
                 </span>
+              </p>
+              <div className="hash" title="Handoffs sent over this link">
+                {l.delegationCount ?? 0} delegation{(l.delegationCount ?? 0) === 1 ? '' : 's'}
               </div>
               {l.status !== 'removed' ? (
                 <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>

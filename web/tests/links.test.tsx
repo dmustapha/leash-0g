@@ -88,10 +88,12 @@ describe('LinkList', () => {
   it('renders status, mode, delegation count, and per-side names', () => {
     render(<LinkList links={[link()]} agentNames={names} onAction={vi.fn()} onModeChange={vi.fn()} />);
     const row = screen.getByTestId('link-row-l1');
+    // G-2.3b: the row wears the console design — the mode-chip shows the raw mode
+    // ('auto'/'supervised') and the handoff count reads "N delegations".
     expect(row).toHaveTextContent('Watcher → Executor');
     expect(row).toHaveTextContent('active');
-    expect(row).toHaveTextContent('automatic');
-    expect(row).toHaveTextContent('3 handoffs');
+    expect(row).toHaveTextContent('auto');
+    expect(row).toHaveTextContent('3 delegations');
   });
 
   it('shows the empty state', () => {

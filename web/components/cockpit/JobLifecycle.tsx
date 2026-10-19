@@ -24,6 +24,57 @@ function formatToken(baseUnits: string, decimals = 6): string {
   }
 }
 
+// G-2.3b: the console.html jobs stepper. The six display steps ARE the real
+// JobStatus progression verbatim; terminal statuses fail at the step where the
+// job actually died (reconciled from the reference, which lumps all terminals at
+// 'verdict' — denied is an owner call at settlement, not an evaluator reject).
+const JOB_STEPS: JobStatus[] = ['originated', 'delivered', 'evaluating', 'verdict', 'awaiting_approval', 'settled'];
+
+function failIndex(job: JobView): number {
+  if (job.status === 'denied' || job.blockedBy === 'owner') return JOB_STEPS.indexOf('awaiting_approval');
+  if (job.status === 'rejected' || job.blockedBy === 'verdict') return JOB_STEPS.indexOf('verdict');
+  if (job.blockedBy === 'acceptance') return JOB_STEPS.indexOf('evaluating');
+  // A generic 'failed' with no blockedBy reason: infer how far it actually got from the real
+  // progress markers rather than guessing — a verdict means it died at/after evaluation, a
+  // deliverable-but-no-verdict means it died in evaluation, neither means it died at delivery.
+  if (job.verdict !== null) return JOB_STEPS.indexOf('verdict');
+  if (job.deliverableRoot !== null) return JOB_STEPS.indexOf('evaluating');
+  return JOB_STEPS.indexOf('delivered');
+}
+
+function JobStepper({ job }: { job: JobView }) {
+  const term = job.status === 'rejected' || job.status === 'denied' || job.status === 'failed';
+  // 'settling' is a broadcast-but-unconfirmed fee transfer — show 'settled' as the active step.
+  const current = job.status === 'settling' ? 'settled' : job.status;
+  const idx = term ? failIndex(job) : JOB_STEPS.indexOf(current);
+  return (
+    <div className="stepper" data-testid="job-stepper">
+      {JOB_STEPS.map((s, i) => {
+        const st = i < idx ? 'done' : i === idx ? (term ? 'fail' : 'active') : '';
+        const label = term && s === JOB_STEPS[idx] ? job.status : s;
+        return (
+          <div className="step-wrap" key={s} style={{ display: 'flex', alignItems: 'center' }}>
+            <div className={`step ${st}`}>
+              <div className="sc">
+                <div className="sd" />
+                <div className="sl">{label.replace(/_/g, ' ')}</div>
+              </div>
+            </div>
+            {i < JOB_STEPS.length - 1 ? <div className={`sbar ${i < idx ? 'done' : ''}`} /> : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+const TONE_CHIP: Record<'idle' | 'accent' | 'allow' | 'deny', string> = {
+  idle: 'badge-pill',
+  accent: 'chip chip-pend',
+  allow: 'chip chip-allow',
+  deny: 'chip chip-deny',
+};
+
 const STATUS_COPY: Record<JobStatus, { label: string; tone: 'idle' | 'accent' | 'allow' | 'deny' }> = {
   originated: { label: 'Requested', tone: 'idle' },
   delivered: { label: 'Delivered', tone: 'accent' },
@@ -116,10 +167,12 @@ export function JobLifecycle({
           </span>
           <strong style={{ fontSize: '1rem' }}>{job.spec.question}</strong>
         </div>
-        <span className={`pill pill-${status.tone}`} data-testid="job-status">
+        <span className={TONE_CHIP[status.tone]} data-testid="job-status">
           {status.label}
         </span>
       </header>
+
+      <JobStepper job={job} />
 
       <ol style={{ display: 'grid', gap: '1rem', listStyle: 'none', margin: 0, padding: 0 }}>
         {/* 1 — request */}
@@ -238,14 +291,23 @@ export function JobLifecycle({
         </Stage>
       </ol>
 
-      {/* Proof-of-Agreement — the verified, multi-party signed record (F7) */}
+      {/* Proof-of-Agreement — the verified, multi-party signed record (F7),
+          rendered as console.html's .poa key/value grid (each party signed its
+          own step; hashes/roots/sigs only — never untrusted agent text). */}
       {job.poa ? (
         <Disclosure label="Proof of Agreement (each party signed its own step)">
-          <div className="code" style={{ display: 'grid', gap: '0.25rem', fontSize: '0.76rem', whiteSpace: 'pre-wrap' }} data-testid="poa">
-            <span>requester signed job spec: {shortAddr(job.poa.requesterSig)}</span>
-            <span>provider signed deliverable: {shortAddr(job.poa.providerSig)}</span>
-            <span>evaluator signed verdict ({job.poa.verdict}): {shortAddr(job.poa.evaluatorSig)}</span>
-            {job.poa.settlementTx ? <span>settlement tx: {shortAddr(job.poa.settlementTx)}</span> : null}
+          <div className="poa" data-testid="poa">
+            <span className="pk">jobSpecHash</span><span className="pv">{shortAddr(job.poa.jobSpecHash)}</span>
+            <span className="pk">requesterSig</span><span className="pv">{shortAddr(job.poa.requesterSig)}</span>
+            <span className="pk">deliverableRoot</span><span className="pv">{shortAddr(job.poa.deliverableRoot)}</span>
+            <span className="pk">providerSig</span><span className="pv">{shortAddr(job.poa.providerSig)}</span>
+            <span className="pk">verdict</span>
+            <span className="pv">
+              <span className={`chip ${job.poa.verdict === 'accept' ? 'chip-allow' : 'chip-deny'}`}>{job.poa.verdict}</span>
+            </span>
+            <span className="pk">evaluatorSig</span><span className="pv">{shortAddr(job.poa.evaluatorSig)}</span>
+            <span className="pk">settlementTx</span>
+            <span className="pv">{job.poa.settlementTx ? shortAddr(job.poa.settlementTx) : <span style={{ color: 'var(--ink-faint)' }}>—</span>}</span>
           </div>
         </Disclosure>
       ) : null}

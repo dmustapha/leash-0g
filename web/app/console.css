@@ -158,3 +158,116 @@
 /* ============ DIGEST ============ */
 .console-view .digest-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--s-4); margin-bottom: var(--s-5); }
 @media (max-width: 900px) { .console-view .digest-grid { grid-template-columns: repeat(2, 1fr); } }
+
+/* ============================================================================
+   OPERATE — jobs (/jobs, /jobs/[id]), job specs (/jobs/specs), links (/links,
+   /links/[id]). STAGE G-2.3b. Scoped under `.console-view .ops-view` — the five
+   OPERATE pages wrap their content root in `.ops-view` (parallel to G-2.3a's
+   `.create-flow`), so these reference primitives restyle the shipped components'
+   existing `.panel`/`.field`/`.label`/`.pill` in place WITHOUT touching the
+   not-yet-reskinned cockpit (G-2.5), which also renders some of the same
+   components (StreamFeed, JobLifecycle) outside this scope.
+
+   Ported VERBATIM from the owner-locked build:
+   · panel / p-title / badge-pill / hash / spill → console.html:200-226
+   · stepper / step / sd / sl / sbar / poa / mode-chip → console.html:339-360
+   · lede / inp / list-chip (job-spec editor idiom) → tools.html:61-108,198
+   Raw tokens throughout → re-themes for free in light.
+
+   RECONCILED to the real product (discipline #3 — never fake data):
+   · the link lifecycle stepper (pending_approval→accepted→completed) in the
+     reference links view is a DEMO fabrication — the real `Link` type carries
+     only status/mode/delegationCount, no stage — so it is omitted here; the
+     real pause/resume/mode-toggle/remove actions and the DelegationTimeline
+     (actual handoff history) stand in its place.
+   · the job stepper's six stages ARE the real `JobStatus` enum verbatim, so the
+     console.html stepper maps 1:1 to live job.status (no fabrication).
+   · tools.html's preset-picker grid has NO analog in the real JobSpecEditor
+     (there are no capability presets for a job spec) → its field/panel/lede/
+     list-chip idiom is applied; the preset cards themselves are omitted.
+   ============================================================================ */
+
+/* ---- panel (console.html .panel) — restyles the components' globals `.panel` in place ---- */
+.console-view .ops-view .panel { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--r-md);
+  padding: var(--s-5); margin-bottom: var(--s-4); box-shadow: none; }
+.console-view .ops-view .panel-hi { border-color: var(--accent-24); box-shadow: inset 3px 0 0 var(--accent); }
+
+/* ---- lede prose (tools.html .lede) ---- */
+.console-view .ops-view .lede { font-size: var(--t-small); color: var(--ink-dim); max-width: 64ch; margin: 0 0 var(--s-5); line-height: 1.6; }
+.console-view .ops-view .lede b { color: var(--ink); font-weight: 600; }
+.console-view .ops-view .lede code, .console-view .ops-view .code { font-family: var(--font-mono); font-size: .92em; color: var(--ink); }
+
+/* ---- badge-pill / hash (console.html) ---- */
+.console-view .ops-view .badge-pill { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono);
+  font-size: 11px; color: var(--ink-dim); background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--r-full); padding: 4px 11px; }
+.console-view .ops-view .badge-pill.jade { color: var(--allow); border-color: var(--allow-24); background: var(--allow-14); }
+.console-view .ops-view .badge-pill.accent { color: var(--accent-ink); border-color: var(--accent-24); background: var(--accent-12); }
+.console-view .ops-view .tnum { font-variant-numeric: tabular-nums; }
+.console-view .ops-view .hash { font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim); }
+.console-view .ops-view .hash a { color: var(--accent-ink); text-decoration: none; }
+.console-view .ops-view .hash a:hover { text-decoration: underline; }
+
+/* ---- status pill (console.html .spill) ---- */
+.console-view .ops-view .spill { display: inline-flex; align-items: center; gap: 7px; font-family: var(--font-mono);
+  font-size: 11px; font-weight: 600; padding: 4px 11px; border-radius: var(--r-full); text-transform: uppercase; letter-spacing: .06em; }
+.console-view .ops-view .spill::before { content: ""; width: 6px; height: 6px; border-radius: var(--r-full); }
+.console-view .ops-view .spill.running { color: var(--allow); background: var(--allow-14); border: 1px solid var(--allow-24); }
+.console-view .ops-view .spill.running::before { background: var(--allow); }
+.console-view .ops-view .spill.paused { color: var(--accent-ink); background: var(--accent-12); border: 1px solid var(--accent-24); }
+.console-view .ops-view .spill.paused::before { background: var(--accent); }
+.console-view .ops-view .spill.revoked { color: var(--deny); background: var(--deny-14); border: 1px solid var(--deny-24); }
+.console-view .ops-view .spill.revoked::before { background: var(--deny); }
+
+/* ---- mode-chip (console.html .mode-chip) — auto/supervised, toggles in place ---- */
+.console-view .ops-view .mode-chip { font-family: var(--font-mono); font-size: 10px; padding: 3px 10px; border-radius: var(--r-full);
+  color: var(--ink-dim); background: var(--surface-2); border: 1px solid var(--border); text-transform: uppercase; letter-spacing: .06em; }
+.console-view .ops-view .mode-chip.auto { color: var(--accent-ink); border-color: var(--accent-24); background: var(--accent-12); }
+.console-view .ops-view .mode-chip.supervised { color: var(--allow); border-color: var(--allow-24); background: var(--allow-14); }
+
+/* ---- jobs / links stepper (console.html .stepper) ---- */
+.console-view .ops-view .stepper { display: flex; align-items: center; gap: 0; margin: var(--s-3) 0 26px; padding: 0 44px; flex-wrap: wrap; }
+.console-view .ops-view .step { display: flex; align-items: center; gap: 0; }
+.console-view .ops-view .step .sc { position: relative; display: flex; flex-direction: column; align-items: center; }
+.console-view .ops-view .step .sd { width: 10px; height: 10px; border-radius: var(--r-full); border: 2px solid var(--border-strong); background: var(--surface-2); }
+.console-view .ops-view .step.done .sd { background: var(--allow); border-color: var(--allow); }
+.console-view .ops-view .step.active .sd { background: var(--accent); border-color: var(--accent-ink); box-shadow: 0 0 0 3px var(--accent-12); }
+.console-view .ops-view .step.fail .sd { background: var(--deny); border-color: var(--deny); }
+.console-view .ops-view .step .sl { position: absolute; top: 15px; left: 50%; transform: translateX(-50%); font-family: var(--font-mono);
+  font-size: 9px; letter-spacing: .02em; color: var(--ink-dim); white-space: nowrap; }
+.console-view .ops-view .step.active .sl { color: var(--accent-ink); }
+.console-view .ops-view .step.done .sl { color: var(--ink-dim); }
+.console-view .ops-view .stepper .sbar { width: 78px; height: 2px; flex: none; background: var(--border-strong); }
+.console-view .ops-view .stepper .sbar.done { background: var(--allow); }
+/* mobile: the fixed-width stepper can't wrap cleanly (labels collide), so it becomes a
+   horizontal scroller — the dots/bars keep their size and the stage labels stay readable. */
+@media (max-width: 560px) {
+  .console-view .ops-view .stepper { flex-wrap: nowrap; overflow-x: auto; padding: 0 8px; margin-top: var(--s-4);
+    scrollbar-width: thin; -webkit-overflow-scrolling: touch; }
+  .console-view .ops-view .stepper .sbar { width: 48px; }
+}
+
+/* ---- proof-of-agreement grid (console.html .poa) ---- */
+.console-view .ops-view .poa { display: grid; grid-template-columns: 150px 1fr; gap: 6px var(--s-4); font-family: var(--font-mono);
+  font-size: 11px; border-top: 1px solid var(--border); padding-top: var(--s-4); margin-top: var(--s-4); }
+.console-view .ops-view .poa .pk { color: var(--ink-faint); }
+.console-view .ops-view .poa .pv { color: var(--ink-dim); overflow: hidden; text-overflow: ellipsis; }
+.console-view .ops-view .poa .pv a { color: var(--accent-ink); text-decoration: none; }
+.console-view .ops-view .poa .pv a:hover { text-decoration: underline; }
+@media (max-width: 560px) { .console-view .ops-view .poa { grid-template-columns: 1fr; gap: 2px var(--s-4); }
+  .console-view .ops-view .poa .pv { margin-bottom: 6px; } }
+
+/* ---- job-spec editor fields (tools.html .label + .inp + .list-chip) — restyles the
+   editor's existing .label + .field in place; .list-chip is the acceptance-rule token ---- */
+.console-view .ops-view .label { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: .1em;
+  color: var(--ink-faint); margin-bottom: 7px; display: block; }
+.console-view .ops-view .field { width: 100%; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--r-sm);
+  color: var(--ink); padding: 10px 12px; font: inherit; font-family: var(--font-sans); font-size: var(--t-small); }
+.console-view .ops-view textarea.field { font-family: var(--font-mono); font-size: 12px; line-height: 1.5; resize: vertical; }
+.console-view .ops-view select.field { font-family: var(--font-mono); font-size: 12px; }
+.console-view .ops-view .field:focus { outline: none; border-color: var(--accent-24); box-shadow: 0 0 0 3px var(--accent-08); }
+.console-view .ops-view .list-chip { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 11px;
+  color: var(--ink); background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-full); padding: 5px 11px; }
+.console-view .ops-view .list-chip .x { all: unset; cursor: pointer; width: 15px; height: 15px; display: grid; place-items: center;
+  border-radius: var(--r-full); color: var(--ink-faint); line-height: 1; }
+.console-view .ops-view .list-chip .x:hover { color: var(--deny); background: var(--deny-14); }

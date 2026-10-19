@@ -3,7 +3,6 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import Link from 'next/link';
 import { makeApi } from '@/lib/api';
 import { useOwnerWallet } from '@/lib/owner-wallet';
 import type { AgentSummary, Link as AgentLink, LinkMode } from '@/lib/types';
@@ -62,39 +61,42 @@ export default function LinksPage() {
     [api, refresh],
   );
 
+  // G-2.3b: the shell topbar owns the "Links" title; `.ops-view` scopes the OPERATE styles.
   return (
-    <div className="wrap" style={{ paddingBlock: 'clamp(1.5rem, 4vw, 3rem)', display: 'grid', gap: '1.1rem' }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: '1rem' }}>
-        <h1 style={{ fontSize: 'var(--text-h1)' }}>Links</h1>
-        <span style={{ flex: 1 }} />
-        <Link href="/app" className="nav-link">
-          ← Your agents
-        </Link>
-      </div>
+    <div className="ops-view">
+      <p className="section-title">
+        Agent-to-agent links · <span className="n">delegation pairs</span>
+      </p>
 
       {!wallet.ready ? (
-        <p role="status" style={{ color: 'var(--color-ink-dim)' }}>Loading…</p>
+        <p role="status" style={{ color: 'var(--ink-dim)' }}>Loading…</p>
       ) : !wallet.authenticated ? (
-        <div className="card" style={{ padding: '1.4rem', display: 'grid', gap: '0.8rem', justifyItems: 'start' }}>
-          <p>Connect your wallet to manage links between your agents.</p>
+        <div className="deadstate">
+          <svg className="leash-svg" viewBox="0 0 80 44" aria-hidden="true">
+            <circle className="leash-clasp" cx="10" cy="22" r="6" />
+            <path className="leash-path" d="M16 22 Q 40 30 74 22" />
+          </svg>
+          <h4>Connect your wallet</h4>
+          <p>Sign in to manage links — the channels one agent uses to hand work to another.</p>
           <button type="button" className="btn btn-primary" onClick={wallet.login}>
             Connect wallet
           </button>
         </div>
       ) : error ? (
-        <div className="toast toast-err" role="alert">
-          <p>We could not load your links ({error}).</p>
-          <button type="button" className="btn btn-sm" onClick={() => void refresh()}>
+        <div className="deadstate error" role="alert">
+          <h4>Could not load your links</h4>
+          <p>{error}</p>
+          <button type="button" className="btn btn-ghost" onClick={() => void refresh()}>
             Retry
           </button>
         </div>
       ) : links === null ? (
-        <p role="status" style={{ color: 'var(--color-ink-dim)' }}>Loading your links…</p>
+        <p role="status" style={{ color: 'var(--ink-dim)' }}>Loading your links…</p>
       ) : (
-        <div style={{ display: 'grid', gap: '1rem', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 340px), 1fr))', alignItems: 'start' }}>
+        <div style={{ display: 'grid', gap: '1rem', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 360px), 1fr))', alignItems: 'start' }}>
           <LinkCreateForm agents={agents} onCreate={createLink} />
           <section aria-label="Your links" style={{ display: 'grid', gap: '0.7rem' }}>
-            <h2 style={{ fontSize: '1rem' }}>Your links</h2>
+            <p className="section-title" style={{ margin: 0 }}>Your links</p>
             <LinkList links={links} agentNames={agentNames} onAction={linkAction} onModeChange={modeChange} />
           </section>
         </div>
