@@ -26,6 +26,18 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             Manrope 400 body). font-display: swap is set per @font-face in landing.css. */}
         <link rel="preload" href="/fonts/clash-display-700.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
         <link rel="preload" href="/fonts/manrope-latin-400-normal.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
+        {/* STAGE G-1.2 anti-FOUC — lifted from `design-reference/marketing.html:7`.
+            Inline and synchronous is the entire point: this must set `data-theme`
+            BEFORE first paint. A `useEffect` would paint dark, then flash to light.
+            Rendered as script CHILDREN, never `dangerouslySetInnerHTML`, because
+            `react/no-danger` is an eslint ERROR app-wide (P5C-3 / I-01).
+            The pathname gate is the marketing-only scope: the console's five remaining
+            literal dark tokens (globals.css) are not themeable until G-2, so light must
+            not leak there. Remove the gate when G-2 retargets them — the reference's own
+            console surfaces carry this control (bind.html:217, signing.html:94). */}
+        <script>
+          {`try{if(location.pathname==='/'&&localStorage.getItem('leash-theme')==='light')document.documentElement.setAttribute('data-theme','light')}catch(e){}`}
+        </script>
       </head>
       <body>
         <Providers>

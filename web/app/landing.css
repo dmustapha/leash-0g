@@ -57,28 +57,64 @@
 
 /* ---- tokens, scoped to the landing root ---- */
 .leash-landing {
-  --color-base: #0a0a0b;
-  --color-surface-1: #141416;
-  --color-surface-2: #1c1c1f;
-  --color-surface-3: #232327;
-  --color-line: #2a2a2e;
-  --color-line-soft: #1e1e21;
-  --color-ink: #f4f4ef;
-  --color-ink-dim: #a2a29c;
-  --color-ink-faint: #8b8b84;
-  --color-ink-dim2: #a2a29c;
-  --color-accent: #c6f24d;
-  --color-accent-hi: #d6ff6a;
-  --color-accent-soft: #1e2410;
-  --color-allow: #4fd08a;
-  --color-allow-soft: #0e2a1c;
-  --color-deny: #ff5d6c;
-  --color-deny-soft: #2a1418;
-  --color-ink-dimm: #a2a29c;
-  --hairline: rgba(244, 244, 239, 0.08);
+  /* STAGE G-1.2 — these were opaque dark LITERALS, and that made light mode cosmetic:
+     real Chrome showed `:root` flipping to paper while `.brand` and `.nav` stayed
+     dark, because this scoped block shadows the themed aliases in globals.css.
+     Each one is now an alias over the canonical role in app/tokens.css, so the single
+     `:root[data-theme="light"]` override re-themes the landing for free.
+
+     Three of them resolve to the reference's own alpha-over-role ladder rather than a
+     hex — that IS the reference recipe (`--border: var(--ink-08)`), and it is why the
+     hairlines adapt instead of needing a second light value:
+       --color-line      <- --border-strong (--ink-16, was #2a2a2e)
+       --color-line-soft <- --border        (--ink-08, was #1e1e21)
+       --hairline        <- --border        (was rgba(244,244,239,.08) — the same thing)
+     The three `*-soft` verdict fills likewise become mixes over their own role, which
+     is how a lime/jade/coral wash survives the canvas inverting under it.
+
+     `--grid-line`, `--glow-accent` and `--selection` stay LOCAL rather than aliases:
+     the global `--glow-accent` is a box-shadow in the light block (tokens.css:181)
+     while this one is a colour. Same name, different type — aliasing them would
+     silently hand a shadow to a `background`.
+
+     `--grid-line` and `--glow-accent` must additionally stay plain `rgba()`, NOT
+     `color-mix()`, and that is a measured constraint rather than a preference. Both
+     feed the `background-image` gradient stops on this same block, and axe-core's
+     colour parser does not understand `color-mix()`. With mixes in those stops an axe
+     run over `/` returns `messageKey: "bgGradient"` and `contrastRatio: 0` for EVERY
+     text node on the canvas — `#hero-title`, `.hero-sub`, `.brand`, `.sim-note`,
+     `.footer-line` — i.e. the landing stops being contrast-auditable at all. Keeping
+     literals is what preserves the audit, so these two theme through the explicit
+     light override below instead of by following `--accent`.
+     `--selection` is exempt: it is never a background in the gradient chain. */
+  --color-base: var(--bg-base);
+  --color-surface-1: var(--surface-1);
+  --color-surface-2: var(--surface-2);
+  --color-surface-3: var(--surface-3);
+  --color-line: var(--border-strong);
+  --color-line-soft: var(--border);
+  --color-ink: var(--ink);
+  --color-ink-dim: var(--ink-dim);
+  --color-ink-faint: var(--ink-faint);
+  --color-ink-dim2: var(--ink-dim);
+  --color-accent: var(--accent);
+  --color-accent-hi: var(--accent-hi);
+  --color-accent-soft: color-mix(in oklab, var(--accent) 12%, var(--bg-base));
+  /* accent as TEXT and text ON the accent fill are separate roles in the reference —
+     bright lime is a dark-mode trait, so on paper the text form deepens to #5c7500
+     (tokens.css:172) while the fill stays vivid. Collapsing them is a contrast
+     failure in light mode, not a style preference. */
+  --color-accent-ink: var(--accent-ink);
+  --color-on-accent: var(--on-accent);
+  --color-allow: var(--allow);
+  --color-allow-soft: color-mix(in oklab, var(--allow) 14%, var(--bg-base));
+  --color-deny: var(--deny);
+  --color-deny-soft: color-mix(in oklab, var(--deny) 14%, var(--bg-base));
+  --color-ink-dimm: var(--ink-dim);
+  --hairline: var(--border);
   --grid-line: rgba(198, 242, 77, 0.035);
   --glow-accent: rgba(198, 242, 77, 0.1);
-  --selection: rgba(198, 242, 77, 0.3);
+  --selection: color-mix(in oklab, var(--accent) 30%, transparent);
 
   --font-display: "Clash Display", ui-sans-serif, system-ui, sans-serif;
   --font-sans: "Manrope", ui-sans-serif, system-ui, -apple-system, sans-serif;
@@ -108,7 +144,15 @@
   --radius-sm: 0.375rem; --radius-md: 0.625rem; --radius-lg: 1rem;
   --radius-xl: 1.375rem; --radius-full: 999px;
   --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.6), 0 20px 50px rgba(0, 0, 0, 0.5);
-  --shadow-accent: 0 0 0 1px rgba(198, 242, 77, 0.4), 0 10px 34px rgba(198, 242, 77, 0.16);
+  /* the lime halo was hard-coded rgba(198,242,77,…) — the same hex as `--accent`.
+     As mixes it follows the accent when the theme deepens it, instead of glowing
+     dark-mode lime over paper. Same numbers, so dark is byte-identical in effect. */
+  --shadow-accent: 0 0 0 1px color-mix(in oklab, var(--accent) 40%, transparent),
+    0 10px 34px color-mix(in oklab, var(--accent) 16%, transparent);
+  /* dark emphasises accent text by going BRIGHTER; paper emphasises it by going
+     DEEPER (see the light override below). One name, two directions — which is the
+     same split the reference makes between `--accent` and `--accent-ink`. */
+  --color-accent-ink-hi: var(--accent-hi);
 
   --ease-spring: cubic-bezier(0.2, 0.9, 0.3, 1.2);
   --ease-morph: cubic-bezier(0.33, 0, 0.2, 1);
@@ -139,8 +183,29 @@
   background-attachment: fixed;
 }
 
+/* STAGE G-1.2 — the landing tokens whose DIRECTION, not just value, inverts on
+   paper. Everything else above themes itself through the role aliases; these cannot,
+   because "depth", "emphasis" and "atmosphere" are rendered by opposite means:
+     --shadow-card        dark = black drop; paper = the reference's soft warm-grey
+                          overlay shadow (tokens.css:180), which is why it aliases
+                          `--shadow-overlay` here instead of carrying its own numbers.
+     --color-accent-ink-hi dark = brighter lime; paper = deeper lime (toward --ink).
+     --grid-line          a 3.5% lime rule reads on near-black and vanishes on paper;
+     --glow-accent        the light values are the deepened accent-ink (#5c7500) for
+                          the rule and the light accent (#aad400) for the bloom, both
+                          as literal rgba because axe cannot parse `color-mix()` in a
+                          gradient stop (see the measured note on the block above).
+   That is the whole light-specific surface, and the ratio is the measure of whether
+   the alias layer did its job. */
+:root[data-theme='light'] .leash-landing {
+  --shadow-card: var(--shadow-overlay);
+  --color-accent-ink-hi: color-mix(in oklab, var(--accent-ink) 78%, var(--ink));
+  --grid-line: rgba(92, 117, 0, 0.07);
+  --glow-accent: rgba(170, 212, 0, 0.16);
+}
+
 .leash-landing * { box-sizing: border-box; margin: 0; }
-.leash-landing ::selection { background: var(--selection); color: var(--color-base); }
+.leash-landing ::selection { background: var(--selection); color: var(--color-on-accent); }
 .leash-landing :focus-visible {
   outline: none;
   box-shadow: var(--focus-ring);
@@ -242,6 +307,56 @@
   color: var(--color-ink);
 }
 
+/* STAGE G-1.2 — the nav's right-hand cluster and the theme control, lifted from
+   `design-reference/marketing.html` (.nav-right :37, .theme-toggle :38-42).
+   The raw tokens here (`--border-strong`, `--glass-bg-strong`, `--ink-dim`, `--ink-24`,
+   `--r-full`, `--t-fast`) come from the global token layer in app/tokens.css, and every
+   one of them carries a light-theme value — which is the whole reason this control
+   restyles itself without a second rule set. */
+.leash-landing .nav-right {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.leash-landing .theme-toggle {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--r-full);
+  border: 1px solid var(--border-strong);
+  background: var(--glass-bg-strong);
+  color: var(--ink-dim);
+  cursor: pointer;
+  transition:
+    border-color var(--t-fast),
+    color var(--t-fast),
+    background var(--t-fast);
+}
+@media (hover: hover) {
+  .leash-landing .theme-toggle:hover {
+    border-color: var(--ink-24);
+    color: var(--ink);
+  }
+}
+.leash-landing .theme-toggle svg {
+  width: 16px;
+  height: 16px;
+}
+/* The icon is chosen by CSS, not by React state. Both glyphs ship in the DOM; this
+   picks one off the attribute the anti-FOUC script sets before first paint, so there
+   is no hydration mismatch and no wrong-glyph flash on a light-mode hard load.
+   See components/landing/ThemeToggle.tsx for the full rationale. */
+.leash-landing .theme-icon-sun {
+  display: none;
+}
+:root[data-theme='light'] .leash-landing .theme-icon-sun {
+  display: block;
+}
+:root[data-theme='light'] .leash-landing .theme-icon-moon {
+  display: none;
+}
+
 /* ---- pills ---- */
 .leash-landing .pill {
   display: inline-flex;
@@ -264,7 +379,7 @@
 .leash-landing .pill:active { transform: translateY(1px); }
 .leash-landing .pill-sm { height: 40px; padding: 0 var(--space-4); font-size: var(--text-small); }
 
-.leash-landing .pill-primary { background: var(--color-accent); color: var(--color-base); font-weight: 700; }
+.leash-landing .pill-primary { background: var(--color-accent); color: var(--color-on-accent); font-weight: 700; }
 @media (hover: hover) {
   .leash-landing .pill-primary:hover { background: var(--color-accent-hi); box-shadow: var(--shadow-accent); }
 }
@@ -272,7 +387,7 @@
 @media (hover: hover) {
   .leash-landing .pill-line:hover { border-color: var(--color-ink-dim); background: var(--color-surface-1); }
 }
-.leash-landing .pill-beat { background: transparent; color: var(--color-accent); border-color: var(--color-accent); }
+.leash-landing .pill-beat { background: transparent; color: var(--color-accent-ink); border-color: var(--color-accent); }
 @media (hover: hover) {
   .leash-landing .pill-beat:hover { background: var(--color-accent-soft); }
 }
@@ -413,7 +528,7 @@
   font-size: var(--text-h2);
   letter-spacing: var(--tracking-display);
   line-height: 1.3;
-  color: var(--color-accent);
+  color: var(--color-accent-ink);
 }
 
 /* ---- how ---- */
@@ -431,7 +546,7 @@
 }
 .leash-landing .how-num {
   display: block;
-  color: var(--color-accent);
+  color: var(--color-accent-ink);
   font-size: var(--text-small);
   margin-bottom: var(--space-3);
 }
@@ -486,8 +601,8 @@
   border-bottom: 1px solid var(--hairline);
 }
 .leash-landing .receipt-name { min-width: 220px; }
-.leash-landing .receipt-list .mono { font-size: var(--text-small); color: var(--color-accent); }
-@media (hover: hover) { .leash-landing .receipt-list a.mono:hover { color: var(--color-accent-hi); } }
+.leash-landing .receipt-list .mono { font-size: var(--text-small); color: var(--color-accent-ink); }
+@media (hover: hover) { .leash-landing .receipt-list a.mono:hover { color: var(--color-accent-ink-hi); } }
 .leash-landing .verify { color: var(--color-ink-faint); font-size: var(--text-small); }
 @media (hover: hover) { .leash-landing a.verify:hover { color: var(--color-ink); } }
 .leash-landing .receipts-note { color: var(--color-ink-faint); font-size: var(--text-small); margin-top: var(--space-5); }

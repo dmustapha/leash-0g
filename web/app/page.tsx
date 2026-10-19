@@ -9,6 +9,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import './landing.css';
 import { LandingRoot } from '@/components/landing/HeroBeat';
+import ThemeToggle from '@/components/landing/ThemeToggle';
 
 export const metadata: Metadata = {
   title: 'LEASH · Let your AI agent spend real money. Keep the leash.',
@@ -28,9 +29,14 @@ export default function LandingPage() {
           <Link className="brand" href="/">
             LEASH
           </Link>
-          <Link className="pill pill-line pill-sm" href="/app">
-            Open the cockpit
-          </Link>
+          {/* STAGE G-1.2 — the reference groups the theme control and the primary CTA
+              in a `.nav-right` cluster (marketing.html:315-318); matched here. */}
+          <div className="nav-right">
+            <ThemeToggle />
+            <Link className="pill pill-line pill-sm" href="/app">
+              Open the cockpit
+            </Link>
+          </div>
         </div>
       </header>
 
