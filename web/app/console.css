@@ -189,27 +189,27 @@
 
 /* ---- panel (console.html .panel) — restyles the components' globals `.panel` AND `.card`
    in place. SHARED across OPERATE + TRUST via :is() (G-2.4 broadened the scope). ---- */
-.console-view :is(.ops-view, .trust-view) .panel,
-.console-view .trust-view .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--r-md);
+.console-view :is(.ops-view, .trust-view, .cockpit-view) .panel,
+.console-view :is(.trust-view, .cockpit-view) .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--r-md);
   padding: var(--s-5); margin-bottom: var(--s-4); box-shadow: none; }
-.console-view :is(.ops-view, .trust-view) .panel-hi,
+.console-view :is(.ops-view, .trust-view, .cockpit-view) .panel-hi,
 .console-view .trust-view .raised { border-color: var(--accent-24); box-shadow: inset 3px 0 0 var(--accent); }
 
 /* ---- lede prose (tools.html .lede) ---- */
-.console-view :is(.ops-view, .trust-view) .lede { font-size: var(--t-small); color: var(--ink-dim); max-width: 64ch; margin: 0 0 var(--s-5); line-height: 1.6; }
-.console-view :is(.ops-view, .trust-view) .lede b { color: var(--ink); font-weight: 600; }
-.console-view :is(.ops-view, .trust-view) .lede code, .console-view :is(.ops-view, .trust-view) .code { font-family: var(--font-mono); font-size: .92em; color: var(--ink); }
+.console-view :is(.ops-view, .trust-view, .cockpit-view) .lede { font-size: var(--t-small); color: var(--ink-dim); max-width: 64ch; margin: 0 0 var(--s-5); line-height: 1.6; }
+.console-view :is(.ops-view, .trust-view, .cockpit-view) .lede b { color: var(--ink); font-weight: 600; }
+.console-view :is(.ops-view, .trust-view, .cockpit-view) .lede code, .console-view :is(.ops-view, .trust-view, .cockpit-view) .code { font-family: var(--font-mono); font-size: .92em; color: var(--ink); }
 
 /* ---- badge-pill / hash (console.html) ---- */
-.console-view :is(.ops-view, .trust-view) .badge-pill { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono);
+.console-view :is(.ops-view, .trust-view, .cockpit-view) .badge-pill { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono);
   font-size: 11px; color: var(--ink-dim); background: var(--surface-2); border: 1px solid var(--border);
   border-radius: var(--r-full); padding: 4px 11px; }
-.console-view :is(.ops-view, .trust-view) .badge-pill.jade { color: var(--allow); border-color: var(--allow-24); background: var(--allow-14); }
-.console-view :is(.ops-view, .trust-view) .badge-pill.accent { color: var(--accent-ink); border-color: var(--accent-24); background: var(--accent-12); }
-.console-view :is(.ops-view, .trust-view) .tnum { font-variant-numeric: tabular-nums; }
-.console-view :is(.ops-view, .trust-view) .hash { font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim); }
-.console-view :is(.ops-view, .trust-view) .hash a { color: var(--accent-ink); text-decoration: none; }
-.console-view :is(.ops-view, .trust-view) .hash a:hover { text-decoration: underline; }
+.console-view :is(.ops-view, .trust-view, .cockpit-view) .badge-pill.jade { color: var(--allow); border-color: var(--allow-24); background: var(--allow-14); }
+.console-view :is(.ops-view, .trust-view, .cockpit-view) .badge-pill.accent { color: var(--accent-ink); border-color: var(--accent-24); background: var(--accent-12); }
+.console-view :is(.ops-view, .trust-view, .cockpit-view) .tnum { font-variant-numeric: tabular-nums; }
+.console-view :is(.ops-view, .trust-view, .cockpit-view) .hash { font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim); }
+.console-view :is(.ops-view, .trust-view, .cockpit-view) .hash a { color: var(--accent-ink); text-decoration: none; }
+.console-view :is(.ops-view, .trust-view, .cockpit-view) .hash a:hover { text-decoration: underline; }
 
 /* ---- status pill (console.html .spill) ---- */
 .console-view .ops-view .spill { display: inline-flex; align-items: center; gap: 7px; font-family: var(--font-mono);
@@ -262,13 +262,13 @@
 
 /* ---- form fields (tools.html .label + .inp + .list-chip) — restyles existing .label +
    .field in place. SHARED across OPERATE (job-spec editor) + TRUST (alert settings). ---- */
-.console-view :is(.ops-view, .trust-view) .label { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: .1em;
+.console-view :is(.ops-view, .trust-view, .cockpit-view) .label { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: .1em;
   color: var(--ink-faint); margin-bottom: 7px; display: block; }
-.console-view :is(.ops-view, .trust-view) .field { width: 100%; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--r-sm);
+.console-view :is(.ops-view, .trust-view, .cockpit-view) .field { width: 100%; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--r-sm);
   color: var(--ink); padding: 10px 12px; font: inherit; font-family: var(--font-sans); font-size: var(--t-small); }
-.console-view :is(.ops-view, .trust-view) textarea.field { font-family: var(--font-mono); font-size: 12px; line-height: 1.5; resize: vertical; }
-.console-view :is(.ops-view, .trust-view) select.field { font-family: var(--font-mono); font-size: 12px; width: auto; }
-.console-view :is(.ops-view, .trust-view) .field:focus { outline: none; border-color: var(--accent-24); box-shadow: 0 0 0 3px var(--accent-08); }
+.console-view :is(.ops-view, .trust-view, .cockpit-view) textarea.field { font-family: var(--font-mono); font-size: 12px; line-height: 1.5; resize: vertical; }
+.console-view :is(.ops-view, .trust-view, .cockpit-view) select.field { font-family: var(--font-mono); font-size: 12px; width: auto; }
+.console-view :is(.ops-view, .trust-view, .cockpit-view) .field:focus { outline: none; border-color: var(--accent-24); box-shadow: 0 0 0 3px var(--accent-08); }
 .console-view .ops-view .list-chip { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 11px;
   color: var(--ink); background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-full); padding: 5px 11px; }
 .console-view .ops-view .list-chip .x { all: unset; cursor: pointer; width: 15px; height: 15px; display: grid; place-items: center;
@@ -294,8 +294,8 @@
 
 /* section eyebrow headings — the settings panels keep their semantic <h2> for a11y
    heading nav, but wear the mono-uppercase p-title eyebrow look (tools.html). */
-.console-view .trust-view .panel h2,
-.console-view .trust-view .card h2 { font-family: var(--font-mono); font-size: 10px; font-weight: 500;
+.console-view :is(.trust-view, .cockpit-view) .panel h2,
+.console-view :is(.trust-view, .cockpit-view) .card h2 { font-family: var(--font-mono); font-size: 10px; font-weight: 500;
   text-transform: uppercase; letter-spacing: .14em; color: var(--ink-faint); margin: 0 0 var(--s-4); }
 
 /* toggle switch (tools.html .switch) — the per-kind Telegram alert toggle */
@@ -327,3 +327,56 @@
 .console-view .trust-view .chain-pill.ok { color: var(--allow); background: var(--allow-14); border: 1px solid var(--allow-24); }
 .console-view .trust-view .chain-pill.broken { color: var(--deny); background: var(--deny-14); border: 1px solid var(--deny-24); }
 @media (max-width: 640px) { .console-view .trust-view .batch-head { grid-template-columns: 1fr; gap: var(--s-3); } }
+
+/* ============================================================================
+   COCKPIT — the per-agent control surface (/agents/[id]). STAGE G-2.5 (LAST,
+   ruling D3). Scoped under `.console-view .cockpit-view` — the page wraps its
+   content root in `.cockpit-view`, so the shared panel/card/field/label/lede/
+   badge-pill/hash/h2-eyebrow primitives (see the :is() rules above) auto-reskin
+   the ~19 cockpit components (StatusBar, AgentControls, PolicyPanel, RulesEditor,
+   GuardianPanel, NetworksPanel, CapabilityGrant/Envelope, SigningGrantPanel,
+   RevokeButton, …) WITHOUT rewriting their markup/logic/test-ids. Below are the
+   cockpit-only primitives.
+
+   Ported VERBATIM from console.html: cockpit-head (229-232), sf-tag lane chips +
+   .conn (248-267), limit-row (280-286). RECONCILED: the reference agent-switcher
+   pills are omitted — the real cockpit is a per-agent route reached from the
+   fleet/shell, and fabricating a switcher would imply fleet data this page does
+   not load. The LIMITS cap values bind to the real on-chain policy (weiToOg),
+   never the demo's invented $500/$1,000.
+   ============================================================================ */
+
+/* agent header (console.html .cockpit-head) */
+.console-view .cockpit-view .cockpit-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--s-4); flex-wrap: wrap; }
+.console-view .cockpit-view .cockpit-head .who .name { font-family: var(--font-display); font-weight: 600; font-size: 1.35rem; letter-spacing: -0.01em; color: var(--ink); }
+.console-view .cockpit-view .cockpit-head .who .addr { font-family: var(--font-mono); font-size: 11px; color: var(--ink-faint); margin-top: 3px; }
+.console-view .cockpit-view .statusbar { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
+
+/* reasoning stream — lane tags (console.html .sf-tag) + connection pill (.conn) */
+.console-view .cockpit-view .sf-tag { font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; letter-spacing: .06em;
+  font-weight: 600; padding: 2px 7px; border-radius: 4px; white-space: nowrap; }
+.console-view .cockpit-view .sf-tag.inference { color: var(--ink-dim); background: var(--ink-06); }
+.console-view .cockpit-view .sf-tag.action { color: var(--accent-ink); background: var(--accent-12); }
+.console-view .cockpit-view .sf-tag.decision { color: var(--ink); background: var(--ink-08); }
+.console-view .cockpit-view .sf-tag.consent { color: var(--allow); background: var(--allow-14); }
+.console-view .cockpit-view .sf-tag.block,
+.console-view .cockpit-view .sf-tag.revoke { color: var(--deny); background: var(--deny-14); }
+.console-view .cockpit-view .sf-tag.error { color: var(--ember); background: var(--ember-16); }
+.console-view .cockpit-view .sf-tag.handoff { color: var(--accent-ink); background: var(--accent-12); }
+.console-view .cockpit-view .conn { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 11px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .06em; }
+.console-view .cockpit-view .conn .dot { width: 7px; height: 7px; border-radius: var(--r-full); background: var(--ink-faint); }
+.console-view .cockpit-view .conn.open { color: var(--allow); } .console-view .cockpit-view .conn.open .dot { background: var(--allow); }
+.console-view .cockpit-view .conn.connecting, .console-view .cockpit-view .conn.reconnecting { color: var(--accent-ink); }
+.console-view .cockpit-view .conn.connecting .dot, .console-view .cockpit-view .conn.reconnecting .dot { background: var(--accent); }
+
+/* limit / cap rows (console.html .limit-row) */
+.console-view .cockpit-view .limit-row { display: grid; gap: 8px; padding: var(--s-4) 0; border-top: 1px solid var(--border); }
+.console-view .cockpit-view .limit-row:first-of-type { border-top: none; padding-top: 0; }
+.console-view .cockpit-view .limit-row .lk { display: flex; justify-content: space-between; align-items: center; font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim); }
+.console-view .cockpit-view .limit-row .lk b { color: var(--ink); }
+.console-view .cockpit-view .limit-note.instant { color: var(--allow); font-family: var(--font-mono); font-size: 10px; }
+.console-view .cockpit-view .limit-note.pending { color: var(--accent-ink); font-family: var(--font-mono); font-size: 10px; }
+
+/* two-column cockpit layout (console.html .cockpit-grid) */
+.console-view .cockpit-view .cockpit-grid { display: grid; grid-template-columns: 1fr 380px; gap: var(--s-4); align-items: start; }
+@media (max-width: 1100px) { .console-view .cockpit-view .cockpit-grid { grid-template-columns: 1fr; } }

@@ -4,12 +4,13 @@
 
 import { useEffect, useState } from 'react';
 import type { AgentDetail } from '@/lib/types';
-import { countdown, weiToOg } from '@/lib/format';
+import { countdown, weiToOg, shortAddr } from '@/lib/format';
 
-const STATUS_PILL: Record<AgentDetail['status'], string> = {
-  running: 'pill-allow',
-  paused: 'pill-idle',
-  revoked: 'pill-deny',
+// G-2.5: console.html cockpit-head status spill (running/paused/revoked).
+const STATUS_SPILL: Record<AgentDetail['status'], string> = {
+  running: 'running',
+  paused: 'paused',
+  revoked: 'revoked',
 };
 
 export function StatusBar({
@@ -29,38 +30,46 @@ export function StatusBar({
     return () => clearInterval(t);
   }, []);
 
+  // G-2.5: the console.html .cockpit-head — agent identity (name + account addr) on the left,
+  // the real status/session/balance pills on the right. Reconciled to real data (no ENS).
   return (
-    <section aria-label="Agent status" style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap', alignItems: 'center' }}>
-      <span className={`pill ${STATUS_PILL[detail.status]}`} data-testid="status-pill">
-        {detail.status}
-      </span>
-      <span className="badge" data-testid="session-countdown">
-        session {countdown(detail.sessionExpiry, now)}
-      </span>
-      <span className="badge">{weiToOg(detail.accountBalance)} {currency} in account</span>
-      {/* D-B9: inert freeform capability label — display only, no taxonomy/filter/discovery. */}
-      {detail.agent?.capabilityLabel ? (
-        <span className="badge" data-testid="capability-label" title="What this agent is for">
-          {detail.agent.capabilityLabel}
+    <section aria-label="Agent status" className="cockpit-head">
+      <div className="who">
+        <div className="name">{detail.agent?.name ?? 'Agent'}</div>
+        <div className="addr">{shortAddr(detail.addresses.account)}</div>
+      </div>
+      <div className="statusbar">
+        <span className={`spill ${STATUS_SPILL[detail.status]}`} data-testid="status-pill">
+          {detail.status}
         </span>
-      ) : null}
-      {chainVerified === true ? (
-        <span
-          className="pill pill-allow"
-          data-testid="server-verified-pill"
-          title="LEASH's own integrity check of this trace chain — for independent verification use the Audit page"
-        >
-          server-verified
+        <span className="badge-pill" data-testid="session-countdown">
+          session {countdown(detail.sessionExpiry, now)}
         </span>
-      ) : chainVerified === false ? (
-        <span
-          className="pill pill-deny"
-          data-testid="server-verify-failed-pill"
-          title="LEASH's own integrity check of this trace chain FAILED — verify independently on the Audit page"
-        >
-          server check failed
-        </span>
-      ) : null}
+        <span className="badge-pill">{weiToOg(detail.accountBalance)} {currency} in account</span>
+        {/* D-B9: inert freeform capability label — display only, no taxonomy/filter/discovery. */}
+        {detail.agent?.capabilityLabel ? (
+          <span className="badge-pill" data-testid="capability-label" title="What this agent is for">
+            {detail.agent.capabilityLabel}
+          </span>
+        ) : null}
+        {chainVerified === true ? (
+          <span
+            className="badge-pill jade"
+            data-testid="server-verified-pill"
+            title="LEASH's own integrity check of this trace chain — for independent verification use the Audit page"
+          >
+            ✓ server-verified
+          </span>
+        ) : chainVerified === false ? (
+          <span
+            className="chip chip-deny"
+            data-testid="server-verify-failed-pill"
+            title="LEASH's own integrity check of this trace chain FAILED — verify independently on the Audit page"
+          >
+            server check failed
+          </span>
+        ) : null}
+      </div>
     </section>
   );
 }

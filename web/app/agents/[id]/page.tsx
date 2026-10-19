@@ -742,9 +742,9 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
     <PageShell
       title="Cockpit"
       aside={
-        <Link href={`/agents/${id}/audit`} className="nav-link">
-          Audit trail →
-        </Link>
+        <span className="hash">
+          <Link href={`/agents/${id}/audit`}>Audit trail →</Link>
+        </span>
       }
     >
       {detail ? (
@@ -941,14 +941,18 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
   );
 }
 
-function PageShell({ title, aside, children }: { title: string; aside?: React.ReactNode; children: React.ReactNode }) {
+// G-2.5: the shell topbar owns the "Cockpit" title; `.cockpit-view` scopes the cockpit styles
+// and auto-reskins the component panels. The per-agent identity rides a `.cockpit-head` built
+// from real `detail` inside the page body (below), not here.
+function PageShell({ aside, children }: { title?: string; aside?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div className="wrap" style={{ paddingBlock: 'clamp(1.5rem, 4vw, 3rem)', display: 'grid', gap: '1.1rem' }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: '1rem' }}>
-        <h1 style={{ fontSize: 'var(--text-h1)' }}>{title}</h1>
-        <span style={{ flex: 1 }} />
-        {aside}
-      </div>
+    <div className="cockpit-view" style={{ display: 'grid', gap: '1.1rem' }}>
+      {aside ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <span style={{ flex: 1 }} />
+          {aside}
+        </div>
+      ) : null}
       {children}
     </div>
   );

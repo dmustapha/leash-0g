@@ -67,20 +67,17 @@ export function StreamFeed({
   );
 
   return (
-    <section aria-label="Live agent activity" className="card" style={{ display: 'grid', gridTemplateRows: 'auto 1fr', minHeight: 0 }}>
-      <header style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.8rem 1rem', borderBottom: '1px solid var(--color-line-soft)' }}>
-        <h2 style={{ fontSize: '1rem' }}>Live activity</h2>
-        <span style={{ flex: 1 }} />
+    <section aria-label="Live agent activity" className="card" style={{ padding: 0, display: 'grid', gridTemplateRows: 'auto 1fr', minHeight: 0 }}>
+      <p className="p-title" style={{ padding: '0.8rem 1rem', margin: 0, borderBottom: '1px solid var(--border)' }}>
+        <span>Live reasoning stream</span>
         {connection === 'open' ? (
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.45rem', fontSize: '0.78rem', color: 'var(--color-allow)' }}>
-            <span className="dot-live" aria-hidden="true" /> live
-          </span>
+          <span className="conn open" data-testid="stream-status"><span className="dot" aria-hidden="true" /> open · live</span>
         ) : (
-          <span className="pill pill-idle" data-testid="stream-status">
-            {connection === 'closed' ? 'offline' : connection}
+          <span className={`conn ${connection}`} data-testid="stream-status">
+            <span className="dot" aria-hidden="true" /> {connection === 'closed' ? 'offline' : connection}
           </span>
         )}
-      </header>
+      </p>
       <div
         aria-live="polite"
         style={{ overflowY: 'auto', maxHeight: '28rem', padding: '0.9rem 1rem', display: 'grid', gap: '0.7rem', alignContent: 'start' }}
@@ -158,18 +155,14 @@ export function StreamFeed({
               </div>
             ) : item.kind === 'delegation' ? (
               <div key={item.id} className="panel" style={{ padding: '0.6rem 0.8rem', display: 'flex', gap: '0.6rem', alignItems: 'baseline', flexWrap: 'wrap' }}>
-                <span className={`pill ${item.event.status === 'completed' ? 'pill-allow' : item.event.status === 'failed' || item.event.status === 'declined' ? 'pill-deny' : 'pill-accent'}`}>
-                  handoff
-                </span>
+                <span className="sf-tag handoff">handoff</span>
                 <span style={{ fontSize: '0.86rem' }}>
                   {item.event.direction === 'outbound' ? 'asked another agent' : 'was asked'} · {item.event.kind} · {item.event.status.replace('_', ' ')}
                 </span>
               </div>
             ) : (
               <div key={item.id} className="panel" style={{ padding: '0.6rem 0.8rem', display: 'flex', gap: '0.6rem', alignItems: 'baseline', flexWrap: 'wrap' }}>
-                <span className={`pill ${item.event.kind === 'block' || item.event.kind === 'revoke' || item.event.kind === 'error' ? 'pill-deny' : item.event.kind === 'action' ? 'pill-allow' : 'pill-idle'}`}>
-                  {item.event.kind}
-                </span>
+                <span className={`sf-tag ${item.event.kind}`}>{item.event.kind}</span>
                 <span style={{ fontSize: '0.86rem' }}>
                   {item.event.summary ??
                     (item.event.valueWei && item.event.to
