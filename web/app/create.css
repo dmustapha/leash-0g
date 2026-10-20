@@ -69,7 +69,6 @@
   transition: border-color var(--t-fast), background var(--t-fast); width: 100%; font: inherit; }
 .console-view .create-flow .choice:hover { border-color: var(--ink-24); }
 .console-view .create-flow .choice[aria-pressed="true"],
-.console-view .create-flow .choice[aria-checked="true"],
 .console-view .create-flow .choice:has(> input:checked) {
   border-color: var(--accent-24); background: var(--accent-08); box-shadow: inset 2px 0 0 var(--accent); }
 /* the card IS the control: the radio is a transparent full-card overlay (positioned, so it paints
