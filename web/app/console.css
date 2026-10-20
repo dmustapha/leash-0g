@@ -436,3 +436,15 @@
 .console-view .cockpit-view .lane-chip.l1 { color: var(--allow); background: var(--allow-14); } .console-view .cockpit-view .lane-chip.l1::before { border-radius: var(--r-full); background: var(--allow); }
 .console-view .cockpit-view .lane-chip.l2 { color: var(--accent-ink); background: var(--accent-12); } .console-view .cockpit-view .lane-chip.l2::before { border-radius: var(--r-full); border: 1.5px solid var(--accent); }
 .console-view .cockpit-view .lane-chip.forbidden { color: var(--deny); background: var(--deny-14); } .console-view .cockpit-view .lane-chip.forbidden::before { background: var(--deny); }
+
+/* ---- cockpit SIGNING surface primitives (ported VERBATIM from signing.html:64-84): the
+   2-up field grid (.two), the key/value review grid (.kv, max-content 1fr), the UNVERIFIED
+   decode chip (.unverified — ember, matching console.html's cockpit unverified), and the
+   small explanatory .hint line. ---- */
+.console-view .cockpit-view .two { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-3); }
+@media (max-width: 520px) { .console-view .cockpit-view .two { grid-template-columns: 1fr; } }
+.console-view .cockpit-view .kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px var(--s-4); font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim); }
+.console-view .cockpit-view .kv .k { color: var(--ink-faint); text-transform: uppercase; letter-spacing: .1em; }
+.console-view .cockpit-view .unverified { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: var(--ember); border: 1px solid var(--ember-24); border-radius: 4px; padding: 1px 6px; }
+.console-view .cockpit-view .hint { font-size: var(--t-small); color: var(--ink-faint); line-height: 1.6; }
+.console-view .cockpit-view .hint code { font-family: var(--font-mono); color: var(--ink-dim); }
