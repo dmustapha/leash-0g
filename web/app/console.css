@@ -381,3 +381,17 @@
 /* two-column cockpit layout (console.html .cockpit-grid) */
 .console-view .cockpit-view .cockpit-grid { display: grid; grid-template-columns: 1fr 380px; gap: var(--s-4); align-items: start; }
 @media (max-width: 1100px) { .console-view .cockpit-view .cockpit-grid { grid-template-columns: 1fr; } }
+
+/* ---- cockpit POLICIES: leash-tension cap bars + payee-chip allowlist (console.html:132-152) ---- */
+.console-view .cockpit-view .caps { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--s-5); }
+@media (max-width: 760px) { .console-view .cockpit-view .caps { grid-template-columns: 1fr; } }
+.console-view .cockpit-view .cap-row .cap-k { display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim); margin-bottom: 8px; }
+.console-view .cockpit-view .cap-row .cap-k b { color: var(--ink); }
+.console-view .cockpit-view .tension { width: 100%; height: 30px; display: block; overflow: visible; }
+.console-view .cockpit-view .owner-note { font-family: var(--font-mono); font-size: 10px; color: var(--ink-faint); display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: var(--r-sm); padding: 3px 8px; }
+.console-view .cockpit-view .owner-note svg { width: 11px; height: 11px; }
+.console-view .cockpit-view .allowlist { border-top: 1px solid var(--border); margin-top: var(--s-5); padding-top: var(--s-5); }
+.console-view .cockpit-view .al-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--s-3); }
+.console-view .cockpit-view .al-title { font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim); text-transform: uppercase; letter-spacing: .1em; }
+.console-view .cockpit-view .chips-wrap { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+.console-view .cockpit-view .payee-chip { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 11px; color: var(--ink); background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-full); padding: 5px 12px; }

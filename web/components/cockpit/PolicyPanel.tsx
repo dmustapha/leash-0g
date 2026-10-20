@@ -160,6 +160,15 @@ export function PolicyPanel({
     }
   }
 
+  // leash-tension slack (0..1, 1 = lots of room) from REAL values — see the LIMITS comment below.
+  const _winWei = BigInt(detail.policy.windowCapWei || '0');
+  const _perWei = BigInt(detail.policy.perTransferCapWei || '0');
+  const _balWei = BigInt(detail.accountBalance || '0');
+  const _ratio = (num: bigint, den: bigint) => (den > 0n ? Math.max(0, Math.min(1, Number((num * 10000n) / den) / 10000)) : 0);
+  const slackPer = _winWei > 0n ? Math.max(0, 1 - Number((_perWei * 10000n) / _winWei) / 10000) : 1; // one payment vs the window budget
+  const slackBudget = _ratio(_balWei, _winWei); // balance's headroom against the window budget (taut when under-funded)
+  const slackExpiry = Math.max(0, Math.min(1, (detail.policy.expiresAt - Math.floor(Date.now() / 1000)) / (30 * 86400))); // access time left (vs ~30d)
+
   return (
     <section aria-label="Agent limits" className="card" style={{ padding: '1rem 1.1rem', display: 'grid', gap: '0.8rem' }}>
       <div style={{ display: 'flex', alignItems: 'center' }}>
@@ -173,15 +182,42 @@ export function PolicyPanel({
       </div>
 
       {!editing ? (
-        <dl style={{ display: 'grid', gap: '0.5rem', margin: 0, fontSize: '0.88rem' }}>
-          <Row k="Per payment" v={`${weiToOg(detail.policy.perTransferCapWei)} ${currency} max`} />
-          <Row
-            k="Budget"
-            v={`${weiToOg(detail.policy.windowCapWei)} ${currency} / ${Math.round(detail.policy.windowSeconds / 3600)}h`}
-          />
-          <Row k="Can pay" v={detail.policy.allowlist.map(shortAddr).join(', ') || 'nobody yet'} />
-          <Row k="Expires" v={new Date(detail.policy.expiresAt * 1000).toLocaleString()} />
-        </dl>
+        <>
+          {/* LIMITS as the signature leash-tension bars (console.html policyBlock). Slack is
+              computed from REAL on-chain values: a single payment against the window budget, the
+              balance's headroom against that budget, and the access-time remaining — more slack =
+              more sag (looser leash); < 20% slack = taut. No fabricated spend figures. */}
+          <div className="caps">
+            <div className="cap-row">
+              <div className="cap-k"><span>Per payment</span><b>{weiToOg(detail.policy.perTransferCapWei)} {currency}</b></div>
+              <TensionBar slack={slackPer} />
+            </div>
+            <div className="cap-row">
+              <div className="cap-k"><span>Budget · {Math.round(detail.policy.windowSeconds / 3600)}h</span><b>{weiToOg(detail.policy.windowCapWei)} {currency}</b></div>
+              <TensionBar slack={slackBudget} />
+            </div>
+            <div className="cap-row">
+              <div className="cap-k"><span>Access expires</span><b>{new Date(detail.policy.expiresAt * 1000).toLocaleDateString()}</b></div>
+              <TensionBar slack={slackExpiry} />
+            </div>
+          </div>
+          <div className="allowlist">
+            <div className="al-head">
+              <span className="al-title">Allowlist · {detail.policy.allowlist.length} {detail.policy.allowlist.length === 1 ? 'payee' : 'payees'}</span>
+            </div>
+            {detail.policy.allowlist.length > 0 ? (
+              <div className="chips-wrap">
+                {detail.policy.allowlist.map((a) => (
+                  <span key={a} className="payee-chip" title={a}>{shortAddr(a)}</span>
+                ))}
+              </div>
+            ) : (
+              <p style={{ fontSize: '0.84rem', color: 'var(--ink-faint)', margin: 0 }}>
+                No payees yet — this agent cannot send to anyone until you add one.
+              </p>
+            )}
+          </div>
+        </>
       ) : (
         <form onSubmit={(e) => void submit(e)} style={{ display: 'grid', gap: '0.8rem' }}>
           <Field
@@ -364,11 +400,16 @@ export function PolicyPanel({
   );
 }
 
-function Row({ k, v }: { k: string; v: string }) {
+// The console.html leash-tension bar: a catenary that sags with slack (room) and pulls taut
+// as the leash tightens. slack 0..1; < 0.2 = taut (accent-hi stroke via .leash-svg.taut).
+function TensionBar({ slack }: { slack: number }) {
+  const s = Math.max(0, Math.min(1, slack));
+  const sag = 15 + s * 9; // more room → more sag
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.8rem', borderBottom: '1px solid var(--color-line-soft)', paddingBottom: '0.4rem' }}>
-      <dt className="label">{k}</dt>
-      <dd style={{ margin: 0, fontFamily: 'var(--font-mono)', fontSize: '0.84rem', textAlign: 'right' }}>{v}</dd>
-    </div>
+    <svg className={`tension leash-svg${s < 0.2 ? ' taut' : ''}`} viewBox="0 0 260 30" preserveAspectRatio="none" aria-hidden="true">
+      <circle className="leash-clasp" cx="6" cy="15" r="4" />
+      <path className="leash-path" d={`M10 15 Q 130 ${sag} 254 15`} />
+      <path className="leash-clasp" d="M254 15 a4 4 0 1 0 -0.1 0" strokeWidth="1.5" />
+    </svg>
   );
 }
