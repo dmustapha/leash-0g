@@ -73,7 +73,7 @@ function UnsureFlag({ show }: { show: boolean }) {
         alignItems: 'center',
         gap: '0.3rem',
         fontSize: '0.75rem',
-        color: 'var(--color-accent)',
+        color: 'var(--accent)',
         marginTop: '0.2rem',
       }}
     >
@@ -108,12 +108,12 @@ function EditField({
   const fieldId = `field-${testid}`;
   return (
     <div style={{ display: 'grid', gap: '0.3rem' }}>
-      <label htmlFor={fieldId} className="label" style={{ color: 'var(--color-ink)' }}>
+      <label htmlFor={fieldId} className="label" style={{ color: 'var(--ink)' }}>
         {label}
-        {required ? <span style={{ color: 'var(--color-deny)' }}> *</span> : null}
+        {required ? <span style={{ color: 'var(--deny)' }}> *</span> : null}
       </label>
       {requiredHint ? (
-        <p style={{ fontSize: '0.78rem', color: 'var(--color-ink-dim)', margin: 0 }}>{requiredHint}</p>
+        <p style={{ fontSize: '0.78rem', color: 'var(--ink-dim)', margin: 0 }}>{requiredHint}</p>
       ) : null}
       {multiline ? (
         <textarea
@@ -249,11 +249,11 @@ function CreateReadBack({ draft, onConfirm, onBack }: CreateReadBackProps) {
         <p className="eyebrow">Read it back</p>
         <h1 style={{ fontSize: 'var(--text-h1)' }}>Here’s what I understood</h1>
         {/* rationale is UNTRUSTED model text — rendered as PLAIN TEXT (no HTML). */}
-        <p data-testid="read-back-rationale" style={{ color: 'var(--color-ink-dim)', fontSize: '0.92rem', margin: 0 }}>
+        <p data-testid="read-back-rationale" style={{ color: 'var(--ink-dim)', fontSize: '0.92rem', margin: 0 }}>
           {draft.rationale}
         </p>
         {draft.confidence === 'low' ? (
-          <p data-testid="read-back-low-confidence" style={{ color: 'var(--color-accent)', fontSize: '0.82rem', margin: 0 }}>
+          <p data-testid="read-back-low-confidence" style={{ color: 'var(--accent)', fontSize: '0.82rem', margin: 0 }}>
             I wasn’t fully sure about parts of this — the flagged fields are worth a second look.
           </p>
         ) : null}
@@ -264,7 +264,7 @@ function CreateReadBack({ draft, onConfirm, onBack }: CreateReadBackProps) {
         <h2 style={{ fontSize: '1.05rem', margin: 0 }}>What it does</h2>
 
         <div style={{ display: 'grid', gap: '0.3rem' }}>
-          <span className="label" style={{ color: 'var(--color-ink)' }}>Kind of agent</span>
+          <span className="label" style={{ color: 'var(--ink)' }}>Kind of agent</span>
           <p data-testid="read-back-role" style={{ margin: 0, fontSize: '0.92rem' }}>{ROLE_LABEL[role]}</p>
           <UnsureFlag show={unsure(draft, 'proposedRole')} />
         </div>
@@ -320,9 +320,9 @@ function CreateReadBack({ draft, onConfirm, onBack }: CreateReadBackProps) {
           padding: '1rem 1.1rem',
           display: 'grid',
           gap: '0.9rem',
-          border: '1px solid var(--color-accent)',
+          border: '1px solid var(--ember-24)',
           borderRadius: 'var(--radius-md)',
-          background: 'rgba(255,184,76,0.05)',
+          background: 'color-mix(in srgb, var(--ember) 8%, transparent)',
         }}
       >
         <h2 style={{ fontSize: '1.05rem', margin: 0 }}>The leash</h2>
@@ -334,7 +334,7 @@ function CreateReadBack({ draft, onConfirm, onBack }: CreateReadBackProps) {
             margin: 0,
             fontSize: '0.95rem',
             fontWeight: 600,
-            color: draft.moneyPower === 'can-move-money' ? 'var(--color-accent)' : 'var(--color-ink)',
+            color: draft.moneyPower === 'can-move-money' ? 'var(--accent)' : 'var(--ink)',
           }}
         >
           {moneyPowerLine}
@@ -410,7 +410,7 @@ function CreateReadBack({ draft, onConfirm, onBack }: CreateReadBackProps) {
             ) : null}
           </>
         ) : (
-          <p data-testid="read-back-no-money-note" style={{ margin: 0, fontSize: '0.88rem', color: 'var(--color-ink-dim)' }}>
+          <p data-testid="read-back-no-money-note" style={{ margin: 0, fontSize: '0.88rem', color: 'var(--ink-dim)' }}>
             Nothing to set here. This agent holds zero spending caps and an empty allowlist by
             construction — there is no money for it to move, no matter what it is asked.
           </p>
@@ -425,7 +425,7 @@ function CreateReadBack({ draft, onConfirm, onBack }: CreateReadBackProps) {
       </section>
 
       {error ? (
-        <p role="alert" style={{ color: 'var(--color-deny)', fontSize: '0.85rem', margin: 0 }}>
+        <p role="alert" style={{ color: 'var(--deny)', fontSize: '0.85rem', margin: 0 }}>
           {error}
         </p>
       ) : null}
@@ -522,11 +522,11 @@ function DirectReadBack({ draft, onConfirm, onBack, chainCandidates, chainConfig
         <p className="eyebrow">Redirect</p>
         <h1 style={{ fontSize: 'var(--text-h1)' }}>Here is how I understand the new task</h1>
         {/* understanding is UNTRUSTED agent-facing text — rendered as PLAIN TEXT (no HTML). */}
-        <p data-testid="read-back-understanding" style={{ color: 'var(--color-ink-dim)', fontSize: '0.92rem', margin: 0 }}>
+        <p data-testid="read-back-understanding" style={{ color: 'var(--ink-dim)', fontSize: '0.92rem', margin: 0 }}>
           {draft.understanding}
         </p>
         {draft.confidence === 'low' ? (
-          <p data-testid="read-back-low-confidence" style={{ color: 'var(--color-accent)', fontSize: '0.82rem', margin: 0 }}>
+          <p data-testid="read-back-low-confidence" style={{ color: 'var(--accent)', fontSize: '0.82rem', margin: 0 }}>
             I wasn’t fully sure about parts of this — the flagged fields are worth a second look.
           </p>
         ) : null}
@@ -536,7 +536,7 @@ function DirectReadBack({ draft, onConfirm, onBack, chainCandidates, chainConfig
       <section data-testid="tier-what-it-does" aria-label="What changes" className="panel" style={{ padding: '1rem 1.1rem', display: 'grid', gap: '0.9rem' }}>
         <h2 style={{ fontSize: '1.05rem', margin: 0 }}>What changes</h2>
         {initial.length === 0 ? (
-          <p data-testid="read-back-no-patch" style={{ margin: 0, fontSize: '0.88rem', color: 'var(--color-ink-dim)' }}>
+          <p data-testid="read-back-no-patch" style={{ margin: 0, fontSize: '0.88rem', color: 'var(--ink-dim)' }}>
             Nothing descriptive to change here — this only redirects the agent’s task.
           </p>
         ) : (
@@ -561,9 +561,9 @@ function DirectReadBack({ draft, onConfirm, onBack, chainCandidates, chainConfig
           padding: '1rem 1.1rem',
           display: 'grid',
           gap: '0.9rem',
-          border: '1px solid var(--color-accent)',
+          border: '1px solid var(--ember-24)',
           borderRadius: 'var(--radius-md)',
-          background: 'rgba(255,184,76,0.05)',
+          background: 'color-mix(in srgb, var(--ember) 8%, transparent)',
         }}
       >
         <h2 style={{ fontSize: '1.05rem', margin: 0 }}>The leash</h2>
@@ -574,7 +574,7 @@ function DirectReadBack({ draft, onConfirm, onBack, chainCandidates, chainConfig
             margin: 0,
             fontSize: '0.95rem',
             fontWeight: 600,
-            color: draft.moneyPower === 'can-move-money' ? 'var(--color-accent)' : 'var(--color-ink)',
+            color: draft.moneyPower === 'can-move-money' ? 'var(--accent)' : 'var(--ink)',
           }}
         >
           {moneyPowerLine}
@@ -607,13 +607,13 @@ function DirectReadBack({ draft, onConfirm, onBack, chainCandidates, chainConfig
             requiredHint="A wallet address is never guessed for you. Type the one address this agent may pay."
           />
         ) : movesMoney ? (
-          <p data-testid="read-back-self-recipient-note" style={{ margin: 0, fontSize: '0.88rem', color: 'var(--color-ink-dim)' }}>
+          <p data-testid="read-back-self-recipient-note" style={{ margin: 0, fontSize: '0.88rem', color: 'var(--ink-dim)' }}>
             {role === 'trader'
               ? 'There’s no outside address to set — this agent only ever moves money into its own account (a trader swaps to itself). Its spending stays bounded by its caps and the price band, which this redirect never loosens.'
               : 'There’s no outside address to set — this agent only pays on an inbound delegation, within its own caps, which this redirect never loosens.'}
           </p>
         ) : (
-          <p data-testid="read-back-no-money-note" style={{ margin: 0, fontSize: '0.88rem', color: 'var(--color-ink-dim)' }}>
+          <p data-testid="read-back-no-money-note" style={{ margin: 0, fontSize: '0.88rem', color: 'var(--ink-dim)' }}>
             Nothing to set here. This agent cannot move money, so redirecting its task never gives
             it a way to spend.
           </p>
@@ -638,7 +638,7 @@ function DirectReadBack({ draft, onConfirm, onBack, chainCandidates, chainConfig
       ) : null}
 
       {error ? (
-        <p role="alert" style={{ color: 'var(--color-deny)', fontSize: '0.85rem', margin: 0 }}>
+        <p role="alert" style={{ color: 'var(--deny)', fontSize: '0.85rem', margin: 0 }}>
           {error}
         </p>
       ) : null}

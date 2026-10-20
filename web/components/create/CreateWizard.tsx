@@ -4,7 +4,7 @@
 // this component stays a pure, testable state machine.
 'use client';
 
-import { useMemo, useState } from 'react';
+import { Fragment, useMemo, useState } from 'react';
 import Link from 'next/link';
 import { isAddress, type Address } from 'viem';
 import { ApiError } from '@/lib/api';
@@ -550,7 +550,7 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
       >
         {body}
         {error ? (
-          <p role="alert" style={{ color: 'var(--color-deny)', fontSize: '0.85rem' }}>
+          <p role="alert" style={{ color: 'var(--deny)', fontSize: '0.85rem' }}>
             {error}
           </p>
         ) : null}
@@ -584,7 +584,7 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
               autoFocus
             />
             {(networks?.length ?? 0) > 1 ? (
-              <label className="label" style={{ color: 'var(--color-ink)', display: 'grid', gap: '0.35rem' }}>
+              <label className="label" style={{ color: 'var(--ink)', display: 'grid', gap: '0.35rem' }}>
                 Network
                 <select
                   className="field"
@@ -601,7 +601,7 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
                     </option>
                   ))}
                 </select>
-                <span style={{ fontSize: '0.82rem', color: 'var(--color-ink-dim)' }}>
+                <span style={{ fontSize: '0.82rem', color: 'var(--ink-dim)' }}>
                   The blockchain your agent&apos;s account is created on. Defaults to 0G.
                 </span>
               </label>
@@ -620,7 +620,7 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
                 />
                 <span style={{ display: 'grid', gap: '0.25rem' }}>
                   <span style={{ fontWeight: 600 }}>Band-walled trading agent</span>
-                  <span style={{ fontSize: '0.84rem', color: 'var(--color-ink-dim)' }}>
+                  <span style={{ fontSize: '0.84rem', color: 'var(--ink-dim)' }}>
                     Every trade is checked against the live oracle price band on-chain — trades
                     outside the band are refused by the contract.
                   </span>
@@ -647,29 +647,29 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
             : 'Enter a valid wallet address and amounts greater than zero, like 0.1.',
           <>
             <h1 style={{ fontSize: 'var(--text-h1)' }}>What should this agent do?</h1>
-            <fieldset style={{ border: 0, margin: 0, padding: 0, display: 'grid', gap: '0.5rem' }} data-testid="role-chooser">
-              <legend className="label" style={{ color: 'var(--color-ink)', padding: 0, marginBottom: '0.35rem' }}>
+            <fieldset style={{ border: 0, margin: 0, padding: 0 }} data-testid="role-chooser">
+              <legend className="label" style={{ color: 'var(--ink)', padding: 0, marginBottom: '0.35rem' }}>
                 Pick the job that fits
               </legend>
-              {ROLE_OPTIONS.map((opt) => (
-                <label key={opt.value} className="panel" style={{ display: 'flex', gap: '0.6rem', alignItems: 'flex-start', cursor: 'pointer', padding: '0.7rem 0.85rem' }}>
-                  <input
-                    type="radio"
-                    name="agent-role"
-                    value={opt.value}
-                    checked={role === opt.value}
-                    onChange={() => setRole(opt.value)}
-                    style={{ marginTop: '0.25rem' }}
-                    data-testid={`role-${opt.value}`}
-                  />
-                  <span style={{ fontSize: '0.9rem' }}>
-                    <strong>{opt.label}</strong>
-                    <span style={{ display: 'block', color: 'var(--color-ink-dim)', fontSize: '0.82rem' }}>
-                      {opt.explain}
-                    </span>
-                  </span>
-                </label>
-              ))}
+              {/* bind.html .chooser 2-col grid of .choice cards. The radio stays (form semantics +
+                  the :has(> input:checked) accent-selected style) but is visually hidden; the card
+                  IS the control, and :has(> input:focus-visible) carries the keyboard focus ring. */}
+              <div className="chooser">
+                {ROLE_OPTIONS.map((opt) => (
+                  <label key={opt.value} className="choice">
+                    <input
+                      type="radio"
+                      name="agent-role"
+                      value={opt.value}
+                      checked={role === opt.value}
+                      onChange={() => setRole(opt.value)}
+                      data-testid={`role-${opt.value}`}
+                    />
+                    <span className="cn">{opt.label}</span>
+                    <span className="cd">{opt.explain}</span>
+                  </label>
+                ))}
+              </div>
             </fieldset>
 
             {/* D-A1: the requester is an ADVANCED door, not a peer role. Enabled only when the
@@ -700,7 +700,7 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
                       />
                       <span style={{ fontSize: '0.9rem' }}>
                         <strong>Order a job and pay for good work</strong>
-                        <span style={{ display: 'block', color: 'var(--color-ink-dim)', fontSize: '0.82rem' }}>
+                        <span style={{ display: 'block', color: 'var(--ink-dim)', fontSize: '0.82rem' }}>
                           It posts a job you defined, waits for a verified deliverable, then pays a
                           capped on-chain fee — with your approval.
                         </span>
@@ -708,7 +708,7 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
                     </label>
                   ) : (
                     <div data-testid="requester-locked" style={{ display: 'grid', gap: '0.5rem' }}>
-                      <p style={{ margin: 0, fontSize: '0.86rem', color: 'var(--color-ink-dim)' }}>
+                      <p style={{ margin: 0, fontSize: '0.86rem', color: 'var(--ink-dim)' }}>
                         This orders work from your other agents — first create a worker and a judge,
                         and define a job. You have{' '}
                         <strong>{jobAgents?.providers.length ?? 0}</strong> worker
@@ -807,13 +807,13 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
                 />
               </>
             ) : role === 'executor' ? (
-              <p data-testid="executor-goal-note" style={{ color: 'var(--color-ink-dim)', fontSize: '0.88rem' }}>
+              <p data-testid="executor-goal-note" style={{ color: 'var(--ink-dim)', fontSize: '0.88rem' }}>
                 Nothing else to set here. This agent waits for requests from an agent you link to
                 it, checks each one against its own limits (you set those next), and then pays —
                 or asks you first.
               </p>
             ) : (
-              <p data-testid="job-goal-note" style={{ color: 'var(--color-ink-dim)', fontSize: '0.88rem' }}>
+              <p data-testid="job-goal-note" style={{ color: 'var(--ink-dim)', fontSize: '0.88rem' }}>
                 {role === 'provider'
                   ? 'This agent does jobs. Next you describe the service it offers — then link a requester to it.'
                   : role === 'evaluator'
@@ -847,7 +847,7 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
           '',
           <>
             <h1 style={{ fontSize: 'var(--text-h1)' }}>This agent can never move money</h1>
-            <p style={{ color: 'var(--color-ink-dim)', fontSize: '0.92rem' }} data-testid="sentinel-policy-note">
+            <p style={{ color: 'var(--ink-dim)', fontSize: '0.92rem' }} data-testid="sentinel-policy-note">
               Watcher agents get the strictest possible leash, set automatically: it can pay
               nobody (empty allowlist) and its payment limits are zero. Even if it is tricked,
               there is nothing to steal — it can only ASK a linked agent to pay, and that agent
@@ -877,7 +877,7 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
               placeholder="calibrated probability estimates…"
               autoFocus
             />
-            <p data-testid="provider-spend-note" style={{ color: 'var(--color-ink-dim)', fontSize: '0.86rem' }}>
+            <p data-testid="provider-spend-note" style={{ color: 'var(--ink-dim)', fontSize: '0.86rem' }}>
               This agent is spend-incapable — zero caps, empty allowlist. It only produces work.
             </p>
           </>,
@@ -899,7 +899,7 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
               placeholder="strict calibration + grounded claims"
               autoFocus
             />
-            <p data-testid="evaluator-spend-note" style={{ color: 'var(--color-ink-dim)', fontSize: '0.86rem' }}>
+            <p data-testid="evaluator-spend-note" style={{ color: 'var(--ink-dim)', fontSize: '0.86rem' }}>
               Spend-incapable by construction. It is a skeptic — it defaults to reject and must justify any accept.
             </p>
           </>,
@@ -915,7 +915,7 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
             {/* D-A2: job-handle is a PICKER over saved job specs (not free text). Empty state
                 routes to "Define a job" so there is no dead-end. */}
             {(jobSpecs?.length ?? 0) > 0 ? (
-              <label className="label" style={{ color: 'var(--color-ink)' }}>
+              <label className="label" style={{ color: 'var(--ink)' }}>
                 Job to order
                 <select
                   className="field"
@@ -933,7 +933,7 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
               </label>
             ) : (
               <div data-testid="requester-jobspec-empty" className="panel" style={{ padding: '0.7rem 0.85rem', display: 'grid', gap: '0.5rem' }}>
-                <p style={{ margin: 0, fontSize: '0.86rem', color: 'var(--color-ink-dim)' }}>
+                <p style={{ margin: 0, fontSize: '0.86rem', color: 'var(--ink-dim)' }}>
                   You have no saved jobs yet. Define a job first — the requester runs that exact
                   spec (the fee and pass/fail rules live there, on your side).
                 </p>
@@ -942,7 +942,7 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
                 </Link>
               </div>
             )}
-            <label className="label" style={{ color: 'var(--color-ink)' }}>
+            <label className="label" style={{ color: 'var(--ink)' }}>
               Provider agent
               <select
                 className="field"
@@ -958,7 +958,7 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
                 ))}
               </select>
             </label>
-            <label className="label" style={{ color: 'var(--color-ink)' }}>
+            <label className="label" style={{ color: 'var(--ink)' }}>
               Evaluator agent
               <select
                 className="field"
@@ -1004,7 +1004,7 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
           'Enter the settlement token and per-token caps; the per-job fee cap must not exceed the per-transfer cap.',
           <>
             <h1 style={{ fontSize: 'var(--text-h1)' }}>Settlement limits</h1>
-            <p style={{ color: 'var(--color-ink-dim)', fontSize: '0.88rem' }}>
+            <p style={{ color: 'var(--ink-dim)', fontSize: '0.88rem' }}>
               The one token this account can ever move, and the hard caps the contract enforces on it.
               The token is fixed at creation — a different token is a different account.
             </p>
@@ -1144,7 +1144,8 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
       {step === 'review' && (
         <div style={{ display: 'grid', gap: '0.9rem' }}>
           <h1 style={{ fontSize: 'var(--text-h1)' }}>Review and create</h1>
-          <dl style={{ display: 'grid', gap: '0.55rem', margin: 0 }} data-testid="review-summary">
+          {/* bind.html .kv review grid (150px 1fr) — the read-back of every armed field. */}
+          <dl className="kv" data-testid="review-summary">
             {[
               ['Name', name.trim()],
               ['Network', selectedChain?.name ?? (chainId !== config.chainId ? 'Loading…' : '0G Galileo Testnet')],
@@ -1213,10 +1214,10 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
               ...(capabilityLabel.trim() ? [['What it’s for', capabilityLabel.trim()]] : []),
               ['Expires', `in ${expiryDays} days`],
             ].map(([k, v]) => (
-              <div key={k} style={{ display: 'flex', gap: '0.8rem', justifyContent: 'space-between', borderBottom: '1px solid var(--color-line-soft)', paddingBottom: '0.45rem' }}>
-                <dt className="label">{k}</dt>
-                <dd style={{ margin: 0, fontFamily: 'var(--font-mono)', fontSize: '0.86rem', wordBreak: 'break-all', textAlign: 'right' }}>{v}</dd>
-              </div>
+              <Fragment key={k}>
+                <dt className="kvk">{k}</dt>
+                <dd className="kvv">{v}</dd>
+              </Fragment>
             ))}
           </dl>
           <Disclosure label="What happens when I press create?">
@@ -1225,14 +1226,14 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
             on-chain with these limits. You will get a gateway token shown exactly once.
           </Disclosure>
           {topUpExceedsCap ? (
-            <p role="alert" data-testid="goal-cap-error" style={{ color: 'var(--color-deny)', fontSize: '0.85rem' }}>
+            <p role="alert" data-testid="goal-cap-error" style={{ color: 'var(--deny)', fontSize: '0.85rem' }}>
               The per-top-up amount ({topUp} 0G) is higher than the per-payment limit ({perTransfer}{' '}
               0G), so a top-up could never go through. Lower the top-up or raise the per-payment
               limit.
             </p>
           ) : null}
           {error ? (
-            <p role="alert" style={{ color: 'var(--color-deny)', fontSize: '0.85rem' }}>
+            <p role="alert" style={{ color: 'var(--deny)', fontSize: '0.85rem' }}>
               {error}
             </p>
           ) : null}
@@ -1270,7 +1271,7 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
           style={{ display: 'grid', gap: '0.9rem' }}
         >
           <h1 style={{ fontSize: 'var(--text-h1)' }}>Choose a passphrase</h1>
-          <p style={{ color: 'var(--color-ink-dim)', fontSize: '0.9rem' }}>
+          <p style={{ color: 'var(--ink-dim)', fontSize: '0.9rem' }}>
             Your wallet signs differently each time, so we cannot use it to lock your audit key.
             Pick a passphrase instead — you will need it to read your audit trail later.
           </p>
@@ -1293,7 +1294,7 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
         <div role="status" aria-live="polite" style={{ display: 'grid', gap: '0.8rem', justifyItems: 'start' }}>
           <span className="dot-live" aria-hidden="true" />
           <h1 style={{ fontSize: 'var(--text-h1)' }}>Creating your agent…</h1>
-          <p style={{ color: 'var(--color-ink-dim)', fontSize: '0.9rem' }}>
+          <p style={{ color: 'var(--ink-dim)', fontSize: '0.9rem' }}>
             Generating your audit key, asking your wallet for a signature, and deploying the
             on-chain account. This can take a minute.
           </p>
@@ -1304,17 +1305,18 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
         <div style={{ display: 'grid', gap: '1rem' }} data-testid="create-done">
           <span className="pill pill-allow">Agent created</span>
           <h1 style={{ fontSize: 'var(--text-h1)' }}>Save your gateway token</h1>
-          <p style={{ color: 'var(--color-ink-dim)', fontSize: '0.9rem' }}>
-            This token is shown <strong style={{ color: 'var(--color-ink)' }}>only once</strong>. Your
-            agent uses it to reach its brain through LEASH.
-          </p>
-          <div className="panel" style={{ padding: '0.8rem', display: 'flex', gap: '0.6rem', alignItems: 'center', justifyContent: 'space-between' }}>
-            <code className="code" data-testid="gateway-token" style={{ color: 'var(--color-accent)' }}>
+          {/* bind.html .token-box (ember-bordered) + .once-warn — the shown-once secret. */}
+          <div className="token-box">
+            <code className="code" data-testid="gateway-token" style={{ flex: 1, color: 'var(--accent)' }}>
               {result.response.gatewayToken}
             </code>
             <CopyButton text={result.response.gatewayToken} />
           </div>
-          <div style={{ display: 'grid', gap: '0.3rem', fontSize: '0.84rem', color: 'var(--color-ink-dim)', fontFamily: 'var(--font-mono)' }}>
+          <p className="once-warn">
+            <b>Shown only once.</b> Your agent uses it to reach its brain through LEASH — copy it now
+            and store it somewhere safe. We cannot show it again.
+          </p>
+          <div style={{ display: 'grid', gap: '0.3rem', fontSize: '0.84rem', color: 'var(--ink-dim)', fontFamily: 'var(--font-mono)' }}>
             <span>Account: {result.response.accountAddr}</span>
             <span>Audit key locked with: {result.kekMode === 'signature' ? 'your wallet signature' : 'your passphrase'}</span>
           </div>
@@ -1350,7 +1352,7 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
           {role !== 'sentinel' ? (
             <section aria-label="Fund your agent" className="panel" style={{ padding: '0.9rem 1rem', display: 'grid', gap: '0.7rem' }}>
               <h2 style={{ fontSize: '1rem' }}>Fund your agent</h2>
-              <p style={{ color: 'var(--color-ink-dim)', fontSize: '0.88rem', margin: 0 }}>
+              <p style={{ color: 'var(--ink-dim)', fontSize: '0.88rem', margin: 0 }}>
                 The agent pays from its own on-chain account, which starts empty. Send some 0G so
                 it can actually pay when the time comes.
               </p>
@@ -1370,7 +1372,7 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
               />
             </section>
           ) : (
-            <p data-testid="sentinel-no-fund-note" style={{ color: 'var(--color-ink-dim)', fontSize: '0.88rem' }}>
+            <p data-testid="sentinel-no-fund-note" style={{ color: 'var(--ink-dim)', fontSize: '0.88rem' }}>
               Nothing to fund: this watcher can never move money, so its account stays empty.
               Next, link it to an agent that can act — from the Links page.
             </p>

@@ -64,7 +64,7 @@
    polish); `:has(> input:checked)` below only matches the templates. */
 .console-view .create-flow .chooser { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-3); }
 @media (max-width: 640px) { .console-view .create-flow .chooser { grid-template-columns: 1fr; } }
-.console-view .create-flow .choice { text-align: left; background: var(--surface-2); border: 1px solid var(--border);
+.console-view .create-flow .choice { position: relative; text-align: left; background: var(--surface-2); border: 1px solid var(--border);
   border-radius: var(--r-md); padding: var(--s-4) var(--s-5); cursor: pointer; display: grid; gap: 5px;
   transition: border-color var(--t-fast), background var(--t-fast); width: 100%; font: inherit; }
 .console-view .create-flow .choice:hover { border-color: var(--ink-24); }
@@ -72,6 +72,11 @@
 .console-view .create-flow .choice[aria-checked="true"],
 .console-view .create-flow .choice:has(> input:checked) {
   border-color: var(--accent-24); background: var(--accent-08); box-shadow: inset 2px 0 0 var(--accent); }
+/* the card IS the control: the radio is a transparent full-card overlay (positioned, so it paints
+   above the label text and catches the click), keeping the native radio semantics + keyboard +
+   test actionability while the card carries the visual selected/focus state. */
+.console-view .create-flow .choice > input[type="radio"] { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.console-view .create-flow .choice:has(> input:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
 .console-view .create-flow .choice .cg { font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; letter-spacing: .1em; color: var(--ink-faint); }
 .console-view .create-flow .choice .cn { font-family: var(--font-display); font-weight: 500; font-size: 1rem; color: var(--ink); }
 .console-view .create-flow .choice .cd { font-size: 12px; line-height: 1.5; color: var(--ink-dim); }
