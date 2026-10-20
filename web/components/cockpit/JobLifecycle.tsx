@@ -10,63 +10,7 @@
 import type { JobView, JobStatus, ApprovalDecision } from '@/lib/types';
 import { Disclosure } from '@/components/ui/Disclosure';
 import { shortAddr } from '@/lib/format';
-
-/** TestUSD is 6-dp; render base units as a decimal token amount. */
-function formatToken(baseUnits: string, decimals = 6): string {
-  try {
-    const v = BigInt(baseUnits);
-    const d = 10n ** BigInt(decimals);
-    const whole = v / d;
-    const frac = (v % d).toString().padStart(decimals, '0').replace(/0+$/, '');
-    return frac ? `${whole}.${frac}` : `${whole}`;
-  } catch {
-    return baseUnits;
-  }
-}
-
-// G-2.3b: the console.html jobs stepper. The six display steps ARE the real
-// JobStatus progression verbatim; terminal statuses fail at the step where the
-// job actually died (reconciled from the reference, which lumps all terminals at
-// 'verdict' — denied is an owner call at settlement, not an evaluator reject).
-const JOB_STEPS: JobStatus[] = ['originated', 'delivered', 'evaluating', 'verdict', 'awaiting_approval', 'settled'];
-
-function failIndex(job: JobView): number {
-  if (job.status === 'denied' || job.blockedBy === 'owner') return JOB_STEPS.indexOf('awaiting_approval');
-  if (job.status === 'rejected' || job.blockedBy === 'verdict') return JOB_STEPS.indexOf('verdict');
-  if (job.blockedBy === 'acceptance') return JOB_STEPS.indexOf('evaluating');
-  // A generic 'failed' with no blockedBy reason: infer how far it actually got from the real
-  // progress markers rather than guessing — a verdict means it died at/after evaluation, a
-  // deliverable-but-no-verdict means it died in evaluation, neither means it died at delivery.
-  if (job.verdict !== null) return JOB_STEPS.indexOf('verdict');
-  if (job.deliverableRoot !== null) return JOB_STEPS.indexOf('evaluating');
-  return JOB_STEPS.indexOf('delivered');
-}
-
-function JobStepper({ job }: { job: JobView }) {
-  const term = job.status === 'rejected' || job.status === 'denied' || job.status === 'failed';
-  // 'settling' is a broadcast-but-unconfirmed fee transfer — show 'settled' as the active step.
-  const current = job.status === 'settling' ? 'settled' : job.status;
-  const idx = term ? failIndex(job) : JOB_STEPS.indexOf(current);
-  return (
-    <div className="stepper" data-testid="job-stepper">
-      {JOB_STEPS.map((s, i) => {
-        const st = i < idx ? 'done' : i === idx ? (term ? 'fail' : 'active') : '';
-        const label = term && s === JOB_STEPS[idx] ? job.status : s;
-        return (
-          <div className="step-wrap" key={s} style={{ display: 'flex', alignItems: 'center' }}>
-            <div className={`step ${st}`}>
-              <div className="sc">
-                <div className="sd" />
-                <div className="sl">{label.replace(/_/g, ' ')}</div>
-              </div>
-            </div>
-            {i < JOB_STEPS.length - 1 ? <div className={`sbar ${i < idx ? 'done' : ''}`} /> : null}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
+import { JobStepper, formatToken } from '@/components/cockpit/JobStepper';
 
 const TONE_CHIP: Record<'idle' | 'accent' | 'allow' | 'deny', string> = {
   idle: 'badge-pill',
@@ -295,7 +239,10 @@ export function JobLifecycle({
           rendered as console.html's .poa key/value grid (each party signed its
           own step; hashes/roots/sigs only — never untrusted agent text). */}
       {job.poa ? (
-        <Disclosure label="Proof of Agreement (each party signed its own step)">
+        // console.html renders the PoA grid INLINE (not disclosed) — the multi-party signed
+        // record is the proof the settlement was earned, so it is shown, not hidden.
+        <div style={{ display: 'grid', gap: '0.5rem' }}>
+          <h3 className="label" style={{ margin: 0 }}>Proof of Agreement · each party signed its own step</h3>
           <div className="poa" data-testid="poa">
             <span className="pk">jobSpecHash</span><span className="pv">{shortAddr(job.poa.jobSpecHash)}</span>
             <span className="pk">requesterSig</span><span className="pv">{shortAddr(job.poa.requesterSig)}</span>
@@ -309,7 +256,7 @@ export function JobLifecycle({
             <span className="pk">settlementTx</span>
             <span className="pv">{job.poa.settlementTx ? shortAddr(job.poa.settlementTx) : <span style={{ color: 'var(--ink-faint)' }}>—</span>}</span>
           </div>
-        </Disclosure>
+        </div>
       ) : null}
     </section>
   );

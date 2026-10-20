@@ -8,6 +8,13 @@ import { useState } from 'react';
 import type { Link as AgentLink, LinkMode } from '@/lib/types';
 
 // G-2.3b: console.html .spill status family (running/paused/revoked).
+// NOTE (G-2.5 fidelity): the reference renders a per-link forward stepper
+// (pending_approval → accepted → completed), but a LEASH Link has only a `status`
+// (active / paused / removed) — not a staged lifecycle. paused/removed are not
+// "further along" than active, so a progress stepper would misrepresent them. The
+// row instead carries the real signals faithfully: the .spill status, the mode-chip,
+// and the delegation count. (The per-delegation lifecycle lives in the pair view's
+// DelegationTimeline, where there IS a real staged hop to show.)
 const STATUS_SPILL: Record<AgentLink['status'], string> = {
   active: 'running',
   paused: 'paused',
@@ -42,7 +49,7 @@ export function LinkList({
 
   if (links.length === 0) {
     return (
-      <p data-testid="links-empty" style={{ color: 'var(--color-ink-dim)' }}>
+      <p data-testid="links-empty" style={{ color: 'var(--ink-dim)' }}>
         No links yet. Link two agents above so one can hand work to the other.
       </p>
     );
@@ -53,7 +60,7 @@ export function LinkList({
   return (
     <div style={{ display: 'grid', gap: '0.6rem' }} data-testid="link-list">
       {error ? (
-        <p role="alert" style={{ color: 'var(--color-deny)', fontSize: '0.85rem' }}>
+        <p role="alert" style={{ color: 'var(--deny)', fontSize: '0.85rem' }}>
           {error}
         </p>
       ) : null}
@@ -99,7 +106,7 @@ export function LinkList({
                   </button>
                 </div>
               ) : (
-                <p style={{ fontSize: '0.8rem', color: 'var(--color-ink-faint)' }}>
+                <p style={{ fontSize: '0.8rem', color: 'var(--ink-faint)' }}>
                   Removed links stay for your records. Create a new link to reconnect these agents.
                 </p>
               )}

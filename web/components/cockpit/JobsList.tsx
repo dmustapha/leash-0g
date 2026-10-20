@@ -5,6 +5,7 @@
 
 import Link from 'next/link';
 import type { JobView, JobStatus } from '@/lib/types';
+import { JobStepper, formatToken } from '@/components/cockpit/JobStepper';
 
 // G-2.3b: each status maps to the console.html chip family (chip-allow / chip-deny /
 // chip-pend). A neutral 'originated' carries no color (plain badge-pill).
@@ -42,12 +43,17 @@ export function JobsList({ jobs }: { jobs: JobView[] }) {
             href={`/jobs/${job.jobId}`}
             className="panel"
             data-testid={`job-row-${job.jobId}`}
-            style={{ display: 'block', textDecoration: 'none', color: 'inherit' }}
+            style={{ display: 'grid', gap: 'var(--s-3)', textDecoration: 'none', color: 'inherit' }}
           >
             <p className="p-title" style={{ margin: 0, textTransform: 'none', letterSpacing: 0, fontFamily: 'var(--font-sans)', fontSize: '0.95rem', color: 'var(--ink)' }}>
               <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{job.spec.question}</span>
-              <span className={STATUS_CHIP[job.status]}>{job.status.replace(/_/g, ' ')}</span>
+              <span style={{ display: 'flex', gap: '8px', alignItems: 'center', flex: 'none' }}>
+                <span className="badge-pill mono tnum">{formatToken(job.feeAmountWei, job.feeTokenDecimals ?? 6)} {job.feeTokenSymbol ?? ''}</span>
+                <span className={STATUS_CHIP[job.status]}>{job.status.replace(/_/g, ' ')}</span>
+              </span>
             </p>
+            {/* console.html jobBlock renders the stepper per row — at-a-glance lifecycle progress. */}
+            <JobStepper job={job} />
           </Link>
         </li>
       ))}
