@@ -29,6 +29,7 @@ const BASE: JobView = {
   rationaleRef: `0x${'cd'.repeat(32)}`,
   approvalId: 'apr-9',
   settlementTx: null,
+  settlementTxPending: null,
   poa: null,
   blockedBy: null,
   createdAt: '2026-09-22T00:00:00Z',
@@ -104,7 +105,60 @@ describe('JobLifecycle', () => {
       },
     };
     render(<JobLifecycle job={withPoa} onDecide={vi.fn()} />);
-    expect(screen.getByTestId('poa')).toHaveTextContent(/requester signed job spec/i);
-    expect(screen.getByTestId('poa')).toHaveTextContent(/evaluator signed verdict/i);
+    // G-2.3b: the PoA renders as console.html's key/value grid — each party's signature
+    // keyed by its field name (requesterSig / evaluatorSig), the verdict as a chip.
+    const poa = screen.getByTestId('poa');
+    expect(poa).toHaveTextContent('requesterSig');
+    expect(poa).toHaveTextContent('evaluatorSig');
+    expect(poa).toHaveTextContent('jobSpecHash');
+    expect(poa).toHaveTextContent('verdict');
+  });
+});
+
+// G-2.3b: the console.html progress stepper. Its step classes are driven purely by the real
+// JobStatus (no invented stages) — so these cases pin the status→step mapping, including the
+// settling remap and the data-driven terminal fail-dot placement (Gate-② W1/W2).
+describe('JobStepper (G-2.3b)', () => {
+  // The .step whose visible label matches `label` (labels render with _ → space).
+  function stepClass(container: HTMLElement, label: string): string {
+    const stepper = container.querySelector('[data-testid="job-stepper"]')!;
+    const steps = [...stepper.querySelectorAll('.step')];
+    const hit = steps.find((s) => s.querySelector('.sl')?.textContent?.trim() === label);
+    if (!hit) throw new Error(`no step labeled "${label}" (have: ${steps.map((s) => s.querySelector('.sl')?.textContent).join(', ')})`);
+    return hit.className;
+  }
+
+  it('awaiting_approval: that step is active, earlier steps done, settled still pending', () => {
+    const { container } = render(<JobLifecycle job={{ ...BASE, status: 'awaiting_approval' }} onDecide={vi.fn()} />);
+    expect(stepClass(container, 'awaiting approval')).toContain('active');
+    expect(stepClass(container, 'originated')).toContain('done');
+    expect(stepClass(container, 'verdict')).toContain('done');
+    expect(stepClass(container, 'settled')).not.toMatch(/done|active|fail/);
+  });
+
+  it('settling: remapped to the settled step shown active (never a crash, never a blank)', () => {
+    const { container } = render(<JobLifecycle job={{ ...BASE, status: 'settling' }} onDecide={vi.fn()} />);
+    expect(stepClass(container, 'settled')).toContain('active');
+    expect(stepClass(container, 'awaiting approval')).toContain('done');
+  });
+
+  it('rejected: fail dot at the verdict step, labeled with the terminal status', () => {
+    const { container } = render(<JobLifecycle job={{ ...BASE, status: 'rejected', verdict: 'reject' }} onDecide={vi.fn()} />);
+    expect(stepClass(container, 'rejected')).toContain('fail'); // the verdict step relabels to 'rejected'
+    expect(stepClass(container, 'evaluating')).toContain('done');
+  });
+
+  it('denied: owner call → fail dot at awaiting_approval, not verdict', () => {
+    const { container } = render(<JobLifecycle job={{ ...BASE, status: 'denied', blockedBy: 'owner' }} onDecide={vi.fn()} />);
+    expect(stepClass(container, 'denied')).toContain('fail'); // awaiting_approval step relabels to 'denied'
+    expect(stepClass(container, 'verdict')).toContain('done');
+  });
+
+  it('failed with a deliverable but no verdict: fail dot inferred at evaluating', () => {
+    const { container } = render(
+      <JobLifecycle job={{ ...BASE, status: 'failed', blockedBy: null, verdict: null, deliverableRoot: `0x${'ab'.repeat(32)}` }} onDecide={vi.fn()} />,
+    );
+    expect(stepClass(container, 'failed')).toContain('fail'); // evaluating step relabels to 'failed'
+    expect(stepClass(container, 'delivered')).toContain('done');
   });
 });

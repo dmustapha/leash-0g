@@ -62,10 +62,25 @@ export default function JobDetailPage() {
     [api, refresh],
   );
 
+  // G-2.3b: the shell topbar owns the "Jobs" title; `.ops-view` scopes the OPERATE styles.
   return (
-    <main style={{ display: 'grid', gap: '1rem', maxWidth: 720, margin: '0 auto', padding: '1.5rem' }}>
-      {error ? <p style={{ color: 'var(--color-deny, #d66)', fontSize: '0.9rem' }}>{error}</p> : null}
-      {job ? <JobLifecycle job={job} onDecide={onDecide} /> : <p style={{ color: 'var(--color-ink-faint)' }}>Loading…</p>}
-    </main>
+    <div className="ops-view">
+      <p className="section-title">
+        ACP job · <span className="n">request → deliver → verify → settle</span>
+      </p>
+      {error ? (
+        <div className="deadstate error" role="alert">
+          <h4>Could not load this job</h4>
+          <p>{error}</p>
+          <button type="button" className="btn btn-ghost" onClick={() => void refresh()}>
+            Retry
+          </button>
+        </div>
+      ) : job ? (
+        <JobLifecycle job={job} onDecide={onDecide} />
+      ) : (
+        <p role="status" style={{ color: 'var(--ink-dim)' }}>Loading…</p>
+      )}
+    </div>
   );
 }

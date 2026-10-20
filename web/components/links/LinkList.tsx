@@ -7,10 +7,18 @@ import Link from 'next/link';
 import { useState } from 'react';
 import type { Link as AgentLink, LinkMode } from '@/lib/types';
 
-const STATUS_PILL: Record<AgentLink['status'], string> = {
-  active: 'pill-allow',
-  paused: 'pill-idle',
-  removed: 'pill-deny',
+// G-2.3b: console.html .spill status family (running/paused/revoked).
+// NOTE (G-2.5 fidelity): the reference renders a per-link forward stepper
+// (pending_approval → accepted → completed), but a LEASH Link has only a `status`
+// (active / paused / removed) — not a staged lifecycle. paused/removed are not
+// "further along" than active, so a progress stepper would misrepresent them. The
+// row instead carries the real signals faithfully: the .spill status, the mode-chip,
+// and the delegation count. (The per-delegation lifecycle lives in the pair view's
+// DelegationTimeline, where there IS a real staged hop to show.)
+const STATUS_SPILL: Record<AgentLink['status'], string> = {
+  active: 'running',
+  paused: 'paused',
+  removed: 'revoked',
 };
 
 export function LinkList({
@@ -41,7 +49,7 @@ export function LinkList({
 
   if (links.length === 0) {
     return (
-      <p data-testid="links-empty" style={{ color: 'var(--color-ink-dim)' }}>
+      <p data-testid="links-empty" style={{ color: 'var(--ink-dim)' }}>
         No links yet. Link two agents above so one can hand work to the other.
       </p>
     );
@@ -52,7 +60,7 @@ export function LinkList({
   return (
     <div style={{ display: 'grid', gap: '0.6rem' }} data-testid="link-list">
       {error ? (
-        <p role="alert" style={{ color: 'var(--color-deny)', fontSize: '0.85rem' }}>
+        <p role="alert" style={{ color: 'var(--deny)', fontSize: '0.85rem' }}>
           {error}
         </p>
       ) : null}
@@ -60,16 +68,18 @@ export function LinkList({
         {links.map((l) => {
           const busy = busyId === l.id;
           return (
-            <li key={l.id} className="panel" data-testid={`link-row-${l.id}`} style={{ padding: '0.85rem 1rem', display: 'grid', gap: '0.6rem' }}>
-              <div style={{ display: 'flex', gap: '0.7rem', alignItems: 'center', flexWrap: 'wrap' }}>
-                <Link href={`/links/${l.id}`} className="link-tx" style={{ fontSize: '0.95rem', fontFamily: 'var(--font-sans)' }}>
+            <li key={l.id} className="panel" data-testid={`link-row-${l.id}`} style={{ display: 'grid', gap: '0.6rem' }}>
+              <p className="p-title" style={{ margin: 0, textTransform: 'none', letterSpacing: 0 }}>
+                <Link href={`/links/${l.id}`} className="link-tx" style={{ fontSize: '0.95rem', fontFamily: 'var(--font-display)', fontWeight: 500, color: 'var(--ink)' }}>
                   {name(l.fromAgentId)} → {name(l.toAgentId)}
                 </Link>
-                <span className={`pill ${STATUS_PILL[l.status]}`}>{l.status}</span>
-                <span className="badge">{l.mode === 'auto' ? 'automatic' : 'supervised'}</span>
-                <span className="badge" title="Handoffs sent over this link">
-                  {l.delegationCount ?? 0} handoff{(l.delegationCount ?? 0) === 1 ? '' : 's'}
+                <span style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                  <span className={`mode-chip ${l.mode}`}>{l.mode}</span>
+                  <span className={`spill ${STATUS_SPILL[l.status]}`}>{l.status}</span>
                 </span>
+              </p>
+              <div className="hash" title="Handoffs sent over this link">
+                {l.delegationCount ?? 0} delegation{(l.delegationCount ?? 0) === 1 ? '' : 's'}
               </div>
               {l.status !== 'removed' ? (
                 <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
@@ -96,7 +106,7 @@ export function LinkList({
                   </button>
                 </div>
               ) : (
-                <p style={{ fontSize: '0.8rem', color: 'var(--color-ink-faint)' }}>
+                <p style={{ fontSize: '0.8rem', color: 'var(--ink-faint)' }}>
                   Removed links stay for your records. Create a new link to reconnect these agents.
                 </p>
               )}

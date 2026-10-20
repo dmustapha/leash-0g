@@ -36,47 +36,45 @@ export default function DigestPage() {
 
   if (!wallet.ready) {
     return (
-      <Shell>
-        <p role="status" style={{ color: 'var(--color-ink-dim)' }}>Loading…</p>
-      </Shell>
+      <p role="status" style={{ color: 'var(--ink-dim)' }}>
+        Loading…
+      </p>
     );
   }
   if (!wallet.authenticated) {
     return (
-      <Shell>
-        <div className="card" style={{ padding: '1.4rem', display: 'grid', gap: '0.8rem', justifyItems: 'start' }}>
-          <p>Connect your wallet to see your daily digest.</p>
-          <button type="button" className="btn btn-primary" onClick={wallet.login}>
-            Connect wallet
-          </button>
-        </div>
-      </Shell>
+      <div className="deadstate">
+        <svg className="leash-svg" viewBox="0 0 80 44" aria-hidden="true">
+          <circle className="leash-clasp" cx="10" cy="22" r="6" />
+          <path className="leash-path" d="M16 22 Q 40 30 74 22" />
+        </svg>
+        <h4>Connect your wallet</h4>
+        <p>Sign in for the daily glance — what each agent spent, blocked, and settled.</p>
+        <button type="button" className="btn btn-primary" onClick={wallet.login}>
+          Connect wallet
+        </button>
+      </div>
     );
   }
 
-  return (
-    <Shell>
-      {loadError && !digest ? (
-        <div className="toast toast-err" role="alert">
-          <p>We could not load your digest ({loadError}).</p>
-          <button type="button" className="btn btn-sm" onClick={() => void refresh()}>
-            Retry
-          </button>
-        </div>
-      ) : digest ? (
-        <DigestView digest={digest} onMark={onMark} />
-      ) : (
-        <p role="status" style={{ color: 'var(--color-ink-dim)' }}>Loading your digest…</p>
-      )}
-    </Shell>
-  );
-}
+  if (loadError && !digest) {
+    return (
+      <div className="deadstate error" role="alert">
+        <h4>Could not load your digest</h4>
+        <p>{loadError}</p>
+        <button type="button" className="btn btn-ghost" onClick={() => void refresh()}>
+          Retry
+        </button>
+      </div>
+    );
+  }
 
-function Shell({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="wrap" style={{ paddingBlock: 'clamp(1.5rem, 4vw, 3rem)', display: 'grid', gap: '1.1rem', maxWidth: '860px' }}>
-      <h1 style={{ fontSize: 'var(--text-h1)' }}>Daily digest</h1>
-      {children}
-    </div>
+  // The page title ("Digest") lives in the shell topbar; the view renders straight in.
+  return digest ? (
+    <DigestView digest={digest} onMark={onMark} />
+  ) : (
+    <p role="status" style={{ color: 'var(--ink-dim)' }}>
+      Loading your digest…
+    </p>
   );
 }

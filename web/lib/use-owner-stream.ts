@@ -12,10 +12,20 @@ import { useOwnerWallet } from './owner-wallet';
 import type { OwnerStreamEvent } from './types';
 
 type Listener = (ev: OwnerStreamEvent) => void;
+/** Live transport state of the shared owner stream (mirrors lib/sse.ts). */
+export type StreamStatus = 'connecting' | 'open' | 'reconnecting' | 'closed';
+type StatusListener = (s: StreamStatus) => void;
 
 let handle: SseHandle | null = null;
 let currentGetToken: (() => Promise<string | null>) | null = null;
 const listeners = new Set<Listener>();
+const statusListeners = new Set<StatusListener>();
+let currentStatus: StreamStatus = 'closed';
+
+function setStatus(s: StreamStatus): void {
+  currentStatus = s;
+  for (const l of statusListeners) l(s);
+}
 
 function ensureConnected(getToken: () => Promise<string | null>): void {
   currentGetToken = getToken;
@@ -23,6 +33,8 @@ function ensureConnected(getToken: () => Promise<string | null>): void {
   handle = connectSse({
     url: `${config.apiUrl}/api/owner/stream`,
     getToken: () => (currentGetToken ? currentGetToken() : Promise.resolve(null)),
+    // Fan the transport state out to the topbar LIVE indicator (and any other status subscriber).
+    onStatusChange: setStatus,
     onEvent: (data) => {
       const ev = data as OwnerStreamEvent;
       if (ev && typeof ev === 'object' && 'type' in ev) {
@@ -38,6 +50,8 @@ export function resetOwnerStreamForTests(): void {
   handle = null;
   currentGetToken = null;
   listeners.clear();
+  statusListeners.clear();
+  currentStatus = 'closed';
 }
 
 /**
@@ -59,9 +73,48 @@ export function useOwnerStream(onEvent: Listener): void {
       if (listeners.size === 0) {
         handle?.close();
         handle = null;
+        setStatus('closed');
       }
     };
   }, [wallet.authenticated, wallet.getToken]);
+}
+
+/**
+ * Live transport state of the shared owner stream, for the topbar LIVE indicator. Subscribing
+ * here holds the shared connection open (a no-op event listener keeps the refcount), so the dot
+ * reflects the REAL stream — `open` = live, `connecting`/`reconnecting` = the rail is settling,
+ * `closed` = no stream. When the owner is not authenticated there is no stream, so it stays
+ * `closed` and the topbar shows nothing (an unauthenticated "LIVE" would be a false claim).
+ */
+export function useOwnerStreamStatus(): StreamStatus {
+  const wallet = useOwnerWallet();
+  const [status, setLocal] = useState<StreamStatus>(currentStatus);
+
+  useEffect(() => {
+    if (!wallet.authenticated) {
+      setLocal('closed');
+      return;
+    }
+    const noop: Listener = () => {};
+    const onStatus: StatusListener = (s) => setLocal(s);
+    listeners.add(noop); // hold the refcount so the connection stays up for the indicator
+    statusListeners.add(onStatus);
+    ensureConnected(wallet.getToken);
+    // Sync-read: reconcile to the manager's status NOW, in case the connection was already open
+    // (another subscriber) or onStatusChange fired synchronously during ensureConnected.
+    setLocal(currentStatus);
+    return () => {
+      statusListeners.delete(onStatus);
+      listeners.delete(noop);
+      if (listeners.size === 0) {
+        handle?.close();
+        handle = null;
+        setStatus('closed');
+      }
+    };
+  }, [wallet.authenticated, wallet.getToken]);
+
+  return status;
 }
 
 /**

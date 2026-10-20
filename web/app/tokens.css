@@ -1,0 +1,197 @@
+/* File: web/app/tokens.css
+   ============================================================================
+   STAGE G-1.1 — THE TOKEN BRIDGE.  The canonical LEASH token layer.
+   A VERBATIM lift of `web/design-reference/tokens.css:17-169` — the two `:root`
+   blocks and the light-theme atmosphere overrides, and nothing else. The rest of
+   that file (reset, `body`, `.btn`, `.chip`, `.glass`, atmosphere, motion) is
+   component surface that collides with the console's own `.btn`/`.card`, so it
+   is NOT imported here; G-1.4 brings it in scoped under `.leash-landing`.
+
+   WHY THIS FILE IS A SEPARATE FILE AND KEPT BYTE-FAITHFUL: re-importability. The
+   design build is owner-locked but not frozen; when it is re-exported, this file
+   is a one-file diff against the reference. Do not reformat, re-order, or
+   "tidy" it. Values are the reference's, unaltered.
+
+   WHY PLAIN `:root` AND NOT `@theme` (ruling D1(c), 2026-10-18):
+   these raw names are CANONICAL and themeable; `@theme` in globals.css is a thin
+   alias layer (`--color-ink: var(--ink)`) covering only the tokens the app's own
+   TSX consumes as utilities. Measured against the installed Tailwind v4.3.3: the
+   `var()` indirection survives verbatim into `@layer theme`, utilities generate
+   through it, opacity modifiers work (`color-mix(in oklab, var(--color-ink) 40%,
+   transparent)`), and overriding a raw name under `:root[data-theme="light"]`
+   re-themes every alias for free. Rationale + spike table:
+   0g-fleet/docs/phases/STAGE-G-UI-IDENTITY-ADOPTION-SCOPE.md §7 D1.
+
+   TWO NAMES EXIST IN BOTH NAMESPACES. Both were measured, not assumed:
+   · `--font-display` / `--font-sans` / `--font-mono` — declared here AND in
+     globals.css `@theme`. The strings are IDENTICAL, so the duplicate is a no-op;
+     `@theme` keeps its copy because `font-mono`/`font-sans`/`font-display`
+     utilities (14 call sites) are generated from it. Left verbatim on purpose.
+   · `--ease-spring` — a REAL collision: `.34,1.36` here vs `.34,1.56` in the
+     console, with a live consumer on each side (`.sever-recoil` recoil in the
+     reference, `.flip-in` verdict flip in the console). An unlayered `:root`
+     declaration outranks `@layer theme`, so importing this verbatim would have
+     silently softened the console's verdict flip. Resolved by renaming the
+     CONSOLE's token to `--ease-verdict` (zero utility consumers) — this name
+     stays the reference's.
+
+   An unthemeable family would have had to stay literal: `--breakpoint-*`,
+   `--container-*`, `--spacing` are resolved at build time (a `@media` query
+   cannot hold a `var()`). Verified: the reference declares none of them, so the
+   whole 92-token set is safe to indirect.
+   ============================================================================ */
+:root {
+  /* --- BASE ROLES (6) — Signal Grid: neutral near-black, electric-lime sig -- */
+  --bg-base:      #0a0a0b;                  /* neutral near-black world      */
+  --surface-1:    #141416;                  /* bg-step ladder (elevation A)  */
+  --surface-2:    #1c1c1f;
+  --surface-3:    #232327;
+
+  --ink:          #f4f4ef;                  /* text-primary (cool off-white) */
+  --ink-dim:      #a2a29c;                  /* text-secondary                */
+  --ink-faint:    #8b8b84;                  /* text-muted                    */
+
+  --accent:       #c6f24d;                  /* the leash — electric-lime sig */
+  --accent-hi:    #d6ff6a;
+  --accent-ink:   var(--accent);            /* accent-as-TEXT — same as fill in dark; deepens in light */
+  --ember:        #7bd85a;                  /* lime-green bloom (glow-plane only, NOT a text/ui role) */
+
+  /* semantic signal family (counts as ONE base role; verdict-only, never chrome) */
+  --allow:        #4fd08a;                  /* jade  — ALLOW / settled       */
+  --deny:         #ff5d6c;                  /* coral — DENY / REVOKED        */
+  /* PENDING/IDLE reuses --accent (no new hue) */
+
+  /* --- ALPHA-OVER-ROLE LADDERS (recipe 1) ------------------------------- */
+  --ink-04:  color-mix(in oklab, var(--ink) 4%,  transparent);
+  --ink-06:  color-mix(in oklab, var(--ink) 6%,  transparent);
+  --ink-08:  color-mix(in oklab, var(--ink) 8%,  transparent);
+  --ink-10:  color-mix(in oklab, var(--ink) 10%, transparent);
+  --ink-12:  color-mix(in oklab, var(--ink) 12%, transparent);
+  --ink-16:  color-mix(in oklab, var(--ink) 16%, transparent);
+  --ink-24:  color-mix(in oklab, var(--ink) 24%, transparent);
+  --ink-40:  color-mix(in oklab, var(--ink) 40%, transparent);
+  --accent-08: color-mix(in oklab, var(--accent) 8%,  transparent);
+  --accent-12: color-mix(in oklab, var(--accent) 12%, transparent);
+  --accent-16: color-mix(in oklab, var(--accent) 16%, transparent);
+  --accent-24: color-mix(in oklab, var(--accent) 24%, transparent);
+  --accent-40: color-mix(in oklab, var(--accent) 40%, transparent);
+  --accent-64: color-mix(in oklab, var(--accent) 64%, transparent);
+  --ember-16:  color-mix(in oklab, var(--ember) 16%, transparent);
+  --ember-24:  color-mix(in oklab, var(--ember) 24%, transparent);
+  --allow-14:  color-mix(in oklab, var(--allow) 14%, transparent);
+  --allow-24:  color-mix(in oklab, var(--allow) 24%, transparent);
+  --allow-40:  color-mix(in oklab, var(--allow) 40%, transparent);
+  --deny-14:   color-mix(in oklab, var(--deny)  14%, transparent);
+  --deny-24:   color-mix(in oklab, var(--deny)  24%, transparent);
+  --deny-40:   color-mix(in oklab, var(--deny)  40%, transparent);
+
+  /* semantic aliases (primitive -> semantic — CORE-TOKENS-1) */
+  --border:        var(--ink-08);
+  --border-strong: var(--ink-16);
+  --hover-fill:    var(--ink-06);
+  --focus-ring:    var(--accent);
+
+  /* --- GLASS (recipe: linear frosted nav + arkham modal) ---------------- */
+  /* frosted translucent surface = bg-base @ alpha + backdrop-blur + inset top-highlight + hairline */
+  --glass-blur:      20px;
+  --glass-bg:        color-mix(in oklab, var(--bg-base) 55%, transparent);
+  --glass-bg-strong: color-mix(in oklab, var(--surface-1) 72%, transparent);
+  --glass-hi:        inset 0 1px 0 var(--ink-10);        /* top rim highlight (figma bevel)   */
+  --glass-edge:      1px solid var(--ink-10);
+
+  /* --- SPACING (4px base grid — CORE-TOKENS-2) -------------------------- */
+  --s-1: 4px;  --s-2: 8px;  --s-3: 12px; --s-4: 16px; --s-5: 24px;
+  --s-6: 32px; --s-7: 48px; --s-8: 64px; --s-9: 96px; --s-10: 128px;
+
+  /* --- RADII ------------------------------------------------------------ */
+  --r-sm: 6px; --r-md: 10px; --r-lg: 16px; --r-xl: 22px; --r-2xl: 28px; --r-full: 999px;
+
+  /* --- TYPE (fluid modular scale — CORE-TYPE-1) ------------------------- */
+  --font-display: "Clash Display", ui-sans-serif, system-ui, sans-serif;
+  --font-sans:    "Manrope", ui-sans-serif, system-ui, -apple-system, sans-serif;
+  --font-mono:    "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* ink-on-lime — buttons/chips sitting on the electric accent */
+  --on-accent:    #0a0a0b;
+
+  --t-display: clamp(3rem, 1.6rem + 6vw, 6.5rem);       /* bigger hero — size carries hierarchy */
+  --t-h1:      clamp(2rem, 1.30rem + 2.8vw, 3.4rem);
+  --t-h2:      clamp(1.4rem, 1.05rem + 1.4vw, 2rem);
+  --t-body:    1rem;
+  --t-small:   0.8125rem;
+  --t-eyebrow: 0.6875rem;
+  --t-stat:    clamp(2.4rem, 1.4rem + 3.4vw, 4.2rem);   /* number-flow metrics as hero object   */
+  --t-data:    0.8125rem;
+
+  --tr-display: -0.034em; --tr-h1: -0.024em; --tr-h2: -0.016em;
+  --tr-body: 0; --tr-eyebrow: 0.24em;
+
+  /* --- ELEVATION (doctrine A: bg-step + hairline; drops overlay-only) --- */
+  --shadow-none: none;
+  --shadow-overlay: 0 24px 60px -18px rgba(0,0,0,0.66),
+                    0 4px 14px  rgba(0,0,0,0.5);
+  --glow-accent: 0 0 0 1px var(--accent-40),
+                 0 18px 70px -20px var(--accent-24);
+  --glow-accent-hi: 0 0 0 1px var(--accent-64),
+                    0 22px 90px -18px var(--accent-40);
+
+  /* --- MOTION (named easing set — recipe 15, extended) ------------------ */
+  --ease-out-cubic: cubic-bezier(.33, 1, .68, 1);
+  --ease-out-expo:  cubic-bezier(.16, 1, .30, 1);
+  --ease-out-quart: cubic-bezier(.22, 1, .36, 1);   /* chit/jupiter reveal ease  */
+  --ease-in-out:    cubic-bezier(.65, 0, .35, 1);
+  --ease-in-out-quad: cubic-bezier(.455,.03,.515,.955);
+  --ease-spring:    cubic-bezier(.34, 1.36, .64, 1);
+  --ease-spring-soft: cubic-bezier(.34, 1.18, .64, 1);
+  --t-fast: .12s; --t-base: .24s; --t-mid: .4s; --t-slow: .6s; --t-draw: 1.6s;
+
+  /* scroll-progress plumbing (set by JS 0..1) */
+  --scroll: 0;
+}
+
+/* ============================================================================
+   LIGHT THEME — same Signal Grid identity, inverted world.
+   Only the 6 base roles + accent/verdict hues are remapped; every alpha-over-role
+   ladder (borders, hovers, hairlines, chip fills) auto-adapts because they are
+   color-mix(...) over --ink / --accent, which flip here. Bright neons are a
+   dark-mode trait, so accent + verdicts DEEPEN just enough to read on white while
+   staying unmistakably lime / jade / coral.
+   ============================================================================ */
+:root[data-theme="light"] {
+  --bg-base:      #eceae4;                  /* warm paper world             */
+  --surface-1:    #f5f4ef;                  /* elevation ladder (lighter up) */
+  --surface-2:    #fbfaf6;
+  --surface-3:    #ffffff;
+
+  --ink:          #1a1a17;                  /* near-black text on paper      */
+  --ink-dim:      #56564f;
+  --ink-faint:    #86867c;
+
+  --accent:       #aad400;                  /* vivid lime FILL (buttons/strokes/glow) */
+  --accent-hi:    #bce800;
+  --accent-ink:   #5c7500;                  /* deep lime for accent TEXT (eyebrow/links) */
+  --ember:        #c3e05a;
+  --allow:        #1f9d5b;                  /* deeper jade — reads on white  */
+  --deny:         #e23a4c;                  /* deeper coral                  */
+
+  --on-accent:    #16210a;                  /* dark ink on the lime fill     */
+
+  /* elevation: on paper, depth reads as soft shadow, not glow */
+  --shadow-overlay: 0 24px 60px -18px rgba(40,40,30,0.20), 0 4px 14px rgba(40,40,30,0.12);
+  --glow-accent:    0 0 0 1px var(--accent-40), 0 12px 40px -16px color-mix(in oklab, var(--accent) 40%, transparent);
+  --glass-bg:        color-mix(in oklab, #ffffff 62%, transparent);
+  --glass-bg-strong: color-mix(in oklab, #ffffff 78%, transparent);
+  color-scheme: light;
+}
+
+/* light-theme atmosphere — the marketing world's grain/glow/vignette are tuned for
+   a dark canvas (screen blend, dark vignette). On paper they must invert to multiply
+   + a soft light vignette so the colored light reads without dirtying the page.
+   Inert until G-1.4 lands the atmosphere layers; carried now so the light contract
+   arrives whole rather than being rediscovered later. */
+:root[data-theme="light"] .grain { opacity: .05; mix-blend-mode: multiply; }
+:root[data-theme="light"] .glow-plane { mix-blend-mode: multiply; opacity: .55; }
+:root[data-theme="light"] .brand-bloom { mix-blend-mode: multiply; }
+:root[data-theme="light"] .vignette {
+  background: radial-gradient(130% 100% at 50% 28%, transparent 58%, color-mix(in oklab, var(--ink) 8%, transparent) 100%); }
+:root[data-theme="light"] .twinkle circle { opacity: .10; }

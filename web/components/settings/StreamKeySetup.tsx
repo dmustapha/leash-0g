@@ -55,7 +55,7 @@ export function StreamKeySetup({
     return (
       <section aria-label="Owner-stream key" className="card" style={{ padding: '1rem 1.1rem', display: 'grid', gap: '0.6rem' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-          <h2 style={{ fontSize: '1rem', margin: 0 }}>Your daily-loop key</h2>
+          <h2>Your daily-loop key</h2>
           <span style={{ flex: 1 }} />
           <span className="pill pill-allow" data-testid="stream-key-set-pill">set</span>
         </div>
@@ -119,7 +119,7 @@ export function StreamKeySetup({
       data-testid="stream-key-setup"
       style={{ padding: '1rem 1.1rem', display: 'grid', gap: '0.7rem', borderColor: 'rgba(198,242,77,0.45)' }}
     >
-      <h2 style={{ fontSize: '1rem', margin: 0 }}>One-time setup: your daily-loop key</h2>
+      <h2>One-time setup: your daily-loop key</h2>
       <p style={{ margin: 0, fontSize: '0.88rem', color: 'var(--color-ink-dim)' }}>
         Every alert, decision, and digest gets sealed to 0G Storage encrypted so ONLY you can
         read it. Your browser makes the key; LEASH keeps just the public half. Alerts already

@@ -32,19 +32,32 @@ export default function JobsPage() {
     void refresh();
   }, [refresh]);
 
+  // G-2.3b: the shell topbar owns the "Jobs" title; this view opens on its own
+  // section eyebrow. `.ops-view` is the scope hook for the OPERATE styles in console.css.
   return (
-    <main style={{ display: 'grid', gap: '1rem', maxWidth: 720, margin: '0 auto', padding: '1.5rem' }}>
-      <header style={{ display: 'grid', gap: '0.25rem' }}>
-        <h1 style={{ margin: 0, fontSize: '1.2rem' }}>Jobs</h1>
-        <p style={{ margin: 0, fontSize: '0.86rem', color: 'var(--color-ink-faint)' }}>
-          Real agent-economy work under your leash: request → deliver → verify → settle.
+    <div className="ops-view">
+      <div className="fleet-head">
+        <p className="section-title" style={{ margin: 0 }}>
+          Agent commerce jobs · <span className="n">ACP lifecycle</span>
         </p>
-        <Link href="/jobs/specs" className="btn btn-ghost btn-sm" data-testid="define-job" style={{ justifySelf: 'start' }}>
+        <span className="grow" />
+        <Link href="/jobs/specs" className="btn btn-ghost btn-sm" data-testid="define-job">
           Define a job
         </Link>
-      </header>
-      {error ? <p style={{ color: 'var(--color-deny, #d66)', fontSize: '0.9rem' }}>{error}</p> : null}
-      {loaded ? <JobsList jobs={jobs} /> : <p style={{ color: 'var(--color-ink-faint)' }}>Loading…</p>}
-    </main>
+      </div>
+      {error ? (
+        <div className="deadstate error" role="alert">
+          <h4>Could not load your jobs</h4>
+          <p>{error}</p>
+          <button type="button" className="btn btn-ghost" onClick={() => void refresh()}>
+            Retry
+          </button>
+        </div>
+      ) : loaded ? (
+        <JobsList jobs={jobs} />
+      ) : (
+        <p role="status" style={{ color: 'var(--ink-dim)' }}>Loading…</p>
+      )}
+    </div>
   );
 }

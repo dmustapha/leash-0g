@@ -181,7 +181,7 @@ describe('InboxView', () => {
       <InboxView alerts={[]} unread={0} agents={[]} onDecide={vi.fn()} onDismiss={vi.fn()} onMarkAllRead={onMarkAllRead} />,
     );
     expect(screen.getByTestId('inbox-empty')).toBeInTheDocument();
-    expect(screen.getByTestId('inbox-caught-up-pill')).toHaveTextContent('All caught up');
+    expect(screen.getByTestId('inbox-caught-up-pill')).toHaveTextContent(/all caught up/i);
     await user.click(screen.getByTestId('mark-all-read-btn'));
     expect(onMarkAllRead).toHaveBeenCalled();
   });

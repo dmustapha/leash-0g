@@ -10,19 +10,14 @@
 import type { JobView, JobStatus, ApprovalDecision } from '@/lib/types';
 import { Disclosure } from '@/components/ui/Disclosure';
 import { shortAddr } from '@/lib/format';
+import { JobStepper, formatToken } from '@/components/cockpit/JobStepper';
 
-/** TestUSD is 6-dp; render base units as a decimal token amount. */
-function formatToken(baseUnits: string, decimals = 6): string {
-  try {
-    const v = BigInt(baseUnits);
-    const d = 10n ** BigInt(decimals);
-    const whole = v / d;
-    const frac = (v % d).toString().padStart(decimals, '0').replace(/0+$/, '');
-    return frac ? `${whole}.${frac}` : `${whole}`;
-  } catch {
-    return baseUnits;
-  }
-}
+const TONE_CHIP: Record<'idle' | 'accent' | 'allow' | 'deny', string> = {
+  idle: 'badge-pill',
+  accent: 'chip chip-pend',
+  allow: 'chip chip-allow',
+  deny: 'chip chip-deny',
+};
 
 const STATUS_COPY: Record<JobStatus, { label: string; tone: 'idle' | 'accent' | 'allow' | 'deny' }> = {
   originated: { label: 'Requested', tone: 'idle' },
@@ -30,6 +25,10 @@ const STATUS_COPY: Record<JobStatus, { label: string; tone: 'idle' | 'accent' | 
   evaluating: { label: 'Evaluating', tone: 'accent' },
   verdict: { label: 'Verdict in', tone: 'accent' },
   awaiting_approval: { label: 'Awaiting your approval', tone: 'accent' },
+  // You approved it and the fee transfer is on the network; nobody is waiting
+  // on you. Deliberately not 'allow' — it is not money confirmed yet — and
+  // deliberately not 'deny' — nothing has gone wrong.
+  settling: { label: 'Paying — waiting for the network', tone: 'accent' },
   settled: { label: 'Settled', tone: 'allow' },
   rejected: { label: 'Rejected', tone: 'deny' },
   denied: { label: 'Denied', tone: 'deny' },
@@ -92,7 +91,11 @@ export function JobLifecycle({
   const sym = job.feeTokenSymbol ?? tokenSymbol ?? 'tokens';
   const dec = job.feeTokenDecimals ?? 6;
   const fee = (base: string) => formatToken(base, dec);
-  const status = STATUS_COPY[job.status];
+  // Defensive: a status the backend has and this mirror does not must degrade to
+  // a readable row, never a crash. STATUS_COPY omitting 'settling' is exactly
+  // how a live job blanked this panel, and the next status added backend-side
+  // would do it again.
+  const status = STATUS_COPY[job.status] ?? { label: job.status, tone: 'idle' as const };
   const delivered = job.deliverableRoot !== null;
   const verdictIn = job.verdict !== null;
   const settled = job.status === 'settled';
@@ -108,10 +111,12 @@ export function JobLifecycle({
           </span>
           <strong style={{ fontSize: '1rem' }}>{job.spec.question}</strong>
         </div>
-        <span className={`pill pill-${status.tone}`} data-testid="job-status">
+        <span className={TONE_CHIP[status.tone]} data-testid="job-status">
           {status.label}
         </span>
       </header>
+
+      <JobStepper job={job} />
 
       <ol style={{ display: 'grid', gap: '1rem', listStyle: 'none', margin: 0, padding: 0 }}>
         {/* 1 — request */}
@@ -176,7 +181,12 @@ export function JobLifecycle({
         </Stage>
 
         {/* 4 — settle (owner-supervised, verdict-bound) */}
-        <Stage n={4} title="Settled — governed on-chain fee" done={settled} active={job.status === 'awaiting_approval'}>
+        <Stage
+          n={4}
+          title="Settled — governed on-chain fee"
+          done={settled}
+          active={job.status === 'awaiting_approval' || job.status === 'settling'}
+        >
           {job.status === 'awaiting_approval' && job.approvalId ? (
             <div style={{ display: 'grid', gap: '0.5rem' }} data-testid="settlement-approval">
               <p style={{ margin: 0, fontSize: '0.86rem', color: 'var(--color-ink-dim)' }}>
@@ -202,6 +212,14 @@ export function JobLifecycle({
                 </div>
               ) : null}
             </div>
+          ) : job.status === 'settling' ? (
+            <p style={{ margin: 0, fontSize: '0.86rem', color: 'var(--color-ink-dim)' }} data-testid="settlement-pending">
+              Sent <strong>{fee(job.feeAmountWei)} {sym}</strong> to {shortAddr(job.feeRecipient)} — waiting for the
+              network to confirm it.
+              {job.settlementTxPending ? (
+                <> Tx <code className="code">{shortAddr(job.settlementTxPending)}</code>.</>
+              ) : null}
+            </p>
           ) : settled && job.settlementTx ? (
             <p style={{ margin: 0, fontSize: '0.86rem', color: 'var(--color-ink-dim)' }} data-testid="settlement-tx">
               Paid <strong>{fee(job.feeAmountWei)} {sym}</strong> — tx{' '}
@@ -217,16 +235,28 @@ export function JobLifecycle({
         </Stage>
       </ol>
 
-      {/* Proof-of-Agreement — the verified, multi-party signed record (F7) */}
+      {/* Proof-of-Agreement — the verified, multi-party signed record (F7),
+          rendered as console.html's .poa key/value grid (each party signed its
+          own step; hashes/roots/sigs only — never untrusted agent text). */}
       {job.poa ? (
-        <Disclosure label="Proof of Agreement (each party signed its own step)">
-          <div className="code" style={{ display: 'grid', gap: '0.25rem', fontSize: '0.76rem', whiteSpace: 'pre-wrap' }} data-testid="poa">
-            <span>requester signed job spec: {shortAddr(job.poa.requesterSig)}</span>
-            <span>provider signed deliverable: {shortAddr(job.poa.providerSig)}</span>
-            <span>evaluator signed verdict ({job.poa.verdict}): {shortAddr(job.poa.evaluatorSig)}</span>
-            {job.poa.settlementTx ? <span>settlement tx: {shortAddr(job.poa.settlementTx)}</span> : null}
+        // console.html renders the PoA grid INLINE (not disclosed) — the multi-party signed
+        // record is the proof the settlement was earned, so it is shown, not hidden.
+        <div style={{ display: 'grid', gap: '0.5rem' }}>
+          <h3 className="label" style={{ margin: 0 }}>Proof of Agreement · each party signed its own step</h3>
+          <div className="poa" data-testid="poa">
+            <span className="pk">jobSpecHash</span><span className="pv">{shortAddr(job.poa.jobSpecHash)}</span>
+            <span className="pk">requesterSig</span><span className="pv">{shortAddr(job.poa.requesterSig)}</span>
+            <span className="pk">deliverableRoot</span><span className="pv">{shortAddr(job.poa.deliverableRoot)}</span>
+            <span className="pk">providerSig</span><span className="pv">{shortAddr(job.poa.providerSig)}</span>
+            <span className="pk">verdict</span>
+            <span className="pv">
+              <span className={`chip ${job.poa.verdict === 'accept' ? 'chip-allow' : 'chip-deny'}`}>{job.poa.verdict}</span>
+            </span>
+            <span className="pk">evaluatorSig</span><span className="pv">{shortAddr(job.poa.evaluatorSig)}</span>
+            <span className="pk">settlementTx</span>
+            <span className="pv">{job.poa.settlementTx ? shortAddr(job.poa.settlementTx) : <span style={{ color: 'var(--ink-faint)' }}>—</span>}</span>
           </div>
-        </Disclosure>
+        </div>
       ) : null}
     </section>
   );

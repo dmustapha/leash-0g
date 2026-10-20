@@ -1,0 +1,450 @@
+/* File: web/app/console.css
+   STAGE G-2.2 — console VIEW styles (fleet first; inbox/digest follow in this slice),
+   imported app-wide after shell.css. Everything is scoped under `.console-view` (the shell's
+   main content area, AppShell.tsx) so it never collides with the marketing `.leash-landing`
+   scope or globals.css's `@layer components` (whose bare `.meter` is an 8px progress bar —
+   unlayered rules here win, and the scope keeps them apart regardless).
+
+   Ported verbatim from the owner-locked build (design-reference/console.html:74-105, 170-171,
+   and the leash/chip/skel primitives marketing.css already carries under .leash-landing),
+   re-homed to `.console-view`. Raw tokens throughout → re-themes for free in light. */
+
+/* ---- status chips (console.html uses `.chip`, not globals' `.pill`) ---- */
+.console-view .chip { font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+  letter-spacing: .04em; padding: 3px 9px; border-radius: var(--r-sm);
+  display: inline-flex; align-items: center; gap: 6px; text-transform: uppercase; white-space: nowrap; }
+.console-view .chip::before { content: ""; width: 6px; height: 6px; flex: none; }
+.console-view .chip-allow { color: var(--allow); background: var(--allow-14); border: 1px solid var(--allow-24); }
+.console-view .chip-allow::before { border-radius: var(--r-full); background: var(--allow); }
+.console-view .chip-deny  { color: var(--deny);  background: var(--deny-14);  border: 1px solid var(--deny-24); }
+.console-view .chip-deny::before  { background: var(--deny); }
+.console-view .chip-pend  { color: var(--accent-ink); background: var(--accent-12); border: 1px solid var(--accent-24); }
+.console-view .chip-pend::before  { border-radius: var(--r-full); background: transparent; border: 1.5px solid var(--accent); }
+
+/* role chip (reconciled from the artifact's invented protocol chip — carries the REAL
+   runtime role: treasury/sentinel/executor/trader/requester/provider/evaluator). */
+.console-view .role-chip { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono);
+  font-size: 11px; color: var(--accent-ink); border: 1px solid var(--accent-24); background: var(--accent-12);
+  border-radius: var(--r-full); padding: 3px 10px; text-transform: capitalize; white-space: nowrap; }
+
+/* ---- leash-svg meter primitives (restraint motion profile, P4) ---- */
+.console-view .leash-svg .leash-path { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round;
+  transition: d var(--t-slow) var(--ease-out-cubic), stroke var(--t-base) var(--ease-out-cubic); }
+.console-view .leash-svg .leash-clasp { fill: none; stroke: var(--accent); stroke-width: 2; }
+.console-view .leash-svg.taut .leash-path { stroke: var(--accent-hi); }
+.console-view .leash-svg.cut  .leash-path { stroke: var(--deny); stroke-dasharray: 3 5; }
+.console-view .signal-pulse { fill: var(--allow); r: 3.2; filter: drop-shadow(0 0 5px var(--allow)); opacity: 0; }
+@media (prefers-reduced-motion: no-preference) {
+  /* the ONE live pulse the console keeps (console.html P4) — a signal riding the catenary */
+  .console-view .signal-pulse.run { animation: consoleSignalRide 3.6s var(--ease-in-out) infinite; }
+  @keyframes consoleSignalRide { 0% { offset-distance: 0%; opacity: 0; } 8% { opacity: 1; }
+    82% { opacity: 1; } 92%,100% { offset-distance: 100%; opacity: 0; } }
+}
+
+/* ---- skeleton load ---- */
+.console-view .skel { background: linear-gradient(100deg, var(--surface-2) 30%, var(--surface-3) 50%, var(--surface-2) 70%);
+  background-size: 220% 100%; border-radius: 4px; }
+@media (prefers-reduced-motion: no-preference) {
+  .console-view .skel { animation: consoleSkel 1.3s linear infinite; }
+  @keyframes consoleSkel { from { background-position: 120% 0 } to { background-position: -120% 0 } }
+}
+.console-view .skel-card { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--r-lg); padding: var(--s-5); }
+.console-view .skel-line { height: 12px; margin-bottom: 10px; }
+
+/* ---- branded empty / error states ---- */
+.console-view .deadstate { text-align: center; padding: var(--s-9) var(--s-5); border: 1px dashed var(--border-strong);
+  border-radius: var(--r-lg); color: var(--ink-faint); }
+.console-view .deadstate svg { width: 64px; height: 44px; margin: 0 auto var(--s-4); display: block; overflow: visible; opacity: .6; }
+.console-view .deadstate h4 { font-family: var(--font-display); font-weight: 500; font-size: 1.1rem; color: var(--ink-dim); margin: 0 0 var(--s-2); }
+.console-view .deadstate p { font-size: var(--t-small); margin: 0 auto; max-width: 40ch; }
+.console-view .deadstate.error { border-color: var(--deny-24); color: var(--deny); }
+.console-view .deadstate .btn { margin-top: var(--s-5); }
+
+/* ---- section title ---- */
+.console-view .section-title { font-family: var(--font-mono); font-size: 11px; text-transform: uppercase;
+  letter-spacing: .16em; color: var(--ink-faint); margin: 0 0 var(--s-4); display: flex; align-items: center; gap: 10px; }
+.console-view .section-title .n { color: var(--ink-dim); }
+
+/* ============ FLEET ============ */
+.console-view .fleet-summary { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--s-4); margin-bottom: var(--s-5); }
+.console-view .sum { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--r-lg);
+  padding: var(--s-4) var(--s-5); position: relative; overflow: hidden; }
+.console-view .sum .k { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: .12em; color: var(--ink-faint); }
+.console-view .sum .v { font-family: var(--font-mono); font-size: 1.7rem; color: var(--ink); margin-top: 8px; line-height: 1; }
+.console-view .sum .v small { color: var(--ink-faint); font-size: .6em; }
+.console-view .sum .v.accent { color: var(--accent-ink); }
+.console-view .sum .v.deny { color: var(--deny); }
+.console-view .sum .v.allow { color: var(--allow); }
+@media (max-width: 900px) { .console-view .fleet-summary { grid-template-columns: repeat(2, 1fr); } }
+
+.console-view .fleet { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: var(--s-4); }
+.console-view .agent { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--r-lg);
+  padding: var(--s-5); display: block; text-decoration: none; color: inherit;
+  transition: transform var(--t-base) var(--ease-out-cubic), border-color var(--t-base); }
+.console-view a.agent:hover { border-color: var(--ink-24); transform: translateY(-2px); }
+.console-view a.agent:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.console-view .agent .row1 { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--s-3); margin-bottom: var(--s-4); }
+.console-view .agent .name { font-family: var(--font-display); font-weight: 500; font-size: 1.05rem; letter-spacing: -0.01em; color: var(--ink); }
+.console-view .agent .addr { font-family: var(--font-mono); font-size: 11px; color: var(--ink-faint); margin-top: 2px; }
+.console-view .agent .tags { display: flex; gap: var(--s-2); align-items: center; flex: none; }
+.console-view .agent .meter { margin: var(--s-2) 0 var(--s-4); height: auto; background: none; border: 0; overflow: visible; }
+.console-view .agent .meter svg { width: 100%; height: 56px; display: block; overflow: visible; }
+.console-view .agent .cap-label { display: flex; justify-content: space-between; font-family: var(--font-mono);
+  font-size: 11px; color: var(--ink-dim); margin-top: 6px; }
+.console-view .agent .cap-label b { color: var(--ink); font-weight: 500; }
+.console-view .agent .cap-label .v-accent { color: var(--accent-ink); }
+.console-view .agent .facts { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--s-3);
+  border-top: 1px solid var(--border); padding-top: var(--s-4); }
+.console-view .fact .k { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: .1em; color: var(--ink-faint); }
+.console-view .fact .v { font-family: var(--font-mono); font-size: var(--t-data); color: var(--ink); margin-top: 3px; }
+.console-view .fact .v.v-deny { color: var(--deny); }
+.console-view .fact .v .faint { color: var(--ink-faint); }
+
+/* fleet toolbar (show-revoked toggle, load-more) */
+.console-view .fleet-head { display: flex; align-items: center; gap: var(--s-3); margin-bottom: var(--s-4); flex-wrap: wrap; }
+.console-view .fleet-head .grow { flex: 1; }
+
+/* ---- shared view toolbar + filters ---- */
+.console-view .view-toolbar { display: flex; align-items: center; gap: var(--s-3); margin-bottom: var(--s-4); flex-wrap: wrap; }
+.console-view .view-toolbar .grow { flex: 1; }
+.console-view .filters { display: flex; gap: var(--s-3); flex-wrap: wrap; margin-bottom: var(--s-4); }
+.console-view .filters label { display: grid; gap: 4px; }
+.console-view .filters .label { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: .1em; color: var(--ink-faint); }
+.console-view .filters select { background: var(--surface-1); color: var(--ink); border: 1px solid var(--border); border-radius: var(--r-sm);
+  padding: 6px 10px; font: inherit; font-family: var(--font-mono); font-size: 12px; }
+
+/* ---- panel title + badge-pill (reference primitives) ---- */
+.console-view .p-title { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: .14em;
+  color: var(--ink-faint); display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); margin: 0 0 var(--s-4); }
+.console-view .badge-pill { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 11px;
+  color: var(--ink-dim); border: 1px solid var(--border); border-radius: var(--r-full); padding: 3px 10px; }
+.console-view .row-btns { display: flex; gap: var(--s-3); flex-wrap: wrap; }
+.console-view .mini-list { display: flex; flex-direction: column; gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; }
+.console-view .mini-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; background: var(--surface-1);
+  padding: 11px var(--s-4); font-size: var(--t-small); }
+.console-view .mini-row .lead { color: var(--ink); font-weight: 500; }
+.console-view .mini-row .lead small { color: var(--ink-faint); font-weight: 400; }
+.console-view .mini-row .faint { color: var(--ink-faint); }
+
+/* ============ INBOX ============ */
+.console-view .alert { display: grid; grid-template-columns: auto 1fr auto; gap: var(--s-4); align-items: start;
+  background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--r-lg); padding: var(--s-4) var(--s-5); margin-bottom: var(--s-3); }
+.console-view .alert.unread { border-left: 2px solid var(--accent); }
+.console-view .alert.decision.unread { border-left: 2px solid var(--ember); }
+.console-view .alert.read { opacity: .72; }
+.console-view .alert .a-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+.console-view .alert .a-agent { font-family: var(--font-display); font-weight: 500; font-size: .95rem; color: var(--ink-dim); }
+.console-view .alert.unread .a-agent { color: var(--ink); }
+.console-view .alert .a-intent { font-family: var(--font-sans); font-size: 12.5px; line-height: 1.45; color: var(--ink-dim); margin: 0; }
+.console-view .alert .a-intent b { font-family: var(--font-mono); font-size: 11.5px; font-weight: 600; color: var(--ink); }
+.console-view .alert .a-sub { display: grid; gap: .2rem; border-left: 2px solid var(--border); padding-left: .7rem; margin-top: 6px; }
+.console-view .alert .a-sub .a-sub-k { font-size: .7rem; letter-spacing: .04em; text-transform: uppercase; color: var(--ink-faint); font-family: var(--font-mono); }
+.console-view .alert .a-sub .a-sub-v { font-size: .86rem; color: var(--ink-dim); font-style: italic; }
+.console-view .alert .a-meta { font-family: var(--font-mono); font-size: 11px; color: var(--ink-faint); margin-top: 5px; display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+.console-view .alert .a-actions { display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
+.console-view .kind-chip { font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; letter-spacing: .06em; font-weight: 600;
+  padding: 2px 8px; border-radius: 4px; color: var(--ink-dim); background: var(--ink-06); white-space: nowrap; }
+.console-view .kind-chip.approval_required { color: var(--ember); background: var(--ember-16); }
+.console-view .kind-chip.limit_hit, .console-view .kind-chip.revoked, .console-view .kind-chip.revoke_failed { color: var(--deny); background: var(--deny-14); }
+.console-view .kind-chip.runtime_error, .console-view .kind-chip.throttle, .console-view .kind-chip.alert_storm, .console-view .kind-chip.delegation_terminal { color: var(--ember); background: var(--ember-16); }
+.console-view .unverified { font-family: var(--font-mono); font-size: 9px; letter-spacing: .1em; text-transform: uppercase;
+  color: var(--ink-faint); border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; }
+.console-view .dot-live { width: 7px; height: 7px; border-radius: var(--r-full); background: var(--accent); display: inline-block; }
+@media (max-width: 640px) {
+  .console-view .alert { grid-template-columns: 1fr; }
+  .console-view .alert .a-actions { flex-direction: row; align-items: flex-start; }
+}
+
+/* ============ DIGEST ============ */
+.console-view .digest-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: var(--s-4); margin-bottom: var(--s-5); }
+@media (max-width: 900px) { .console-view .digest-grid { grid-template-columns: repeat(2, 1fr); } }
+
+/* ============================================================================
+   OPERATE — jobs (/jobs, /jobs/[id]), job specs (/jobs/specs), links (/links,
+   /links/[id]). STAGE G-2.3b. Scoped under `.console-view .ops-view` — the five
+   OPERATE pages wrap their content root in `.ops-view` (parallel to G-2.3a's
+   `.create-flow`), so these reference primitives restyle the shipped components'
+   existing `.panel`/`.field`/`.label`/`.pill` in place WITHOUT touching the
+   not-yet-reskinned cockpit (G-2.5), which also renders some of the same
+   components (StreamFeed, JobLifecycle) outside this scope.
+
+   Ported VERBATIM from the owner-locked build:
+   · panel / p-title / badge-pill / hash / spill → console.html:200-226
+   · stepper / step / sd / sl / sbar / poa / mode-chip → console.html:339-360
+   · lede / inp / list-chip (job-spec editor idiom) → tools.html:61-108,198
+   Raw tokens throughout → re-themes for free in light.
+
+   RECONCILED to the real product (discipline #3 — never fake data):
+   · the link lifecycle stepper (pending_approval→accepted→completed) in the
+     reference links view is a DEMO fabrication — the real `Link` type carries
+     only status/mode/delegationCount, no stage — so it is omitted here; the
+     real pause/resume/mode-toggle/remove actions and the DelegationTimeline
+     (actual handoff history) stand in its place.
+   · the job stepper's six stages ARE the real `JobStatus` enum verbatim, so the
+     console.html stepper maps 1:1 to live job.status (no fabrication).
+   · tools.html's preset-picker grid has NO analog in the real JobSpecEditor
+     (there are no capability presets for a job spec) → its field/panel/lede/
+     list-chip idiom is applied; the preset cards themselves are omitted.
+   ============================================================================ */
+
+/* ---- panel (console.html .panel) — restyles the components' globals `.panel` AND `.card`
+   in place. SHARED across OPERATE + TRUST via :is() (G-2.4 broadened the scope). ---- */
+.console-view :is(.ops-view, .trust-view, .cockpit-view) .panel,
+.console-view :is(.trust-view, .cockpit-view) .card { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--r-md);
+  padding: var(--s-5); margin-bottom: var(--s-4); box-shadow: none; }
+.console-view :is(.ops-view, .trust-view, .cockpit-view) .panel-hi,
+.console-view .trust-view .raised { border-color: var(--accent-24); box-shadow: inset 3px 0 0 var(--accent); }
+
+/* ---- lede prose (tools.html .lede) ---- */
+.console-view :is(.ops-view, .trust-view, .cockpit-view) .lede { font-size: var(--t-small); color: var(--ink-dim); max-width: 64ch; margin: 0 0 var(--s-5); line-height: 1.6; }
+.console-view :is(.ops-view, .trust-view, .cockpit-view) .lede b { color: var(--ink); font-weight: 600; }
+.console-view :is(.ops-view, .trust-view, .cockpit-view) .lede code, .console-view :is(.ops-view, .trust-view, .cockpit-view) .code { font-family: var(--font-mono); font-size: .92em; color: var(--ink); }
+
+/* ---- badge-pill / hash (console.html) ---- */
+.console-view :is(.ops-view, .trust-view, .cockpit-view) .badge-pill { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono);
+  font-size: 11px; color: var(--ink-dim); background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--r-full); padding: 4px 11px; }
+.console-view :is(.ops-view, .trust-view, .cockpit-view) .badge-pill.jade { color: var(--allow); border-color: var(--allow-24); background: var(--allow-14); }
+.console-view :is(.ops-view, .trust-view, .cockpit-view) .badge-pill.accent { color: var(--accent-ink); border-color: var(--accent-24); background: var(--accent-12); }
+.console-view :is(.ops-view, .trust-view, .cockpit-view) .tnum { font-variant-numeric: tabular-nums; }
+.console-view :is(.ops-view, .trust-view, .cockpit-view) .hash { font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim); }
+.console-view :is(.ops-view, .trust-view, .cockpit-view) .hash a { color: var(--accent-ink); text-decoration: none; }
+.console-view :is(.ops-view, .trust-view, .cockpit-view) .hash a:hover { text-decoration: underline; }
+
+/* ---- status pill (console.html .spill) ---- */
+.console-view :is(.ops-view, .cockpit-view) .spill { display: inline-flex; align-items: center; gap: 7px; font-family: var(--font-mono);
+  font-size: 11px; font-weight: 600; padding: 4px 11px; border-radius: var(--r-full); text-transform: uppercase; letter-spacing: .06em; }
+.console-view :is(.ops-view, .cockpit-view) .spill::before { content: ""; width: 6px; height: 6px; border-radius: var(--r-full); }
+.console-view :is(.ops-view, .cockpit-view) .spill.running { color: var(--allow); background: var(--allow-14); border: 1px solid var(--allow-24); }
+.console-view :is(.ops-view, .cockpit-view) .spill.running::before { background: var(--allow); }
+.console-view :is(.ops-view, .cockpit-view) .spill.paused { color: var(--accent-ink); background: var(--accent-12); border: 1px solid var(--accent-24); }
+.console-view :is(.ops-view, .cockpit-view) .spill.paused::before { background: var(--accent); }
+.console-view :is(.ops-view, .cockpit-view) .spill.revoked { color: var(--deny); background: var(--deny-14); border: 1px solid var(--deny-24); }
+.console-view :is(.ops-view, .cockpit-view) .spill.revoked::before { background: var(--deny); }
+
+/* ---- mode-chip (console.html .mode-chip) — auto/supervised, toggles in place ---- */
+.console-view .ops-view .mode-chip { font-family: var(--font-mono); font-size: 10px; padding: 3px 10px; border-radius: var(--r-full);
+  color: var(--ink-dim); background: var(--surface-2); border: 1px solid var(--border); text-transform: uppercase; letter-spacing: .06em; }
+.console-view .ops-view .mode-chip.auto { color: var(--accent-ink); border-color: var(--accent-24); background: var(--accent-12); }
+.console-view .ops-view .mode-chip.supervised { color: var(--allow); border-color: var(--allow-24); background: var(--allow-14); }
+
+/* ---- jobs / links stepper (console.html .stepper) ---- */
+.console-view .ops-view .stepper { display: flex; align-items: center; gap: 0; margin: var(--s-3) 0 26px; padding: 0 44px; flex-wrap: wrap; }
+.console-view .ops-view .step { display: flex; align-items: center; gap: 0; }
+.console-view .ops-view .step .sc { position: relative; display: flex; flex-direction: column; align-items: center; }
+.console-view .ops-view .step .sd { width: 10px; height: 10px; border-radius: var(--r-full); border: 2px solid var(--border-strong); background: var(--surface-2); }
+.console-view .ops-view .step.done .sd { background: var(--allow); border-color: var(--allow); }
+.console-view .ops-view .step.active .sd { background: var(--accent); border-color: var(--accent-ink); box-shadow: 0 0 0 3px var(--accent-12); }
+.console-view .ops-view .step.fail .sd { background: var(--deny); border-color: var(--deny); }
+.console-view .ops-view .step .sl { position: absolute; top: 15px; left: 50%; transform: translateX(-50%); font-family: var(--font-mono);
+  font-size: 9px; letter-spacing: .02em; color: var(--ink-dim); white-space: nowrap; }
+.console-view .ops-view .step.active .sl { color: var(--accent-ink); }
+.console-view .ops-view .step.done .sl { color: var(--ink-dim); }
+.console-view .ops-view .stepper .sbar { width: 78px; height: 2px; flex: none; background: var(--border-strong); }
+.console-view .ops-view .stepper .sbar.done { background: var(--allow); }
+/* mobile: the fixed-width stepper can't wrap cleanly (labels collide), so it becomes a
+   horizontal scroller — the dots/bars keep their size and the stage labels stay readable. */
+@media (max-width: 560px) {
+  .console-view .ops-view .stepper { flex-wrap: nowrap; overflow-x: auto; padding: 0 8px; margin-top: var(--s-4);
+    scrollbar-width: thin; -webkit-overflow-scrolling: touch; }
+  .console-view .ops-view .stepper .sbar { width: 48px; }
+}
+
+/* ---- proof-of-agreement grid (console.html .poa) ---- */
+.console-view .ops-view .poa { display: grid; grid-template-columns: 150px 1fr; gap: 6px var(--s-4); font-family: var(--font-mono);
+  font-size: 11px; border-top: 1px solid var(--border); padding-top: var(--s-4); margin-top: var(--s-4); }
+.console-view .ops-view .poa .pk { color: var(--ink-faint); }
+.console-view .ops-view .poa .pv { color: var(--ink-dim); overflow: hidden; text-overflow: ellipsis; }
+.console-view .ops-view .poa .pv a { color: var(--accent-ink); text-decoration: none; }
+.console-view .ops-view .poa .pv a:hover { text-decoration: underline; }
+@media (max-width: 560px) { .console-view .ops-view .poa { grid-template-columns: 1fr; gap: 2px var(--s-4); }
+  .console-view .ops-view .poa .pv { margin-bottom: 6px; } }
+
+/* ---- form fields (tools.html .label + .inp + .list-chip) — restyles existing .label +
+   .field in place. SHARED across OPERATE (job-spec editor) + TRUST (alert settings). ---- */
+.console-view :is(.ops-view, .trust-view, .cockpit-view) .label { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: .1em;
+  color: var(--ink-faint); margin-bottom: 7px; display: block; }
+.console-view :is(.ops-view, .trust-view, .cockpit-view) .field { width: 100%; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--r-sm);
+  color: var(--ink); padding: 10px 12px; font: inherit; font-family: var(--font-sans); font-size: var(--t-small); }
+.console-view :is(.ops-view, .trust-view, .cockpit-view) textarea.field { font-family: var(--font-mono); font-size: 12px; line-height: 1.5; resize: vertical; }
+.console-view :is(.ops-view, .trust-view, .cockpit-view) select.field { font-family: var(--font-mono); font-size: 12px; width: auto; }
+.console-view :is(.ops-view, .trust-view, .cockpit-view) .field:focus { outline: none; border-color: var(--accent-24); box-shadow: 0 0 0 3px var(--accent-08); }
+.console-view .ops-view .list-chip { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 11px;
+  color: var(--ink); background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-full); padding: 5px 11px; }
+.console-view .ops-view .list-chip .x { all: unset; cursor: pointer; width: 15px; height: 15px; display: grid; place-items: center;
+  border-radius: var(--r-full); color: var(--ink-faint); line-height: 1; }
+.console-view .ops-view .list-chip .x:hover { color: var(--deny); background: var(--deny-14); }
+
+/* ============================================================================
+   TRUST — audit (/agents/[id]/audit) + alert settings (/settings/alerts).
+   STAGE G-2.4. Scoped under `.console-view .trust-view` — both pages wrap their
+   content root in `.trust-view`. Shares panel/lede/badge-pill/hash/label/field
+   with OPERATE (see :is() rules above); adds the TRUST-only primitives below.
+
+   Ported VERBATIM: batch / batch-head / events / ev-row / chain-pill →
+   console.html:366-379; switch / track / knob / slabel → tools.html:84-95.
+
+   RECONCILED (discipline #3): the reference audit toolbar's filter pills
+   (Revocations / Policy edits) have no analog in the real AuditView (it has no
+   filters) → omitted. The reference shows chain-ok/broken on every batch row,
+   but the live app only KNOWS the chain result after an owner-side decrypt
+   (verifyBatch) → the chain-pill appears in the decrypted-records view where it
+   is real, never guessed on the sealed-batch row.
+   ============================================================================ */
+
+/* section eyebrow headings — the settings panels keep their semantic <h2> for a11y
+   heading nav, but wear the mono-uppercase p-title eyebrow look (tools.html). */
+.console-view :is(.trust-view, .cockpit-view) .panel h2,
+.console-view :is(.trust-view, .cockpit-view) .card h2 { font-family: var(--font-mono); font-size: 10px; font-weight: 500;
+  text-transform: uppercase; letter-spacing: .14em; color: var(--ink-faint); margin: 0 0 var(--s-4); }
+
+/* toggle switch (tools.html .switch) — the per-kind Telegram alert toggle */
+.console-view .trust-view .switch { position: relative; display: inline-flex; align-items: center; gap: 9px; cursor: pointer; user-select: none; }
+/* the real checkbox stays in the a11y tree (aria-label, focusable) but is visually hidden by
+   opacity — sized to COVER the whole switch so the whole control is the click target (and so
+   Playwright, which treats a zero-box element as not actionable, can click it). */
+.console-view .trust-view .switch input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.console-view .trust-view .switch input:disabled { cursor: default; }
+.console-view .trust-view .switch .track { width: 38px; height: 21px; border-radius: var(--r-full); background: var(--ink-10);
+  border: 1px solid var(--border-strong); transition: background var(--t-fast), border-color var(--t-fast); }
+.console-view .trust-view .switch .knob { position: absolute; top: 3px; left: 3px; width: 15px; height: 15px; border-radius: var(--r-full);
+  background: var(--ink-dim); transition: transform var(--t-fast), background var(--t-fast); }
+.console-view .trust-view .switch input:checked + .track { background: var(--allow-24); border-color: var(--allow-40); }
+.console-view .trust-view .switch input:checked + .track + .knob { transform: translateX(17px); background: var(--allow); }
+.console-view .trust-view .switch input:disabled + .track { opacity: .55; }
+.console-view .trust-view .switch input:focus-visible + .track { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.console-view .trust-view .switch .slabel { font-family: var(--font-mono); font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.console-view .trust-view .switch[data-on="true"] .slabel { color: var(--allow); }
+.console-view .trust-view .switch[data-on="false"] .slabel { color: var(--ink-faint); }
+
+/* audit batches (console.html .batch / .chain-pill) */
+.console-view .trust-view .batch { background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--r-lg);
+  margin-bottom: var(--s-3); overflow: hidden; }
+.console-view .trust-view .batch-head { display: grid; grid-template-columns: 1fr auto auto auto; gap: var(--s-4); align-items: center;
+  padding: var(--s-4) var(--s-5); }
+.console-view .trust-view .chain-pill { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono);
+  font-size: 10px; padding: 3px 9px; border-radius: var(--r-full); white-space: nowrap; }
+.console-view .trust-view .chain-pill.ok { color: var(--allow); background: var(--allow-14); border: 1px solid var(--allow-24); }
+.console-view .trust-view .chain-pill.broken { color: var(--deny); background: var(--deny-14); border: 1px solid var(--deny-24); }
+@media (max-width: 640px) { .console-view .trust-view .batch-head { grid-template-columns: 1fr; gap: var(--s-3); } }
+
+/* ============================================================================
+   COCKPIT — the per-agent control surface (/agents/[id]). STAGE G-2.5 (LAST,
+   ruling D3). Scoped under `.console-view .cockpit-view` — the page wraps its
+   content root in `.cockpit-view`, so the shared panel/card/field/label/lede/
+   badge-pill/hash/h2-eyebrow primitives (see the :is() rules above) auto-reskin
+   the ~19 cockpit components (StatusBar, AgentControls, PolicyPanel, RulesEditor,
+   GuardianPanel, NetworksPanel, CapabilityGrant/Envelope, SigningGrantPanel,
+   RevokeButton, …) WITHOUT rewriting their markup/logic/test-ids. Below are the
+   cockpit-only primitives.
+
+   Ported VERBATIM from console.html: cockpit-head (229-232), sf-tag lane chips +
+   .conn (248-267), limit-row (280-286). RECONCILED: the reference agent-switcher
+   pills are omitted — the real cockpit is a per-agent route reached from the
+   fleet/shell, and fabricating a switcher would imply fleet data this page does
+   not load. The LIMITS cap values bind to the real on-chain policy (weiToOg),
+   never the demo's invented $500/$1,000.
+   ============================================================================ */
+
+/* agent header (console.html .cockpit-head) */
+.console-view .cockpit-view .cockpit-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--s-4); flex-wrap: wrap; }
+.console-view .cockpit-view .cockpit-head .who .name { font-family: var(--font-display); font-weight: 600; font-size: 1.35rem; letter-spacing: -0.01em; color: var(--ink); }
+.console-view .cockpit-view .cockpit-head .who .addr { font-family: var(--font-mono); font-size: 11px; color: var(--ink-faint); margin-top: 3px; }
+.console-view .cockpit-view .statusbar { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
+
+/* reasoning stream — lane tags (console.html .sf-tag) + connection pill (.conn) */
+.console-view .cockpit-view .sf-tag { font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; letter-spacing: .06em;
+  font-weight: 600; padding: 2px 7px; border-radius: 4px; white-space: nowrap; }
+.console-view .cockpit-view .sf-tag.inference { color: var(--ink-dim); background: var(--ink-06); }
+.console-view .cockpit-view .sf-tag.action { color: var(--accent-ink); background: var(--accent-12); }
+.console-view .cockpit-view .sf-tag.decision { color: var(--ink); background: var(--ink-08); }
+.console-view .cockpit-view .sf-tag.modify { color: var(--accent-ink); background: var(--accent-12); }
+.console-view .cockpit-view .sf-tag.consent { color: var(--allow); background: var(--allow-14); }
+.console-view .cockpit-view .sf-tag.block,
+.console-view .cockpit-view .sf-tag.revoke { color: var(--deny); background: var(--deny-14); }
+.console-view .cockpit-view .sf-tag.error { color: var(--ember); background: var(--ember-16); }
+.console-view .cockpit-view .sf-tag.handoff { color: var(--accent-ink); background: var(--accent-12); }
+.console-view .cockpit-view .conn { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 11px; color: var(--ink-faint); text-transform: uppercase; letter-spacing: .06em; }
+.console-view .cockpit-view .conn .dot { width: 7px; height: 7px; border-radius: var(--r-full); background: var(--ink-faint); }
+.console-view .cockpit-view .conn.open { color: var(--allow); } .console-view .cockpit-view .conn.open .dot { background: var(--allow); }
+.console-view .cockpit-view .conn.connecting, .console-view .cockpit-view .conn.reconnecting { color: var(--accent-ink); }
+.console-view .cockpit-view .conn.connecting .dot, .console-view .cockpit-view .conn.reconnecting .dot { background: var(--accent); }
+
+/* limit / cap rows (console.html .limit-row) */
+.console-view .cockpit-view .limit-row { display: grid; gap: 8px; padding: var(--s-4) 0; border-top: 1px solid var(--border); }
+.console-view .cockpit-view .limit-row:first-of-type { border-top: none; padding-top: 0; }
+.console-view .cockpit-view .limit-row .lk { display: flex; justify-content: space-between; align-items: center; font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim); }
+.console-view .cockpit-view .limit-row .lk b { color: var(--ink); }
+.console-view .cockpit-view .limit-note.instant { color: var(--allow); font-family: var(--font-mono); font-size: 10px; }
+.console-view .cockpit-view .limit-note.pending { color: var(--accent-ink); font-family: var(--font-mono); font-size: 10px; }
+
+/* two-column cockpit layout (console.html .cockpit-grid) */
+.console-view .cockpit-view .cockpit-grid { display: grid; grid-template-columns: 1fr 380px; gap: var(--s-4); align-items: start; }
+@media (max-width: 1100px) { .console-view .cockpit-view .cockpit-grid { grid-template-columns: 1fr; } }
+
+/* ---- cockpit POLICIES: leash-tension cap bars + payee-chip allowlist (console.html:132-152) ---- */
+/* Tension-bar grid is container-responsive: stacks to one bar per row inside the 380px cockpit
+   rail (matching the reference LIMITS rail), and fans out to a multi-up row when the grid
+   collapses and the panel spans full width (< 1100px). */
+.console-view .cockpit-view .caps { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--s-5); }
+.console-view .cockpit-view .cap-row .cap-k { display: flex; justify-content: space-between; font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim); margin-bottom: 8px; }
+.console-view .cockpit-view .cap-row .cap-k b { color: var(--ink); }
+.console-view .cockpit-view .tension { width: 100%; height: 30px; display: block; overflow: visible; }
+.console-view .cockpit-view .owner-note { font-family: var(--font-mono); font-size: 10px; color: var(--ink-faint); display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border); border-radius: var(--r-sm); padding: 3px 8px; }
+.console-view .cockpit-view .owner-note svg { width: 11px; height: 11px; }
+.console-view .cockpit-view .allowlist { border-top: 1px solid var(--border); margin-top: var(--s-5); padding-top: var(--s-5); }
+.console-view .cockpit-view .al-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: var(--s-3); }
+.console-view .cockpit-view .al-title { font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim); text-transform: uppercase; letter-spacing: .1em; }
+.console-view .cockpit-view .chips-wrap { display: flex; flex-wrap: wrap; gap: var(--s-2); }
+.console-view .cockpit-view .payee-chip { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 11px; color: var(--ink); background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-full); padding: 5px 12px; }
+
+/* ---- cockpit CAPABILITY surface: preset-grid + tool-list rows + sensitivity lane-chips
+   (ported VERBATIM from tools.html:62-151). RECONCILED to LEASH's real capability model:
+   presets bind to PRESET_CATALOG; tool rows render real grants / resolved-preset rules /
+   one-off decisions; the L1/L2/forbidden lane encodes real semantics (standing/active = L1
+   silent, proposed/approve-once/pending = L2 asked, denied/blocked = forbidden). The
+   reference's instant allow/deny .switch is intentionally OMITTED — LEASH grants are
+   tx-governed (propose = timelocked, remove = instant) and gateway rules are 3-way, so a
+   binary instant toggle would misrepresent the on-chain/timelock semantics. ---- */
+.console-view .cockpit-view .presets { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: var(--s-3); }
+.console-view .cockpit-view .preset { text-align: left; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md);
+  padding: var(--s-4); cursor: pointer; font-family: var(--font-sans); color: var(--ink-dim); transition: border-color var(--t-fast), background var(--t-fast); }
+.console-view .cockpit-view .preset:hover { border-color: var(--ink-24); }
+.console-view .cockpit-view .preset[aria-pressed="true"] { border-color: var(--accent-24); background: var(--accent-08); box-shadow: inset 2px 0 0 var(--accent); }
+.console-view .cockpit-view .preset:disabled { cursor: not-allowed; opacity: .6; }
+.console-view .cockpit-view .preset .pn { font-family: var(--font-display); font-weight: 500; font-size: 1rem; color: var(--ink); margin-bottom: 4px; }
+.console-view .cockpit-view .preset .pt { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: .1em; color: var(--ink-faint); margin-bottom: 8px; }
+.console-view .cockpit-view .preset .pd { font-size: 12px; line-height: 1.5; }
+
+.console-view .cockpit-view .tool-list { display: flex; flex-direction: column; gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; }
+.console-view .cockpit-view .tool { background: var(--surface-1); padding: var(--s-4) var(--s-5); }
+.console-view .cockpit-view .tool .trow1 { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
+.console-view .cockpit-view .tool .tid { font-family: var(--font-mono); font-size: 13px; color: var(--ink); font-weight: 500; }
+.console-view .cockpit-view .tool .tdesc { font-family: var(--font-sans); font-size: 12px; color: var(--ink-faint); margin-top: 2px; flex-basis: 100%; }
+.console-view .cockpit-view .tool .tgrow { flex: 1; }
+.console-view .cockpit-view .sens-badge { font-family: var(--font-mono); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; font-weight: 600;
+  color: var(--ember); border: 1px solid var(--ember-24); background: var(--ember-16); border-radius: 4px; padding: 2px 7px; display: inline-flex; align-items: center; gap: 5px; }
+.console-view .cockpit-view .sens-badge svg { width: 10px; height: 10px; }
+.console-view .cockpit-view .always-note { font-family: var(--font-mono); font-size: 10px; color: var(--ember); display: inline-flex; align-items: center; gap: 7px;
+  border: 1px dashed var(--ember-24); border-radius: var(--r-sm); padding: 5px 10px; }
+.console-view .cockpit-view .always-note svg { width: 12px; height: 12px; flex: none; }
+
+/* sensitivity lane chip — color + shape encodes the lane (tools.html:146-151) */
+.console-view .cockpit-view .lane-chip { font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; letter-spacing: .06em; font-weight: 600;
+  padding: 3px 9px; border-radius: 4px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.console-view .cockpit-view .lane-chip::before { content: ""; width: 6px; height: 6px; flex: none; }
+.console-view .cockpit-view .lane-chip.l1 { color: var(--allow); background: var(--allow-14); } .console-view .cockpit-view .lane-chip.l1::before { border-radius: var(--r-full); background: var(--allow); }
+.console-view .cockpit-view .lane-chip.l2 { color: var(--accent-ink); background: var(--accent-12); } .console-view .cockpit-view .lane-chip.l2::before { border-radius: var(--r-full); border: 1.5px solid var(--accent); }
+.console-view .cockpit-view .lane-chip.forbidden { color: var(--deny); background: var(--deny-14); } .console-view .cockpit-view .lane-chip.forbidden::before { background: var(--deny); }
+
+/* ---- cockpit SIGNING surface primitives (ported VERBATIM from signing.html:64-84): the
+   2-up field grid (.two), the key/value review grid (.kv, max-content 1fr), the UNVERIFIED
+   decode chip (.unverified — ember, matching console.html's cockpit unverified), and the
+   small explanatory .hint line. ---- */
+.console-view .cockpit-view .two { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-3); }
+@media (max-width: 520px) { .console-view .cockpit-view .two { grid-template-columns: 1fr; } }
+.console-view .cockpit-view .kv { display: grid; grid-template-columns: max-content 1fr; gap: 4px var(--s-4); font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim); }
+.console-view .cockpit-view .kv .k { color: var(--ink-faint); text-transform: uppercase; letter-spacing: .1em; }
+.console-view .cockpit-view .unverified { display: inline-flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; color: var(--ember); border: 1px solid var(--ember-24); border-radius: 4px; padding: 1px 6px; }
+.console-view .cockpit-view .hint { font-size: var(--t-small); color: var(--ink-faint); line-height: 1.6; }
+.console-view .cockpit-view .hint code { font-family: var(--font-mono); color: var(--ink-dim); }

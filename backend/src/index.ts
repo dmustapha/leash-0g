@@ -23,6 +23,7 @@ import { RuntimeLease } from './runtime/lease.js';
 import { backfillLegacyGuardian } from './store/agents.js';
 import { sweepStaleReservations } from './store/reservations.js';
 import { pruneAllStaleDraftDirections } from './store/directions.js';
+import { sweepPendingSettlements } from './jobs/settlement-sweep.js';
 import { pgRevokeCursorStore } from './store/revoke-cursor.js';
 import { runtimeRoleCanBypassAudit } from './db/audit-role.js';
 import { sweepOrphanedApprovals } from './approvals/sweep.js';
@@ -227,6 +228,23 @@ async function main(): Promise<void> {
     );
   }, cfg.JIT_TTL_MS);
   oneShotSweepTimer.unref();
+
+  // The settlement reconciliation sweep. A job fee is BROADCAST and its hash
+  // persisted before the receipt wait, so an unreadable receipt leaves the job
+  // in 'settling' instead of lying that it failed — this tick is what resolves
+  // it against the chain (and appends the jobFee trace the owner digest reads).
+  // Lease-held like the sweepers above: two instances must not both promote the
+  // same row. 60s because an unreported paid settlement is the thing being
+  // fixed; the per-row cost is one receipt read.
+  const settlementSweepTimer = setInterval(() => {
+    if (!lease.held()) return;
+    void sweepPendingSettlements({
+      pool,
+      chain: chainRegistry.getSessionChain(defaultChainId),
+      hub,
+    }).catch((err: unknown) => console.error('settlement sweep tick failed', err));
+  }, 60_000);
+  settlementSweepTimer.unref();
 
   // Coordination layer (spec §3b): links/delegations lifecycle + channel
   // throttles + expiry sweeper. The nudge is delivery-latency only.
@@ -456,6 +474,8 @@ async function main(): Promise<void> {
     clearInterval(digestTimer);
     clearInterval(reservationSweepTimer);
     clearInterval(directionsSweepTimer); // was previously left running on shutdown
+    clearInterval(oneShotSweepTimer);
+    clearInterval(settlementSweepTimer);
     coordinator.stopSweeper();
     lease.release();
     broker.cancelAll();

@@ -54,7 +54,7 @@ export function TelegramPanel({
   return (
     <section aria-label="Telegram" className="card" style={{ padding: '1rem 1.1rem', display: 'grid', gap: '0.7rem' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
-        <h2 style={{ fontSize: '1rem', margin: 0 }}>Telegram</h2>
+        <h2>Telegram</h2>
         <span style={{ flex: 1 }} />
         {linked ? (
           <span className="pill pill-allow" data-testid="telegram-linked-pill">

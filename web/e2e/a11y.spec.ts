@@ -17,6 +17,10 @@ async function expectNoSeriousViolations(page: Page) {
 test('create page has no serious/critical a11y violations', async ({ page }) => {
   await installMockApi(page, freshState());
   await page.goto('/create');
+  // /create opens on the intent FUNNEL (app/create/page.tsx:181); the wizard sits behind
+  // "Set it up manually". The funnel's own a11y is covered by funnel.spec.ts — this test
+  // audits the wizard, so skip straight to it.
+  await page.getByTestId('funnel-manual').click();
   await expect(page.getByLabel('Agent name')).toBeVisible();
   await expectNoSeriousViolations(page);
 });
@@ -43,7 +47,8 @@ test('cockpit direction surfaces (DirectBox read-back + StatusChat answer) have 
 test('audit page has no serious/critical a11y violations', async ({ page }) => {
   await installMockApi(page, freshState());
   await page.goto('/agents/agent-1/audit');
-  await expect(page.getByRole('heading', { name: 'Audit trail' })).toBeVisible();
+  // G-2.4: the shell topbar owns the page title ("Audit"); the view opens on a section eyebrow.
+  await expect(page.getByRole('heading', { name: 'Audit', exact: true })).toBeVisible();
   await expectNoSeriousViolations(page);
 });
 
@@ -84,6 +89,27 @@ test('fleet list (/app) has no serious/critical a11y violations', async ({ page 
 test('landing (/) has no serious/critical a11y violations', async ({ page }) => {
   await page.goto('/');
   await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+  // The hero rises in on a staggered reveal, so an h1 that is merely *visible* is still
+  // mid-fade. axe composites a partly-transparent element against what shows through it,
+  // so auditing here once measured the primary CTA at `bgColor: #596b27` — lime blended
+  // down by the near-black canvas — and reported 3.35:1 on a control that settles at
+  // ~16:1. That made this test fail roughly 2 runs in 5: a long-standing flake, not a
+  // regression. Waiting for the hero's reveals to reach opacity 1 audits the page the
+  // owner actually reads, which is the only state this test means to assert.
+  //
+  // STAGE G-2.0 re-pointed this from `.reveal-2` (retired with landing.css) onto the
+  // imported build's own mechanism. We wait on the h1's `.reveal-swipe` lines, NOT the
+  // `.reveal-up` blocks: reveal-swipe runs a load-time mask animation (opacity 0→1,
+  // `forwards`) and the headline is always above the fold, so it reliably settles to 1.
+  // reveal-up, by contrast, only reveals when its IntersectionObserver fires — and at
+  // Playwright's 1280×720 viewport the hero's CTA sits below the ~800px fold, so it never
+  // intersects and stays at opacity 0 (which axe skips as invisible — not a violation; the
+  // flake this guard exists for was a *mid-fade* element, and settling the headline past
+  // its animation window is what proves nothing in the hero is caught mid-transition).
+  await page.waitForFunction(() => {
+    const els = [...document.querySelectorAll('#hero .reveal-swipe')];
+    return els.length > 0 && els.every((el) => getComputedStyle(el).opacity === '1');
+  });
   await expectNoSeriousViolations(page);
 });
 

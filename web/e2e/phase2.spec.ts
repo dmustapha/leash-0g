@@ -36,6 +36,9 @@ test('fleet list → create second agent (executor) → link → pair timeline �
 
   // — Create the SECOND agent through the wizard, choosing the executor role
   await page.getByRole('link', { name: 'Create agent' }).first().click();
+  // Past the intent funnel (app/create/page.tsx:181) into the wizard — this spec is about
+  // the executor ROLE choice, which only the wizard's goal step offers.
+  await page.getByTestId('funnel-manual').click();
   await page.getByLabel('Agent name').fill('Executor');
   await page.getByTestId('wizard-next').click();
   await page.getByTestId('role-executor').check();

@@ -11,6 +11,9 @@ test.describe('create → watch → approve → revoke', () => {
 
     // — Create wizard (one decision per step; E2E wallet signs the KEK message for real)
     await page.goto('/create');
+    // The intent funnel wraps the wizard (app/create/page.tsx:181). This spec exercises the
+    // wizard path end-to-end; the funnel → read-back → review path is funnel.spec.ts.
+    await page.getByTestId('funnel-manual').click();
     await page.getByLabel('Agent name').fill('Treasury helper');
     await page.getByTestId('wizard-next').click();
     await page.getByLabel('Who to keep topped up').fill(MOCK_PAYEE); // goal step
@@ -39,7 +42,10 @@ test.describe('create → watch → approve → revoke', () => {
     await expect(page.getByTestId('fund-section')).toBeVisible();
     await page.getByTestId('fund-skip').click();
     await expect(page.getByTestId('status-pill')).toHaveText('running');
-    await expect(page.getByTestId('stream-feed')).toContainText('Checking the beneficiary balance');
+    // AQ-A0-Q2VIS: the mock's reasoning frame is now a realistic DELIBERATION (D-2) rather than one
+    // tidy sentence, so assert on that content. The agent's thinking reaching this feed at all is
+    // the thing worth asserting here; `q2vis.spec.ts` covers the disclosure/degradation behaviour.
+    await expect(page.getByTestId('stream-feed')).toContainText('read the observation');
 
     // — Approve the boundary decision
     const card = page.getByTestId('approval-card');

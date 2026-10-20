@@ -135,7 +135,7 @@ export function AuditView({
             <div style={{ display: 'grid', gap: '0.6rem', justifyItems: 'start' }}>
               {blob.mode === 'passphrase' ? (
                 <div style={{ display: 'grid', gap: '0.35rem', width: 'min(100%, 22rem)' }}>
-                  <label htmlFor="unlock-pass" className="label" style={{ color: 'var(--color-ink)' }}>
+                  <label htmlFor="unlock-pass" className="label">
                     Passphrase
                   </label>
                   <input
@@ -186,37 +186,46 @@ export function AuditView({
         </p>
       )}
 
-      {/* Batch list */}
-      <section aria-label="Audit batches" className="card" style={{ overflow: 'hidden' }}>
-        <h2 style={{ fontSize: '1rem', padding: '0.9rem 1.1rem', borderBottom: '1px solid var(--color-line-soft)' }}>
-          Sealed batches
-        </h2>
+      {/* Batch list — console.html .batch rows. The chain-ok/broken pill is deliberately NOT
+          shown here: the live app only knows the chain result after an owner-side decrypt
+          (verifyBatch), so it appears in the decrypted-records view below, never guessed here. */}
+      <section aria-label="Audit batches">
+        <p className="section-title">Sealed batches · <span className="n">0G Storage</span></p>
         {batches.length === 0 ? (
-          <p style={{ padding: '1.1rem', color: 'var(--color-ink-faint)', fontSize: '0.9rem' }}>
-            No audit batches yet. Once your agent acts, its records are sealed into encrypted
-            batches on 0G Storage and listed here.
-          </p>
+          <div className="deadstate">
+            <svg className="leash-svg" viewBox="0 0 80 44" aria-hidden="true">
+              <circle className="leash-clasp" cx="10" cy="22" r="6" />
+              <path className="leash-path" d="M16 22 Q 40 30 74 22" />
+            </svg>
+            <h4>No batches yet</h4>
+            <p>Once your agent acts, its records are sealed into encrypted batches on 0G Storage and listed here.</p>
+          </div>
         ) : (
           <ul style={{ listStyle: 'none', margin: 0, padding: 0 }}>
             {batches.map((b) => (
-              <li key={b.batchId} style={{ padding: '0.8rem 1.1rem', borderBottom: '1px solid var(--color-line-soft)', display: 'flex', gap: '0.8rem', flexWrap: 'wrap', alignItems: 'center' }}>
-                <span className="badge">records {b.seqFrom}–{b.seqTo}</span>
-                <span className="code" title="Merkle root" style={{ fontSize: '0.74rem' }}>
-                  root {b.merkleRoot.slice(0, 10)}…
-                </span>
-                <a className="link-tx" href={`${STORAGE_EXPLORER_URL}/tx/${b.storageTx}`} target="_blank" rel="noreferrer">
-                  verify on 0G
-                </a>
-                <span style={{ flex: 1 }} />
-                <button
-                  type="button"
-                  className="btn btn-sm"
-                  disabled={!privKey || busy}
-                  onClick={() => void viewBatch(b)}
-                  title={privKey ? undefined : 'Unlock your audit key first'}
-                >
-                  Decrypt &amp; view
-                </button>
+              <li key={b.batchId} className="batch">
+                <div className="batch-head">
+                  <div className="hash" style={{ display: 'grid', gap: '4px', minWidth: 0 }}>
+                    <span><span style={{ color: 'var(--ink-faint)' }}>merkleRoot</span> {b.merkleRoot.slice(0, 10)}…</span>
+                    <span>
+                      <span style={{ color: 'var(--ink-faint)' }}>storageTx</span>{' '}
+                      <a href={`${STORAGE_EXPLORER_URL}/tx/${b.storageTx}`} target="_blank" rel="noreferrer">
+                        {b.storageTx.slice(0, 10)}… ↗
+                      </a>
+                    </span>
+                  </div>
+                  <span className="badge-pill">{b.seqTo - b.seqFrom + 1} events</span>
+                  <span className="hash" title={`records ${b.seqFrom}–${b.seqTo}`}>#{b.seqFrom}–{b.seqTo}</span>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    disabled={!privKey || busy}
+                    onClick={() => void viewBatch(b)}
+                    title={privKey ? undefined : 'Unlock your audit key first'}
+                  >
+                    Decrypt &amp; view
+                  </button>
+                </div>
               </li>
             ))}
           </ul>
@@ -235,16 +244,16 @@ export function AuditView({
           <div style={{ display: 'flex', gap: '0.7rem', alignItems: 'center', flexWrap: 'wrap' }}>
             <h2 style={{ fontSize: '1rem' }}>Batch {viewing.batchId}</h2>
             {viewing.chain.ok ? (
-              <span className="pill pill-allow" data-testid="chain-ok">
-                {viewing.chain.anchored === 'genesis'
-                  ? 'Chain verified from genesis'
-                  : 'Chain verified (slice only)'}
+              <span className="chain-pill ok" data-testid="chain-ok">
+                ◆ {viewing.chain.anchored === 'genesis'
+                  ? 'chain verified from genesis'
+                  : 'chain verified (slice only)'}
                 {' · '}
                 {viewing.chain.count} records
               </span>
             ) : (
-              <span className="pill pill-deny" data-testid="chain-broken">
-                Chain broken at record {viewing.chain.brokenAtSeq} ({viewing.chain.reason})
+              <span className="chain-pill broken" data-testid="chain-broken">
+                ◇ chain broken at record {viewing.chain.brokenAtSeq} ({viewing.chain.reason})
               </span>
             )}
           </div>

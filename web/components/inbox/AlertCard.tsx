@@ -1,12 +1,13 @@
 // File: web/components/inbox/AlertCard.tsx
-// One alert, rendered by kind (spec §3b taxonomy):
-//  - approval_required (decision): inline Approve/Deny — the SAME approval rails as the
-//    cockpit's ApprovalCard (POST /api/approvals/:id). Never dismissible (server 409s).
-//  - limit_hit (decision): plain-language decoded-error copy, Adjust deep-link to the policy
-//    panel (re-arm for SessionExpired), "resets in" countdown, Dismiss.
-//  - revoke_failed: steer CTA to the agent page (owner-wallet fallback lives there).
-//  - other info kinds: dismissible, coalesced count shown as ×N.
-// Pure component — decisions and dismissals bubble up via callbacks.
+// STAGE G-2.2 — restyled to the owner-locked `.alert` design (console.html:321-336, alertCard
+// renderer :1082-1091): kind-chip | a-body | a-actions. The DESIGN is the artifact's; all the
+// real behaviour the artifact's demo lacks is kept intact —
+//  - approval_required (decision): inline Approve/Deny — same approval rails as the cockpit
+//    (POST /api/approvals/:id). Never dismissible.
+//  - limit_hit (decision): plain-language decoded-error copy, Adjust deep-link, "resets in".
+//  - revoke_failed: steer CTA to the agent page (owner-wallet fallback).
+//  - other info kinds: dismissible, coalesced ×N.
+// Every test id is preserved so the inbox e2e stays green.
 'use client';
 
 import { useEffect, useState } from 'react';
@@ -36,11 +37,13 @@ const RESOLUTION_LABEL: Record<NonNullable<Alert['resolution']>, string> = {
 
 export function AlertCard({
   alert,
+  agentName,
   onDecide,
   onDismiss,
 }: {
   alert: Alert;
-  /** Same rails as the cockpit ApprovalCard — POST /api/approvals/:id upstream. */
+  /** optional display name for the a-head (InboxView resolves it from the agent list). */
+  agentName?: string;
   onDecide: (approvalId: string, decision: 'approve' | 'deny') => Promise<void>;
   onDismiss: (alertId: string) => Promise<void>;
 }) {
@@ -48,6 +51,7 @@ export function AlertCard({
   const [error, setError] = useState<string | null>(null);
 
   const open = alert.status === 'unread' || alert.status === 'read';
+  const unread = alert.status === 'unread';
   const isDecision = alert.class === 'decision';
   const dismissible = open && alert.kind !== 'approval_required';
 
@@ -68,8 +72,6 @@ export function AlertCard({
   const autoDeniesAt = typeof alert.refs.autoDeniesAtUnix === 'number' ? alert.refs.autoDeniesAtUnix : undefined;
   const sessionExpired = alert.refs.errorName === 'SessionExpired';
 
-  // Keep the countdown lines ticking (30s granularity matches countdown()'s
-  // minute-level copy) — without this they freeze at render time.
   const [, setTick] = useState(0);
   useEffect(() => {
     if (clearsAt === undefined && autoDeniesAt === undefined) return;
@@ -80,100 +82,82 @@ export function AlertCard({
   return (
     <article
       aria-label={KIND_LABEL[alert.kind]}
-      className={isDecision && open ? 'raised' : 'panel'}
+      className={`alert${isDecision ? ' decision' : ''} ${open ? (unread ? 'unread' : 'read') : 'read'}`}
       data-testid={`alert-${alert.id}`}
-      style={{
-        padding: '0.9rem 1.05rem',
-        display: 'grid',
-        gap: '0.6rem',
-        ...(isDecision && open ? { borderColor: 'rgba(198,242,77,0.45)' } : {}),
-        ...(open ? {} : { opacity: 0.75 }),
-      }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: '0.55rem', flexWrap: 'wrap' }}>
-        <span className={isDecision && open ? 'pill pill-accent' : 'pill pill-idle'}>
-          {KIND_LABEL[alert.kind]}
-        </span>
-        {alert.count > 1 ? (
-          <span className="badge" data-testid="alert-count" title={`${alert.count} occurrences, coalesced`}>
-            ×{alert.count}
-          </span>
+      <span className={`kind-chip ${alert.kind}`}>{alert.kind.replace(/_/g, ' ')}</span>
+
+      <div className="a-body">
+        <div className="a-head">
+          <span className="a-agent">{agentName ?? KIND_LABEL[alert.kind]}</span>
+          {alert.count > 1 ? (
+            <span className="badge-pill" data-testid="alert-count" title={`${alert.count} occurrences, coalesced`}>
+              ×{alert.count}
+            </span>
+          ) : null}
+          {unread ? <span className="dot-live" role="img" aria-label="unread" data-testid="alert-unread-dot" /> : null}
+          {isDecision && open ? <span className="unverified">Untrusted intent</span> : null}
+        </div>
+
+        <p className="a-intent">{alert.summary}</p>
+
+        {typeof alert.refs.agentIntent === 'string' && alert.refs.agentIntent ? (
+          <div className="a-sub" data-testid="agent-intent">
+            <span className="a-sub-k">Agent says · unverified</span>
+            <span className="a-sub-v">“{alert.refs.agentIntent}”</span>
+          </div>
         ) : null}
-        {alert.status === 'unread' ? (
-          <span className="dot-live" role="img" aria-label="unread" data-testid="alert-unread-dot" />
+
+        {open && alert.kind === 'approval_required' && autoDeniesAt !== undefined ? (
+          <div className="a-meta" data-testid="autodeny-countdown">
+            {countdown(autoDeniesAt) === 'expired'
+              ? 'Time is up — this is denying by default.'
+              : `Denies by default in ${countdown(autoDeniesAt)} if you don't answer.`}
+          </div>
         ) : null}
-        <span style={{ flex: 1 }} />
-        <span style={{ fontSize: '0.76rem', color: 'var(--color-ink-faint)' }}>
-          {new Date(alert.createdAt).toLocaleString()}
-        </span>
+
+        {alert.kind === 'limit_hit' && decodedPlain ? (
+          <div style={{ display: 'grid', gap: '0.4rem', marginTop: '6px' }}>
+            <p className="a-intent" data-testid="decoded-plain" style={{ margin: 0 }}>
+              {decodedPlain}
+            </p>
+            {clearsAt !== undefined ? (
+              <div className="a-meta" data-testid="limit-countdown">
+                {countdown(clearsAt) === 'expired'
+                  ? 'The limit has reset — the agent can act again.'
+                  : `Resets in ${countdown(clearsAt)} (at ${new Date(clearsAt * 1000).toLocaleTimeString()}).`}
+              </div>
+            ) : null}
+            <Disclosure label="Technical detail">
+              Contract error: <code className="code">{alert.refs.errorName}</code>
+            </Disclosure>
+          </div>
+        ) : null}
+
+        {!open && alert.resolution ? (
+          <p
+            className={`chip ${alert.resolution === 'approve' ? 'chip-allow' : alert.resolution === 'deny' ? 'chip-deny' : 'chip-pend'}`}
+            style={{ justifySelf: 'start', marginTop: '6px' }}
+            data-testid="alert-resolution"
+          >
+            {RESOLUTION_LABEL[alert.resolution]}
+            {alert.resolvedVia === 'telegram' ? ' · via Telegram' : ''}
+          </p>
+        ) : null}
+
+        {error ? (
+          <p role="alert" style={{ color: 'var(--deny)', fontSize: '0.84rem', margin: '6px 0 0' }}>
+            {error}
+          </p>
+        ) : null}
+
+        <div className="a-meta">
+          <span>{new Date(alert.createdAt).toLocaleString()}</span>
+        </div>
       </div>
 
-      <p style={{ fontSize: '0.92rem', margin: 0 }}>{alert.summary}</p>
-
-      {typeof alert.refs.agentIntent === 'string' && alert.refs.agentIntent ? (
-        <div
-          data-testid="agent-intent"
-          style={{
-            borderLeft: '2px solid var(--color-line)',
-            paddingLeft: '0.7rem',
-            display: 'grid',
-            gap: '0.15rem',
-          }}
-        >
-          <span style={{ fontSize: '0.72rem', letterSpacing: '0.04em', textTransform: 'uppercase', color: 'var(--color-ink-faint)' }}>
-            Agent says · unverified
-          </span>
-          <span style={{ fontSize: '0.86rem', color: 'var(--color-ink-dim)', fontStyle: 'italic' }}>
-            “{alert.refs.agentIntent}”
-          </span>
-        </div>
-      ) : null}
-
-      {open && alert.kind === 'approval_required' && autoDeniesAt !== undefined ? (
-        <p style={{ fontSize: '0.84rem', margin: 0, color: 'var(--color-ink-dim)' }} data-testid="autodeny-countdown">
-          {countdown(autoDeniesAt) === 'expired'
-            ? 'Time is up — this is denying by default.'
-            : `Denies by default in ${countdown(autoDeniesAt)} if you don't answer.`}
-        </p>
-      ) : null}
-
-      {alert.kind === 'limit_hit' && decodedPlain ? (
-        <div style={{ display: 'grid', gap: '0.4rem' }}>
-          <p style={{ fontSize: '0.86rem', color: 'var(--color-ink-dim)', margin: 0 }} data-testid="decoded-plain">
-            {decodedPlain}
-          </p>
-          {clearsAt !== undefined ? (
-            <p style={{ fontSize: '0.84rem', margin: 0 }} data-testid="limit-countdown">
-              {countdown(clearsAt) === 'expired'
-                ? 'The limit has reset — the agent can act again.'
-                : `Resets in ${countdown(clearsAt)} (at ${new Date(clearsAt * 1000).toLocaleTimeString()}).`}
-            </p>
-          ) : null}
-          <Disclosure label="Technical detail">
-            Contract error: <code className="code">{alert.refs.errorName}</code>
-          </Disclosure>
-        </div>
-      ) : null}
-
-      {!open && alert.resolution ? (
-        <p
-          className={`pill ${alert.resolution === 'approve' ? 'pill-allow' : alert.resolution === 'deny' ? 'pill-deny' : 'pill-idle'}`}
-          style={{ justifySelf: 'start' }}
-          data-testid="alert-resolution"
-        >
-          {RESOLUTION_LABEL[alert.resolution]}
-          {alert.resolvedVia === 'telegram' ? ' · via Telegram' : ''}
-        </p>
-      ) : null}
-
-      {error ? (
-        <p role="alert" style={{ color: 'var(--color-deny)', fontSize: '0.84rem', margin: 0 }}>
-          {error}
-        </p>
-      ) : null}
-
       {open ? (
-        <div style={{ display: 'flex', gap: '0.55rem', flexWrap: 'wrap' }}>
+        <div className="a-actions">
           {alert.kind === 'approval_required' && alert.refs.approvalId ? (
             <>
               <button
@@ -181,9 +165,7 @@ export function AlertCard({
                 className="btn btn-primary btn-sm"
                 disabled={busy !== null}
                 data-testid="alert-approve-btn"
-                onClick={() =>
-                  void run('approve', () => onDecide(alert.refs.approvalId as string, 'approve'))
-                }
+                onClick={() => void run('approve', () => onDecide(alert.refs.approvalId as string, 'approve'))}
               >
                 {busy === 'approve' ? 'Approving…' : 'Approve'}
               </button>
@@ -192,9 +174,7 @@ export function AlertCard({
                 className="btn btn-danger btn-sm"
                 disabled={busy !== null}
                 data-testid="alert-deny-btn"
-                onClick={() =>
-                  void run('deny', () => onDecide(alert.refs.approvalId as string, 'deny'))
-                }
+                onClick={() => void run('deny', () => onDecide(alert.refs.approvalId as string, 'deny'))}
               >
                 {busy === 'deny' ? 'Denying…' : 'Deny'}
               </button>

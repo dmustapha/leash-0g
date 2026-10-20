@@ -40,7 +40,8 @@ import { raiseSigningRequest, type SigningServiceDeps } from '../signing/signing
 import { recordSigningArm } from '../store/signing.js';
 import {
   buildReasonRequest,
-  completionContent,
+  completionChannels,
+  rationaleAnchored,
   parseDecision,
   type AgentDecision,
   type CapabilityView,
@@ -132,6 +133,8 @@ const TreasuryState = Annotation.Root({
   capabilities: Annotation<CapabilityView[]>,
   /** FR3 (F-8): the trader role's sensed token holdings (null for every other role). */
   holdings: Annotation<TraderHoldings | null>,
+  /** D-3 (token half): server-read decimals/symbol per goal token, so DISPLAY labels the real asset. */
+  tokenMeta: Annotation<{ hold?: { symbol: string; decimals: number }; spend?: { symbol: string; decimals: number } }>,
   /**
    * FR3b: the band-feed price (18dp decimal string) sensed for the trader's swap
    * rule this cycle, or null (no band / unreadable). Read at SENSE time so the
@@ -141,6 +144,18 @@ const TreasuryState = Annotation.Root({
    */
   bandPrice18: Annotation<string | null>,
   reasoning: Annotation<string>,
+  /**
+   * AQ-A0-Q2VIS D-2: the model's DELIBERATION (`reasoning_content`), kept separate from
+   * `reasoning` (which is the decision channel `parseDecision` runs on). This is the Q2 signal —
+   * it was generated and billed on every cycle already and then discarded (S-1/S-2).
+   */
+  deliberation: Annotation<string>,
+  /** D-2/G-6: which channel the decision came from. `'scavenge'` = the truncation rescue fired. */
+  decisionSource: Annotation<'content' | 'scavenge' | 'empty'>,
+  /** D-6/G-2: `finish_reason` of the reasoning call — `'length'` is the degenerate signature. */
+  finishReason: Annotation<string | null>,
+  /** D-6: `"action":` restatement count inside the deliberation (severity, not a classifier). */
+  deliberationLoops: Annotation<number>,
   decision: Annotation<AgentDecision>,
   route: Annotation<Route>,
   /** Stage D (D-10): the resolved governed-call `executeCall` args for the `call` route. */
@@ -395,7 +410,20 @@ export function buildTreasuryGraph(
     const spender = approveGrant?.spenderSet[0];
     // FR3b: the granted swap rule (if any) — its band feed prices this cycle's minOut.
     const swapGrant = grants.find((g) => SELECTORS.get(g.selector.toLowerCase())?.swapArgs);
-    const [account, policy, holdBalance, spendBalance, allowance, bandPrice] = await Promise.all([
+    // AQ-A0-Q2VIS D-3 (token half): read each token's OWN decimals + symbol so the SERVER authors
+    // the human-readable label. Without this the trader was handed raw ERC-20 base units and asked
+    // to talk about them, so it converted them itself — producing "0.1 0G of the spend token" on
+    // the owner-facing surface, which is F-A0-1's exact mislabel shape on a different asset.
+    // Instructing the model not to do that is patching the symptom; handing it a correct
+    // pre-formatted string removes the need to convert at all (`never-guess-money` — server-read
+    // facts, never model-derived).
+    //
+    // `getErc20Meta` memoizes per token, so this is two reads once per process, not per cycle. A
+    // read failure is non-fatal: null meta renders as "<n> units" (honest rather than wrong), and
+    // the raw `*Wei` integers the rules compare are untouched either way.
+    const tokenMetaOf = (token: string): Promise<{ symbol: string; decimals: number } | null> =>
+      deps.chain.getErc20Meta(token).catch(() => null);
+    const [account, policy, holdBalance, spendBalance, allowance, bandPrice, holdMeta, spendMeta] = await Promise.all([
       deps.chain.getBalance(ctx.accountAddr),
       deps.chain.getPolicyView(ctx.accountAddr, []),
       deps.chain.getErc20Balance(goal.holdToken, ctx.accountAddr),
@@ -404,6 +432,8 @@ export function buildTreasuryGraph(
       swapGrant
         ? deps.chain.getSwapBandPrice18(ctx.accountAddr, swapGrant.target, swapGrant.selector)
         : Promise.resolve(null),
+      tokenMetaOf(goal.holdToken),
+      tokenMetaOf(goal.spendToken),
     ]);
     return {
       beneficiaryBalanceWei: '0',
@@ -415,6 +445,10 @@ export function buildTreasuryGraph(
         holdBalanceWei: holdBalance.toString(),
         spendBalanceWei: spendBalance.toString(),
         routerAllowanceWei: allowance.toString(),
+      },
+      tokenMeta: {
+        ...(holdMeta ? { hold: holdMeta } : {}),
+        ...(spendMeta ? { spend: spendMeta } : {}),
       },
       policy: toPolicySnapshot(policy),
     };
@@ -480,7 +514,7 @@ export function buildTreasuryGraph(
     // (resp. per spam envelope — the coordinator throttles bound issuance,
     // this bounds the receiver side).
     if (mode.mode === 'executor_idle' || mode.mode === 'inbound_reject') {
-      return { reasoning: '' };
+      return { reasoning: '', deliberation: '', decisionSource: 'empty' as const, finishReason: null, deliberationLoops: 0 };
     }
     const model = ctx.goal.model ?? deps.defaultModel;
     const body = buildReasonRequest(model, {
@@ -491,6 +525,7 @@ export function buildTreasuryGraph(
       nowSec: Math.floor(Date.now() / 1000),
       // FR3 (F-8): the trader's sensed token holdings (absent for other roles).
       ...(state.holdings ? { holdings: state.holdings } : {}),
+      ...(state.tokenMeta ? { tokenMeta: state.tokenMeta } : {}),
       // Stage D (D-10): the governed-call envelope the model may act on this cycle.
       ...(state.capabilities && state.capabilities.length > 0 ? { capabilities: state.capabilities } : {}),
       // Inbound delegation rides the observation as LABELED UNTRUSTED input
@@ -508,7 +543,10 @@ export function buildTreasuryGraph(
     if (!res.ok) {
       throw new Error(`gateway refused inference: status ${res.status}`);
     }
-    let text = completionContent(completion);
+    // D-2: read BOTH channels. The decision path still uses only `decisionText`; the deliberation
+    // is carried separately instead of being dropped (S-1).
+    let channels = completionChannels(completion);
+    let text = channels.decisionText;
     if (!parseDecision(text)) {
       // F-4: ONE in-cycle re-ask before the decide overlay stands down — the
       // reasoning model drops an unparsable decision in a large share of
@@ -523,15 +561,48 @@ export function buildTreasuryGraph(
           body: JSON.stringify(body),
         });
         if (retryRes.ok) {
-          const retryText = completionContent(await retryRes.json().catch(() => null));
-          if (parseDecision(retryText)) text = retryText;
+          const retryChannels = completionChannels(await retryRes.json().catch(() => null));
+          // The retry's deliberation replaces the first only when the retry is the one that
+          // decided — otherwise the owner would read thinking that did not produce this decision.
+          if (parseDecision(retryChannels.decisionText)) {
+            text = retryChannels.decisionText;
+            channels = retryChannels;
+          }
         }
       } catch {
         /* keep the first output — the decide overlay stands down on it */
       }
     }
-    deps.hub.emit(ctx.agentId, 'reasoning', reasoningEvent(text || '(empty model output)'));
-    return { reasoning: text };
+    // D-2/D-4 audit layer: the deliberation streams on the `reasoning` channel, which the cockpit
+    // renders as a REVIEW surface — one plain line plus "Show the exact model output (raw, for
+    // review only)" (Defect-2 option (a)) — with the cycle's health so a degenerate cycle degrades
+    // to its signature instead of streaming 64 KB of repetition (C-5).
+    const delib = clipDeliberation(channels.deliberation, channels);
+    deps.hub.emit(
+      ctx.agentId,
+      'reasoning',
+      reasoningEvent(delib.text || text || '(empty model output)', {
+        truncated: channels.finishReason === 'length',
+        loopCount: channels.loopCount,
+        decisionSource: channels.decisionSource,
+        clipped: delib.clipped,
+      }),
+    );
+    if (channels.decisionSource === 'scavenge') {
+      // G-6: the scavenge is an ~11% tail event that three retries hide to ~0.14%. Log it the
+      // moment it fires; the durable count lives on the trace record (`decisionSource`).
+      console.warn(
+        `[runtime] agent ${ctx.agentId}: decision scavenged from reasoning_content ` +
+          `(finish_reason=${channels.finishReason}, loops=${channels.loopCount})`,
+      );
+    }
+    return {
+      reasoning: text,
+      deliberation: delib.text,
+      decisionSource: channels.decisionSource,
+      finishReason: channels.finishReason,
+      deliberationLoops: channels.loopCount,
+    };
   }
 
   async function decide(state: State): Promise<Partial<State>> {
@@ -1077,6 +1148,27 @@ export function buildTreasuryGraph(
     if (o.type !== 'delegated') {
       // 'delegated' writes nothing here: the coordinator's 'delegate' trace IS
       // the issuer-side record of this outcome (spec §3b — no double-trace).
+      //
+      // AQ-A0-Q2VIS D-5 / D-4 audit layer: the hash-chained trace record is THE auditable record,
+      // so this is where the deliberation is preserved whole (16 384 cap = p100 of 270 measured
+      // healthy bodies + headroom; degenerate cycles store a signature instead of their
+      // repetition — see `clipDeliberation`). `decisionSource` rides along as the durable G-6
+      // scavenge counter: the scavenge rate is now a SQL question over this column, not a guess.
+      const auditDetail: Record<string, Json> = state.deliberation
+        ? { deliberation: state.deliberation, decisionSource: state.decisionSource, deliberationLoops: state.deliberationLoops, ...(state.finishReason ? { finishReason: state.finishReason } : {}) }
+        : {};
+      // D-4 owner layer: the rationale plus the verdict of the deterministic anchor check. BOTH are
+      // stored — a rationale that failed the anchor is withheld from the surface (see
+      // `traceEvent`) but kept here, because "the agent explained itself wrongly" is exactly the
+      // kind of thing an audit record must not quietly drop.
+      const anchor = state.decision?.rationale ? rationaleAnchored(state.decision) : null;
+      if (state.decision?.rationale && anchor) {
+        auditDetail['rationale'] = state.decision.rationale;
+        auditDetail['rationaleAnchored'] = anchor.ok;
+        if (!anchor.ok) {
+          auditDetail['rationaleAnchorFailure'] = anchor.actionMatches ? 'amount' : 'action';
+        }
+      }
       const rec =
         o.type === 'acted'
           ? await appendTrace(deps.pool, {
@@ -1093,6 +1185,7 @@ export function buildTreasuryGraph(
                   : `sent ${formatG(o.valueWei)} to ${shortAddr(state.effectiveBeneficiary)}${o.approved ? ' (owner-approved)' : ''}`,
                 // Q5: carry the model's own plain-language WHY so the cockpit shows why it acted.
                 ...(state.decision?.reason ? { reason: state.decision.reason } : {}),
+                ...auditDetail,
               },
             })
           : await appendTrace(deps.pool, {
@@ -1103,6 +1196,7 @@ export function buildTreasuryGraph(
                 reason: 'reason' in o ? o.reason : '',
                 // P3C-6(ii): decoded contract error rides the trace detail.
                 ...(o.type === 'failed' && o.decoded ? { decoded: { ...o.decoded } as unknown as Json } : {}),
+                ...auditDetail,
               },
             });
       deps.hub.emit(ctx.agentId, 'trace', traceEvent(rec));
@@ -1111,6 +1205,15 @@ export function buildTreasuryGraph(
     // UNTRUSTED finding whenever the agent actually reasoned this cycle (idle /
     // rejected-inbound cycles have empty reasoning and are skipped). Bounded
     // rolling window; the status summary reads it read-only, never as authority.
+    //
+    // AQ-A0-Q2VIS D-5 — this 2 000-char bound STAYS, deliberately. The spec named this line (and
+    // the chain.handoff one below) as the persistence cap to raise to 16 384, but both are
+    // PROMPT-BOUND channels, not the audit record: `direction/status.ts` reads 50 of these entries
+    // straight into a model call, so a 16 KB cap here is ~800 KB of prompt per status question —
+    // a cost regression, and the opposite of G-4. The audit fidelity D-5 actually asks for lives on
+    // the hash-chained trace record above, which is what S-12 means by "the auditable trace
+    // record". `state.reasoning` here is the short decision channel anyway, so this cap has never
+    // been what truncated a deliberation.
     if (state.reasoning && state.reasoning.trim()) {
       await appendMemory(deps.pool, {
         agentId: ctx.agentId,
@@ -1436,6 +1539,50 @@ function evaluateDecision(
 
   const route: Route = amount > BigInt(policy.perTransferCapWei) ? 'approval' : 'act';
   return { decision: parsed, route };
+}
+
+/**
+ * AQ-A0-Q2VIS D-5 — the deliberation fidelity floor.
+ *
+ * The old cap was `slice(0, 2000)`, which fully preserves 6 of 270 measured healthy deliberations
+ * (2.2%) — the auditable record was mutilated on 97.8% of cycles. The cap is not a storage dial,
+ * it is a fidelity floor, so it is set from the measured distribution rather than guessed: p100 of
+ * 270 healthy bodies is 13 818 chars, and 16 384 covers that with headroom while staying aligned to
+ * `max_tokens: 4096` at ~4 chars/token. Measured healthy retention: 100%.
+ *
+ * The truncated population is a genuinely DIFFERENT distribution (up to 64 254 chars of the same
+ * sentence restated), so a cap alone cannot serve both — a degenerate cycle stores its SIGNATURE
+ * instead of its repetition.
+ *
+ * Note which signal decides that. `loop_count` was the SCOPE chat's candidate, measured on 16
+ * bodies; re-measured on 200 it does NOT separate (healthy reaches 14, degenerate starts at 6).
+ * `finish_reason: 'length'` separates perfectly at n=200 — every truncated cycle sat exactly at the
+ * 4 096-token cap, every healthy one at or below 3 538 — so that is the classifier, and loop_count
+ * is recorded as severity.
+ *
+ * Storage: mean 4 741 chars x 2 880 cycles/day ≈ 13.6 MB/day/agent. If that ever bites, it is
+ * solved at the retention/compression layer — never by truncating every record at ingest.
+ */
+const DELIBERATION_CAP = 16_384;
+
+export function clipDeliberation(
+  deliberation: string,
+  health: { finishReason: string | null; loopCount: number },
+): { text: string; clipped: boolean } {
+  if (health.finishReason === 'length') {
+    // Degenerate: keep what identifies the failure (head + tail + the numbers), not the loop.
+    const head = deliberation.slice(0, 1_000);
+    const tail = deliberation.slice(-1_000);
+    return {
+      text:
+        `[degenerate cycle: the model restated its answer ${health.loopCount}x until it hit the token cap ` +
+        `(finish_reason=length, ${deliberation.length} chars). Head and tail kept; the repetition is not stored.]\n` +
+        `--- head ---\n${head}\n--- tail ---\n${tail}`,
+      clipped: true,
+    };
+  }
+  if (deliberation.length <= DELIBERATION_CAP) return { text: deliberation, clipped: false };
+  return { text: deliberation.slice(0, DELIBERATION_CAP), clipped: true };
 }
 
 function outcomeSummary(o: CycleOutcome): string {

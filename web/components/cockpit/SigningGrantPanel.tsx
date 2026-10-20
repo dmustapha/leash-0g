@@ -68,7 +68,7 @@ export function SigningGrantPanel({
     >
       <div style={{ display: 'grid', gap: '0.3rem' }}>
         <h2 style={{ fontSize: '1rem', margin: 0 }}>Let this agent sign for a protocol</h2>
-        <p style={{ margin: 0, fontSize: '0.84rem', color: 'var(--color-ink-dim)' }}>
+        <p style={{ margin: 0, fontSize: '0.84rem', color: 'var(--ink-dim)' }}>
           A signing grant lets the agent&apos;s session key sign a specific off-chain message (an
           approval permit, a swap order) under caps you set. You sign every grant from your own
           wallet — nothing is armed until you turn it on here.
@@ -76,7 +76,7 @@ export function SigningGrantPanel({
       </div>
 
       {available.length === 0 ? (
-        <p data-testid="signing-empty" style={{ margin: 0, fontSize: '0.86rem', color: 'var(--color-ink-dim)' }}>
+        <p data-testid="signing-empty" style={{ margin: 0, fontSize: '0.86rem', color: 'var(--ink-dim)' }}>
           No signing protocols are available to grant on this account yet.
         </p>
       ) : (
@@ -261,35 +261,34 @@ function DescriptorRow({
           <span
             className="badge"
             data-testid={`signing-active-${descriptor.descriptorId}`}
-            style={{ color: 'var(--color-accent)' }}
+            style={{ color: 'var(--accent)' }}
           >
             armed
           </span>
         ) : null}
       </div>
 
-      {/* Decoded grant intent — PLAIN TEXT, labeled UNVERIFIED. Never innerHTML/markdown. */}
+      {/* Decoded grant intent — PLAIN TEXT, labeled UNVERIFIED. Never innerHTML/markdown.
+          signing.html: the decode is the hero, headed by the .unverified chip. */}
       <div
         data-testid={`signing-intent-${descriptor.descriptorId}`}
         className="panel"
-        style={{ padding: '0.6rem 0.7rem', display: 'grid', gap: '0.25rem', fontSize: '0.84rem' }}
+        style={{ padding: '0.6rem 0.7rem', display: 'grid', gap: '0.35rem', fontSize: '0.84rem' }}
       >
-        <span className="label" style={{ color: 'var(--color-ink-dim)' }}>
-          What it signs <span className="badge">UNVERIFIED</span>
-        </span>
+        <span className="unverified">● UNVERIFIED — not yet armed on-chain</span>
         <span>{describeGrant(descriptor)}</span>
       </div>
 
       {active && current ? (
-        <dl
-          data-testid={`signing-current-${descriptor.descriptorId}`}
-          style={{ margin: 0, display: 'grid', gap: '0.15rem', fontSize: '0.82rem' }}
-        >
-          <div>per-signature cap: <span className="code">{current.perIntentCap}</span></div>
-          <div>deadline window: <span className="code">{current.maxDeadlineWindow}s</span></div>
-          <div>spend token: <span className="code">{shortAddr(current.token)}</span></div>
+        // signing.html .kv review grid (max-content 1fr) for the armed grant's real params.
+        <dl className="kv" data-testid={`signing-current-${descriptor.descriptorId}`} style={{ margin: 0 }}>
+          <span className="k">Per-sig cap</span><span>{current.perIntentCap}</span>
+          <span className="k">Deadline</span><span>{current.maxDeadlineWindow}s</span>
+          <span className="k">Spend token</span><span>{shortAddr(current.token)}</span>
           {current.spenderSet.length > 0 ? (
-            <div>spenders: <span className="code">{current.spenderSet.map(shortAddr).join(', ')}</span></div>
+            <>
+              <span className="k">Spenders</span><span>{current.spenderSet.map(shortAddr).join(', ')}</span>
+            </>
           ) : null}
         </dl>
       ) : null}
@@ -314,33 +313,39 @@ function DescriptorRow({
 
       {action !== 'remove' ? (
         <div style={{ display: 'grid', gap: '0.5rem' }}>
-          <label className="label" htmlFor={`signing-cap-${descriptor.descriptorId}`}>
-            Per-signature cap (base units)
-          </label>
-          <input
-            id={`signing-cap-${descriptor.descriptorId}`}
-            className="field"
-            data-testid={`signing-cap-${descriptor.descriptorId}`}
-            inputMode="numeric"
-            value={perIntentCap}
-            onChange={(e) => setPerIntentCap(e.target.value)}
-            placeholder="1000000000000000000"
-            disabled={busy || phase === 'apply'}
-          />
-
-          <label className="label" htmlFor={`signing-window-${descriptor.descriptorId}`}>
-            Deadline window (seconds)
-          </label>
-          <input
-            id={`signing-window-${descriptor.descriptorId}`}
-            className="field"
-            data-testid={`signing-window-${descriptor.descriptorId}`}
-            inputMode="numeric"
-            value={maxDeadlineWindow}
-            onChange={(e) => setMaxDeadlineWindow(e.target.value)}
-            placeholder="3600"
-            disabled={busy || phase === 'apply'}
-          />
+          {/* signing.html .two: the per-intent cap + deadline window sit side by side. */}
+          <div className="two">
+            <div style={{ display: 'grid', gap: '0.4rem' }}>
+              <label className="label" htmlFor={`signing-cap-${descriptor.descriptorId}`}>
+                Per-signature cap (base units)
+              </label>
+              <input
+                id={`signing-cap-${descriptor.descriptorId}`}
+                className="field"
+                data-testid={`signing-cap-${descriptor.descriptorId}`}
+                inputMode="numeric"
+                value={perIntentCap}
+                onChange={(e) => setPerIntentCap(e.target.value)}
+                placeholder="1000000000000000000"
+                disabled={busy || phase === 'apply'}
+              />
+            </div>
+            <div style={{ display: 'grid', gap: '0.4rem' }}>
+              <label className="label" htmlFor={`signing-window-${descriptor.descriptorId}`}>
+                Deadline window (seconds)
+              </label>
+              <input
+                id={`signing-window-${descriptor.descriptorId}`}
+                className="field"
+                data-testid={`signing-window-${descriptor.descriptorId}`}
+                inputMode="numeric"
+                value={maxDeadlineWindow}
+                onChange={(e) => setMaxDeadlineWindow(e.target.value)}
+                placeholder="3600"
+                disabled={busy || phase === 'apply'}
+              />
+            </div>
+          </div>
 
           <label className="label" htmlFor={`signing-token-${descriptor.descriptorId}`}>
             {isOrder ? 'Sell token (pinned)' : 'Spend token'}
@@ -368,7 +373,7 @@ function DescriptorRow({
             disabled={busy || phase === 'apply'}
           />
           {isBatch ? (
-            <p style={{ margin: 0, fontSize: '0.8rem', color: 'var(--color-ink-dim)' }}>
+            <p className="hint" style={{ margin: 0 }}>
               This is a batch permit — the per-token caps are the reviewed allowlist pinned by the
               descriptor; the per-signature cap above bounds each leaf.
             </p>
@@ -411,14 +416,14 @@ function DescriptorRow({
       ) : null}
 
       {action === 'propose' && phase === 'propose' ? (
-        <p style={{ margin: 0, fontSize: '0.82rem', color: 'var(--color-accent)' }}>
+        <p className="hint" style={{ margin: 0 }}>
           Arming a signing grant loosens the leash, so it waits a short safety delay on-chain before
           it takes effect.
         </p>
       ) : null}
 
       {error ? (
-        <p role="alert" style={{ color: 'var(--color-deny)', fontSize: '0.84rem', margin: 0 }}>
+        <p role="alert" style={{ color: 'var(--deny)', fontSize: '0.84rem', margin: 0 }}>
           {error}
         </p>
       ) : null}
@@ -437,7 +442,7 @@ function DescriptorRow({
             </button>
           ) : (
             <div style={{ display: 'grid', gap: '0.4rem' }}>
-              <p style={{ margin: 0, fontSize: '0.82rem', color: 'var(--color-accent)' }}>
+              <p style={{ margin: 0, fontSize: '0.82rem', color: 'var(--accent)' }}>
                 Signed — this takes effect in ~15 min. Come back and apply it.
               </p>
               <button

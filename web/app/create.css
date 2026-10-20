@@ -1,0 +1,105 @@
+/* File: web/app/create.css
+   STAGE G-2.3 — the CREATE flow, dressed in the owner-locked design language of
+   `design-reference/bind.html` (obligation b: /create derives from bind.html's s-bind
+   panels/fields/chooser). Imported app-wide; everything is scoped under
+   `.console-view .create-flow` so it restyles ONLY the create page's existing
+   `.field`/`.label`/`.panel`/`.card` into bind.html's idiom — the 1382-line wizard keeps
+   its markup + logic + test ids and simply wears the new look. New classes (.lede,
+   .chooser/.choice, .kv, .token-box) are added for the funnel + review + done screens.
+   Raw tokens throughout → re-themes for free in light. */
+
+.console-view .create-flow { max-width: 820px; margin: 0 auto; }
+
+/* intro prose (bind.html .lede) */
+.console-view .create-flow .lede { font-size: var(--t-small); color: var(--ink-dim); max-width: 64ch;
+  margin: 0 0 var(--s-5); line-height: 1.6; }
+.console-view .create-flow .lede b { color: var(--ink); font-weight: 600; }
+.console-view .create-flow h1 { font-family: var(--font-display); font-weight: 500; font-size: 1.5rem;
+  letter-spacing: -0.01em; color: var(--ink); margin: 0 0 var(--s-2); }
+.console-view .create-flow h2 { font-family: var(--font-display); font-weight: 500; font-size: 1.15rem;
+  letter-spacing: -0.01em; color: var(--ink); margin: 0 0 var(--s-3); }
+
+/* panels (bind.html .panel) — restyles the create page's .card AND .panel in place */
+.console-view .create-flow .panel,
+.console-view .create-flow .card {
+  background: var(--surface-1); border: 1px solid var(--border); border-radius: var(--r-md);
+  padding: var(--s-5); margin-bottom: var(--s-4); box-shadow: var(--shadow-none);
+}
+.console-view .create-flow .panel-hi,
+.console-view .create-flow .card.raised { border-color: var(--accent-24); box-shadow: inset 3px 0 0 var(--accent); }
+.console-view .create-flow .p-title { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+  letter-spacing: .14em; color: var(--ink-faint); margin: 0 0 var(--s-4); display: flex; align-items: center;
+  justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+
+/* form fields (bind.html .fk label + .inp input + .fhint) — restyles .label + .field in place.
+   `display: block` (NOT flex): CreateWizard has COMPOUND labels that wrap their <select> as a
+   child (requester step); flex would lay the label text and the control side-by-side. Block
+   keeps them stacked; the inline `.req`/`.opt` spans still flow after the label text. (Gate-②) */
+.console-view .create-flow .label { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase;
+  letter-spacing: .1em; color: var(--ink-faint); margin-bottom: 7px; display: block; }
+/* non-input grouping wrapper (the funnel field block) — NOT the .field input style */
+.console-view .create-flow .field-group { margin-bottom: var(--s-4); }
+.console-view .create-flow .label .req { color: var(--accent-ink); text-transform: none; letter-spacing: 0; }
+.console-view .create-flow .label .opt { color: var(--ink-faint); font-weight: 400; text-transform: none; letter-spacing: 0; }
+.console-view .create-flow .field,
+.console-view .create-flow input[type="text"],
+.console-view .create-flow input[type="number"],
+.console-view .create-flow textarea,
+.console-view .create-flow select {
+  width: 100%; background: var(--surface-2); border: 1px solid var(--border-strong); border-radius: var(--r-sm);
+  color: var(--ink); font-family: var(--font-mono); font-size: 12px; padding: 9px var(--s-3); box-shadow: var(--shadow-none);
+}
+.console-view .create-flow .field:focus,
+.console-view .create-flow input:focus:not([type="radio"]):not([type="checkbox"]),
+.console-view .create-flow textarea:focus,
+.console-view .create-flow select:focus { outline: none; border-color: var(--accent-24); box-shadow: 0 0 0 3px var(--accent-08); }
+.console-view .create-flow textarea.field { font-family: var(--font-mono); line-height: 1.5; resize: vertical; }
+.console-view .create-flow .fhint { font-family: var(--font-sans); font-size: 11px; color: var(--ink-faint); margin-top: 6px; line-height: 1.5; }
+.console-view .create-flow .deny-default { font-family: var(--font-mono); font-size: 10px; color: var(--ember);
+  display: inline-flex; align-items: center; gap: 7px; border: 1px dashed var(--ember-24); border-radius: var(--r-sm);
+  padding: 5px 10px; margin-top: 8px; }
+
+/* chooser cards (bind.html .chooser/.choice) — the funnel templates. The wizard's role
+   chooser keeps its own `.panel` radio-card markup (converting it to `.choice` is a later
+   polish); `:has(> input:checked)` below only matches the templates. */
+.console-view .create-flow .chooser { display: grid; grid-template-columns: 1fr 1fr; gap: var(--s-3); }
+@media (max-width: 640px) { .console-view .create-flow .chooser { grid-template-columns: 1fr; } }
+.console-view .create-flow .choice { position: relative; text-align: left; background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--r-md); padding: var(--s-4) var(--s-5); cursor: pointer; display: grid; gap: 5px;
+  transition: border-color var(--t-fast), background var(--t-fast); width: 100%; font: inherit; }
+.console-view .create-flow .choice:hover { border-color: var(--ink-24); }
+.console-view .create-flow .choice[aria-pressed="true"],
+.console-view .create-flow .choice:has(> input:checked) {
+  border-color: var(--accent-24); background: var(--accent-08); box-shadow: inset 2px 0 0 var(--accent); }
+/* the card IS the control: the radio is a transparent full-card overlay (positioned, so it paints
+   above the label text and catches the click), keeping the native radio semantics + keyboard +
+   test actionability while the card carries the visual selected/focus state. */
+.console-view .create-flow .choice > input[type="radio"] { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
+.console-view .create-flow .choice:has(> input:focus-visible) { outline: 2px solid var(--focus-ring); outline-offset: 2px; }
+.console-view .create-flow .choice .cg { font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; letter-spacing: .1em; color: var(--ink-faint); }
+.console-view .create-flow .choice .cn { font-family: var(--font-display); font-weight: 500; font-size: 1rem; color: var(--ink); }
+.console-view .create-flow .choice .cd { font-size: 12px; line-height: 1.5; color: var(--ink-dim); }
+
+/* key-value review/result (bind.html .kv) */
+.console-view .create-flow .kv { display: grid; grid-template-columns: 150px 1fr; gap: 10px var(--s-4);
+  font-family: var(--font-mono); font-size: 12px; margin: 0; }
+@media (max-width: 560px) { .console-view .create-flow .kv { grid-template-columns: 1fr; gap: 4px var(--s-4); } }
+.console-view .create-flow .kv dt, .console-view .create-flow .kv .kvk { color: var(--ink-faint); font-size: 10px;
+  text-transform: uppercase; letter-spacing: .1em; align-self: center; margin: 0; }
+.console-view .create-flow .kv dd, .console-view .create-flow .kv .kvv { color: var(--ink); word-break: break-all; margin: 0;
+  display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
+
+/* one-time gateway token (bind.html .token-box / .once-warn) */
+.console-view .create-flow .token-box { background: var(--surface-2); border: 1px solid var(--ember-24); border-radius: var(--r-sm);
+  padding: 11px var(--s-4); font-family: var(--font-mono); font-size: 12px; color: var(--ink); word-break: break-all;
+  display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
+.console-view .create-flow .once-warn { font-family: var(--font-sans); font-size: 12px; color: var(--ink-dim); line-height: 1.5;
+  display: flex; gap: 10px; align-items: flex-start; margin-top: var(--s-3); }
+.console-view .create-flow .once-warn b { color: var(--ember); font-weight: 600; }
+
+/* radios/checkboxes ride the lime accent, not the browser's blue, inside the create flow */
+.console-view .create-flow input[type="radio"],
+.console-view .create-flow input[type="checkbox"] { accent-color: var(--accent); width: auto; }
+
+/* the manual-escape divider in the funnel */
+.console-view .create-flow .funnel-escape { border-top: 1px solid var(--border); padding-top: var(--s-4); margin-top: var(--s-2); }

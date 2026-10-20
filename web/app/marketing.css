@@ -1,0 +1,763 @@
+/* File: web/app/marketing.css
+   ============================================================================
+   STAGE G-2.0 — THE MARKETING SURFACE, IMPORTED.
+
+   This file replaces `app/landing.css`. It is the port of TWO regions of the
+   owner-locked build, in this order:
+
+     1. `design-reference/tokens.css:171-500` — reset/base, shared primitives
+        (`.h-display`/`.btn`/`.chip`/`.glass`), the atmosphere layer, the leash
+        signature, and BOTH halves of the reduced-motion contract. G-1.1 lifted
+        only `:17-169` (the raw `:root` props) into `app/tokens.css` and its
+        header named this region as the deferred remainder. This is it.
+     2. `design-reference/marketing.html:14-271` — the MARKETING profile: glass
+        nav, hero, Loop-Link, leash band, marquee, section scaffolding, device,
+        bento, rail, metrics, closer, footer, and the 900px collapse.
+
+   THE ONE SYSTEMATIC TRANSFORM — SCOPE.  Every selector is prefixed with
+   `.leash-landing`. The reference is a standalone document; this app serves the
+   console off the same `globals.css`, which owns its own `.btn`, `.card`,
+   `.chip` and `.nav`. Unscoped, `tokens.css:171-500` would restyle every
+   console button and every verdict chip in the product. The prefix changes no
+   pixel on `/` and is the reason the import is safe to land at all.
+
+   Two consequences of that transform, both mechanical:
+     · `body` / `html` rules move onto `.leash-landing` (the landing root is the
+       page's own body here). `background` and the type stack come with them.
+     · The reference's hero STATE classes are `#hero.is-taut` / `#hero.is-snapped`.
+       Here the state lives on `.leash-landing` (React owns that className; see
+       `components/landing/LandingRoot.tsx`), so the selectors read
+       `.leash-landing.is-taut #hero`. Same specificity story, same cascade.
+
+   STATED DEVIATIONS (there are two, both forced, both named at their site):
+     · `.vrow .tx` accepts a non-anchor span — see `#proof` below.
+     · `.sim-note` is an ADDITION, carried forward from G-1.3.
+   Everything else is the artifact. Do not "improve" it.
+   ============================================================================ */
+
+/* self-hosted faces — the app ships Manrope/JetBrains via a Google CDN @import
+   but has no Clash Display face; the landing needs all three self-hosted. */
+@font-face {
+  font-family: 'Clash Display';
+  src: url('/fonts/clash-display-500.woff2') format('woff2');
+  font-weight: 500; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Clash Display';
+  src: url('/fonts/clash-display-600.woff2') format('woff2');
+  font-weight: 600; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Clash Display';
+  src: url('/fonts/clash-display-700.woff2') format('woff2');
+  font-weight: 700; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Manrope';
+  src: url('/fonts/manrope-latin-400-normal.woff2') format('woff2');
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Manrope';
+  src: url('/fonts/manrope-latin-500-normal.woff2') format('woff2');
+  font-weight: 500; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Manrope';
+  src: url('/fonts/manrope-latin-600-normal.woff2') format('woff2');
+  font-weight: 600; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'Manrope';
+  src: url('/fonts/manrope-latin-700-normal.woff2') format('woff2');
+  font-weight: 700; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/jetbrains-mono-latin-400-normal.woff2') format('woff2');
+  font-weight: 400; font-style: normal; font-display: swap;
+}
+@font-face {
+  font-family: 'JetBrains Mono';
+  src: url('/fonts/jetbrains-mono-latin-500-normal.woff2') format('woff2');
+  font-weight: 500; font-style: normal; font-display: swap;
+}
+
+/* ==== RESET / BASE (tokens.css:171-188) =================================== */
+.leash-landing, .leash-landing *, .leash-landing *::before, .leash-landing *::after { box-sizing: border-box; }
+.leash-landing {
+  /* `html`'s two properties, plus `body`'s, land here — this element IS the
+     document body for the marketing surface. */
+  -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; scroll-behavior: smooth;
+  margin: 0; background: var(--bg-base); color: var(--ink);
+  font-family: var(--font-sans); font-size: var(--t-body); line-height: 1.6;
+  letter-spacing: var(--tr-body);
+  /* marketing.html:16 — the atmosphere planes are fixed and oversized; without
+     this the glow-field pushes a horizontal scrollbar. */
+  position: relative; overflow-x: hidden; min-height: 100vh;
+}
+.leash-landing h1, .leash-landing h2, .leash-landing h3,
+.leash-landing p, .leash-landing ul, .leash-landing ol { margin: 0; }
+.leash-landing a { color: inherit; text-decoration: none; }
+.leash-landing ::selection { background: var(--accent-24); color: var(--ink); }
+
+/* mono-as-instrument (recipe 4): every numeric/eyebrow/readout/code */
+.leash-landing .mono, .leash-landing .eyebrow, .leash-landing .stat,
+.leash-landing .data, .leash-landing code, .leash-landing [data-numeric] {
+  font-family: var(--font-mono); font-variant-numeric: tabular-nums lining-nums;
+}
+.leash-landing .eyebrow {
+  font-size: var(--t-eyebrow); text-transform: uppercase;
+  letter-spacing: var(--tr-eyebrow); color: var(--accent-ink); font-weight: 500;
+}
+
+/* a11y furniture the static artifact has no need for and a routed app does.
+   `.skip-link` is the app's own (it targets `#main` in app/layout.tsx);
+   `.visually-hidden` carries the accessible name for sections whose visible
+   heading the design states as an eyebrow. Neither renders for a sighted
+   visitor, so neither is a visual deviation. */
+.leash-landing .skip-link {
+  position: absolute; left: -9999px; top: 0; z-index: 10;
+  background: var(--ink); color: var(--bg-base);
+  padding: 8px 16px; border-radius: var(--r-sm);
+}
+.leash-landing .skip-link:focus { left: var(--s-2); top: var(--s-2); }
+.leash-landing .visually-hidden {
+  position: absolute; width: 1px; height: 1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap;
+}
+
+/* ==== SHARED PRIMITIVES (tokens.css:190-262) ============================== */
+.leash-landing .h-display { font-family: var(--font-display); font-weight: 500;
+  font-size: var(--t-display); letter-spacing: var(--tr-display); line-height: 0.96; }
+.leash-landing .h1 { font-family: var(--font-display); font-weight: 500;
+  font-size: var(--t-h1); letter-spacing: var(--tr-h1); line-height: 1.05; }
+.leash-landing .h2 { font-family: var(--font-display); font-weight: 500;
+  font-size: var(--t-h2); letter-spacing: var(--tr-h2); line-height: 1.15; }
+.leash-landing .dim  { color: var(--ink-dim); }
+.leash-landing .faint{ color: var(--ink-faint); }
+/* two-tone headline: the loaded word RECESSES to grey */
+.leash-landing .recess { color: var(--ink-faint); }
+.leash-landing .amber  { color: var(--accent-ink); }
+
+/* buttons — full state layer (CORE-STATE-1) + shine + press */
+.leash-landing .btn {
+  font-family: var(--font-sans); font-size: var(--t-small); font-weight: 550;
+  padding: 11px 20px; border-radius: var(--r-md); border: 1px solid transparent;
+  cursor: pointer; position: relative; overflow: hidden;
+  transition: background var(--t-fast) var(--ease-out-cubic),
+    border-color var(--t-fast) var(--ease-out-cubic),
+    transform var(--t-fast) var(--ease-out-cubic),
+    box-shadow var(--t-base) var(--ease-out-cubic), color var(--t-fast);
+  display: inline-flex; align-items: center; gap: 8px; text-decoration: none;
+}
+.leash-landing .btn-primary { background: var(--accent); color: var(--on-accent); font-weight: 650; }
+.leash-landing .btn-primary:hover  { background: var(--accent-hi); box-shadow: var(--glow-accent); }
+.leash-landing .btn-primary:active { transform: translateY(1px); }
+.leash-landing .btn-ghost { background: transparent; color: var(--ink); border-color: var(--border-strong); }
+.leash-landing .btn-ghost:hover  { background: var(--hover-fill); border-color: var(--ink-24); }
+.leash-landing .btn-ghost:active { transform: translateY(1px); }
+.leash-landing .btn:disabled { opacity: .4; cursor: not-allowed; }
+.leash-landing .btn-danger { background: transparent; color: var(--deny); border-color: var(--deny-24); }
+.leash-landing .btn-danger:hover { background: var(--deny-14); }
+.leash-landing .btn .shine { position:absolute; inset:0; pointer-events:none;
+  background: linear-gradient(100deg, transparent 30%, var(--ink-24) 50%, transparent 70%);
+  transform: translateX(-160%); }
+
+/* the ONE keyboard-only focus ring — 2px, >=3:1 (CORE-STATE-1 / WCAG 2.2) */
+.leash-landing :focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 2px; border-radius: 4px; }
+.leash-landing :focus:not(:focus-visible) { outline: none; }
+
+/* verdict chips — color + shape encode meaning (recipe 16) */
+.leash-landing .chip { font-family: var(--font-mono); font-size: 11px; font-weight: 600;
+  letter-spacing: .04em; padding: 3px 9px; border-radius: var(--r-sm);
+  display: inline-flex; align-items: center; gap: 6px; text-transform: uppercase; white-space: nowrap; }
+.leash-landing .chip::before { content: ""; width: 6px; height: 6px; flex: none; }
+.leash-landing .chip-allow { color: var(--allow); background: var(--allow-14); border: 1px solid var(--allow-24); }
+.leash-landing .chip-allow::before { border-radius: var(--r-full); background: var(--allow); }     /* dot */
+.leash-landing .chip-deny  { color: var(--deny);  background: var(--deny-14);  border: 1px solid var(--deny-24); }
+.leash-landing .chip-deny::before  { background: var(--deny); }                                    /* square */
+.leash-landing .chip-pend  { color: var(--accent-ink); background: var(--accent-12); border: 1px solid var(--accent-24); }
+.leash-landing .chip-pend::before  { border-radius: var(--r-full); background: transparent; border: 1.5px solid var(--accent); } /* ring */
+
+/* glass surface primitive (nav / cards / device / modal) */
+.leash-landing .glass {
+  background: var(--glass-bg-strong);
+  backdrop-filter: blur(var(--glass-blur)) saturate(1.2);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.2);
+  border: var(--glass-edge);
+  box-shadow: var(--glass-hi);
+}
+/* layered glass depth — inner film grain so frosted panels read as real glass, not flat */
+.leash-landing .glass-grain { position: relative; }
+.leash-landing .glass-grain::before { content:""; position:absolute; inset:0; pointer-events:none; border-radius:inherit; z-index:0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
+  background-size: 120px 120px; opacity: .05; mix-blend-mode: overlay; }
+.leash-landing .glass-grain > * { position: relative; z-index: 1; }
+
+/* scroll-progress bar (wires the --scroll token).
+   PARITY NOTE, measured: the reference declares `--scroll: 0` in tokens.css and
+   its scroll handler never writes it, so the bar renders at scaleX(0) — i.e.
+   invisible — in the locked build. Wiring it here would ADD a visible element
+   the artifact does not show. The element ships; the token stays unset. */
+.leash-landing .scroll-progress { position: fixed; top: 0; left: 0; height: 2px; z-index: 40; pointer-events: none;
+  width: 100%; transform: scaleX(var(--scroll)); transform-origin: left;
+  background: linear-gradient(90deg, var(--accent), var(--accent-hi)); opacity: .8; }
+
+/* ==== ATMOSPHERE (tokens.css:264-298) ===================================== */
+/* film grain — feTurbulence baked into an inline SVG data-URI */
+.leash-landing .grain { position: fixed; inset: 0; z-index: 0; pointer-events: none; opacity: .16;
+  mix-blend-mode: overlay;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 160px 160px; }
+/* signature directional bloom — the leash-brand lime light source, top-right */
+.leash-landing .brand-bloom { position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background:
+    radial-gradient(1100px 620px at 88% -10%, var(--accent-16), transparent 58%),
+    radial-gradient(760px 520px at 6% 8%, var(--accent-08), transparent 60%);
+  mix-blend-mode: screen; }
+/* edge vignette — pulls focus to center, gives the flat canvas real depth */
+.leash-landing .vignette { position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background: radial-gradient(130% 100% at 50% 30%, transparent 52%, rgba(0,0,0,0.55) 100%); }
+/* blueprint grid — 3.5% paper (72px) */
+.leash-landing .bg-grid { position: fixed; inset: 0; z-index: 0; pointer-events: none;
+  background-image:
+    linear-gradient(var(--ink-04) 1px, transparent 1px),
+    linear-gradient(90deg, var(--ink-04) 1px, transparent 1px);
+  background-size: 72px 72px;
+  mask-image: linear-gradient(180deg, #000 0%, color-mix(in oklab,#000 55%,transparent) 55%, color-mix(in oklab,#000 35%,transparent) 100%);
+  -webkit-mask-image: linear-gradient(180deg, #000 0%, color-mix(in oklab,#000 55%,transparent) 55%, color-mix(in oklab,#000 35%,transparent) 100%); }
+/* drifting COLORED glow planes — 3 layers, different hue/speed, screen blend */
+.leash-landing .glow-field { position: fixed; inset: -20%; z-index: 0; pointer-events: none; overflow: hidden; }
+.leash-landing .glow-plane { position: absolute; border-radius: 50%; filter: blur(60px); mix-blend-mode: screen; will-change: transform, opacity; }
+.leash-landing .plane-amber { top: -14%; left: 46%; width: 60vw; height: 60vw; transform: translateX(-50%);
+  background: radial-gradient(closest-side, var(--accent-24) 0%, transparent 70%); }
+.leash-landing .plane-ember { top: 24%; left: 8%; width: 46vw; height: 46vw;
+  background: radial-gradient(closest-side, var(--ember-24) 0%, transparent 72%); }
+.leash-landing .plane-cool  { top: 52%; left: 78%; width: 42vw; height: 42vw; transform: translateX(-50%);
+  background: radial-gradient(closest-side, color-mix(in oklab, var(--allow) 14%, transparent) 0%, transparent 72%); }
+/* twinkling dot field — SVG dots injected by the controller; each gets a --d delay */
+.leash-landing .twinkle { position: fixed; inset: 0; z-index: 0; pointer-events: none; }
+.leash-landing .twinkle circle { fill: var(--ink); opacity: .16; }
+
+/* ==== SIGNATURE: THE LEASH LINE (tokens.css:300-313) ====================== */
+.leash-landing .leash-svg .leash-path {
+  fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round;
+  transition: d var(--t-slow) var(--ease-out-cubic), stroke var(--t-base) var(--ease-out-cubic); }
+.leash-landing .leash-svg .leash-clasp { fill: none; stroke: var(--accent); stroke-width: 2; }
+.leash-landing .leash-svg.taut  .leash-path { stroke: var(--accent-hi); }
+.leash-landing .leash-svg.cut   .leash-path { stroke: var(--deny); stroke-dasharray: 3 5; }
+/* gradient seam shimmer overlay path (rides the same d, animated dash) */
+.leash-landing .leash-svg .leash-shimmer { fill: none; stroke: url(#leashGrad); stroke-width: 2.4;
+  stroke-linecap: round; opacity: .9; }
+/* the signal pulse dot that rides the catenary via offset-path */
+.leash-landing .signal-pulse { fill: var(--allow); r: 4;
+  filter: drop-shadow(0 0 5px var(--allow)); }
+.leash-landing .signal-pulse.deny { fill: var(--deny); filter: drop-shadow(0 0 5px var(--deny)); }
+
+/* ==== MICRO-INTERACTION PRIMITIVES (tokens.css:315-318) =================== */
+.leash-landing .lift { transition: transform var(--t-base) var(--ease-out-cubic),
+  box-shadow var(--t-base) var(--ease-out-cubic), border-color var(--t-base); }
+.leash-landing .press:active { transform: translateY(1px); }
+
+/* ==== MOTION — all decorative motion behind no-preference (tokens.css:320-470) */
+@media (prefers-reduced-motion: no-preference) {
+  /* signature draw-in */
+  .leash-landing .leash-draw .leash-path, .leash-landing .leash-draw .leash-shimmer {
+    stroke-dasharray: 1600; stroke-dashoffset: 1600;
+    animation: leashDraw var(--t-draw) var(--ease-out-expo) forwards; }
+  @keyframes leashDraw { to { stroke-dashoffset: 0; } }
+  /* resting sway — the whole leash breathes vertically */
+  .leash-landing .leash-sway { animation: leashSway 7s var(--ease-in-out) infinite; transform-origin: center; }
+  @keyframes leashSway { 0%,100%{ transform: translateY(0) } 50%{ transform: translateY(4px) } }
+  /* seam shimmer sweep along the stroke */
+  .leash-landing .leash-shimmer.shimmer-run { stroke-dasharray: 90 1600; animation: seamShimmer 3.4s linear infinite; }
+  @keyframes seamShimmer { from { stroke-dashoffset: 1690; } to { stroke-dashoffset: 0; } }
+  /* signal pulse rides offset-path (path set inline per-svg by the controller) */
+  .leash-landing .signal-pulse.run { animation: signalRide 3.6s var(--ease-in-out) infinite; }
+  @keyframes signalRide {
+    0%   { offset-distance: 0%;   opacity: 0; }
+    8%   { opacity: 1; }
+    50%  { offset-distance: 100%; opacity: 1; }
+    58%  { opacity: 0; }
+    100% { offset-distance: 100%; opacity: 0; } }
+  /* DENY beat: pulse travels only to the gate then snaps back garnet */
+  .leash-landing .signal-pulse.deny.run { animation: signalDeny 3.6s var(--ease-in-out) infinite; }
+  @keyframes signalDeny {
+    0%   { offset-distance: 0%;  opacity: 0; }
+    8%   { opacity: 1; }
+    34%  { offset-distance: 12%; opacity: 1; }
+    40%  { offset-distance: 12%; opacity: 1; transform: scale(1.5); }
+    46%  { offset-distance: 0%;  opacity: 0; transform: scale(1); }
+    100% { offset-distance: 0%;  opacity: 0; } }
+
+  /* mask-swipe headline reveal (recipe 11) */
+  .leash-landing .reveal-swipe { opacity: 0;
+    mask: linear-gradient(to right, #000 25%, #000000e6 50%, #0000) 150% 0 / 400% no-repeat;
+    -webkit-mask: linear-gradient(to right, #000 25%, #000000e6 50%, #0000) 150% 0 / 400% no-repeat;
+    animation: maskReveal 1s var(--ease-out-expo) forwards; }
+  @keyframes maskReveal { to { opacity: 1; mask-position: 0 0; -webkit-mask-position: 0 0;
+      mask-size: 400%; -webkit-mask-size: 400%; } }
+
+  /* IO stagger reveal — fade + rise + deblur (recipe 10) */
+  .leash-landing .reveal-up { opacity: 0; transform: translateY(24px) scale(.985); filter: blur(5px); }
+  .leash-landing .reveal-up.in { animation: fadeUp .85s var(--ease-out-quart) both; }
+  @keyframes fadeUp { to { opacity: 1; transform: none; filter: blur(0); } }
+  /* translateY ladder — distance encodes proximity (data-rung 1..4) */
+  .leash-landing .reveal-up[data-rung="1"]{ transform: translateY(8px)  scale(.99); }
+  .leash-landing .reveal-up[data-rung="2"]{ transform: translateY(14px) scale(.988); }
+  .leash-landing .reveal-up[data-rung="3"]{ transform: translateY(20px) scale(.986); }
+  .leash-landing .reveal-up[data-rung="4"]{ transform: translateY(28px) scale(.984); }
+
+  /* drifting glow planes at different speeds (screen blend) */
+  .leash-landing .plane-amber { animation: driftA 15s var(--ease-in-out) infinite alternate; }
+  .leash-landing .plane-ember { animation: driftB 19s var(--ease-in-out) infinite alternate; }
+  .leash-landing .plane-cool  { animation: driftC 23s var(--ease-in-out) infinite alternate; }
+  @keyframes driftA { from{ transform: translateX(-50%) translate3d(-3%,-2%,0) scale(1);   opacity:.7 }
+                      to  { transform: translateX(-50%) translate3d(4%,3%,0)   scale(1.14); opacity:.95 } }
+  @keyframes driftB { from{ transform: translate3d(0,0,0) scale(1);      opacity:.5 }
+                      to  { transform: translate3d(8%,-4%,0) scale(1.2);  opacity:.8 } }
+  @keyframes driftC { from{ transform: translateX(-50%) translate3d(0,0,0) scale(1);     opacity:.4 }
+                      to  { transform: translateX(-50%) translate3d(-6%,4%,0) scale(1.16);opacity:.7 } }
+
+  /* twinkling dots — discrete steps, per-dot delay via --d */
+  .leash-landing .twinkle circle { animation: twinkle 3.4s steps(1) infinite; animation-delay: var(--d, 0s); }
+  @keyframes twinkle { 0%,100%{ opacity:.14 } 20%{ opacity:.7 } 40%{ opacity:.2 } 60%{ opacity:.55 } 80%{ opacity:.12 } }
+
+  /* live status pulse (single dot) + expanding ping ring */
+  .leash-landing .live-dot { animation: livePulse 2s var(--ease-in-out) infinite; }
+  @keyframes livePulse { 0%,100%{ opacity:1; transform:scale(1);} 50%{opacity:.35; transform:scale(.7);} }
+  .leash-landing .ping-ring::after { content:""; position:absolute; inset:0; border-radius:var(--r-full);
+    box-shadow: 0 0 0 0 var(--accent-40); animation: pingRing 2.4s var(--ease-out-cubic) infinite; }
+  @keyframes pingRing { 0%{ box-shadow:0 0 0 0 var(--accent-40) } 70%,100%{ box-shadow:0 0 0 9px transparent } }
+
+  /* verdict flash — new row only, jade/garnet bg-fade (recipe 13) */
+  .leash-landing .flash-allow { animation: flashAllow 1.5s var(--ease-out-cubic); }
+  .leash-landing .flash-deny  { animation: flashDeny  1.5s var(--ease-out-cubic); }
+  @keyframes flashAllow { from { background: var(--allow-14);} to { background: transparent;} }
+  @keyframes flashDeny  { from { background: var(--deny-14); } to { background: transparent;} }
+
+  /* card lift + glow on hover */
+  .leash-landing .lift:hover { transform: translateY(-5px); box-shadow: 0 22px 60px -30px var(--accent-40); border-color: var(--accent-24); }
+  /* button shine sweep on hover */
+  .leash-landing .btn:hover .shine { transform: translateX(160%); transition: transform .7s var(--ease-out-quart); }
+  /* nav sibling-dim: hovering the group fades non-hovered links */
+  .leash-landing .navlinks:hover a:not(:hover) { opacity: .45; }
+
+  /* device-frame reveal */
+  .leash-landing .device-reveal { opacity: 0; transform: perspective(1400px) rotateX(9deg) translateY(40px) scale(.96); }
+  .leash-landing .device-reveal.in { animation: deviceIn 1.1s var(--ease-out-quart) both; }
+  @keyframes deviceIn { to { opacity:1; transform: perspective(1400px) rotateX(0) translateY(0) scale(1); } }
+
+  /* closing beat: leash SEVERS on scroll — recoil + spark */
+  .leash-landing .sever-recoil.cut .recoil-l { animation: recoilL .5s var(--ease-spring) both; }
+  .leash-landing .sever-recoil.cut .recoil-r { animation: recoilR .5s var(--ease-spring) both; }
+  @keyframes recoilL { 0%{ transform: translateX(0) } 100%{ transform: translateX(-14px) } }
+  @keyframes recoilR { 0%{ transform: translateX(0) } 100%{ transform: translateX(14px) } }
+  .leash-landing .sever-spark { opacity: 0; }
+  .leash-landing .sever-recoil.cut .sever-spark { animation: spark .6s var(--ease-out-expo) both; }
+  @keyframes spark { 0%{ opacity:0; transform:scale(.4) } 40%{ opacity:1; transform:scale(1.3) } 100%{ opacity:0; transform:scale(2) } }
+
+  /* number-flow rolling digit (JS-driven; this just eases the transform) */
+  .leash-landing .nflow .col { transition: transform .9s var(--ease-out-quart); }
+
+  /* console skeleton shimmer */
+  .leash-landing .skel { background: linear-gradient(100deg, var(--surface-2) 30%, var(--surface-3) 50%, var(--surface-2) 70%);
+    background-size: 220% 100%; animation: skel 1.3s linear infinite; }
+  @keyframes skel { from { background-position: 120% 0 } to { background-position: -120% 0 } }
+
+  /* ---- RICHNESS LAYER 2 (density push) ---- */
+
+  /* the accent word breathes a warm glow */
+  .leash-landing .glow-word { animation: glowWord 3.6s var(--ease-in-out) infinite; }
+  @keyframes glowWord {
+    0%,100%{ text-shadow: 0 0 20px var(--accent-24); }
+    50%    { text-shadow: 0 0 40px var(--accent-40), 0 0 12px var(--accent-24); } }
+
+  /* a continuous diagonal sheen sweeps the whole display headline */
+  .leash-landing .sheen { position: relative; }
+  .leash-landing .sheen::after { content:""; position:absolute; inset:0; pointer-events:none;
+    background: linear-gradient(105deg, transparent 42%, var(--ink-16) 50%, transparent 58%);
+    background-size: 260% 100%; mix-blend-mode: screen;
+    animation: sheenSweep 6.5s var(--ease-in-out) infinite; }
+  @keyframes sheenSweep { 0%{ background-position: 180% 0 } 55%,100%{ background-position: -80% 0 } }
+
+  /* ambient amber motes rising through the hero */
+  .leash-landing .mote { position:absolute; bottom:0; width:3px; height:3px; border-radius:50%;
+    background: var(--accent); filter: blur(.5px); opacity:0; will-change: transform, opacity;
+    animation: moteRise var(--mdur, 15s) linear infinite; animation-delay: var(--d,0s); }
+  @keyframes moteRise {
+    0%  { transform: translateY(30px) scale(.5); opacity:0; }
+    12% { opacity:.55; }
+    88% { opacity:.4; }
+    100%{ transform: translateY(-320px) scale(1); opacity:0; } }
+
+  /* infinite marquee (duplicated track) */
+  .leash-landing .marquee-track { animation: marqueeX 34s linear infinite; }
+  @keyframes marqueeX { from{ transform: translateX(0) } to{ transform: translateX(-50%) } }
+
+  /* second signal pulse family — staggered via class */
+  .leash-landing .signal-pulse.run.d1 { animation-delay: 1.2s; }
+  .leash-landing .signal-pulse.run.d2 { animation-delay: 2.4s; }
+  .leash-landing .signal-pulse.run.d3 { animation-delay: 3.0s; }
+
+  /* verdict-pop label at the gate when a pulse settles */
+  .leash-landing .gate-pop { animation: gatePop 3.6s var(--ease-in-out) infinite; opacity: 0; }
+  @keyframes gatePop { 0%,44%{ opacity:0; transform: translateY(0) scale(.8) }
+    50%{ opacity:1; transform: translateY(-2px) scale(1) } 66%,100%{ opacity:0; transform: translateY(-6px) scale(.9) } }
+
+  /* magnetic CTA — JS sets the transform; transition eases the return */
+  .leash-landing .magnetic { transition: transform var(--t-base) var(--ease-spring-soft); }
+
+  /* device mouse-parallax tilt — JS sets the transform */
+  .leash-landing .tilt { transition: transform var(--t-slow) var(--ease-out-quart); }
+}
+
+/* ==== REDUCED-MOTION (HARD parity CORE-MOTION-1 — two-sided, tokens.css:472-500) */
+@media (prefers-reduced-motion: reduce) {
+  .leash-landing .leash-draw .leash-path, .leash-landing .leash-draw .leash-shimmer { stroke-dashoffset: 0 !important; animation: none !important; }
+  .leash-landing .leash-sway { animation: none !important; }
+  .leash-landing .leash-shimmer.shimmer-run { animation: none !important; stroke-dasharray: none !important; opacity: .5 !important; }
+  .leash-landing .signal-pulse, .leash-landing .signal-pulse.run, .leash-landing .signal-pulse.deny.run { animation: none !important; opacity: 0 !important; }
+  .leash-landing .reveal-swipe { opacity: 1 !important; mask: none !important; -webkit-mask: none !important; animation: none !important; }
+  .leash-landing .reveal-up, .leash-landing .reveal-up.in { opacity: 1 !important; transform: none !important; filter: none !important; animation: none !important; }
+  .leash-landing .glow-plane { animation: none !important; }        /* hold, don't drift */
+  .leash-landing .twinkle circle { animation: none !important; opacity: .16 !important; }
+  .leash-landing .live-dot   { animation: none !important; opacity: 1 !important; }
+  .leash-landing .ping-ring::after { animation: none !important; box-shadow: none !important; }
+  .leash-landing .flash-allow, .leash-landing .flash-deny { animation: none !important; }
+  .leash-landing .lift:hover { transform: none !important; }
+  .leash-landing .btn:hover .shine { transform: translateX(-160%) !important; }
+  .leash-landing .navlinks:hover a:not(:hover) { opacity: 1 !important; }
+  .leash-landing .device-reveal, .leash-landing .device-reveal.in { opacity: 1 !important; transform: none !important; animation: none !important; }
+  .leash-landing .sever-recoil.cut .recoil-l, .leash-landing .sever-recoil.cut .recoil-r, .leash-landing .sever-recoil.cut .sever-spark { animation: none !important; }
+  .leash-landing .nflow .col { transition: none !important; }
+  .leash-landing .skel { animation: none !important; }
+  .leash-landing .glow-word { animation: none !important; text-shadow: none !important; }
+  .leash-landing .sheen::after { animation: none !important; content: none !important; }
+  .leash-landing .mote { animation: none !important; opacity: 0 !important; }
+  .leash-landing .marquee-track { animation: none !important; }
+  .leash-landing .gate-pop { animation: none !important; opacity: 0 !important; }
+  .leash-landing .magnetic, .leash-landing .tilt { transform: none !important; }
+  .leash-landing, .leash-landing *, .leash-landing *::before, .leash-landing *::after {
+    animation-duration: .01ms !important; animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important; scroll-behavior: auto !important; }
+}
+
+/* ===== MARKETING SURFACE (PROFILE = MARKETING) — marketing.html:14-271 ===== */
+.leash-landing .wrap { max-width: 1200px; margin: 0 auto; padding: 0 var(--s-5); }
+.leash-landing main, .leash-landing nav { position: relative; z-index: 1; }
+
+/* --- glass nav --- */
+.leash-landing nav { position: sticky; top: 0; z-index: 30; height: 66px; display: flex; align-items: center;
+  border-bottom: 1px solid var(--border);
+  background: var(--glass-bg); backdrop-filter: blur(var(--glass-blur)) saturate(1.3);
+  -webkit-backdrop-filter: blur(var(--glass-blur)) saturate(1.3); box-shadow: var(--glass-hi);
+  transition: background var(--t-base) var(--ease-out-cubic), height var(--t-base); }
+.leash-landing nav.scrolled { background: color-mix(in oklab, var(--bg-base) 88%, transparent); height: 58px; }
+.leash-landing nav .wrap { display: flex; align-items: center; justify-content: space-between; width: 100%; }
+.leash-landing .brand { display: flex; align-items: center; gap: 10px; font-family: var(--font-display);
+  font-weight: 600; font-size: 18px; letter-spacing: -0.01em; }
+.leash-landing .brand svg { overflow: visible; }
+.leash-landing .navlinks { display: flex; gap: var(--s-6); }
+.leash-landing .navlinks a { color: var(--ink-dim); text-decoration: none; font-size: var(--t-small);
+  position: relative; transition: color var(--t-fast), opacity var(--t-base); }
+.leash-landing .navlinks a::after { content:""; position:absolute; left:0; bottom:-6px; height:1px; width:100%;
+  background: var(--accent); transform: scaleX(0); transform-origin: left;
+  transition: transform var(--t-base) var(--ease-out-cubic); }
+.leash-landing .navlinks a:hover { color: var(--ink); }
+.leash-landing .navlinks a:hover::after { transform: scaleX(1); }
+.leash-landing .nav-right { display:flex; align-items:center; gap:14px; }
+.leash-landing .theme-toggle { display:grid; place-items:center; width:34px; height:34px; border-radius:var(--r-full);
+  border:1px solid var(--border-strong); background:var(--glass-bg-strong); color:var(--ink-dim); cursor:pointer;
+  transition: border-color var(--t-fast), color var(--t-fast), background var(--t-fast); }
+.leash-landing .theme-toggle:hover { border-color:var(--ink-24); color:var(--ink); }
+.leash-landing .theme-toggle svg { width:16px; height:16px; }
+/* The glyph is chosen by CSS, not by React state: both ship in the DOM and the
+   anti-FOUC script in app/layout.tsx sets `data-theme` before React runs, so a
+   state-driven icon would flash the wrong one. See ThemeToggle.tsx. */
+.leash-landing .theme-icon-sun { display: none; }
+:root[data-theme='light'] .leash-landing .theme-icon-sun { display: block; }
+:root[data-theme='light'] .leash-landing .theme-icon-moon { display: none; }
+
+/* --- hero --- */
+.leash-landing .hero { padding: var(--s-9) 0 var(--s-6); text-align: center; position: relative; }
+.leash-landing .motes { position: absolute; inset: 0; pointer-events: none; overflow: hidden; z-index: 0; }
+.leash-landing .hero > * { position: relative; z-index: 1; }
+.leash-landing .hero-eyebrow { display: inline-flex; align-items: center; gap: 8px; margin-bottom: var(--s-6);
+  padding: 5px 12px 5px 10px; border-radius: var(--r-full); border: 1px solid var(--border-strong);
+  background: var(--glass-bg-strong); backdrop-filter: blur(10px); }
+.leash-landing .hero-eyebrow .dot { position: relative; width: 7px; height: 7px; border-radius: var(--r-full);
+  background: var(--allow); display: inline-block; }
+.leash-landing .hero h1 { margin: 0 auto; max-width: 15ch; }
+.leash-landing .hero h1 .line { display: block; }
+.leash-landing .hero p.sub { max-width: 54ch; margin: var(--s-6) auto var(--s-6); color: var(--ink-dim);
+  font-size: 1.18rem; line-height: 1.55; }
+.leash-landing .hero .cta { display: flex; gap: var(--s-3); justify-content: center; }
+
+/* ADDITION, not in the artifact — carried forward from G-1.3 under scope §0(a).
+   The reference is a static page; this hero ships above a real product, and the
+   note is what stops a visitor reading a scripted beat as live fleet data. The
+   force is truthfulness, not taste. */
+.leash-landing .sim-note { margin-top: var(--s-4); color: var(--ink-faint); font-size: var(--t-small); }
+
+/* --- Loop-Link: the forged hero object (draw -> alive -> taut -> snap -> re-arm) --- */
+.leash-landing .object-stage { display: flex; justify-content: center; margin: 0 0 var(--s-2); perspective: 900px; position: relative; }
+.leash-landing .looplink { width: min(72vw, 440px); height: auto; overflow: visible;
+  stroke: var(--accent); stroke-width: 3.5; stroke-linecap: round;
+  filter: drop-shadow(0 0 20px var(--accent-24)) drop-shadow(0 0 3px var(--accent-16));
+  transform: rotateX(var(--rx,0deg)) rotateY(var(--ry,0deg));
+  transition: transform var(--t-slow) var(--ease-out-quart); will-change: transform; }
+.leash-landing .looplink .ll-link  { transition: stroke var(--t-base) var(--ease-out-cubic); }
+.leash-landing .looplink .ll-tether{ transition: d var(--t-slow) var(--ease-spring); }
+.leash-landing .looplink .ll-spark { fill: var(--accent-hi); opacity: 0; transform-box: fill-box; transform-origin: center; }
+/* interactive beat control — the caption IS the button that plays the refusal */
+.leash-landing .ll-beat { display: inline-flex; align-items: center; gap: 9px; margin: 0 auto var(--s-6);
+  font-size: 11px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-dim);
+  background: var(--glass-bg-strong); backdrop-filter: blur(10px);
+  border: 1px solid var(--border-strong); border-radius: var(--r-full); padding: 8px 16px 8px 12px;
+  cursor: pointer; transition: color var(--t-base), border-color var(--t-base), background var(--t-base), box-shadow var(--t-base); }
+.leash-landing .ll-beat:hover { color: var(--ink); border-color: var(--accent-24); box-shadow: 0 0 0 3px var(--accent-08); }
+.leash-landing .ll-beat .ll-dot { width: 6px; height: 6px; border-radius: var(--r-full); background: var(--accent);
+  box-shadow: 0 0 8px var(--accent); transition: background var(--t-base), box-shadow var(--t-base); }
+.leash-landing .ll-beat .ll-play { font-size: 8px; color: var(--accent-ink); transition: color var(--t-base); margin-right: -2px; }
+/* SCOPE TRANSFORM: the artifact keys these off `#hero.is-taut`; React owns the
+   root className here, so the state sits on `.leash-landing` and the hero is the
+   descendant. Identical cascade, identical result. */
+.leash-landing.is-taut    #hero .ll-beat { color: var(--deny); border-color: var(--deny-24); }
+.leash-landing.is-taut    #hero .ll-beat .ll-dot { background: var(--deny); box-shadow: 0 0 8px var(--deny); }
+.leash-landing.is-taut    #hero .ll-beat .ll-play,
+.leash-landing.is-snapped #hero .ll-beat .ll-play { color: currentColor; }
+.leash-landing.is-snapped #hero .ll-beat { color: var(--allow); border-color: var(--allow-24); }
+.leash-landing.is-snapped #hero .ll-beat .ll-dot { background: var(--allow); box-shadow: 0 0 8px var(--allow); }
+/* refusal tint: on "refused" the tether snaps straight AND flushes coral for the beat */
+.leash-landing.is-taut #hero .ll-tether { stroke: var(--deny); }
+.leash-landing.is-taut #hero .looplink { filter: drop-shadow(0 0 20px var(--deny-24)) drop-shadow(0 0 3px var(--deny-14)); }
+/* verdict-pop label above the object */
+.leash-landing .ll-verdict { position: absolute; top: 8px; left: 50%; transform: translateX(-50%) translateY(6px);
+  font-size: 10px; letter-spacing: .18em; text-transform: uppercase; font-weight: 600;
+  padding: 4px 10px; border-radius: var(--r-full); opacity: 0; pointer-events: none;
+  transition: opacity var(--t-base), transform var(--t-base); white-space: nowrap; }
+.leash-landing .ll-verdict.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.leash-landing .ll-verdict.refused { color: var(--deny); background: var(--deny-14); border: 1px solid var(--deny-24); }
+.leash-landing .ll-verdict.revoked { color: var(--allow); background: var(--allow-14); border: 1px solid var(--allow-24); }
+@media (prefers-reduced-motion: no-preference) {
+  .leash-landing.will-draw #hero .ll-loop  { stroke-dasharray: 70; stroke-dashoffset: 70; }
+  .leash-landing.will-draw #hero .ll-tether{ stroke-dasharray: 60; stroke-dashoffset: 60; }
+  .leash-landing.will-draw #hero .ll-link  { stroke-dasharray: 62; stroke-dashoffset: 62; }
+  .leash-landing.is-drawing #hero .ll-loop  { animation: llDraw .50s ease-out forwards; }
+  .leash-landing.is-drawing #hero .ll-tether{ animation: llDraw .60s ease-out .45s forwards; }
+  .leash-landing.is-drawing #hero .ll-link1 { animation: llDraw .36s ease-out 1.00s forwards; }
+  .leash-landing.is-drawing #hero .ll-link2 { animation: llDraw .36s ease-out 1.25s forwards; }
+  .leash-landing.is-alive  #hero .ll-sway   { animation: llSway 4.6s var(--ease-in-out) infinite; transform-origin: 28px 24px; }
+  .leash-landing.is-taut   #hero .ll-sway   { animation: none; }
+  .leash-landing.is-taut   #hero .ll-tether { d: path('M28 24 C 42 24, 50 24, 60 24 S 70 24, 77 24'); }
+  .leash-landing.is-snapped #hero .ll-sway  { animation: none; }
+  .leash-landing.is-snapped #hero .ll-tether{ stroke-dasharray: 20 14 60; d: path('M28 26 C 40 30, 48 31, 56 27 S 70 25, 77 24'); }
+  .leash-landing.is-snapped #hero .ll-link  { stroke: var(--allow); }
+  .leash-landing.is-snapped #hero .ll-spark { animation: llSpark .6s var(--ease-out-expo) both; }
+}
+@keyframes llDraw  { to { stroke-dashoffset: 0; } }
+@keyframes llSway  { 0%,100% { transform: rotate(0); } 50% { transform: rotate(2.4deg); } }
+@keyframes llSpark { 0% { opacity:0; transform: scale(.4); } 40% { opacity:1; transform: scale(1.5); } 100% { opacity:0; transform: scale(2.3); } }
+@media (prefers-reduced-motion: reduce) {
+  .leash-landing .looplink .ll-tether { d: path('M28 24 C 42 24, 46 14, 57 19 S 70 29, 77 24'); }
+  .leash-landing .ll-spark { opacity: 0 !important; }
+}
+
+/* --- the LIVING leash band --- */
+.leash-landing .leash-band { margin: var(--s-7) 0 0; position: relative; }
+.leash-landing .leash-band svg.band { width: 100%; height: 160px; display: block; overflow: visible; }
+.leash-landing .leash-label { display: flex; justify-content: space-between; max-width: 1200px; margin: 8px auto 0;
+  padding: 0 var(--s-5); font-family: var(--font-mono); font-size: 11px; color: var(--ink-faint); }
+.leash-landing .leash-label b { color: var(--ink-dim); font-weight: 500; }
+
+/* --- integration marquee --- */
+.leash-landing .marquee { overflow: hidden; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+  padding: var(--s-4) 0; margin-top: var(--s-8); -webkit-mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 12%, #000 88%, transparent); }
+.leash-landing .marquee-track { display: flex; gap: var(--s-8); width: max-content; align-items: center; }
+.leash-landing .marquee-track span { font-family: var(--font-mono); font-size: 13px; color: var(--ink-faint);
+  letter-spacing: .06em; display: inline-flex; align-items: center; gap: var(--s-8); white-space: nowrap; }
+.leash-landing .marquee-track b { color: var(--ink-dim); font-weight: 500; }
+.leash-landing .marquee-track .sep { width: 5px; height: 5px; transform: rotate(45deg); background: var(--accent-40); }
+
+/* --- section scaffolding --- */
+.leash-landing section { padding: var(--s-8) 0; position: relative; }
+.leash-landing .sec-head { margin-bottom: var(--s-7); }
+.leash-landing .sec-head.center { text-align: center; }
+.leash-landing .sec-head .eyebrow { display:block; margin-bottom: var(--s-3); }
+.leash-landing .sec-head h2 { margin: 0; max-width: 22ch; }
+.leash-landing .sec-head.center h2 { margin: 0 auto; }
+.leash-landing .sec-head .lede { color: var(--ink-dim); max-width: 54ch; margin-top: var(--s-4); }
+.leash-landing .sec-head.center .lede { margin-left: auto; margin-right: auto; }
+
+/* --- `problem`: the ONE live-only section kept, re-dressed (ruling D2) ---
+   Stakes before demo. The copy is the live page's; the dress is the reference's
+   own `.sec-head` + `.hcard` vocabulary, so it carries no private styling of its
+   own beyond the thesis line. `.thesis` is `.h2`-weight ink on purpose: the
+   pre-G-2.0 build lost it to a generic `p` rule and it rendered grey — that was
+   the known G-1.4 specificity debt, and the re-dress is what closes it. */
+.leash-landing .problem-body { display: grid; gap: var(--s-4); max-width: 60ch; }
+.leash-landing .problem-body p { color: var(--ink-dim); margin: 0; }
+.leash-landing .problem-body p.thesis { font-family: var(--font-display); font-weight: 500;
+  font-size: var(--t-h2); letter-spacing: var(--tr-h2); line-height: 1.15; color: var(--ink); }
+
+/* --- product-demonstrates-itself: glass device --- */
+.leash-landing .demo { display: grid; grid-template-columns: 0.85fr 1.15fr; gap: var(--s-8); align-items: center; }
+.leash-landing .demo .copy h2 { max-width: 14ch; }
+.leash-landing .demo .copy p { color: var(--ink-dim); margin: var(--s-4) 0 var(--s-5); max-width: 46ch; }
+.leash-landing .demo .copy ul { list-style: none; padding: 0; margin: 0; display: grid; gap: var(--s-3); }
+.leash-landing .demo .copy li { display: flex; gap: 10px; align-items: flex-start; font-size: var(--t-small); color: var(--ink-dim); }
+.leash-landing .demo .copy li .mk { width: 7px; height: 7px; transform: rotate(45deg); background: var(--accent); margin-top: 6px; flex: none; }
+.leash-landing .demo .copy li b { color: var(--ink); font-weight: 550; }
+
+.leash-landing .device-wrap { perspective: 1400px; }
+.leash-landing .device { position: relative; border-radius: var(--r-2xl); padding: 12px;
+  background: linear-gradient(160deg, var(--surface-2), var(--surface-1));
+  border: 1px solid var(--ink-12);
+  box-shadow: 0 40px 120px -40px var(--accent-40), var(--glass-hi);
+  transform-style: preserve-3d; }
+.leash-landing .device::before { content:""; position:absolute; inset:-2px; border-radius: calc(var(--r-2xl) + 2px);
+  background: radial-gradient(60% 40% at 50% 0%, var(--accent-24), transparent 70%); z-index:-1; filter: blur(24px); }
+.leash-landing .device .screen { border-radius: var(--r-xl); overflow: hidden; background: var(--bg-base);
+  border: 1px solid var(--border); }
+.leash-landing .mc-top { display:flex; align-items:center; justify-content:space-between; padding: 10px 14px;
+  border-bottom: 1px solid var(--border); background: var(--glass-bg-strong); backdrop-filter: blur(8px); }
+.leash-landing .mc-top .t { font-family: var(--font-display); font-weight:500; font-size: 13px; }
+.leash-landing .mc-live { display:flex; align-items:center; gap:6px; font-family: var(--font-mono); font-size:10px; color: var(--allow); letter-spacing:.08em; }
+.leash-landing .mc-live .live-dot { width:6px; height:6px; border-radius:var(--r-full); background: var(--allow); }
+.leash-landing .mc-body { display: grid; grid-template-columns: 54px 1fr; }
+.leash-landing .mc-rail { border-right: 1px solid var(--border); padding: 12px 8px; display:flex; flex-direction:column; gap: 10px; align-items:center; }
+.leash-landing .mc-rail .ic { width: 30px; height:30px; border-radius: var(--r-sm); display:grid; place-items:center; color: var(--ink-faint); }
+.leash-landing .mc-rail .ic.on { background: var(--accent-12); color: var(--ink); box-shadow: inset 2px 0 0 var(--accent); }
+.leash-landing .mc-rail .ic svg { width:15px; height:15px; }
+.leash-landing .mc-main { padding: 14px; }
+.leash-landing .mc-card { border: 1px solid var(--border); border-radius: var(--r-md); padding: 12px; background: var(--surface-1); }
+.leash-landing .mc-card .r1 { display:flex; align-items:center; justify-content:space-between; }
+.leash-landing .mc-card .nm { font-family: var(--font-display); font-weight:500; font-size:13px; }
+.leash-landing .mc-card .ad { font-family: var(--font-mono); font-size:9.5px; color: var(--ink-faint); margin-top:1px; }
+.leash-landing .mc-meter svg { width:100%; height: 40px; display:block; margin: 10px 0 4px; overflow: visible; }
+.leash-landing .mc-meter .cap { display:flex; justify-content:space-between; font-family: var(--font-mono); font-size:10px; color: var(--ink-dim); }
+.leash-landing .mc-meter .cap b { color: var(--ink); font-weight:500; }
+/* live reasoning line — the agent thinks out loud before it decides */
+.leash-landing .mc-think { margin-top: 12px; display:flex; align-items:baseline; gap:6px; min-height: 15px;
+  font-family: var(--font-sans); font-size: 11px; line-height: 1.35; color: var(--ink-faint); }
+.leash-landing .mc-think .tk { color: var(--accent-ink); font-size: 9px; transform: translateY(-1px); }
+.leash-landing .mc-think b { font-family: var(--font-mono); font-weight: 600; font-size: 10px; color: var(--ink-dim); }
+.leash-landing .mc-think.think-pulse { animation: mcThink .5s var(--ease-out-cubic); }
+@media (prefers-reduced-motion: no-preference){ @keyframes mcThink { from{ opacity:.35; } to{ opacity:1; } } }
+.leash-landing .mc-stream { margin-top: 8px; display: grid; gap: 1px; background: var(--border); border-radius: var(--r-sm); overflow:hidden; border:1px solid var(--border); }
+.leash-landing .mc-row { display:grid; grid-template-columns: 52px 1fr auto; gap: 8px; align-items:center;
+  padding: 7px 10px; background: var(--surface-1); font-family: var(--font-mono); font-size: 10.5px; }
+.leash-landing .mc-row .py { color: var(--ink-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.leash-landing .mc-row .am { color: var(--ink); text-align:right; }
+
+/* --- how it holds: asymmetric bento --- */
+.leash-landing .bento { display: grid; grid-template-columns: repeat(6, 1fr); gap: var(--s-4); }
+.leash-landing .hcard { position: relative; background: var(--glass-bg-strong); backdrop-filter: blur(10px);
+  border: 1px solid var(--border); border-radius: var(--r-lg); padding: var(--s-6); overflow: hidden;
+  box-shadow: var(--glass-hi); }
+.leash-landing .hcard::before { content:""; position:absolute; inset:0; pointer-events:none; border-radius:inherit; z-index:0;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='g'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23g)'/%3E%3C/svg%3E");
+  background-size: 120px 120px; opacity:.045; mix-blend-mode:overlay; }
+.leash-landing .hcard > * { position: relative; z-index: 1; }
+.leash-landing .hcard .idx { font-family: var(--font-display); font-weight: 700; font-size: clamp(3rem, 6vw, 5rem);
+  line-height: 1; color: var(--ink-08); position: absolute; top: 8px; right: 18px; pointer-events: none; }
+.leash-landing .hcard .step { font-family: var(--font-mono); font-size: 11px; color: var(--accent-ink); letter-spacing: .12em; }
+.leash-landing .hcard h3 { font-family: var(--font-display); font-weight: 500; font-size: 1.35rem;
+  letter-spacing: -0.01em; margin: var(--s-3) 0 var(--s-2); max-width: 16ch; }
+.leash-landing .hcard p { color: var(--ink-dim); font-size: var(--t-small); margin: 0; max-width: 34ch; }
+.leash-landing .hcard .mini { margin-top: var(--s-5); }
+.leash-landing .hcard .mini svg { width: 100%; height: 46px; display:block; overflow: visible; }
+.leash-landing .hcard.wide { grid-column: span 4; }
+.leash-landing .hcard.tall { grid-column: span 2; }
+.leash-landing .hcard.half { grid-column: span 3; }
+.leash-landing .hcard.third { grid-column: span 2; }
+.leash-landing .hcard .code { font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim);
+  background: var(--bg-base); border: 1px solid var(--border); border-radius: var(--r-sm);
+  padding: 8px 10px; margin-top: var(--s-4); display: inline-block; }
+.leash-landing .hcard .code b { color: var(--accent-ink); font-weight: 600; }
+/* R-1 (binding debt) — the two relocated outcome cards state a VERDICT rather
+   than a step, so the eyebrow carries the verdict's own colour. Everything else
+   is the stock `.hcard`; no new geometry was invented for them. */
+.leash-landing .hcard .step.verdict-deny  { color: var(--deny); }
+.leash-landing .hcard .step.verdict-allow { color: var(--allow); }
+
+/* --- live rail section --- */
+.leash-landing .rail-top { display:flex; align-items:baseline; justify-content:space-between; margin-bottom: var(--s-4); flex-wrap:wrap; gap: var(--s-3); }
+.leash-landing .rail-top .settled { font-family: var(--font-mono); font-size: 13px; color: var(--ink-dim); }
+.leash-landing .rail-top .settled b { color: var(--accent-ink); font-size: 1.3rem; }
+.leash-landing .rail-top .section-title { font-family: var(--font-mono); font-size: 11px; letter-spacing: .14em;
+  text-transform: uppercase; color: var(--ink-faint); }
+.leash-landing .rail-panel { background: var(--glass-bg-strong); backdrop-filter: blur(12px);
+  border: 1px solid var(--border); border-radius: var(--r-lg); overflow: hidden; box-shadow: var(--glass-hi); }
+.leash-landing .rail-head, .leash-landing .vrow { display: grid; grid-template-columns: 96px 1fr 132px 108px 84px; align-items: center;
+  gap: var(--s-4); padding: 13px var(--s-5); font-family: var(--font-mono); font-size: var(--t-data); }
+.leash-landing .rail-head { color: var(--ink-faint); font-size: 10px; text-transform: uppercase; letter-spacing: .14em;
+  border-bottom: 1px solid var(--border); }
+.leash-landing .vrow { border-top: 1px solid var(--border); transition: background var(--t-fast); }
+.leash-landing .vrow:hover { background: var(--hover-fill); }
+.leash-landing .vrow .who { color: var(--ink); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.leash-landing .vrow .who small { color: var(--ink-faint); }
+.leash-landing .vrow .amt { text-align: right; color: var(--ink); }
+/* STATED DEVIATION (forced): the artifact renders the tx cell as `<a href="#">`
+   with an "View transaction 0x51a2…" label. The landing is unauthenticated and
+   the backend is owner-scoped (lib/api.ts takes a TokenGetter), so there is no
+   public verdict feed to resolve those hashes against — the stream is scripted.
+   A dead `#` anchor announcing itself as a transaction receipt is both a false
+   claim and a control that goes nowhere, so the cell ships as a span. The
+   selector drops `a` so the accent colour is unchanged; the hover underline is
+   the only lost affordance, and it belonged to a link that did not exist. */
+.leash-landing .vrow .tx { color: var(--accent-ink); text-decoration: none; }
+.leash-landing .vrow a.tx:hover { text-decoration: underline; }
+
+/* proof note (ADDITION, G-2.0): the artifact's #proof makes a truth-claim ("the
+   on-chain receipt") but ships no real anchor. The simulated stream stays; this line
+   wires the REAL Sourcify-verified contracts under it, in the artifact's own mono/faint
+   idiom. No imported element is restyled — this styles new content only. */
+.leash-landing .proof-note { margin-top: var(--s-4); display: flex; flex-wrap: wrap; align-items: baseline;
+  gap: 6px var(--s-3); font-family: var(--font-mono); font-size: var(--t-small); color: var(--ink-faint); }
+.leash-landing .proof-note .faint { color: var(--ink-faint); }
+.leash-landing .proof-note .proof-link { color: var(--accent-ink); text-decoration: none;
+  border-bottom: 1px solid var(--accent-24); transition: border-color var(--t-fast); }
+.leash-landing .proof-note .proof-link:hover { border-color: var(--accent); }
+
+/* --- metrics (number-flow) --- */
+.leash-landing .metrics { display: grid; grid-template-columns: repeat(3,1fr); gap: var(--s-6); text-align: center; }
+.leash-landing .metric { padding: var(--s-6) var(--s-4); border: 1px solid var(--border); border-radius: var(--r-lg);
+  background: var(--glass-bg-strong); backdrop-filter: blur(8px); box-shadow: var(--glass-hi); }
+.leash-landing .metric .stat { font-size: var(--t-stat); color: var(--accent-ink); display: block; line-height: 1; font-weight: 500; }
+.leash-landing .metric .lbl { color: var(--ink-faint); font-size: var(--t-small); margin-top: var(--s-3); display:block; }
+
+/* --- closing beat --- */
+.leash-landing .closer { text-align: center; padding: var(--s-8) 0 var(--s-8); border-top: 1px solid var(--border);
+  background: radial-gradient(60% 80% at 50% 40%, var(--accent-08), transparent 70%); }
+.leash-landing .closer svg.sever { width: min(760px, 92%); height: 130px; display: block; margin: 0 auto var(--s-6); overflow: visible; }
+.leash-landing .closer .whole { transition: opacity .3s var(--ease-out-cubic); }
+.leash-landing .closer.cut .whole { opacity: 0; }
+.leash-landing .closer .halves { opacity: 0; transition: opacity .2s; }
+.leash-landing .closer.cut .halves { opacity: 1; }
+.leash-landing .closer h2 { max-width: 18ch; margin: 0 auto var(--s-6); font-size: var(--t-h1); }
+.leash-landing .closer .cta { display: flex; gap: var(--s-3); justify-content: center; }
+
+.leash-landing footer { border-top: 1px solid var(--border); padding: var(--s-7) 0; margin-top: var(--s-6);
+  color: var(--ink-faint); font-size: var(--t-small); }
+.leash-landing footer .wrap { display: flex; justify-content: space-between; align-items: center; gap: var(--s-5); flex-wrap: wrap; }
+.leash-landing footer .mono { color: var(--ink-dim); }
+
+@media (max-width: 900px) {
+  .leash-landing .demo { grid-template-columns: 1fr; }
+  .leash-landing .bento { grid-template-columns: 1fr; }
+  .leash-landing .hcard.wide, .leash-landing .hcard.tall,
+  .leash-landing .hcard.half, .leash-landing .hcard.third { grid-column: span 1; }
+  .leash-landing .metrics { grid-template-columns: 1fr; }
+  .leash-landing .rail-head, .leash-landing .vrow { grid-template-columns: 84px 1fr 92px; }
+  .leash-landing .rail-head span:nth-child(3), .leash-landing .rail-head span:nth-child(5),
+  .leash-landing .vrow .reason, .leash-landing .vrow .tx { display: none; }
+  /* the navlinks are a desktop affordance in the artifact's own 900px collapse —
+     it hides nothing, but at 390px four links overflow the 66px bar. The nav
+     reduces to mark + theme + CTA, which is the same cluster the artifact shows
+     when the links are the first thing to lose. */
+  .leash-landing .navlinks { display: none; }
+}

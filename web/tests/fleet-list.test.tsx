@@ -31,14 +31,14 @@ describe('FleetList', () => {
     );
     const row1 = screen.getByTestId('fleet-row-a1');
     expect(row1).toHaveTextContent('Treasury helper');
-    expect(row1).toHaveTextContent('active');
+    expect(row1).toHaveTextContent('Active');
     expect(row1).toHaveTextContent('0.25 0G');
     expect(row1).toHaveAttribute('href', '/agents/a1');
     // Revoked agents are hidden by default; the toggle reveals them.
     expect(screen.queryByTestId('fleet-row-a2')).not.toBeInTheDocument();
     await user.click(screen.getByTestId('fleet-toggle-revoked'));
     const row2 = screen.getByTestId('fleet-row-a2');
-    expect(row2).toHaveTextContent('revoked');
+    expect(row2).toHaveTextContent('Revoked');
     expect(row2).toHaveTextContent('0 0G');
   });
 

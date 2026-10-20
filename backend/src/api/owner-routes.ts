@@ -3214,6 +3214,11 @@ function jobView(job: import('../store/jobs.js').JobRow): Json {
     rationaleRef: job.rationaleRef,
     approvalId: job.approvalId,
     settlementTx: job.settlementTx,
+    // The hash of a broadcast-but-unconfirmed fee transfer. Exposed because the
+    // owner is entitled to the handle on a payment that may already have moved
+    // their money — withholding it until confirmation is what made an
+    // unconfirmed settlement look, on every surface, like nothing happened.
+    settlementTxPending: job.settlementTxPending,
     poa: (job.poa as unknown as Json) ?? null,
     blockedBy: job.blockedBy,
     createdAt: job.createdAt,

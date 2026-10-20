@@ -183,7 +183,9 @@ export default function CreatePage() {
   }, []);
 
   return (
-    <div className="wrap-narrow" style={{ paddingBlock: 'clamp(2rem, 5vw, 4rem)', maxWidth: '640px' }}>
+    // G-2.3: `.create-flow` is the scope hook for create.css (bind.html idiom); the shell
+    // provides the page chrome + padding, so no page-level hero/wrap here.
+    <div className="create-flow">
       {screen === 'funnel' ? (
         <FunnelEntry onElevate={onElevate} onPick={onPick} onManual={onManual} />
       ) : screen === 'readback' && draft ? (

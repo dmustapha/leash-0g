@@ -236,7 +236,7 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
         const ev = data as StreamEvent;
         const nid = `ev-${seqRef.current++}`;
         if (ev.type === 'reasoning') {
-          setItems((prev) => [...prev.slice(-199), { kind: 'reasoning', text: ev.text, id: nid }]);
+          setItems((prev) => [...prev.slice(-199), { kind: 'reasoning', text: ev.text, id: nid, ...(ev.meta ? { meta: ev.meta } : {}) }]);
         } else if (ev.type === 'trace') {
           setItems((prev) => [...prev.slice(-199), { kind: 'trace', event: ev, id: nid }]);
         } else if (ev.type === 'approval') {
@@ -742,9 +742,9 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
     <PageShell
       title="Cockpit"
       aside={
-        <Link href={`/agents/${id}/audit`} className="nav-link">
-          Audit trail →
-        </Link>
+        <span className="hash">
+          <Link href={`/agents/${id}/audit`}>Audit trail →</Link>
+        </span>
       }
     >
       {detail ? (
@@ -822,72 +822,13 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
         </div>
       ))}
 
-      {detail && detail.status !== 'revoked' ? (
-        <section
-          aria-label="Direct this agent"
-          style={{ display: 'grid', gap: '1rem', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 340px), 1fr))', alignItems: 'start' }}
-        >
-          <DirectBox
-            onDirect={async (intent) => (await api.direct(id, { intent })).direction}
-            onConfirm={async (directionId, edited, recipient, chainPlan) => {
-              await api.confirmDirection(id, directionId, {
-                edited,
-                ...(recipient ? { recipient } : {}),
-                ...(chainPlan && chainPlan.length > 0 ? { chainPlan } : {}),
-              });
-              void loadChains();
-            }}
-            chainCandidates={chainCandidates}
-          />
-          <StatusChat onAsk={async (q) => api.agentStatus(id, q)} />
-        </section>
-      ) : null}
-
-      {chains.length > 0 ? (
-        <section aria-label="Chains" data-testid="chains-section" style={{ display: 'grid', gap: '1rem' }}>
-          {chains.map(({ chain, hops }) => (
-            <ChainView key={chain.id} chain={chain} hops={hops} agentNames={agentNames} />
-          ))}
-        </section>
-      ) : null}
-
-      <div style={{ display: 'grid', gap: '1rem', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 340px), 1fr))', alignItems: 'start' }}>
-        <StreamFeed items={items} connection={connection} chainId={agentNetworks?.homeChainId} />
-        <div style={{ display: 'grid', gap: '1rem' }}>
-          {detail ? (
-            // Anchor for the inbox limit_hit "Adjust policy" deep-link (spec §3c).
-            <div id="policy-panel">
-              <PolicyPanel
-                detail={detail}
-                onSubmitPolicy={submitPolicy}
-                pending={pending}
-                onApply={applyPending}
-                onWindDown={windDown}
-                onRearm={rearm}
-                currency={currency}
-              />
-            </div>
-          ) : null}
-          {detail ? (
-            // Anchor for the migrate-guardian banner CTA (M-02 carry).
-            <div id="guardian-panel">
-              <GuardianPanel guardian={guardian} leashGuardian={detail.leashGuardianAddr} onSetGuardian={setGuardianTx} />
-            </div>
-          ) : null}
-          {detail ? (
-            <RulesEditor rules={detail.agent?.gatewayRules ?? []} onSave={saveRules} />
-          ) : null}
-          {/* SE-7 (spec §7.C): per-chain presence + the onboard action, one address everywhere. */}
-          <NetworksPanel
-            view={agentNetworks}
-            networks={networks}
-            onOnboard={async (chainId) => {
-              const result = await api.onboardNetwork(id, chainId);
-              await loadNetworks();
-              return result;
-            }}
-          />
-
+      {/* The cockpit grid (console.html .cockpit-grid, 1fr/380px): the live stream + the
+          "what this agent can do on its own" capability surfaces fill the main column; the
+          Limits/Guardian/Message-rules/Networks control rail sits at a fixed 380px on the right.
+          Collapses to one column < 1100px (see .cockpit-grid in console.css). */}
+      <div className="cockpit-grid">
+        <div style={{ display: 'grid', gap: '1rem', alignItems: 'start' }}>
+          <StreamFeed items={items} connection={connection} chainId={agentNetworks?.homeChainId} />
           {detail && detail.status !== 'revoked' && bandCapable && traderGoal?.type === 'trader' ? (
             <PriceBandPanel
               routerAddr={homeNetwork?.router ?? ''}
@@ -929,26 +870,95 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
               />
             </div>
           ) : null}
-          <RevokeButton
-            revoked={detail?.status === 'revoked'}
-            onRevoke={revokeGuardian}
-            onRevokeOnchain={revokeFallback}
-            onRearm={rearm}
+        </div>
+        <div style={{ display: 'grid', gap: '1rem', alignItems: 'start' }}>
+          {detail ? (
+            // Anchor for the inbox limit_hit "Adjust policy" deep-link (spec §3c).
+            <div id="policy-panel">
+              <PolicyPanel
+                detail={detail}
+                onSubmitPolicy={submitPolicy}
+                pending={pending}
+                onApply={applyPending}
+                onWindDown={windDown}
+                onRearm={rearm}
+                currency={currency}
+              />
+            </div>
+          ) : null}
+          {detail ? (
+            // Anchor for the migrate-guardian banner CTA (M-02 carry).
+            <div id="guardian-panel">
+              <GuardianPanel guardian={guardian} leashGuardian={detail.leashGuardianAddr} onSetGuardian={setGuardianTx} />
+            </div>
+          ) : null}
+          {detail ? (
+            <RulesEditor rules={detail.agent?.gatewayRules ?? []} onSave={saveRules} />
+          ) : null}
+          {/* SE-7 (spec §7.C): per-chain presence + the onboard action, one address everywhere. */}
+          <NetworksPanel
+            view={agentNetworks}
+            networks={networks}
+            onOnboard={async (chainId) => {
+              const result = await api.onboardNetwork(id, chainId);
+              await loadNetworks();
+              return result;
+            }}
           />
         </div>
       </div>
+
+      {/* Direction & status chat — full-width below the grid (console.html renderCockpit order). */}
+      {detail && detail.status !== 'revoked' ? (
+        <section aria-label="Direct this agent" style={{ display: 'grid', gap: '1rem', alignItems: 'start' }}>
+          <DirectBox
+            onDirect={async (intent) => (await api.direct(id, { intent })).direction}
+            onConfirm={async (directionId, edited, recipient, chainPlan) => {
+              await api.confirmDirection(id, directionId, {
+                edited,
+                ...(recipient ? { recipient } : {}),
+                ...(chainPlan && chainPlan.length > 0 ? { chainPlan } : {}),
+              });
+              void loadChains();
+            }}
+            chainCandidates={chainCandidates}
+          />
+          <StatusChat onAsk={async (q) => api.agentStatus(id, q)} />
+        </section>
+      ) : null}
+
+      {/* Delegation chain — full-width below (console.html renderCockpit order). */}
+      {chains.length > 0 ? (
+        <section aria-label="Chains" data-testid="chains-section" style={{ display: 'grid', gap: '1rem' }}>
+          {chains.map(({ chain, hops }) => (
+            <ChainView key={chain.id} chain={chain} hops={hops} agentNames={agentNames} />
+          ))}
+        </section>
+      ) : null}
+
+      {/* Danger zone — full-width at the foot (console.html renderCockpit order). */}
+      <RevokeButton
+        revoked={detail?.status === 'revoked'}
+        onRevoke={revokeGuardian}
+        onRevokeOnchain={revokeFallback}
+        onRearm={rearm}
+      />
     </PageShell>
   );
 }
 
-function PageShell({ title, aside, children }: { title: string; aside?: React.ReactNode; children: React.ReactNode }) {
+// G-2.5: the shell topbar owns the "Cockpit" title; `.cockpit-view` scopes the cockpit styles
+// and auto-reskins the component panels. The per-agent identity rides a `.cockpit-head` built
+// from real `detail` inside the page body (below), not here.
+function PageShell({ aside, children }: { title?: string; aside?: React.ReactNode; children: React.ReactNode }) {
   return (
-    <div className="wrap" style={{ paddingBlock: 'clamp(1.5rem, 4vw, 3rem)', display: 'grid', gap: '1.1rem' }}>
-      <div style={{ display: 'flex', alignItems: 'baseline', gap: '1rem' }}>
-        <h1 style={{ fontSize: 'var(--text-h1)' }}>{title}</h1>
-        <span style={{ flex: 1 }} />
-        {aside}
-      </div>
+    <div className="cockpit-view" style={{ display: 'grid', gap: '1.1rem' }}>
+      {aside ? (
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <span style={{ flex: 1 }} />
+          {aside}
+        </div>
+      ) : null}
       {children}
     </div>
   );

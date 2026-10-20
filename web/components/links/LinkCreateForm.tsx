@@ -55,14 +55,14 @@ export function LinkCreateForm({
   }
 
   return (
-    <form onSubmit={(e) => void submit(e)} className="card" data-testid="link-create-form" style={{ padding: '1rem 1.1rem', display: 'grid', gap: '0.8rem' }}>
-      <h2 style={{ fontSize: '1rem' }}>Link two agents</h2>
-      <p style={{ color: 'var(--color-ink-dim)', fontSize: '0.86rem' }}>
+    <form onSubmit={(e) => void submit(e)} className="panel" data-testid="link-create-form" style={{ display: 'grid', gap: '0.8rem' }}>
+      <p className="p-title"><span>Link two agents</span></p>
+      <p className="lede" style={{ margin: 0 }}>
         A link lets one agent hand work to another. Without a link, agents cannot talk to each
         other at all.
       </p>
       <div style={{ display: 'grid', gap: '0.35rem' }}>
-        <label htmlFor="link-from" className="label" style={{ color: 'var(--color-ink)' }}>
+        <label htmlFor="link-from" className="label" style={{ marginBottom: 0 }}>
           From (the agent that asks)
         </label>
         <select id="link-from" className="field" value={fromId} onChange={(e) => setFromId(e.target.value)} disabled={busy}>
@@ -75,7 +75,7 @@ export function LinkCreateForm({
         </select>
       </div>
       <div style={{ display: 'grid', gap: '0.35rem' }}>
-        <label htmlFor="link-to" className="label" style={{ color: 'var(--color-ink)' }}>
+        <label htmlFor="link-to" className="label" style={{ marginBottom: 0 }}>
           To (the agent that acts)
         </label>
         <select id="link-to" className="field" value={toId} onChange={(e) => setToId(e.target.value)} disabled={busy}>
@@ -93,7 +93,7 @@ export function LinkCreateForm({
         </p>
       ) : null}
       <fieldset style={{ border: 0, margin: 0, padding: 0, display: 'grid', gap: '0.45rem' }}>
-        <legend className="label" style={{ color: 'var(--color-ink)', padding: 0, marginBottom: '0.35rem' }}>
+        <legend className="label" style={{ padding: 0, marginBottom: '0.35rem' }}>
           How should handoffs work?
         </legend>
         {(['auto', 'supervised'] as const).map((m) => (

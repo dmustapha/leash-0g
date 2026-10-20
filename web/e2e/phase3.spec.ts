@@ -71,7 +71,8 @@ test('mark all read clears the unread pill', async ({ page }) => {
   await installMockApi(page, state);
   await page.goto('/inbox');
 
-  await expect(page.getByTestId('inbox-unread-pill')).toHaveText('2 unread');
+  // G-2.2: the unread count lives in the "Attention queue · N unread" section title.
+  await expect(page.getByTestId('inbox-unread-pill')).toContainText('2 unread');
   await page.getByTestId('mark-all-read-btn').click();
   await expect(page.getByTestId('inbox-caught-up-pill')).toBeVisible();
 });
@@ -82,12 +83,13 @@ test('digest: balance change rendered, mark caught up → empty state', async ({
   await installMockApi(page, state);
   await page.goto('/digest');
 
+  // G-2.2: per-agent digest is now a notable-activity row; the balance-change VALUE is kept
+  // (data-testid), the standalone "Balance change" label folded into the inline summary.
   const agentCard = page.getByTestId('digest-agent-agent-1');
-  await expect(agentCard.getByText('Balance change')).toBeVisible();
   await expect(agentCard.getByTestId('balance-change')).toHaveText('-0.02 0G');
 
   await page.getByTestId('mark-caught-up-btn').click();
-  await expect(page.getByTestId('digest-empty')).toHaveText('Nothing new since you last looked.');
+  await expect(page.getByTestId('digest-empty')).toContainText('Nothing has happened since you last looked.');
 });
 
 test('alert settings: key setup gate, prefs PATCH, telegram deep-link', async ({ page }) => {

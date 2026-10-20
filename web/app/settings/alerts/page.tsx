@@ -96,15 +96,20 @@ export default function AlertSettingsPage() {
   if (!wallet.ready) {
     return (
       <Shell>
-        <p role="status" style={{ color: 'var(--color-ink-dim)' }}>Loading…</p>
+        <p role="status" style={{ color: 'var(--ink-dim)' }}>Loading…</p>
       </Shell>
     );
   }
   if (!wallet.authenticated) {
     return (
       <Shell>
-        <div className="card" style={{ padding: '1.4rem', display: 'grid', gap: '0.8rem', justifyItems: 'start' }}>
-          <p>Connect your wallet to manage your alert settings.</p>
+        <div className="deadstate">
+          <svg className="leash-svg" viewBox="0 0 80 44" aria-hidden="true">
+            <circle className="leash-clasp" cx="10" cy="22" r="6" />
+            <path className="leash-path" d="M16 22 Q 40 30 74 22" />
+          </svg>
+          <h4>Connect your wallet</h4>
+          <p>Sign in to manage what reaches you, where — alert channels, the daily digest, and Telegram.</p>
           <button type="button" className="btn btn-primary" onClick={wallet.login}>
             Connect wallet
           </button>
@@ -115,9 +120,10 @@ export default function AlertSettingsPage() {
   if (loadError && !settings) {
     return (
       <Shell>
-        <div className="toast toast-err" role="alert">
-          <p>We could not load your settings ({loadError}).</p>
-          <button type="button" className="btn btn-sm" onClick={() => void refresh()}>
+        <div className="deadstate error" role="alert">
+          <h4>Could not load your settings</h4>
+          <p>{loadError}</p>
+          <button type="button" className="btn btn-ghost" onClick={() => void refresh()}>
             Retry
           </button>
         </div>
@@ -127,7 +133,7 @@ export default function AlertSettingsPage() {
   if (!settings) {
     return (
       <Shell>
-        <p role="status" style={{ color: 'var(--color-ink-dim)' }}>Loading your settings…</p>
+        <p role="status" style={{ color: 'var(--ink-dim)' }}>Loading your settings…</p>
       </Shell>
     );
   }
@@ -144,7 +150,7 @@ export default function AlertSettingsPage() {
       <AlertPrefsPanel prefs={settings.alertPrefs} onChange={patchPrefs} />
 
       <section aria-label="Daily digest schedule" className="card" style={{ padding: '1rem 1.1rem', display: 'grid', gap: '0.7rem' }}>
-        <h2 style={{ fontSize: '1rem', margin: 0 }}>Daily digest</h2>
+        <h2>Daily digest</h2>
         <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--color-ink-dim)' }}>
           One message a day with what your agents did — only when there is something to tell,
           and only if Telegram is linked.
@@ -206,10 +212,13 @@ export default function AlertSettingsPage() {
   );
 }
 
+// G-2.4: the shell topbar owns the "Alerts" title; `.trust-view` scopes the TRUST styles.
 function Shell({ children }: { children: React.ReactNode }) {
   return (
-    <div className="wrap" style={{ paddingBlock: 'clamp(1.5rem, 4vw, 3rem)', display: 'grid', gap: '1.1rem', maxWidth: '860px' }}>
-      <h1 style={{ fontSize: 'var(--text-h1)' }}>Alert settings</h1>
+    <div className="trust-view" style={{ display: 'grid', gap: '1.1rem', maxWidth: '860px' }}>
+      <p className="section-title" style={{ margin: 0 }}>
+        Delivery preferences · <span className="n">what reaches you, where</span>
+      </p>
       {children}
     </div>
   );

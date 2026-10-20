@@ -30,7 +30,16 @@ import {
 import { evaluateAcceptance, renderAcceptanceContract, type AcceptanceResult } from './acceptance.js';
 import { evaluateGate } from './gate.js';
 import { buildProviderRequest, parseDeliverable, buildEvaluatorRequest, parseVerdict } from './prompt.js';
-import { hashJobSpec, verdictMessage, signWithSessionKey, buildPoaRecord, verifyPoa, assertEvaluatorIdentity } from './poa.js';
+import {
+  hashJobSpec,
+  verdictMessage,
+  signWithSessionKey,
+  buildPoaRecord,
+  poaFromJobRow,
+  verifyPoa,
+  assertEvaluatorIdentity,
+} from './poa.js';
+import { ReceiptUnconfirmedError } from '../chain/wait-receipt.js';
 import { getJobSpec } from '../store/job-specs.js';
 import { getAgentById } from '../store/agents.js';
 import {
@@ -43,6 +52,7 @@ import {
   recordVerdict,
   markAwaitingApproval,
   recordSettlement,
+  recordSettlementSubmitted,
   claimSettlement,
   markJobStatus,
 } from '../store/jobs.js';
@@ -72,6 +82,13 @@ export type JobOutcome =
   | { type: 'settled'; jobId: string; txHash: string; feeToken: string; feeAmountWei: string; feeTokenSymbol: string | null; feeTokenDecimals: number | null }
   | { type: 'rejected'; jobId: string; reason: string }
   | { type: 'denied'; jobId: string }
+  /**
+   * Broadcast, receipt unresolved. Distinct from BOTH 'settled' and 'failed' on
+   * purpose: value may have moved, and the only honest statement is that we do
+   * not yet know. The job stays 'settling' and `jobs/settlement-sweep.ts`
+   * resolves it against the chain, which is what then appends the jobFee trace.
+   */
+  | { type: 'unconfirmed'; jobId: string; txHash: string; reason: string }
   | { type: 'noop'; reason: string }
   | { type: 'failed'; reason: string };
 
@@ -532,7 +549,11 @@ export function buildJobGraph(deps: JobGraphDeps, ctx: JobAgentContext, checkpoi
     if (deps.alerts) {
       const deadline =
         deps.approvalTimeoutMs !== undefined
-          ? ` ⏱ Auto-denies in ${inMinutes(deps.approvalTimeoutMs)} if you don't answer.`
+          // `inMinutes` already returns "in 10 min" — the extra literal "in" here rendered
+          // "Auto-denies in in 10 min" on every job-settlement approval alert the owner sees.
+          // Caught live during the Unit-1 fault drill, 2026-10-18; of the eight `inMinutes`
+          // call sites this was the only one that prefixed the word.
+          ? ` ⏱ Auto-denies ${inMinutes(deps.approvalTimeoutMs)} if you don't answer.`
           : ' ⏱ Auto-denies if you don\'t answer in time.';
       // Both the deliverable summary and the evaluator rationale are UNTRUSTED
       // (F-quar): sanitized, carried in refs, never in the verified summary.
@@ -597,18 +618,13 @@ export function buildJobGraph(deps: JobGraphDeps, ctx: JobAgentContext, checkpoi
         token: job.feeToken,
         to: job.feeRecipient,
         amountWei: BigInt(job.feeAmountWei),
+        // WRITE-AHEAD. Fires the moment the tx is broadcast, before the receipt
+        // wait that can throw for a tx which landed. Without this the hash of a
+        // real, paid transfer exists only inside a call frame that is about to
+        // unwind — which is how a settlement went missing.
+        onSubmitted: (h) => recordSettlementSubmitted(deps.pool, job.jobId, h),
       });
-      const poa = buildPoaRecord({
-        jobId: job.jobId,
-        jobSpecHash: job.jobSpecHash,
-        requesterSig: job.requesterSig,
-        deliverableRoot: job.deliverableRoot ?? '',
-        providerSig: job.providerSig ?? '',
-        verdict: job.verdict ?? 'accept',
-        evaluatorSig: job.evaluatorSig ?? '',
-        acceptance: job.acceptance ?? { passed: true, failures: [], checked: 0 },
-        settlementTx: txHash,
-      });
+      const poa = poaFromJobRow(job, txHash);
       await recordSettlement(deps.pool, job.jobId, { settlementTx: txHash, poa });
       // The signed multi-party PoA → the owner-record / audit stream (→ 0G
       // Storage, hash-chained). Only hashes/roots/sigs — never untrusted text.
@@ -625,6 +641,25 @@ export function buildJobGraph(deps: JobGraphDeps, ctx: JobAgentContext, checkpoi
         },
       };
     } catch (err) {
+      // "We could not read the receipt" is NOT "the transfer failed". The tx is
+      // broadcast and its hash is already persisted by onSubmitted above, so the
+      // job STAYS in 'settling' and the settlement sweep resolves it against the
+      // chain. Marking it 'failed' here is precisely the bug: it books a transfer
+      // that may have paid as one that did not, and the owner digest — which
+      // keys on the jobFee trace the settled path appends — reports nothing.
+      if (err instanceof ReceiptUnconfirmedError) {
+        console.warn(
+          `[jobs] settlement receipt unconfirmed for job ${job.jobId}; leaving in 'settling' for the sweep (tx ${err.hash})`,
+        );
+        return {
+          outcome: {
+            type: 'unconfirmed',
+            jobId: job.jobId,
+            txHash: err.hash,
+            reason: 'settlement submitted; waiting for the network to confirm it',
+          },
+        };
+      }
       const decoded = decodeLeashError(err);
       const reason = decoded ? `settle refused: ${decoded.plain}` : `settle failed: ${err instanceof Error ? err.message : String(err)}`;
       await markJobStatus(deps.pool, job.jobId, 'failed', { blockedBy: 'settlement' });
@@ -691,6 +726,31 @@ export function buildJobGraph(deps: JobGraphDeps, ctx: JobAgentContext, checkpoi
       await c.markCompleted(inbound.delegationId, { outcome: o.type });
     } else if (o.type === 'failed') {
       await c.markFailed(inbound.delegationId, o.reason);
+    } else if (o.type === 'unconfirmed') {
+      // Deliberately NOT marked. The transfer is broadcast and may well have
+      // paid; `markFailed` here would reproduce, on the delegation surface, the
+      // exact lie this fix removes from the job row. The delegation stays
+      // 'accepted' — "the receiver is still working on it" — which is true for
+      // as long as the settlement sweep is still working on it.
+      //
+      // Be precise about what does NOT catch this, because it is tempting to
+      // assume the TTL does. `sweepExpiredDelegations` (coordination/store.ts)
+      // only considers 'pending'/'pending_approval', so `expires_at` never
+      // applies to an accepted row; and `listOrphanedAccepted` is BOOT ONLY and
+      // transitions every accepted row to 'failed' ("orphaned by restart"). So
+      // while this process lives the row stays open, and the next restart books
+      // it failed — under a job that by then is very likely settled.
+      //
+      // That is a smaller lie than losing the payment (the money IS recorded and
+      // jobFee reaches the digest) but it is not zero, and it is filed:
+      // docs/issues/F-DELEGATION-UNCONFIRMED-NOT-CLOSED.md (0g-fleet). The fix
+      // needs the delegationId reachable from the job row — `jobs` has no such
+      // column — plus narrowing listOrphanedAccepted to skip a job still
+      // 'settling' with a pending hash. A schema change, not a reason to book a
+      // maybe-paid job as failed here.
+      console.warn(
+        `[jobs] delegation ${inbound.delegationId} left accepted: settlement unconfirmed for job ${o.jobId} (tx ${o.txHash})`,
+      );
     } else {
       await c.markFailed(inbound.delegationId, 'unhandled inbound');
     }
@@ -770,6 +830,10 @@ function outcomeSummary(o: JobOutcome): string {
       return `job ${o.jobId} rejected: ${o.reason}`;
     case 'denied':
       return `owner denied settlement for job ${o.jobId}`;
+    case 'unconfirmed':
+      // Owner-facing: plain, and honest that the payment is in flight rather
+      // than either done or failed.
+      return `settlement sent for job ${o.jobId}, waiting for the network to confirm it (tx ${o.txHash})`;
     case 'noop':
       return `no action: ${o.reason}`;
     case 'failed':

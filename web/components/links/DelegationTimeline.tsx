@@ -39,15 +39,14 @@ export function DelegationTimeline({
   const name = (id: string) => (id ? (agentNames[id] ?? `${id.slice(0, 8)}…`) : '…');
 
   return (
-    <section aria-label="Handoff timeline" className="card" style={{ display: 'grid', gridTemplateRows: 'auto 1fr', minHeight: 0 }}>
-      <header style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', padding: '0.8rem 1rem', borderBottom: '1px solid var(--color-line-soft)' }}>
-        <h2 style={{ fontSize: '1rem' }}>Handoffs</h2>
-        <span style={{ flex: 1 }} />
-        <span className="badge">{delegations.length}</span>
-      </header>
+    <section aria-label="Handoff timeline" className="panel" style={{ padding: 0, display: 'grid', gridTemplateRows: 'auto 1fr', minHeight: 0 }}>
+      <p className="p-title" style={{ padding: '0.8rem 1rem', margin: 0, borderBottom: '1px solid var(--border)' }}>
+        <span>Handoffs</span>
+        <span className="badge-pill">{delegations.length}</span>
+      </p>
       <div aria-live="polite" data-testid="delegation-timeline" style={{ overflowY: 'auto', maxHeight: '28rem', padding: '0.9rem 1rem', display: 'grid', gap: '0.7rem', alignContent: 'start' }}>
         {delegations.length === 0 ? (
-          <p style={{ color: 'var(--color-ink-faint)', fontSize: '0.9rem' }}>
+          <p style={{ color: 'var(--ink-faint)', fontSize: '0.9rem' }}>
             No handoffs yet. When one agent asks the other to do something, it shows up here.
           </p>
         ) : (

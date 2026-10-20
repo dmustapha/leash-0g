@@ -104,12 +104,12 @@ export function OwnerAuditSection({
   return (
     <section aria-label="Daily-loop audit trail" className="card" style={{ overflow: 'hidden' }} data-testid="owner-audit-section">
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.7rem', padding: '0.9rem 1.1rem', borderBottom: '1px solid var(--color-line-soft)', flexWrap: 'wrap' }}>
-        <h2 style={{ fontSize: '1rem', margin: 0 }}>Daily-loop audit trail</h2>
+        <h2>Daily-loop audit trail</h2>
         {chainVerified !== undefined ? (
           chainVerified ? (
-            <span className="pill pill-allow" data-testid="owner-chain-verified">record chain verified</span>
+            <span className="chain-pill ok" data-testid="owner-chain-verified">◆ record chain verified</span>
           ) : (
-            <span className="pill pill-deny" data-testid="owner-chain-broken">record chain check FAILED</span>
+            <span className="chain-pill broken" data-testid="owner-chain-broken">◇ record chain check FAILED</span>
           )
         ) : null}
       </div>
@@ -167,7 +167,7 @@ export function OwnerAuditSection({
               </label>
               {importedBlob?.mode === 'passphrase' ? (
                 <label style={{ display: 'grid', gap: '0.3rem', width: 'min(100%, 22rem)' }}>
-                  <span className="label" style={{ color: 'var(--color-ink)' }}>Passphrase</span>
+                  <span className="label">Passphrase</span>
                   <input
                     type="password"
                     className="field"
@@ -206,14 +206,14 @@ export function OwnerAuditSection({
             <div style={{ display: 'flex', gap: '0.7rem', alignItems: 'center', flexWrap: 'wrap' }}>
               <h3 style={{ fontSize: '0.95rem', margin: 0 }}>Batch {viewing.batchId}</h3>
               {viewing.chain.ok ? (
-                <span className="pill pill-allow">
-                  {viewing.chain.anchored === 'genesis' ? 'Chain verified from genesis' : 'Chain verified (slice only)'}
+                <span className="chain-pill ok">
+                  ◆ {viewing.chain.anchored === 'genesis' ? 'chain verified from genesis' : 'chain verified (slice only)'}
                   {' · '}
                   {viewing.chain.count} records
                 </span>
               ) : (
-                <span className="pill pill-deny">
-                  Chain broken at record {viewing.chain.brokenAtSeq} ({viewing.chain.reason})
+                <span className="chain-pill broken">
+                  ◇ chain broken at record {viewing.chain.brokenAtSeq} ({viewing.chain.reason})
                 </span>
               )}
             </div>
