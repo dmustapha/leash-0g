@@ -42,7 +42,11 @@ const LANE: Record<string, { cls: 'l1' | 'l2' | 'forbidden'; label: string }> = 
 };
 
 function LaneChip({ status }: { status: string }) {
-  const lane = LANE[status] ?? LANE.active!;
+  // Fail CLOSED: an unrecognized status (e.g. a future backend state, the way JobStatus grew
+  // `settling`) must never silently render as "L1 silent / runs on its own" — that would
+  // under-represent risk on the one surface that shows what the agent can do unattended. Default
+  // an unknown state to the needs-your-attention lane, not the safe-looking one.
+  const lane = LANE[status] ?? { cls: 'l2' as const, label: 'needs review' };
   return <span className={`lane-chip ${lane.cls}`}>{lane.label}</span>;
 }
 

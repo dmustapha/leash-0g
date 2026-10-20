@@ -691,7 +691,12 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
                     <label style={{ display: 'flex', gap: '0.6rem', alignItems: 'flex-start', cursor: 'pointer' }}>
                       <input
                         type="radio"
-                        name="agent-role"
+                        // Distinct name: this advanced-door radio lives OUTSIDE the primary
+                        // .chooser fieldset, so sharing `name="agent-role"` would splice it into
+                        // the native radiogroup and let arrow-keys jump focus into this collapsed
+                        // panel. Mutual exclusivity is enforced by the controlled `checked`/`role`
+                        // state, not the name attribute, so decoupling it is safe.
+                        name="agent-role-advanced"
                         value="requester"
                         checked={role === 'requester'}
                         onChange={() => setRole('requester')}
