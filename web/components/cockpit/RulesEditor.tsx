@@ -16,6 +16,14 @@ const ACTION_LABEL: Record<GatewayRule['action'], string> = {
   require_approval: 'Ask me first',
 };
 
+// Each gateway action IS a sensitivity lane (tools.html L1/L2/forbidden): a block is forbidden,
+// an ask-me-first pauses for approval (L2 asked), a silent rewrite runs on its own (L1 silent).
+const ACTION_LANE: Record<GatewayRule['action'], { cls: 'l1' | 'l2' | 'forbidden'; label: string }> = {
+  block: { cls: 'forbidden', label: 'forbidden' },
+  require_approval: { cls: 'l2', label: 'L2 asked' },
+  modify: { cls: 'l1', label: 'L1 silent' },
+};
+
 export function RulesEditor({
   rules,
   onSave,
@@ -98,13 +106,13 @@ export function RulesEditor({
         <span style={{ flex: 1 }} />
         <span className="badge">{draft.length}/{RULES_MAX}</span>
       </div>
-      <p style={{ fontSize: '0.85rem', color: 'var(--color-ink-dim)' }}>
+      <p style={{ fontSize: '0.85rem', color: 'var(--ink-dim)' }}>
         Rules screen everything your agent says to its brain. Match some text and choose what
         happens: block it, rewrite it, or ask you first. Changes are recorded in the audit trail.
       </p>
 
       {draft.length === 0 ? (
-        <p data-testid="rules-empty" style={{ fontSize: '0.86rem', color: 'var(--color-ink-faint)' }}>
+        <p data-testid="rules-empty" style={{ fontSize: '0.86rem', color: 'var(--ink-faint)' }}>
           No rules yet — everything passes through unchanged.
         </p>
       ) : (
@@ -138,6 +146,7 @@ export function RulesEditor({
                     </option>
                   ))}
                 </select>
+                <span className={`lane-chip ${ACTION_LANE[r.action].cls}`} aria-hidden="true">{ACTION_LANE[r.action].label}</span>
                 <button type="button" className="btn btn-ghost btn-sm" onClick={() => removeRow(i)} disabled={busy} data-testid={`remove-rule-${i}`}>
                   Remove
                 </button>
@@ -158,12 +167,12 @@ export function RulesEditor({
       )}
 
       {error ? (
-        <p role="alert" style={{ color: 'var(--color-deny)', fontSize: '0.85rem' }}>
+        <p role="alert" style={{ color: 'var(--deny)', fontSize: '0.85rem' }}>
           {error}
         </p>
       ) : null}
       {saved ? (
-        <p role="status" data-testid="rules-saved" style={{ color: 'var(--color-allow)', fontSize: '0.85rem' }}>
+        <p role="status" data-testid="rules-saved" style={{ color: 'var(--allow)', fontSize: '0.85rem' }}>
           Rules saved and recorded in the audit trail.
         </p>
       ) : null}

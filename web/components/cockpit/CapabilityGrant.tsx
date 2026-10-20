@@ -120,7 +120,7 @@ function SpendBudgetForm({
   return (
     <form onSubmit={(e) => void propose(e)} data-testid="spend-budget-form" style={{ display: 'grid', gap: '0.6rem' }}>
       <h3 className="label" style={{ margin: 0 }}>Set a token spending budget</h3>
-      <p style={{ margin: 0, fontSize: '0.84rem', color: 'var(--color-ink-dim)' }}>
+      <p style={{ margin: 0, fontSize: '0.84rem', color: 'var(--ink-dim)' }}>
         Contract calls that move an ERC-20 are refused on-chain until the token has a budget. The
         budget is the most it can flow out, cumulatively, per window.
       </p>
@@ -128,7 +128,7 @@ function SpendBudgetForm({
       <input id="budget-token" className="field" data-testid="budget-token" value={token} onChange={(e) => setToken(e.target.value)} placeholder="0x…" disabled={busy || phase === 'apply'} />
       <label className="label" htmlFor="budget-cap">Budget (base units)</label>
       <input id="budget-cap" className="field" data-testid="budget-cap" inputMode="numeric" value={windowCap} onChange={(e) => setWindowCap(e.target.value)} placeholder="5000000000000000000000" disabled={busy || phase === 'apply'} />
-      {error ? <p role="alert" style={{ color: 'var(--color-deny)', fontSize: '0.84rem', margin: 0 }}>{error}</p> : null}
+      {error ? <p role="alert" style={{ color: 'var(--deny)', fontSize: '0.84rem', margin: 0 }}>{error}</p> : null}
       {phase === 'propose' ? (
         <div>
           <button type="submit" className="btn btn-primary btn-sm" data-testid="budget-propose" disabled={busy}>
@@ -137,7 +137,7 @@ function SpendBudgetForm({
         </div>
       ) : (
         <div style={{ display: 'grid', gap: '0.4rem' }}>
-          <p style={{ margin: 0, fontSize: '0.82rem', color: 'var(--color-accent)' }}>
+          <p style={{ margin: 0, fontSize: '0.82rem', color: 'var(--accent)' }}>
             Signed — this takes effect in ~15 min. Come back and apply it.
           </p>
           <div>
@@ -230,33 +230,27 @@ function PresetPicker({
   return (
     <div style={{ display: 'grid', gap: '0.7rem' }}>
       <h3 className="label" style={{ margin: 0 }}>Quick start with a preset</h3>
-      <div style={{ display: 'grid', gap: '0.5rem', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 230px), 1fr))' }}>
+      {/* tools.html .presets grid of .preset cards (pn/pt/pd) — a card per real PRESET_CATALOG entry. */}
+      <div className="presets" role="group" aria-label="Capability presets">
         {PRESET_CATALOG.map((p) => (
           <button
             key={p.key}
             type="button"
-            className="panel"
+            className="preset"
             data-testid={`preset-${p.key}`}
             aria-pressed={selected === p.key}
             onClick={() => void pick(p.key)}
             disabled={busy}
-            style={{
-              textAlign: 'left',
-              padding: '0.7rem 0.8rem',
-              display: 'grid',
-              gap: '0.25rem',
-              cursor: busy ? 'not-allowed' : 'pointer',
-              borderColor: selected === p.key ? 'var(--color-accent)' : undefined,
-            }}
           >
-            <strong style={{ fontSize: '0.9rem' }}>{p.name}</strong>
-            <span style={{ fontSize: '0.8rem', color: 'var(--color-ink-dim)' }}>{p.blurb}</span>
+            <div className="pn">{p.name}</div>
+            <div className="pt">{p.tag}</div>
+            <div className="pd">{p.blurb}</div>
           </button>
         ))}
       </div>
 
       {error ? (
-        <p role="alert" style={{ color: 'var(--color-deny)', fontSize: '0.84rem', margin: 0 }}>{error}</p>
+        <p role="alert" style={{ color: 'var(--deny)', fontSize: '0.84rem', margin: 0 }}>{error}</p>
       ) : null}
 
       {preset && preset.rules[step] ? (
@@ -289,7 +283,7 @@ function PresetPicker({
             </button>
           ) : (
             <div style={{ display: 'grid', gap: '0.4rem' }}>
-              <p style={{ margin: 0, fontSize: '0.82rem', color: 'var(--color-accent)' }}>
+              <p style={{ margin: 0, fontSize: '0.82rem', color: 'var(--accent)' }}>
                 Signed — this takes effect in ~15 min. Come back and apply it to continue.
               </p>
               <button type="button" className="btn btn-primary btn-sm" data-testid="preset-apply" disabled={busy} onClick={() => void apply()}>
@@ -400,7 +394,7 @@ function CustomRuleForm({ onCustomRule }: { onCustomRule: (action: CapabilityRul
       ) : null}
 
       {loosening ? (
-        <p style={{ margin: 0, fontSize: '0.82rem', color: 'var(--color-accent)' }}>
+        <p style={{ margin: 0, fontSize: '0.82rem', color: 'var(--accent)' }}>
           Allowing a new call loosens the leash, so it waits a short safety delay on-chain before
           it takes effect.
         </p>
@@ -412,7 +406,7 @@ function CustomRuleForm({ onCustomRule }: { onCustomRule: (action: CapabilityRul
         is ERC-20 approve). Together they name exactly one action; caps bound how much can flow.
       </Disclosure>
 
-      {error ? <p role="alert" style={{ color: 'var(--color-deny)', fontSize: '0.84rem', margin: 0 }}>{error}</p> : null}
+      {error ? <p role="alert" style={{ color: 'var(--deny)', fontSize: '0.84rem', margin: 0 }}>{error}</p> : null}
 
       <div>
         <button type="submit" className="btn btn-primary btn-sm" data-testid="custom-submit" disabled={busy}>

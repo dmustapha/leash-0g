@@ -397,3 +397,42 @@
 .console-view .cockpit-view .al-title { font-family: var(--font-mono); font-size: 11px; color: var(--ink-dim); text-transform: uppercase; letter-spacing: .1em; }
 .console-view .cockpit-view .chips-wrap { display: flex; flex-wrap: wrap; gap: var(--s-2); }
 .console-view .cockpit-view .payee-chip { display: inline-flex; align-items: center; gap: 8px; font-family: var(--font-mono); font-size: 11px; color: var(--ink); background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-full); padding: 5px 12px; }
+
+/* ---- cockpit CAPABILITY surface: preset-grid + tool-list rows + sensitivity lane-chips
+   (ported VERBATIM from tools.html:62-151). RECONCILED to LEASH's real capability model:
+   presets bind to PRESET_CATALOG; tool rows render real grants / resolved-preset rules /
+   one-off decisions; the L1/L2/forbidden lane encodes real semantics (standing/active = L1
+   silent, proposed/approve-once/pending = L2 asked, denied/blocked = forbidden). The
+   reference's instant allow/deny .switch is intentionally OMITTED — LEASH grants are
+   tx-governed (propose = timelocked, remove = instant) and gateway rules are 3-way, so a
+   binary instant toggle would misrepresent the on-chain/timelock semantics. ---- */
+.console-view .cockpit-view .presets { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); gap: var(--s-3); }
+.console-view .cockpit-view .preset { text-align: left; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r-md);
+  padding: var(--s-4); cursor: pointer; font-family: var(--font-sans); color: var(--ink-dim); transition: border-color var(--t-fast), background var(--t-fast); }
+.console-view .cockpit-view .preset:hover { border-color: var(--ink-24); }
+.console-view .cockpit-view .preset[aria-pressed="true"] { border-color: var(--accent-24); background: var(--accent-08); box-shadow: inset 2px 0 0 var(--accent); }
+.console-view .cockpit-view .preset:disabled { cursor: not-allowed; opacity: .6; }
+.console-view .cockpit-view .preset .pn { font-family: var(--font-display); font-weight: 500; font-size: 1rem; color: var(--ink); margin-bottom: 4px; }
+.console-view .cockpit-view .preset .pt { font-family: var(--font-mono); font-size: 10px; text-transform: uppercase; letter-spacing: .1em; color: var(--ink-faint); margin-bottom: 8px; }
+.console-view .cockpit-view .preset .pd { font-size: 12px; line-height: 1.5; }
+
+.console-view .cockpit-view .tool-list { display: flex; flex-direction: column; gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: var(--r-md); overflow: hidden; }
+.console-view .cockpit-view .tool { background: var(--surface-1); padding: var(--s-4) var(--s-5); }
+.console-view .cockpit-view .tool .trow1 { display: flex; align-items: center; gap: var(--s-3); flex-wrap: wrap; }
+.console-view .cockpit-view .tool .tid { font-family: var(--font-mono); font-size: 13px; color: var(--ink); font-weight: 500; }
+.console-view .cockpit-view .tool .tdesc { font-family: var(--font-sans); font-size: 12px; color: var(--ink-faint); margin-top: 2px; flex-basis: 100%; }
+.console-view .cockpit-view .tool .tgrow { flex: 1; }
+.console-view .cockpit-view .sens-badge { font-family: var(--font-mono); font-size: 9px; letter-spacing: .1em; text-transform: uppercase; font-weight: 600;
+  color: var(--ember); border: 1px solid var(--ember-24); background: var(--ember-16); border-radius: 4px; padding: 2px 7px; display: inline-flex; align-items: center; gap: 5px; }
+.console-view .cockpit-view .sens-badge svg { width: 10px; height: 10px; }
+.console-view .cockpit-view .always-note { font-family: var(--font-mono); font-size: 10px; color: var(--ember); display: inline-flex; align-items: center; gap: 7px;
+  border: 1px dashed var(--ember-24); border-radius: var(--r-sm); padding: 5px 10px; }
+.console-view .cockpit-view .always-note svg { width: 12px; height: 12px; flex: none; }
+
+/* sensitivity lane chip — color + shape encodes the lane (tools.html:146-151) */
+.console-view .cockpit-view .lane-chip { font-family: var(--font-mono); font-size: 9px; text-transform: uppercase; letter-spacing: .06em; font-weight: 600;
+  padding: 3px 9px; border-radius: 4px; display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.console-view .cockpit-view .lane-chip::before { content: ""; width: 6px; height: 6px; flex: none; }
+.console-view .cockpit-view .lane-chip.l1 { color: var(--allow); background: var(--allow-14); } .console-view .cockpit-view .lane-chip.l1::before { border-radius: var(--r-full); background: var(--allow); }
+.console-view .cockpit-view .lane-chip.l2 { color: var(--accent-ink); background: var(--accent-12); } .console-view .cockpit-view .lane-chip.l2::before { border-radius: var(--r-full); border: 1.5px solid var(--accent); }
+.console-view .cockpit-view .lane-chip.forbidden { color: var(--deny); background: var(--deny-14); } .console-view .cockpit-view .lane-chip.forbidden::before { background: var(--deny); }
