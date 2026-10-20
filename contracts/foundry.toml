@@ -51,3 +51,5 @@ depth = 64
 
 [rpc_endpoints]
 zg_testnet = "${ZERO_G_RPC}"
+elysium_testnet = "https://testnet-rpc.elysium.kinetiq.xyz"
+

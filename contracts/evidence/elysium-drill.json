@@ -1,0 +1,44 @@
+[
+ {
+  "step": "1-fund-account",
+  "expected": "success",
+  "tx": "0x635f28b1ac8bbe9f2b7cfead1b2cdfa4be4d7ed38ae80e89c8535fa95b3a323e",
+  "status": "success",
+  "detail": "0.003 HYPE funded"
+ },
+ {
+  "step": "2-withincap-allowlisted",
+  "expected": "success",
+  "tx": "0x651b09b09c38b6b53143e1592c7297176aeff7534befcb4630824395f79249f6",
+  "status": "1 (success)",
+  "detail": "0.0005 HYPE to allowlisted \u2014 within 0.001 cap"
+ },
+ {
+  "step": "3-overcap",
+  "expected": "revert OverPerTransferCap",
+  "tx": "0x125e3979a04b1c433f43642a2986c7a87f6d052b3fb4067855f6aab4fb7764ad",
+  "status": "0 (failed)",
+  "detail": "Error: server returned an error response: error code 3: execution reverted, data: \"0x80a03d1500000000000000000000000000000000000000000000000000071afd498d000000000000000000000000000000000000000000000000000000038d7ea4c68000\""
+ },
+ {
+  "step": "4-offallowlist",
+  "expected": "revert NotAllowlisted",
+  "tx": "0x6d777d66156d0fa8e73b8b1fdf5ec50f9ce70084075a9aba9e1990a46cb99d0f",
+  "status": "0 (failed)",
+  "detail": "Error: server returned an error response: error code 3: execution reverted, data: \"0x6f7a5275000000000000000000000000000000000000000000000000000000000000dead\""
+ },
+ {
+  "step": "5-guardian-revoke",
+  "expected": "success",
+  "tx": "0xdee8941cb34ccbcaca79844ac96d5568fa06f91cf3eba1197c2a925420c6b622",
+  "status": "success",
+  "detail": "guardian revoke \u2014 fails closed from here"
+ },
+ {
+  "step": "6-postrevoke-spend",
+  "expected": "revert AccountRevoked",
+  "tx": "0x510e47a9b8da2093d3a6eb4d6f34e7caceb4d48e0c512dce9c91f7713c32ad1b",
+  "status": "0 (failed)",
+  "detail": "Error: server returned an error response: error code 3: execution reverted, data: \"0x74b17b2b\""
+ }
+]
