@@ -100,6 +100,33 @@ export interface CycleMemory {
   recentOutcomes: { window: number; sends: number; standDowns: number; failures: number; blocked: number };
 }
 
+/**
+ * AQ-A1 D-1 ROUND 2 — the flag-shaped carry. Round 1 proved the PROSE carry regresses G-1 (it
+ * inflates deliberation on 0gm and truncates 40–52% of cycles — see AQ-A1-BUILD-RESULTS.md). The
+ * fix direction the data pointed at (shorter carry truncates less) is taken to its limit here: the
+ * model is handed NOT a block to re-read but two server-DERIVED booleans the mechanical rules consume
+ * in one clause each — signal without deliberation load.
+ *
+ * The two flags are chosen to drive exactly the decision-FLIP scenarios while leaving the non-flip
+ * ones (drain, stale-window) untouched:
+ *  - `recentFailureStreak`: recent sends keep reverting → do not blindly resend (repeated-failure).
+ *  - `justToppedUp`: a send LANDED moments ago AND the beneficiary balance actually ROSE → the top-up
+ *    is still settling, don't double-send (redundant-top-up). The `delta > 0` guard is what EXCLUDES
+ *    a drain (balance fell despite a landed send) — there the agent must keep funding, so no flag.
+ */
+export interface CycleFlags {
+  recentFailureStreak: boolean;
+  justToppedUp: boolean;
+}
+
+export function deriveCycleFlags(cm: CycleMemory): CycleFlags {
+  const last = cm.lastCycle;
+  const recentFailureStreak = cm.recentOutcomes.failures >= 2 || last.outcome === 'reverted';
+  const beneficiaryRose = cm.delta !== null && BigInt(cm.delta.beneficiaryBalanceWei) > 0n;
+  const justToppedUp = last.action === 'send' && last.outcome === 'landed' && last.agoSeconds < 90 && beneficiaryRose;
+  return { recentFailureStreak, justToppedUp };
+}
+
 /** Stable, order-independent fingerprint of the prompt-visible capability set. */
 export function capabilitiesKey(caps: Array<{ selector: string }>): string {
   if (caps.length === 0) return '0:';

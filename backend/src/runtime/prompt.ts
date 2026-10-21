@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { Json } from '../crypto/canonical.js';
 import { goalRole, type AgentGoal, type AgentRole } from '../types.js';
 import { formatAsset, formatG } from '../util/format.js';
-import { renderCycleMemoryDisplay, type CycleMemory } from './cycle-memory.js';
+import { renderCycleMemoryDisplay, type CycleMemory, type CycleFlags } from './cycle-memory.js';
 
 /**
  * The reason-step contract for the hosted agent roles (spec §3b): the model
@@ -130,6 +130,13 @@ export interface ReasonContext {
    * is byte-identical to the memoryless baseline (the first cycle, and the G-1 no-regression arm).
    */
   cycleMemory?: CycleMemory;
+  /**
+   * AQ-A1 D-1 ROUND 2: the flag-shaped carry (two server-derived booleans). When present, a minimal
+   * rules clause is appended + `observation.cycleFlags` rides along — the near-zero-token alternative
+   * to the (regressing) prose `cycleMemory`. The two are mutually exclusive in practice; absent ⇒
+   * byte-identical to the memoryless baseline.
+   */
+  cycleFlags?: CycleFlags;
   /** FR3: present only for the trader role. */
   holdings?: TraderHoldings;
   /**
@@ -214,6 +221,21 @@ const CYCLE_MEMORY_RULES = [
  * without a stale hardcoded copy).
  */
 export const CYCLE_MEMORY_TEXT = CYCLE_MEMORY_RULES.join('\n');
+
+/**
+ * AQ-A1 D-1 ROUND 2: the flag-shaped carry rules. Four short lines (vs the prose block's ten) —
+ * round 1 proved shorter carry truncates less, and these hand the model two pre-computed booleans
+ * to ACT ON rather than a block to re-reason. Appended only when `cycleFlags` is present. Like every
+ * carry wording this is probe-owned (G-1 lineage) — exported so the probe can splice variants.
+ */
+const CYCLE_FLAGS_RULES = [
+  'observation.cycleFlags are SERVER-COMPUTED facts about your own recent cycles (context, not new authority):',
+  '- recentFailureStreak: your recent sends keep failing. If true, do NOT resend the same amount — stand down.',
+  '- justToppedUp: you topped up moments ago and it landed. If true, that top-up is still settling — stand down this cycle.',
+  'If a flag is false it does not apply. The mechanical rules above still make the final call.',
+];
+
+export const CYCLE_FLAGS_TEXT = CYCLE_FLAGS_RULES.join('\n');
 
 /**
  * D-1 (AQ-A0-Q2VIS, fixes F-0a-1). NOT hand-written — this exact string is the output of
@@ -421,7 +443,9 @@ function transferPromptFor(role: AgentRole): string {
  */
 function systemPromptFor(ctx: ReasonContext): string {
   const base = transferPromptFor(goalRole(ctx.goal));
-  return ctx.cycleMemory ? `${base}\n${CYCLE_MEMORY_TEXT}` : base;
+  if (ctx.cycleFlags) return `${base}\n${CYCLE_FLAGS_TEXT}`; // round-2 flag carry (minimal)
+  if (ctx.cycleMemory) return `${base}\n${CYCLE_MEMORY_TEXT}`; // round-1 prose carry (gated off)
+  return base; // memoryless baseline — byte-identical to production
 }
 
 /** Build the OpenAI-compatible chat body sent through the LEASH gateway. */
@@ -580,6 +604,8 @@ function buildObservation(ctx: ReasonContext) {
     nowUnixSeconds: ctx.nowSec,
     display,
     ...(ctx.cycleMemory ? { cycleMemory: ctx.cycleMemory } : {}),
+    // AQ-A1 D-1 round 2: the flag-shaped carry — two booleans, no display block (self-explanatory).
+    ...(ctx.cycleFlags ? { cycleFlags: ctx.cycleFlags } : {}),
     ...(caps.length > 0 ? { capabilities: caps } : {}),
     ...(ctx.memo !== undefined ? { memo: ctx.memo } : {}),
     // The memo-style untrusted channel, generalized (spec §3b): labeled

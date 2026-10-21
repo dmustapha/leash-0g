@@ -28,9 +28,9 @@
  * SPENDS real 0G Compute credits (ruled a non-issue for A1 testing). KEY is read into a var, never printed.
  */
 import { writeFileSync, mkdirSync } from 'node:fs';
-import { buildReasonRequest, completionContent, parseDecision, CYCLE_MEMORY_TEXT } from '../src/runtime/prompt.js';
+import { buildReasonRequest, completionContent, parseDecision, CYCLE_MEMORY_TEXT, CYCLE_FLAGS_TEXT } from '../src/runtime/prompt.js';
 import type { ReasonContext } from '../src/runtime/prompt.js';
-import type { CycleMemory } from '../src/runtime/cycle-memory.js';
+import { deriveCycleFlags, type CycleMemory } from '../src/runtime/cycle-memory.js';
 import type { AgentGoal } from '../src/types.js';
 
 const KEY = process.env.KEY;
@@ -175,11 +175,21 @@ const ALT_FIRM = [
   'If cycleMemory is absent this is an early cycle with no history — decide normally.',
 ].join('\n');
 
-const ARMS: Record<string, { carry: boolean; altitude?: string }> = {
-  memoryless: { carry: false },
-  carryTerse: { carry: true, altitude: ALT_TERSE },
-  carryMed: { carry: true, altitude: CYCLE_MEMORY_TEXT }, // the current shipping default
-  carryFirm: { carry: true, altitude: ALT_FIRM },
+// A terser flag wording variant (round-2 altitude probe). 2 lines vs the shipped 4.
+const FLAGS_TERSE = [
+  'observation.cycleFlags (server-computed): recentFailureStreak=true → do not resend, stand down.',
+  'justToppedUp=true → the last top-up is still settling, stand down this cycle. Else they do not apply.',
+].join('\n');
+
+// `mode`: none = memoryless (G-1 baseline); prose = round-1 cycleMemory + altitude; flags = round-2
+// two-boolean carry + (optional) altitude splice over CYCLE_FLAGS_TEXT.
+const ARMS: Record<string, { mode: 'none' | 'prose' | 'flags'; altitude?: string }> = {
+  memoryless: { mode: 'none' },
+  carryTerse: { mode: 'prose', altitude: ALT_TERSE },
+  carryMed: { mode: 'prose', altitude: CYCLE_MEMORY_TEXT }, // round-1 shipping default (regressed)
+  carryFirm: { mode: 'prose', altitude: ALT_FIRM },
+  carryFlags: { mode: 'flags' }, // round-2 default (CYCLE_FLAGS_TEXT)
+  carryFlagsTerse: { mode: 'flags', altitude: FLAGS_TERSE },
 };
 
 interface Row {
@@ -194,16 +204,20 @@ interface Row {
 
 async function sample(tag: string, sc: MemScenario, armKey: string, i: number): Promise<Row> {
   const arm = ARMS[armKey]!;
-  const ctx: ReasonContext = arm.carry ? { ...sc.ctx, cycleMemory: sc.cycleMemory } : { ...sc.ctx };
+  const ctx: ReasonContext =
+    arm.mode === 'prose' ? { ...sc.ctx, cycleMemory: sc.cycleMemory }
+    : arm.mode === 'flags' ? { ...sc.ctx, cycleFlags: deriveCycleFlags(sc.cycleMemory) }
+    : { ...sc.ctx };
   const body = buildReasonRequest(MODEL, ctx) as Record<string, unknown>;
-  // For a carry arm, splice the altitude variant in place of the shipping CYCLE_MEMORY_TEXT (which
-  // buildReasonRequest appended). A 0-hit on a carry arm means prompt.ts drifted — fail loudly.
-  if (arm.carry && arm.altitude && arm.altitude !== CYCLE_MEMORY_TEXT) {
+  // Splice the altitude variant in place of whatever carry text buildReasonRequest appended (prose →
+  // CYCLE_MEMORY_TEXT, flags → CYCLE_FLAGS_TEXT). A 0-hit means prompt.ts drifted — fail loudly.
+  const shipped = arm.mode === 'prose' ? CYCLE_MEMORY_TEXT : arm.mode === 'flags' ? CYCLE_FLAGS_TEXT : null;
+  if (shipped && arm.altitude && arm.altitude !== shipped) {
     const msgs = body.messages as Array<{ role: string; content: string }>;
-    const hits = msgs.filter((m) => m.content.includes(CYCLE_MEMORY_TEXT)).length;
+    const hits = msgs.filter((m) => m.content.includes(shipped)).length;
     if (hits !== 1) throw new Error(`carry-altitude splice failed for ${sc.key}/${armKey}: ${hits} hits (prompt.ts drifted?)`);
     body.messages = msgs.map((m) =>
-      m.role === 'system' && m.content.includes(CYCLE_MEMORY_TEXT) ? { ...m, content: m.content.replace(CYCLE_MEMORY_TEXT, arm.altitude!) } : m,
+      m.role === 'system' && m.content.includes(shipped) ? { ...m, content: m.content.replace(shipped, arm.altitude!) } : m,
     );
   }
 

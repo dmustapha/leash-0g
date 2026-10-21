@@ -7,8 +7,10 @@ import {
   classifyOutcome,
   computeActionPossible,
   computeDelta,
+  deriveCycleFlags,
   renderCycleMemoryDisplay,
   snapshotsDiffer,
+  type CycleMemory,
   type CycleRecord,
   type SenseSnapshot,
 } from '../../src/runtime/cycle-memory.js';
@@ -190,6 +192,31 @@ describe('renderCycleMemoryDisplay', () => {
   });
 });
 
+describe('deriveCycleFlags (D-1 round 2 — the four scenarios)', () => {
+  const mk = (last: CycleMemory['lastCycle'], delta: CycleMemory['delta'], failures = 0): CycleMemory =>
+    ({ lastCycle: last, delta, recentOutcomes: { window: 10, sends: 0, standDowns: 0, failures, blocked: 0 } });
+  it('repeated-failure → recentFailureStreak', () => {
+    const f = deriveCycleFlags(mk({ action: 'send', amountWei: '10000000000000000', outcome: 'reverted', agoSeconds: 30 }, null, 3));
+    expect(f.recentFailureStreak).toBe(true);
+    expect(f.justToppedUp).toBe(false);
+  });
+  it('redundant-top-up → justToppedUp (landed recently AND beneficiary rose)', () => {
+    const f = deriveCycleFlags(mk({ action: 'send', amountWei: '40000000000000000', outcome: 'landed', agoSeconds: 8 }, { beneficiaryBalanceWei: '40000000000000000', accountBalanceWei: '0', remainingWindowWei: '0', capabilitiesChanged: false }));
+    expect(f.justToppedUp).toBe(true);
+    expect(f.recentFailureStreak).toBe(false);
+  });
+  it('drain-detection → NO flags (landed but beneficiary FELL → keep funding)', () => {
+    const f = deriveCycleFlags(mk({ action: 'send', amountWei: '10000000000000000', outcome: 'landed', agoSeconds: 40 }, { beneficiaryBalanceWei: '-6000000000000000', accountBalanceWei: '0', remainingWindowWei: '0', capabilitiesChanged: false }));
+    expect(f.justToppedUp).toBe(false);
+    expect(f.recentFailureStreak).toBe(false);
+  });
+  it('stale-window → NO flags (a blocked stand-down must not suppress the resume)', () => {
+    const f = deriveCycleFlags(mk({ action: 'stand_down', amountWei: '0', outcome: 'blocked', agoSeconds: 130 }, { beneficiaryBalanceWei: '0', accountBalanceWei: '0', remainingWindowWei: '100000000000000000', capabilitiesChanged: false }, 0));
+    expect(f.justToppedUp).toBe(false);
+    expect(f.recentFailureStreak).toBe(false);
+  });
+});
+
 describe('prompt integration (D-1 conditional + D-3)', () => {
   const ctx: ReasonContext = { goal: treasuryGoal, beneficiaryBalanceWei: '12000000000000000', accountBalanceWei: '500000000000000000', policy: pol(), nowSec: now };
   const sys = (b: unknown) => ((b as { messages: Array<{ role: string; content: string }> }).messages.find((m) => m.role === 'system')!.content);
@@ -208,6 +235,13 @@ describe('prompt integration (D-1 conditional + D-3)', () => {
     const obs = JSON.parse(user(withMem).replace(/^Observation:\n/, '')) as Record<string, unknown>;
     expect(obs['cycleMemory']).toBeTruthy();
     expect((obs['display'] as Record<string, unknown>)['cycleMemory']).toBeTruthy();
+  });
+  it('round-2 flags: appends the minimal flags clause + observation.cycleFlags (no prose block)', () => {
+    const b = buildReasonRequest('m', { ...ctx, cycleFlags: { recentFailureStreak: true, justToppedUp: false } });
+    expect(sys(b)).toContain('cycleFlags');
+    expect(sys(b)).not.toContain('Recent history'); // not the prose carry
+    const obs = JSON.parse(user(b).replace(/^Observation:\n/, '')) as Record<string, unknown>;
+    expect(obs['cycleFlags']).toEqual({ recentFailureStreak: true, justToppedUp: false });
   });
   it('D-3: caps the shown allowlist to 10 with a +N more marker, never the on-chain set', () => {
     const many = Array.from({ length: 15 }, (_, i) => `0x${String(i).padStart(40, '0')}`);
