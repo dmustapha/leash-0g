@@ -1,0 +1,86 @@
+name: deploy-backend
+
+# Re-establishes merge→deploy for the backend after the Oct-2026 cutover off Render to the
+# self-hosted Oracle VM (which has no auto-deploy). Builds on the runner (the 1 GB box OOMs
+# if it builds — that crash-looped prod once), then ships the compiled dist to the box.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'backend/**'
+      - '.github/workflows/deploy-backend.yml'
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: false
+
+env:
+  DEPLOY_HOST: 132.145.100.81      # api.leash.ink — public, not a secret
+  DEPLOY_USER: ubuntu
+  APP_DIR: /home/ubuntu/run
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest          # x86_64, matches the box — native deps (argon2) stay compatible
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Build backend
+        working-directory: backend
+        run: |
+          npm ci
+          npm run build
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "${{ secrets.DEPLOY_SSH_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Ship + restart (with auto-rollback)
+        run: |
+          set -euo pipefail
+          SSHK="ssh -i $HOME/.ssh/deploy_key -o StrictHostKeyChecking=yes"
+          TGT="${DEPLOY_USER}@${DEPLOY_HOST}"
+          remote() { $SSHK "$TGT" "$@"; }
+
+          echo "::group::backup current build"
+          remote "rm -rf ${APP_DIR}/dist.prev ${APP_DIR}/migrations.prev; \
+                  cp -r ${APP_DIR}/dist ${APP_DIR}/dist.prev; \
+                  cp -r ${APP_DIR}/migrations ${APP_DIR}/migrations.prev"
+          echo "::endgroup::"
+
+          echo "::group::ship build + migrations + package files"
+          rsync -az --delete -e "$SSHK" backend/dist/        "${TGT}:${APP_DIR}/dist/"
+          rsync -az --delete -e "$SSHK" backend/migrations/  "${TGT}:${APP_DIR}/migrations/"
+          rsync -az          -e "$SSHK" backend/package.json backend/package-lock.json "${TGT}:${APP_DIR}/"
+          echo "::endgroup::"
+
+          echo "::group::install prod deps + restart"
+          # npm ci --omit=dev keeps the box's node_modules in lockstep with the lockfile (handles
+          # dep changes); it runs BEFORE restart, so a failure here leaves the old service running.
+          remote "cd ${APP_DIR} && npm ci --omit=dev --no-audit --no-fund && \
+                  sudo systemctl restart leash-backend.service && sleep 8"
+          echo "::endgroup::"
+
+          echo "::group::healthcheck"
+          if remote "curl -sf -o /dev/null http://localhost:8080/healthz"; then
+            echo "✅ healthy — deploy complete"
+            remote "rm -rf ${APP_DIR}/dist.prev ${APP_DIR}/migrations.prev"
+          else
+            echo "❌ unhealthy — rolling back to previous build"
+            remote "rm -rf ${APP_DIR}/dist ${APP_DIR}/migrations; \
+                    mv ${APP_DIR}/dist.prev ${APP_DIR}/dist; \
+                    mv ${APP_DIR}/migrations.prev ${APP_DIR}/migrations; \
+                    cd ${APP_DIR} && npm ci --omit=dev --no-audit --no-fund; \
+                    sudo systemctl restart leash-backend.service; sleep 6"
+            echo "rolled back."
+            exit 1
+          fi
+          echo "::endgroup::"
