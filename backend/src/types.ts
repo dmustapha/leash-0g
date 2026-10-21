@@ -480,7 +480,8 @@ export type AlertKind =
   | 'throttle' // info, coalesced
   | 'alert_storm' // info — the rate guard tripped; counts suppressed emissions
   | 'wind_down_proposed' // info (Phase-5.5) — agent-PROPOSED completion, quarantined; owner confirms
-  | 'completed'; // info (Phase-5.5) — owner wound the agent down (lifespan dial)
+  | 'completed' // info (Phase-5.5) — owner wound the agent down (lifespan dial)
+  | 'input_budget_exceeded'; // info (AQ-A1 D-3) — a reasoning prompt exceeded the per-cycle input ceiling; never clipped
 export type AlertStatus = 'unread' | 'read' | 'resolved' | 'dismissed';
 export type AlertResolution = 'approve' | 'deny' | 'expired' | 'dismissed';
 export type AlertChannel = 'app' | 'telegram' | 'system';

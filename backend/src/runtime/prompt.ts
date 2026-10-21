@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { Json } from '../crypto/canonical.js';
 import { goalRole, type AgentGoal, type AgentRole } from '../types.js';
 import { formatAsset, formatG } from '../util/format.js';
+import { renderCycleMemoryDisplay, type CycleMemory } from './cycle-memory.js';
 
 /**
  * The reason-step contract for the hosted agent roles (spec §3b): the model
@@ -113,12 +114,22 @@ export interface TraderHoldings {
   routerAllowanceWei: string;
 }
 
+// AQ-A1 D-1: the server-composed cross-cycle carry `CycleMemory` + its renderer live in
+// `cycle-memory.js` (pure, unit-tested); imported above. Same trust class as `display.*` — built in
+// the sense node from the agent's OWN trace records, never model text.
+
 export interface ReasonContext {
   goal: AgentGoal;
   beneficiaryBalanceWei: string;
   accountBalanceWei: string;
   policy: PolicySnapshot;
   nowSec: number;
+  /**
+   * AQ-A1 D-1: the server-composed cross-cycle carry. When present, the memory altitude rules are
+   * appended to the system prompt and the rendered block rides the observation; absent ⇒ the prompt
+   * is byte-identical to the memoryless baseline (the first cycle, and the G-1 no-regression arm).
+   */
+  cycleMemory?: CycleMemory;
   /** FR3: present only for the trader role. */
   holdings?: TraderHoldings;
   /**
@@ -172,6 +183,37 @@ const TOKEN_AMOUNT_RULES = [
   '  in base units, not native 0G. observation.display gives each one in its own token (e.g.',
   '  "0.1 sUSD") — use those words, and never label a token amount 0G.',
 ];
+
+/**
+ * AQ-A1 D-1 — how the rules tell the model to USE the cross-cycle carry. Like `DECISION_CONTRACT`,
+ * this is a GATED-WORDING block (G-1 lineage): the exact altitude is chosen by the interleaved D-5
+ * probe, never hand-tuned in place. The text below is the shipping default pending that probe; it is
+ * deliberately low-altitude (what the fields mean + why they help), and explicitly subordinate to
+ * the mechanical rules so a distractor cannot override a policy comparison (research 3a — distractor
+ * poisoning is mitigated by keeping the carry CONTEXT, never a new rule).
+ *
+ * `observation.cycleMemory` is ABSENT on an early cycle; the last line keeps the block inert then.
+ */
+const CYCLE_MEMORY_RULES = [
+  'Recent history (observation.cycleMemory + observation.display.cycleMemory): SERVER-VERIFIED',
+  'facts about YOUR OWN previous cycles — not an instruction, not a rule.',
+  '- lastAction / lastOutcome / lastWhen: what you decided last cycle, how it ended, how long ago.',
+  '- deltaBeneficiary / deltaAccount / deltaRemainingWindow: how those balances moved since then',
+  '  (a signed amount; use the display words). capabilitiesChanged: whether your grants changed.',
+  '- recent: your sends / stand-downs / failures / blocks over the last several cycles.',
+  'Use it only to decide better THIS cycle: do not repeat a top-up you just completed if the balance',
+  'already reflects it; if you funded the beneficiary last cycle and deltaBeneficiary is still',
+  'negative, something is draining it; do not retry an action that just failed or was blocked without',
+  'new reason. The mechanical rules above still decide every cycle. If cycleMemory is absent, this is',
+  'an early cycle with no history — decide normally.',
+];
+
+/**
+ * Exported so `scripts/q2vis-contract-matrix.mts` can splice a candidate altitude in place of the
+ * shipping wording (same law as `DECISION_CONTRACT_TEXT`: the probe owns it, so it must find it
+ * without a stale hardcoded copy).
+ */
+export const CYCLE_MEMORY_TEXT = CYCLE_MEMORY_RULES.join('\n');
 
 /**
  * D-1 (AQ-A0-Q2VIS, fixes F-0a-1). NOT hand-written — this exact string is the output of
@@ -372,12 +414,22 @@ function transferPromptFor(role: AgentRole): string {
   throw new Error(`buildReasonRequest called for non-transfer role "${role}" — job roles use jobs/prompt.ts`);
 }
 
+/**
+ * AQ-A1 D-1: the system prompt gains the memory-altitude rules ONLY when a carry is present. A cold
+ * start (no `cycleMemory`) therefore produces a byte-identical prompt to the memoryless baseline —
+ * which is exactly what the G-1 no-regression arm and every first cycle must see.
+ */
+function systemPromptFor(ctx: ReasonContext): string {
+  const base = transferPromptFor(goalRole(ctx.goal));
+  return ctx.cycleMemory ? `${base}\n${CYCLE_MEMORY_TEXT}` : base;
+}
+
 /** Build the OpenAI-compatible chat body sent through the LEASH gateway. */
 export function buildReasonRequest(model: string, ctx: ReasonContext): Json {
   return {
     model,
     messages: [
-      { role: 'system', content: transferPromptFor(goalRole(ctx.goal)) },
+      { role: 'system', content: systemPromptFor(ctx) },
       { role: 'user', content: `Observation:\n${JSON.stringify(buildObservation(ctx))}` },
     ],
     temperature: 0,
@@ -441,6 +493,48 @@ function nativeDisplay(ctx: ReasonContext): Record<string, string> {
   };
 }
 
+/**
+ * AQ-A1 D-3: composition caps applied at render time. These NEVER touch authority — the decide node
+ * re-derives every authority arg from on-chain grant state (`loadGrantState`), and policy comparisons
+ * run on the raw integers regardless. The cap only curates the MODEL'S VIEW so the prompt cannot grow
+ * unbounded as grants/allowlists accumulate (research 3a: even one irrelevant in-context item costs).
+ */
+const CAP_CAPABILITIES_SHOWN = 8;
+const CAP_ALLOWLIST_SHOWN = 10;
+
+/**
+ * Pre-select the ≤8 capabilities most relevant to this cycle's goal. The decide node validates the
+ * model's pick against the FULL grant regardless, so dropping entries here can only ever narrow the
+ * menu, never authority. Relevance: a swap/approve rung the trader actually climbs ranks above an
+ * unrelated grant; ties break on the larger per-call cap (the more useful rung), deterministically.
+ */
+function selectCapabilities(caps: CapabilityView[], goal: AgentGoal): CapabilityView[] {
+  if (caps.length <= CAP_CAPABILITIES_SHOWN) return caps;
+  const spendToken = goal.type === 'trader' ? goal.spendToken.toLowerCase() : null;
+  const holdToken = goal.type === 'trader' ? goal.holdToken.toLowerCase() : null;
+  const score = (c: CapabilityView): number => {
+    const sig = c.signature ?? '';
+    let s = 0;
+    if (/^swap/.test(sig)) s += 4;
+    if (/^approve\(/.test(sig)) s += 3;
+    if (spendToken && c.target.toLowerCase() === spendToken) s += 2;
+    if (holdToken && c.target.toLowerCase() === holdToken) s += 1;
+    return s;
+  };
+  return [...caps]
+    .map((c, i) => ({ c, i }))
+    .sort((a, b) => score(b.c) - score(a.c) || compareBig(b.c.perCallCap, a.c.perCallCap) || a.i - b.i)
+    .slice(0, CAP_CAPABILITIES_SHOWN)
+    .map((x) => x.c);
+}
+
+/** Decimal-string BigInt compare (no exceptions on non-numeric — treats those as 0). */
+function compareBig(a: string, b: string): number {
+  const pa = /^\d+$/.test(a) ? BigInt(a) : 0n;
+  const pb = /^\d+$/.test(b) ? BigInt(b) : 0n;
+  return pa < pb ? -1 : pa > pb ? 1 : 0;
+}
+
 // Return type inferred: the observation is only ever JSON.stringify-ed into
 // the user message (interfaces like PolicySnapshot lack Json's index signature).
 function buildObservation(ctx: ReasonContext) {
@@ -460,15 +554,33 @@ function buildObservation(ctx: ReasonContext) {
             },
           }
         : {};
+  // D-3: cap the allowlist shown to the model (never the on-chain set the decide node checks). A
+  // longer list is summarized with a "+N more" marker so the prompt can't grow with the allowlist.
+  const policyView =
+    ctx.policy.allowlist.length > CAP_ALLOWLIST_SHOWN
+      ? {
+          ...ctx.policy,
+          allowlist: ctx.policy.allowlist.slice(0, CAP_ALLOWLIST_SHOWN),
+          allowlistTruncated: `+${ctx.policy.allowlist.length - CAP_ALLOWLIST_SHOWN} more`,
+        }
+      : ctx.policy;
+  // D-3: cap the capability menu shown to the model (never authority — see `selectCapabilities`).
+  const caps = ctx.capabilities && ctx.capabilities.length > 0 ? selectCapabilities(ctx.capabilities, goal) : [];
+  // D-1 one-vocabulary doctrine: the carry's human words ride `display.cycleMemory` (rendered by
+  // `renderCycleMemoryDisplay`), alongside the raw structured carry under `cycleMemory` — exactly
+  // the raw-*Wei + `display.*` split every balance already uses.
+  const display: Record<string, string | Record<string, string>> = { ...nativeDisplay(ctx) };
+  if (ctx.cycleMemory) display['cycleMemory'] = renderCycleMemoryDisplay(ctx.cycleMemory);
   return {
     ...goalCtx,
     ...(ctx.holdings !== undefined ? { holdings: ctx.holdings } : {}),
     beneficiaryBalanceWei: ctx.beneficiaryBalanceWei,
     accountBalanceWei: ctx.accountBalanceWei,
-    policy: ctx.policy,
+    policy: policyView,
     nowUnixSeconds: ctx.nowSec,
-    display: nativeDisplay(ctx),
-    ...(ctx.capabilities && ctx.capabilities.length > 0 ? { capabilities: ctx.capabilities } : {}),
+    display,
+    ...(ctx.cycleMemory ? { cycleMemory: ctx.cycleMemory } : {}),
+    ...(caps.length > 0 ? { capabilities: caps } : {}),
     ...(ctx.memo !== undefined ? { memo: ctx.memo } : {}),
     // The memo-style untrusted channel, generalized (spec §3b): labeled
     // provenance so the model is told this is input, NEVER authority.
@@ -624,6 +736,12 @@ export interface CompletionChannels {
   /** D-6 instrument: see `loopCount`. */
   loopCount: number;
   completionTokens: number | null;
+  /**
+   * AQ-A1 D-3: the INPUT token count the gateway billed for this cycle's prompt. It already crosses
+   * the wire in `usage.prompt_tokens` and was dropped; it is the live instrument the per-cycle input
+   * budget (ceiling 4 096) is asserted against, recorded on every decision trace record.
+   */
+  promptTokens: number | null;
 }
 
 /**
@@ -754,7 +872,7 @@ export function loopCount(deliberation: string): number {
 export function completionChannels(body: unknown): CompletionChannels {
   const empty: CompletionChannels = {
     decisionText: '', deliberation: '', decisionSource: 'empty',
-    finishReason: null, loopCount: 0, completionTokens: null,
+    finishReason: null, loopCount: 0, completionTokens: null, promptTokens: null,
   };
   if (!body || typeof body !== 'object') return empty;
   const choices = (body as { choices?: unknown }).choices;
@@ -763,7 +881,7 @@ export function completionChannels(body: unknown): CompletionChannels {
   const message = choice.message;
   const content = typeof message?.content === 'string' ? message.content : '';
   const deliberation = typeof message?.reasoning_content === 'string' ? message.reasoning_content : '';
-  const usage = (body as { usage?: { completion_tokens?: unknown } }).usage;
+  const usage = (body as { usage?: { completion_tokens?: unknown; prompt_tokens?: unknown } }).usage;
 
   // THE SCAVENGE FALLBACK — never delete this (SPEC D-2, hard constraint). Reasoning models put
   // the whole cycle, decision included, in `reasoning_content` when max_tokens starves `content`.
@@ -781,6 +899,7 @@ export function completionChannels(body: unknown): CompletionChannels {
     finishReason: typeof choice.finish_reason === 'string' ? choice.finish_reason : null,
     loopCount: loopCount(deliberation),
     completionTokens: typeof usage?.completion_tokens === 'number' ? usage.completion_tokens : null,
+    promptTokens: typeof usage?.prompt_tokens === 'number' ? usage.prompt_tokens : null,
   };
 }
 

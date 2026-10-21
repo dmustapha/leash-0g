@@ -49,6 +49,17 @@ import {
   type PolicySnapshot,
   type TraderHoldings,
 } from './prompt.js';
+import {
+  capabilitiesKey,
+  classifyOutcome,
+  computeActionPossible,
+  computeDelta,
+  loadCycleMemory,
+  snapshotsDiffer,
+  type CycleMemory,
+  type CycleRecord,
+  type SenseSnapshot,
+} from './cycle-memory.js';
 
 /**
  * The agent graph (spec §3b): the Phase-1 treasury graph with one new
@@ -156,6 +167,16 @@ const TreasuryState = Annotation.Root({
   finishReason: Annotation<string | null>,
   /** D-6: `"action":` restatement count inside the deliberation (severity, not a classifier). */
   deliberationLoops: Annotation<number>,
+  /** AQ-A1 D-1: the server-composed cross-cycle carry fed into THIS cycle's prompt (null = cold). */
+  cycleMemory: Annotation<CycleMemory | null>,
+  /** AQ-A1 D-2: was a legitimate action available this cycle (per-role predicate)? Metric denominator. */
+  actionPossible: Annotation<boolean>,
+  /** AQ-A1 D-2: did anything decision-relevant move since the previous cycle? Metric gate. */
+  observedChange: Annotation<boolean>,
+  /** AQ-A1 D-1/D-2: the compact sensed snapshot to PERSIST on this cycle's trace record (the next cycle diffs it). */
+  senseSnapshot: Annotation<SenseSnapshot | null>,
+  /** AQ-A1 D-3: usage.prompt_tokens of this cycle's reason call (the per-cycle input-budget instrument). */
+  promptTokens: Annotation<number | null>,
   decision: Annotation<AgentDecision>,
   route: Annotation<Route>,
   /** Stage D (D-10): the resolved governed-call `executeCall` args for the `call` route. */
@@ -454,11 +475,62 @@ export function buildTreasuryGraph(
     };
   }
 
+  /**
+   * AQ-A1 D-1/D-2: compose the cross-cycle carry + boundary instruments on top of this cycle's
+   * freshly-sensed `base`. Reads the agent's OWN recent trace records (`loadCycleMemory`), diffs the
+   * current snapshot against the most recent stored one, and computes the per-role `actionPossible`
+   * predicate — all deterministic server data, never model text. A read failure degrades to a cold
+   * carry (absence is honest), never throwing the cycle.
+   */
+  async function composeCarry(
+    base: Partial<State>,
+    hasInbound: boolean,
+    nowSec: number,
+  ): Promise<Partial<State>> {
+    // Invariant: both call sites sense `policy` before composing the carry (idle/reject cycles never
+    // reach here — they return their own cold carry inline).
+    if (!base.policy) throw new Error('composeCarry requires a sensed policy snapshot');
+    const policy = base.policy;
+    const caps = base.capabilities ?? [];
+    const snapshot: SenseSnapshot = {
+      beneficiaryBalanceWei: base.beneficiaryBalanceWei ?? '0',
+      accountBalanceWei: base.accountBalanceWei ?? '0',
+      remainingWindowWei: policy.remainingWindowWei,
+      // The FULL grant set fingerprints here (not the ≤8 prompt-view cap) so `capabilitiesChanged`
+      // tracks real grant changes, not a reshuffle of which 8 the model happened to see.
+      capabilitiesKey: capabilitiesKey(caps),
+      ...(base.holdings
+        ? {
+            holdBalanceWei: base.holdings.holdBalanceWei,
+            spendBalanceWei: base.holdings.spendBalanceWei,
+            routerAllowanceWei: base.holdings.routerAllowanceWei,
+          }
+        : {}),
+    };
+    const { cycleMemory, baselineSnapshot } = await loadCycleMemory(deps.pool, ctx.agentId, nowSec, 10);
+    // The composer leaves `delta` null; fill it now that we hold the CURRENT snapshot.
+    if (cycleMemory) cycleMemory.delta = computeDelta(snapshot, baselineSnapshot);
+    const observedChange = baselineSnapshot ? snapshotsDiffer(snapshot, baselineSnapshot) : true;
+    const actionPossible = computeActionPossible({
+      goal: ctx.goal,
+      policy,
+      beneficiaryBalanceWei: snapshot.beneficiaryBalanceWei,
+      accountBalanceWei: snapshot.accountBalanceWei,
+      effectiveBeneficiary: base.effectiveBeneficiary ?? '',
+      holdings: base.holdings ?? null,
+      capabilitiesCount: caps.length,
+      hasInbound,
+      nowSec,
+    });
+    return { cycleMemory, actionPossible, observedChange, senseSnapshot: snapshot };
+  }
+
   async function sense(state: State): Promise<Partial<State>> {
     const mode = classifyCycle(ctx.goal, state.inboundDelegation);
     // No transfer intent this cycle (idle executor / rejected inbound): skip
     // the RPC reads — nothing downstream consults them, and the idle executor
-    // polls forever (RPC burn for nothing).
+    // polls forever (RPC burn for nothing). No carry either — nothing was sensed,
+    // and persisting a snapshot of a non-cycle would corrupt the next delta.
     if (mode.mode === 'executor_idle' || mode.mode === 'inbound_reject') {
       return {
         beneficiaryBalanceWei: '0',
@@ -467,6 +539,10 @@ export function buildTreasuryGraph(
         capabilities: [],
         holdings: null,
         bandPrice18: null,
+        cycleMemory: null,
+        actionPossible: false,
+        observedChange: false,
+        senseSnapshot: null,
         policy: {
           perTransferCapWei: '0',
           windowCapWei: '0',
@@ -480,9 +556,13 @@ export function buildTreasuryGraph(
         },
       };
     }
+    const nowSec = Math.floor(Date.now() / 1000);
     const autoGoal = autonomousGoalOf(mode);
     // FR3 (F-8): the trader watches token holdings, not a beneficiary balance.
-    if (autoGoal !== null && autoGoal.type === 'trader') return senseTrader(autoGoal);
+    if (autoGoal !== null && autoGoal.type === 'trader') {
+      const base = await senseTrader(autoGoal);
+      return { ...base, ...(await composeCarry(base, false, nowSec)) };
+    }
     const beneficiary =
       mode.mode === 'inbound_transfer'
         ? mode.request.beneficiary
@@ -493,7 +573,7 @@ export function buildTreasuryGraph(
       deps.chain.getPolicyView(ctx.accountAddr, [beneficiary]),
       senseCapabilities(mode),
     ]);
-    return {
+    const base: Partial<State> = {
       beneficiaryBalanceWei: beneficiaryBalance.toString(),
       accountBalanceWei: account.toString(),
       effectiveBeneficiary: beneficiary,
@@ -505,6 +585,7 @@ export function buildTreasuryGraph(
       // logically reset even though storage updates on the next spend.
       policy: toPolicySnapshot(policy),
     };
+    return { ...base, ...(await composeCarry(base, mode.mode === 'inbound_transfer', nowSec)) };
   }
 
   async function reason(state: State): Promise<Partial<State>> {
@@ -514,7 +595,7 @@ export function buildTreasuryGraph(
     // (resp. per spam envelope — the coordinator throttles bound issuance,
     // this bounds the receiver side).
     if (mode.mode === 'executor_idle' || mode.mode === 'inbound_reject') {
-      return { reasoning: '', deliberation: '', decisionSource: 'empty' as const, finishReason: null, deliberationLoops: 0 };
+      return { reasoning: '', deliberation: '', decisionSource: 'empty' as const, finishReason: null, deliberationLoops: 0, promptTokens: null };
     }
     const model = ctx.goal.model ?? deps.defaultModel;
     const body = buildReasonRequest(model, {
@@ -523,6 +604,9 @@ export function buildTreasuryGraph(
       accountBalanceWei: state.accountBalanceWei,
       policy: state.policy,
       nowSec: Math.floor(Date.now() / 1000),
+      // AQ-A1 D-1: the server-composed cross-cycle carry (absent on a cold start — then the prompt
+      // is byte-identical to the memoryless baseline, which is what every first cycle must see).
+      ...(state.cycleMemory ? { cycleMemory: state.cycleMemory } : {}),
       // FR3 (F-8): the trader's sensed token holdings (absent for other roles).
       ...(state.holdings ? { holdings: state.holdings } : {}),
       ...(state.tokenMeta ? { tokenMeta: state.tokenMeta } : {}),
@@ -596,12 +680,32 @@ export function buildTreasuryGraph(
           `(finish_reason=${channels.finishReason}, loops=${channels.loopCount})`,
       );
     }
+    // AQ-A1 D-3: the per-cycle INPUT budget is a HARD ceiling of 4 096 tokens (matches the
+    // completion budget). We never clip the prompt — a clipped money-decision prompt is more
+    // dangerous than an expensive one — so a breach is asserted LOUDLY (warn + owner alert) and the
+    // cycle proceeds on the full prompt. `promptTokens` rides the trace record so conformance is a
+    // durable SQL question, not an in-process guess (the house pattern).
+    if (channels.promptTokens !== null && channels.promptTokens > INPUT_TOKEN_CEILING) {
+      console.warn(
+        `[runtime] agent ${ctx.agentId}: prompt_tokens ${channels.promptTokens} exceeds the ` +
+          `${INPUT_TOKEN_CEILING} input-budget ceiling — not clipped; investigate composition.`,
+      );
+      await deps.alerts?.emit(ctx.agentRow.ownerAddr, {
+        agentId: ctx.agentId,
+        class: 'info',
+        kind: 'input_budget_exceeded',
+        summary: `${ctx.agentRow.name}: a reasoning prompt used ${channels.promptTokens} input tokens (budget ${INPUT_TOKEN_CEILING}).`,
+        refs: {},
+        dedupKey: `input_budget_exceeded:${ctx.agentId}`,
+      });
+    }
     return {
       reasoning: text,
       deliberation: delib.text,
       decisionSource: channels.decisionSource,
       finishReason: channels.finishReason,
       deliberationLoops: channels.loopCount,
+      promptTokens: channels.promptTokens,
     };
   }
 
@@ -1169,6 +1273,23 @@ export function buildTreasuryGraph(
           auditDetail['rationaleAnchorFailure'] = anchor.actionMatches ? 'amount' : 'action';
         }
       }
+      // AQ-A1 D-1/D-2: persist this cycle's snapshot + boundary instruments under `detail.cycle`, so
+      // the NEXT cycle's `loadCycleMemory` can read the last decision/outcome and diff balances. Only
+      // when a snapshot was actually sensed (idle/reject cycles carry none — persisting one would
+      // corrupt the next delta). `classifyOutcome` reduces the runtime's full outcome union to the
+      // carry's legible vocabulary; the raw amount comes from the DECISION (what was attempted).
+      if (state.senseSnapshot && state.decision) {
+        const cycle: CycleRecord = {
+          action: state.decision.action,
+          amountWei: state.decision.amountWei,
+          outcome: classifyOutcome(o.type, 'reason' in o ? o.reason : undefined, PARSE_MISS_REASON),
+          actionPossible: state.actionPossible,
+          observedChange: state.observedChange,
+          promptTokens: state.promptTokens ?? null,
+          snapshot: state.senseSnapshot,
+        };
+        auditDetail['cycle'] = cycle as unknown as Json;
+      }
       const rec =
         o.type === 'acted'
           ? await appendTrace(deps.pool, {
@@ -1564,6 +1685,14 @@ function evaluateDecision(
  * solved at the retention/compression layer — never by truncating every record at ingest.
  */
 const DELIBERATION_CAP = 16_384;
+
+/**
+ * AQ-A1 D-3: the per-cycle INPUT token ceiling. A HARD budget, never a clip point — a breach is
+ * alerted and the full prompt still goes (a truncated money-decision prompt is the worse failure).
+ * 4 096 matches the completion budget; current roles sit at ~1.2–1.7k and D-1 adds ≤~0.6k, so a
+ * breach means the composition grew wrong (unbounded capabilities/allowlist) and wants investigation.
+ */
+const INPUT_TOKEN_CEILING = 4_096;
 
 export function clipDeliberation(
   deliberation: string,
