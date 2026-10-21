@@ -250,6 +250,8 @@ async function sample(tag: string, sc: MemScenario, armKey: string, i: number): 
   base.prompt_tokens = j?.usage?.prompt_tokens ?? null;
   base.err = j?.error?.message ?? (typeof j?.error === 'string' ? j.error : null);
 
+  // `completionContent` applies production's scavenge fallback, so a row with content_len=0 AND
+  // parses=true means the scavenge fired (decision read from reasoning_content) — not a parse miss.
   const d = parseDecision(completionContent(j));
   base.parses = !!d;
   if (d) {

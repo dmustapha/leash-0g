@@ -195,10 +195,14 @@ describe('renderCycleMemoryDisplay', () => {
 describe('deriveCycleFlags (D-1 round 2 — the four scenarios)', () => {
   const mk = (last: CycleMemory['lastCycle'], delta: CycleMemory['delta'], failures = 0): CycleMemory =>
     ({ lastCycle: last, delta, recentOutcomes: { window: 10, sends: 0, standDowns: 0, failures, blocked: 0 } });
-  it('repeated-failure → recentFailureStreak', () => {
+  it('repeated-failure → recentFailureStreak (≥2 failures in the window)', () => {
     const f = deriveCycleFlags(mk({ action: 'send', amountWei: '10000000000000000', outcome: 'reverted', agoSeconds: 30 }, null, 3));
     expect(f.recentFailureStreak).toBe(true);
     expect(f.justToppedUp).toBe(false);
+  });
+  it('a SINGLE revert does NOT trip the streak (Gate-② carry: no over-suppression of a valid resend)', () => {
+    const f = deriveCycleFlags(mk({ action: 'send', amountWei: '10000000000000000', outcome: 'reverted', agoSeconds: 30 }, null, 1));
+    expect(f.recentFailureStreak).toBe(false);
   });
   it('redundant-top-up → justToppedUp (landed recently AND beneficiary rose)', () => {
     const f = deriveCycleFlags(mk({ action: 'send', amountWei: '40000000000000000', outcome: 'landed', agoSeconds: 8 }, { beneficiaryBalanceWei: '40000000000000000', accountBalanceWei: '0', remainingWindowWei: '0', capabilitiesChanged: false }));

@@ -121,7 +121,13 @@ export interface CycleFlags {
 
 export function deriveCycleFlags(cm: CycleMemory): CycleFlags {
   const last = cm.lastCycle;
-  const recentFailureStreak = cm.recentOutcomes.failures >= 2 || last.outcome === 'reverted';
+  // Gate-② (2026-10-21, distinct-model review): require an actual STREAK (≥2 failures in the
+  // window), NOT a single revert. A one-off revert is a transient (the reason node already retries
+  // once); suppressing the next send on it over-suppresses a valid top-up — and for a pure-delegate
+  // sentinel, whose window failure-count only moves on genuine failed delegations, a single-revert
+  // trigger would muzzle the next request on one RPC blip. The window tally INCLUDES the head trace,
+  // so two consecutive reverts register as `failures >= 2`.
+  const recentFailureStreak = cm.recentOutcomes.failures >= 2;
   const beneficiaryRose = cm.delta !== null && BigInt(cm.delta.beneficiaryBalanceWei) > 0n;
   const justToppedUp = last.action === 'send' && last.outcome === 'landed' && last.agoSeconds < 90 && beneficiaryRose;
   return { recentFailureStreak, justToppedUp };
