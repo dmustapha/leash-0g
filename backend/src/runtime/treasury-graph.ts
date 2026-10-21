@@ -604,9 +604,17 @@ export function buildTreasuryGraph(
       accountBalanceWei: state.accountBalanceWei,
       policy: state.policy,
       nowSec: Math.floor(Date.now() / 1000),
-      // AQ-A1 D-1: the server-composed cross-cycle carry (absent on a cold start — then the prompt
-      // is byte-identical to the memoryless baseline, which is what every first cycle must see).
-      ...(state.cycleMemory ? { cycleMemory: state.cycleMemory } : {}),
+      // AQ-A1 D-1: the server-composed cross-cycle carry. Absent on a cold start — then the prompt is
+      // byte-identical to the memoryless baseline, which every first cycle must see.
+      //
+      // ⚠ GATED OFF BY DEFAULT (`CARRY_INJECTION_ENABLED`). The round-1 D-5 probe
+      // (`docs/evidence/aq-a1/M-memory-matrix-round1.json`) proved every tested altitude REGRESSES
+      // G-1: injecting the prose carry inflates deliberation on `0gm-1.0-35b-a3b` and truncates
+      // 40–52% of cycles (vs 10% memoryless), collapsing parse to 73–85% — the thinking-mode penalty,
+      // not context rot (B-2 retrieved a needle at 4.6k tokens fine). So the carry does NOT reach live
+      // agents until a passing SHAPE lands (round 2: server-derived flags consumed by the mechanical
+      // rules, not a prose block). The D-2 instrument + D-3 budget below are always-on — they passed.
+      ...(CARRY_INJECTION_ENABLED && state.cycleMemory ? { cycleMemory: state.cycleMemory } : {}),
       // FR3 (F-8): the trader's sensed token holdings (absent for other roles).
       ...(state.holdings ? { holdings: state.holdings } : {}),
       ...(state.tokenMeta ? { tokenMeta: state.tokenMeta } : {}),
@@ -1693,6 +1701,15 @@ const DELIBERATION_CAP = 16_384;
  * breach means the composition grew wrong (unbounded capabilities/allowlist) and wants investigation.
  */
 const INPUT_TOKEN_CEILING = 4_096;
+
+/**
+ * AQ-A1 D-1 safety gate. The cross-cycle carry is BUILT and its instrument (D-2) + budget (D-3) are
+ * always-on, but INJECTING the prose carry into the prompt is OFF until a non-regressing altitude
+ * exists (round-1 probe: every altitude truncated 40–52% of cycles — a G-1 fail). Flip to `true`
+ * only once a round-2 shape clears G-1 + G-2 on `scripts/aq-a1-memory-matrix.mts`. Env override lets
+ * the probe/live A-B flip it without a code change: `AQ_A1_CARRY=1`.
+ */
+const CARRY_INJECTION_ENABLED = process.env.AQ_A1_CARRY === '1';
 
 export function clipDeliberation(
   deliberation: string,
