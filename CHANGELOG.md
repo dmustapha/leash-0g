@@ -2,6 +2,13 @@
 
 LEASH is built in phases, each ending in a scope + build review gate and proven on the 0G Galileo testnet (chain 16602) before the next begins. This log tracks those phases.
 
+## Agent-quality — AQ-A1 per-cycle context engineering (2026-10)
+
+- The decision loop was measured **memoryless** — working memory was written every cycle but read back by nothing, so an agent re-decided blind every 30s. AQ-A1 adds a **server-composed cross-cycle carry**: two booleans derived from the agent's OWN hash-chained traces (`recentFailureStreak`, `justToppedUp`) that the mechanical rules consume — so an agent stops re-sending a payment that just reverted, or double-topping-up a wallet it funded moments ago. Server data, same trust class as the balances; never model text, never authority.
+- **Proven on the 0gm probe harness** (interleaved arms, paired by scenario, first-attempt, scored by production's own decision schema): the flag carry is correct on **100%** of the decision-flip scenarios and does no harm on the rest, with **zero truncation** and completion-token cost **below** the memoryless baseline. An earlier prose-block design regressed (40–52% truncation from deliberation inflation) and was rejected — the probe owns the design, never a hand-written wording.
+- Two always-on instruments land with it: a **sense→decide boundary record** (`actionPossible`/`observedChange` per cycle) that makes "decision quality per *observed change*" a durable SQL question, and a **per-cycle input-token budget** (4096 ceiling, alert-not-clip) with capability/allowlist composition caps that curate the model's view without ever narrowing authority.
+- Distinct-model Gate-② AGREE (one carry over, amended + re-verified). The carry is env-gated (`AQ_A1_CARRY=0` disables for A-B / rollback).
+
 ## Whole-project tear-apart — safety floor proven (2026-10)
 
 - Every product stage (P1→RH2) plus four adversarial waves driven against the walls, live on testnet: stolen ops keys, hijacked session keys, forged consent, cross-chain replay, SSRF egress, grant resurrection. Verdict: **zero exploitable custody bugs; the non-custodial thesis holds live.**
