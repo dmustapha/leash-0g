@@ -68,14 +68,14 @@ contract PolicyLib {
 
     /// @notice Validate a governed-proposal payload at PROPOSE time (fail early; the account
     ///         re-validates concrete writes at apply through the same code paths).
+    ///         KIND_ENVELOPE is REFUSED here — the envelope grammar lives on the
+    ///         EnvelopeModule (its own propose/apply_), never on the account's governed slot
+    ///         (Gate-② W-1: a kind-2 payload would misroute in the account's apply dispatch).
     function validatePayload(uint8 kind, bytes calldata payload) external pure {
         if (kind == KIND_ASSET) {
             (, AssetPolicy memory p) = abi.decode(payload, (address, AssetPolicy));
             if (p.windowSeconds == 0) revert InvalidPolicy();
             if (p.windowCap < p.perTransferCap) revert CapInvariant(p.windowCap, p.perTransferCap);
-        } else if (kind == KIND_ENVELOPE) {
-            (, EnvelopeEntry memory e) = abi.decode(payload, (address, EnvelopeEntry));
-            if (e.minWindowSeconds == 0 || e.maxWindowCap < e.maxPerTransferCap) revert InvalidPolicy();
         } else if (kind == KIND_SESSION) {
             SessionPolicy memory sp = abi.decode(payload, (SessionPolicy));
             if (sp.ruleWindowSeconds == 0) revert InvalidPolicy();
@@ -129,7 +129,9 @@ contract PolicyLib {
 
     /// @notice G-2: the two-bucket sliding debit. Estimate = `cur + prev·(W−offset)/W + amount`;
     ///         reverts past the cap; returns the rolled meter for the account to store. `view`
-    ///         (reads block.timestamp) so the account STATICCALLs it.
+    ///         — called from the account's mutable debit path via a plain CALL (Gate-② N-1:
+    ///         Solidity only auto-STATICCALLs from view callers); the isolation guarantee is
+    ///         the immutable address pin + this contract having no state, not the call opcode.
     function slide(WindowMeter calldata m0, uint32 windowSeconds, uint256 amount, uint128 cap)
         external
         view

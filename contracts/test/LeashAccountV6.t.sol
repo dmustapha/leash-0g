@@ -397,6 +397,36 @@ contract LeashAccountV6Test is Test {
         acct.applyGoverned(1, abi.encode(address(novel), PolicyLib.AssetPolicy(true, 10 ether, 20 ether, W)));
     }
 
+    // ================= Gate-② carries (W-1, W-2) =================
+
+    function test_W1_envelopeKind_refused_onAccountGovernedSlot() public {
+        // kind 2 (envelope) is module-owned; the account's propose must refuse it so a
+        // mis-typed payload can never fall into the payee decode (allowlist corruption).
+        bytes memory payload = abi.encode(address(novel), PolicyLib.EnvelopeEntry(true, 1 ether, 2 ether, W));
+        vm.prank(owner);
+        vm.expectRevert(PolicyLib.InvalidPolicy.selector);
+        acct.proposeGoverned(2, payload);
+    }
+
+    function test_W1_unknownKind_apply_refused() public {
+        // even if a bad kind somehow had a commit, apply must revert, never mis-decode
+        vm.prank(owner);
+        vm.expectRevert(PolicyLib.InvalidPolicy.selector);
+        acct.proposeGoverned(9, abi.encode(address(novel), payee));
+    }
+
+    function test_W2_queuedPayee_refused_afterEnvelopeRemoved_midWindow() public {
+        _setEnvelope(address(usd), 10 ether, 30 ether);
+        vm.prank(session);
+        mod.agentAddPayee(address(acct), address(usd), stranger); // never-seen → queued
+        vm.prank(owner);
+        mod.removeEnvelope(address(acct), address(usd)); // owner withdraws the root authority
+        vm.warp(block.timestamp + VETO + 1);
+        vm.prank(session);
+        vm.expectRevert(abi.encodeWithSelector(LeashEnvelopeModuleV6.OutsideEnvelope.selector, address(usd)));
+        mod.agentApplyQueued(address(acct), 2, address(usd), PolicyLib.AssetPolicy(false, 0, 0, 0), stranger);
+    }
+
     // ================= helpers =================
 
     function _grantRule(address target, bytes4 sel, uint8 mode, uint128 pcc, uint128 wcc) internal {

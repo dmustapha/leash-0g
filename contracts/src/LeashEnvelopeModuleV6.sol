@@ -202,6 +202,9 @@ contract LeashEnvelopeModuleV6 {
             p.perTransferCap > e.maxPerTransferCap || p.windowCap > e.maxWindowCap
                 || p.windowSeconds < e.minWindowSeconds
         ) revert OutsideEnvelope(asset);
+        // Gate-② N-2 (documented fail-closed default): with NO VetoConfig set, sharpBps
+        // reads as 0 below, so EVERY enable is "sharp" and queues behind the account's own
+        // timelockDelay — a new account is conservative until the owner tunes the veto.
         VetoConfig storage vc = vetoConfig[account];
 
         (bool enabled, uint128 curPtc, uint128 curWc, uint32 curWs,) = _livePolicy(account, asset);
@@ -266,6 +269,9 @@ contract LeashEnvelopeModuleV6 {
             _acct(account).moduleSetAssetPolicy(asset, p);
         } else {
             if (keccak256(abi.encode(uint8(2), asset, payee)) != agentCommit[account]) revert CommitMismatch();
+            // Gate-② W-2: re-validate the LIVE envelope for payee adds too — an owner who
+            // removed the entry mid-window has withdrawn the root authority (attenuation law).
+            if (!envelope[account][asset].set) revert OutsideEnvelope(asset);
             _acct(account).moduleAddPayee(asset, payee);
         }
         _clearAgent(account);

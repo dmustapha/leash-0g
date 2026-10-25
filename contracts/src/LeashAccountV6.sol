@@ -1091,9 +1091,13 @@ contract LeashAccountV6 is ReentrancyGuard {
             PolicyLib.SessionPolicy memory sp = abi.decode(payload, (PolicyLib.SessionPolicy));
             session = sp;
             emit SessionPolicyChanged(sp);
-        } else {
+        } else if (kind == 4) {
             (address asset, address payee) = abi.decode(payload, (address, address));
             _addPayee(asset, payee);
+        } else {
+            // Gate-② W-1: kind 2 (envelope) is MODULE-owned; any unknown kind must never
+            // fall through to a wrong-type abi.decode (a silent allowlist corruption).
+            revert InvalidPolicy();
         }
         _clearPendingGoverned();
     }
