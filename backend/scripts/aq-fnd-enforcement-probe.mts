@@ -80,9 +80,22 @@ const rec = (gate: string, title: string, status: GateResult['status'], evidence
 
 const sleep = (s: number) => new Promise((r) => setTimeout(r, s * 1000));
 
+/** 0G's RPC can race receipt indexing (TransactionReceiptNotFoundError escapes viem's poller) —
+ *  retry the wait a few times before giving up. */
+async function waitRcpt(hash: Hex) {
+  for (let i = 0; ; i++) {
+    try {
+      return await pub.waitForTransactionReceipt({ hash, timeout: 120_000 });
+    } catch (e) {
+      if (i >= 4) throw e;
+      await sleep(3);
+    }
+  }
+}
+
 async function send(req: { to: Address; data?: Hex; value?: bigint }): Promise<Hex> {
   const hash = await opsWallet.sendTransaction({ account: ops, chain, ...req });
-  const rcpt = await pub.waitForTransactionReceipt({ hash, timeout: 120_000 });
+  const rcpt = await waitRcpt(hash);
   if (rcpt.status !== 'success') throw new Error(`tx reverted: ${hash}`);
   return hash;
 }
@@ -116,7 +129,7 @@ async function deploySingleton(name: string, creation: Hex, saltLabel: string): 
 async function write(addr: Address, abi: any, functionName: string, args: unknown[], account = ops, wallet = opsWallet): Promise<Hex> {
   const { request } = await pub.simulateContract({ address: addr, abi, functionName, args, account });
   const hash = await wallet.writeContract(request);
-  const rcpt = await pub.waitForTransactionReceipt({ hash, timeout: 120_000 });
+  const rcpt = await waitRcpt(hash);
   if (rcpt.status !== 'success') throw new Error(`${functionName} reverted: ${hash}`);
   return hash;
 }
@@ -128,9 +141,9 @@ async function main() {
   mkdirSync(OUT, { recursive: true });
   console.log(`ops ${ops.address}, balance ${await pub.getBalance({ address: ops.address })} wei\n— deploy phase —`);
 
-  const policyLib = await deploySingleton('PolicyLib', A.policyLib.bytecode, 'leash.aqfnd.policylib.v1');
-  const module = await deploySingleton('EnvelopeModuleV6', A.module.bytecode, 'leash.aqfnd.envmodule.v1');
-  const delegate = await deploySingleton('GasRepayDelegate', A.delegate.bytecode, 'leash.aqfnd.gasdelegate.v1');
+  const policyLib = await deploySingleton('PolicyLib', A.policyLib.bytecode, 'leash.aqfnd.policylib.v2');
+  const module = await deploySingleton('EnvelopeModuleV6', A.module.bytecode, 'leash.aqfnd.envmodule.v2');
+  const delegate = await deploySingleton('GasRepayDelegate', A.delegate.bytecode, 'leash.aqfnd.gasdelegate.v2');
 
   // RESUME mode (gas economy): --account/--token/--token2 reuse a prior run's live deploys;
   // ops (the owner) rotates in a fresh session key and the gates continue on the same account.
@@ -326,7 +339,7 @@ async function main() {
   }
   // outside the envelope → refused
   const freshPol: readonly [boolean, bigint, bigint, number] = [true, E18, 2n * E18, W];
-  const NO_ENV = '0x00000000000000000000000000000000000000Aa' as Address; // never enveloped
+  const NO_ENV = '0x00000000000000000000000000000000000000aa' as Address; // never enveloped
   const g6a = await expectRevert(
     () => write(module, MOD, 'agentEnableAsset', [acct, freshPol, NO_ENV], session, sessionWallet),
     'agent enable outside envelope',
