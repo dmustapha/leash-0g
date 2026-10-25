@@ -86,13 +86,16 @@ export async function assertBridgeRoutable(
       `destination RPC reports chain ${reportedDestId}, configured ${destinationChainId} — refusing (L-02)`,
     );
   }
-  // Stage F′ (FP-4 P1): V4 (governed-calldata) + V5 (governed-signing) are both
-  // deterministic CREATE2 accounts eligible to bridge; legacy v2 is not.
-  const deterministic = agent.accountVersion === 4 || agent.accountVersion === 5;
+  // Stage F′ (FP-4 P1) + AQ-FND: V4 (governed-calldata), V5 (governed-signing) and V6
+  // (multi-asset) are deterministic CREATE2 accounts eligible to bridge; legacy v2 is not.
+  // (AQ-FND review N-3: the version gate is explicitly WIDENED to v6 — else the same-address
+  // hardening silently no-ops for the new accounts.)
+  const deterministic =
+    agent.accountVersion === 4 || agent.accountVersion === 5 || agent.accountVersion === 6;
   if (!deterministic || !agent.accountSalt) {
     throw new BridgeRoutingRefusedError(
       'no_persisted_tuple',
-      'only deterministic V4/V5 accounts (persisted salt + tuple) can bridge',
+      'only deterministic V4/V5/V6 accounts (persisted salt + tuple) can bridge',
     );
   }
   let tuple;
@@ -129,10 +132,10 @@ export async function assertBridgeRoutable(
       chainIds: [agent.chainId, destinationChainId],
       expectedAccountAddr: agent.accountAddr,
       homeChainId: agent.chainId,
-      // FP-4: V5 verifies the pinned singletons + off-chain predict (else V4 factory).
-      accountVersion: agent.accountVersion === 5 ? 5 : 4,
-      // RULING-A active anchor (Gate-② W-02): bind to the persisted initcode hash for V5 agents.
-      ...(agent.accountVersion === 5 && agent.initCodeHash ? { initCodeHash: agent.initCodeHash } : {}),
+      // FP-4 + AQ-FND: V5/V6 verify the pinned singletons + off-chain predict (else V4 factory).
+      accountVersion: agent.accountVersion === 6 ? 6 : agent.accountVersion === 5 ? 5 : 4,
+      // RULING-A active anchor: bind to the persisted initcode hash for V5/V6 agents.
+      ...(agent.accountVersion >= 5 && agent.initCodeHash ? { initCodeHash: agent.initCodeHash } : {}),
     });
     return { destinationChainId, verifiedAddr };
   } catch (err) {

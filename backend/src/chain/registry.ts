@@ -54,6 +54,11 @@ export interface ChainConfig {
    * create is DEFAULT-DENIED on a chain missing ANY of the three singletons.
    */
   decodeHelperAddr?: string | undefined;
+  /** AQ-FND V6 singletons (PolicyLib / EnvelopeModule / GasRepayDelegate) — same-address-pinned;
+   *  a V6 create or verify is DEFAULT-DENIED on a chain missing any required one. */
+  policyHelperAddr?: string | undefined;
+  envelopeModuleAddr?: string | undefined;
+  gasRepayDelegateAddr?: string | undefined;
   /** Default account version minted on this chain (SD-E7: 4 = governed calldata). */
   accountVersion: number;
   /** Canonical deployed targets on this chain (mock/real per stage). */
@@ -249,6 +254,9 @@ export class ChainRegistry {
       ...(c.create2DeployerAddr ? { create2DeployerAddr: c.create2DeployerAddr } : {}),
       ...(c.signingHelperAddr ? { signingHelperAddr: c.signingHelperAddr } : {}),
       ...(c.decodeHelperAddr ? { decodeHelperAddr: c.decodeHelperAddr } : {}),
+      ...(c.policyHelperAddr ? { policyHelperAddr: c.policyHelperAddr } : {}),
+      ...(c.envelopeModuleAddr ? { envelopeModuleAddr: c.envelopeModuleAddr } : {}),
+      ...(c.gasRepayDelegateAddr ? { gasRepayDelegateAddr: c.gasRepayDelegateAddr } : {}),
       registryAddr: c.registryAddr,
       ...(clients ? { clients } : {}),
     });
@@ -335,7 +343,7 @@ export class ChainRegistry {
      * both helper contracts, address + codehash) across chains + the off-chain
      * `predictAccountV5`. A chain missing any pinned singleton is REFUSED.
      */
-    accountVersion?: 4 | 5;
+    accountVersion?: 4 | 5 | 6;
     /**
      * The persisted account address (`agents.account_addr`) the caller is about
      * to route funds for. When provided, the verification BINDS the prediction
@@ -365,7 +373,11 @@ export class ChainRegistry {
     // bytecode), so a misconfigured / spoofed dependency is refused with a TYPED
     // error BEFORE any predict is attempted. V4 pins the one factory; V5 pins the
     // three singletons (generic deployer + both helpers) baked into the address.
-    if (version === 5) {
+    if (version === 6) {
+      await this.assertSingletonsSameAddress(input.chainIds, [
+        'create2DeployerAddr', 'signingHelperAddr', 'decodeHelperAddr', 'policyHelperAddr', 'envelopeModuleAddr',
+      ]);
+    } else if (version === 5) {
       await this.assertV5SingletonsSameAddress(input.chainIds);
     } else {
       await this.assertV4FactorySameAddress(input.chainIds);
@@ -375,7 +387,11 @@ export class ChainRegistry {
     for (const chainId of input.chainIds) {
       const ops = this.getChainOps(chainId);
       const predicted = (
-        version === 5 ? this.predictV5(ops, input) : await this.predictV4(ops, chainId, input)
+        version === 6
+          ? this.predictV6(ops, input)
+          : version === 5
+            ? this.predictV5(ops, input)
+            : await this.predictV4(ops, chainId, input)
       ).toLowerCase();
       perChain.push({ chainId, predicted, accountCodehash: await ops.getCodeHash(predicted) });
     }
@@ -390,8 +406,11 @@ export class ChainRegistry {
     // tuple the predictions were derived from must hash to the stored anchor — a post-mint tuple drift
     // (which would shift every chain's prediction in lockstep, invisible to the cross-chain check) is
     // refused here. V5 only; omitted at pre-create time (no account/hash yet).
-    if (version === 5 && input.initCodeHash) {
-      const rebuilt = this.getChainOps(ref.chainId).v5InitCodeHash({
+    if (version >= 5 && input.initCodeHash) {
+      const hashFn = version === 6
+        ? this.getChainOps(ref.chainId).v6InitCodeHash.bind(this.getChainOps(ref.chainId))
+        : this.getChainOps(ref.chainId).v5InitCodeHash.bind(this.getChainOps(ref.chainId));
+      const rebuilt = hashFn({
         ownerAddr: input.ownerAddr,
         guardianAddr: input.create.guardianAddr,
         sessionKeyAddr: input.create.sessionKeyAddr,
@@ -464,6 +483,55 @@ export class ChainRegistry {
         throw new SameAddressMismatchError(f.chainId, 'factory_codehash', ref.codehash, f.codehash ?? 'no code');
       }
     }
+  }
+
+  /**
+   * AQ-FND V6 PASS 1 — the generalized singleton pin: every named ChainConfig singleton must
+   * be at the SAME address with the SAME bytecode on every chain (absent ⇒ refusal). V6 pins
+   * FIVE (deployer + SigningLib + DecodeLib + PolicyLib + EnvelopeModule) — all are part of
+   * the account's CREATE2 preimage or its authority surface.
+   */
+  private async assertSingletonsSameAddress(
+    chainIds: readonly number[],
+    kinds: readonly ('create2DeployerAddr' | 'signingHelperAddr' | 'decodeHelperAddr' | 'policyHelperAddr' | 'envelopeModuleAddr')[],
+  ): Promise<void> {
+    for (const kind of kinds) {
+      const rows: Array<{ chainId: number; addr: string; codehash: string | null }> = [];
+      for (const chainId of chainIds) {
+        const addr = this.getChainConfig(chainId)[kind]?.toLowerCase();
+        if (!addr) throw new SameAddressMismatchError(chainId, 'singleton_missing', kind, 'none');
+        rows.push({ chainId, addr, codehash: await this.getChainOps(chainId).getCodeHash(addr) });
+      }
+      const ref = rows[0];
+      if (!ref) throw new Error('assertSameAddress: unreachable — no chains resolved');
+      if (ref.codehash === null) {
+        throw new SameAddressMismatchError(ref.chainId, 'singleton_codehash', `${kind} bytecode`, 'no code');
+      }
+      for (const r of rows.slice(1)) {
+        if (r.addr !== ref.addr) throw new SameAddressMismatchError(r.chainId, 'singleton_addr', `${kind} ${ref.addr}`, r.addr);
+        if (r.codehash !== ref.codehash) {
+          throw new SameAddressMismatchError(r.chainId, 'singleton_codehash', `${kind} ${ref.codehash}`, r.codehash ?? 'no code');
+        }
+      }
+    }
+  }
+
+  /** V6 per-chain CREATE2 prediction — PURE off-chain, from the persisted tuple (same shape as V5). */
+  private predictV6(
+    ops: LeashChainOps,
+    input: { ownerAddr: string; accountSalt: string; create: SameAddressCreateInput },
+  ): string {
+    return ops.predictAccountV6({
+      ownerAddr: input.ownerAddr,
+      guardianAddr: input.create.guardianAddr,
+      sessionKeyAddr: input.create.sessionKeyAddr,
+      policy: input.create.policy,
+      allowlist: input.create.allowlist,
+      timelockDelay: input.create.timelockDelay,
+      ...(input.create.settlementToken !== undefined ? { settlementToken: input.create.settlementToken } : {}),
+      ...(input.create.tokenPolicy !== undefined ? { tokenPolicy: input.create.tokenPolicy } : {}),
+      accountSalt: input.accountSalt,
+    });
   }
 
   /**

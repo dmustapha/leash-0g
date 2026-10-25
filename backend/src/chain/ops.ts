@@ -20,9 +20,10 @@ import {
   registryAbi,
   leashAccountAbi,
   create2DeployerAbi,
-  leashAccountV5ReadAbi,
+  leashAccountV5ReadAbi, leashAccountV6ReadAbi,
 } from './abis.js';
 import { buildV5Initcode, ownerScopedSalt, predictCreate2Address } from './v5-initcode.js';
+import { buildV6Initcode, type V6CtorArgs } from './v6-initcode.js';
 import type { AccountCreateTuple, ChainOps } from '../server.js';
 import type { PolicyView } from '../types.js';
 
@@ -50,6 +51,10 @@ export interface LeashChainOptions {
    * boot; a V5 create with this unset throws loudly (default-deny).
    */
   create2DeployerAddr?: string;
+  /** AQ-FND V6 singletons (a chain missing either refuses accountVersion:6 creates). */
+  policyHelperAddr?: string;
+  envelopeModuleAddr?: string;
+  gasRepayDelegateAddr?: string;
   /** Stage F′ (RULING-B): canonical SigningLib singleton baked into V5 initcode + read-back-asserted. */
   signingHelperAddr?: string;
   /** Stage F′ (RULING-B): canonical DecodeLib singleton baked into V5 initcode + read-back-asserted. */
@@ -146,6 +151,9 @@ export class LeashChainOps implements ChainOps {
     // V4/legacy factories, so it has its own method (both share the registry write).
     if (input.accountVersion === 5) {
       return this.serializeOps(() => this.deployAndRegisterV5(input));
+    }
+    if (input.accountVersion === 6) {
+      return this.serializeOps(() => this.deployAndRegisterV6(input));
     }
     return this.serializeOps(async () => {
       // SE-1 (SD-E7): select factory address + fn/event by account version.
@@ -448,6 +456,138 @@ export class LeashChainOps implements ChainOps {
       signingHelperAddr,
       decodeHelperAddr,
     }));
+  }
+
+  // ================= AQ-FND — the V6 (multi-asset) mint/predict path =================
+
+  /**
+   * Map the wire create input (V5 shape — unchanged API) onto the V6 InitConfig: the native
+   * policy carries the old native caps on the asset(0) map; the optional settlementToken
+   * becomes the one initial governed asset; `policy.windowSeconds` doubles as the session
+   * rule-window and every initial asset's window. The RICHER multi-asset create API is a
+   * recorded follow-up — this mapping keeps every existing route working on v6 unchanged.
+   */
+  private v6ArgsFromInput(input: Parameters<ChainOps['deployAndRegister']>[0], guardianAddr: string): V6CtorArgs {
+    const policyHelperAddr = this.opts.policyHelperAddr;
+    const envelopeModuleAddr = this.opts.envelopeModuleAddr;
+    const signingHelperAddr = this.opts.signingHelperAddr;
+    const decodeHelperAddr = this.opts.decodeHelperAddr;
+    if (!signingHelperAddr || !decodeHelperAddr || !policyHelperAddr || !envelopeModuleAddr) {
+      throw new Error(`accountVersion=6 requested but chain ${this.opts.chainId} is missing a V6 singleton`);
+    }
+    const ZERO = '0x0000000000000000000000000000000000000000';
+    const hasToken = input.settlementToken !== undefined && input.settlementToken.toLowerCase() !== ZERO;
+    return {
+      ownerAddr: input.ownerAddr,
+      guardianAddr,
+      sessionKeyAddr: input.sessionKeyAddr,
+      session: { ruleWindowSeconds: input.policy.windowSeconds, expiresAt: input.policy.expiresAt },
+      nativePolicy: {
+        enabled: true,
+        perTransferCap: input.policy.perTransferCap,
+        windowCap: input.policy.windowCap,
+        windowSeconds: input.policy.windowSeconds,
+      },
+      initialAssets: hasToken ? [input.settlementToken as string] : [],
+      initialAssetPolicies: hasToken
+        ? [{
+            enabled: true,
+            perTransferCap: input.tokenPolicy?.perTransferCapToken ?? 0n,
+            windowCap: input.tokenPolicy?.windowCapToken ?? 0n,
+            windowSeconds: input.policy.windowSeconds,
+          }]
+        : [],
+      initialAllowlist: input.allowlist,
+      timelockDelay: input.timelockDelay,
+      signingHelperAddr,
+      decodeHelperAddr,
+      policyHelperAddr,
+      envelopeModuleAddr,
+    };
+  }
+
+  private async deployAndRegisterV6(
+    input: Parameters<ChainOps['deployAndRegister']>[0],
+  ): ReturnType<ChainOps['deployAndRegister']> {
+    const deployerAddr = this.opts.create2DeployerAddr;
+    if (!deployerAddr) throw new Error(`accountVersion=6: chain ${this.opts.chainId} has no Create2Deployer`);
+    const agentSalt = (input.accountSalt ?? `0x${randomBytes(32).toString('hex')}`) as Hex;
+    const salt = ownerScopedSalt(input.ownerAddr, agentSalt);
+    const initcode = buildV6Initcode(this.v6ArgsFromInput(input, this.guardianAccount.address));
+    const predicted = predictCreate2Address(deployerAddr, salt, initcode);
+    await this.crossCheckOnChainPredict(deployerAddr as Hex, salt, keccak256(initcode), predicted);
+    const deploy = await this.adoptOrDeployV5(deployerAddr as Hex, salt, initcode, predicted); // generic path, version-agnostic
+    await this.assertV6ReadBack(predicted, input.ownerAddr);
+    const register = await this.registerAgent(input, predicted);
+    return {
+      accountAddr: predicted,
+      chainAgentId: register.chainAgentId,
+      createTx: deploy.createHash,
+      registerTx: register.registerTx,
+      guardianAddr: this.guardianAccount.address,
+      accountVersion: 6,
+      accountSalt: agentSalt,
+      accountCreateTuple: this.v5CreateTuple(input), // same canonical tuple shape (the v6 mapping is deterministic)
+      initCodeHash: keccak256(initcode),
+      adopted: deploy.adopted,
+    };
+  }
+
+  /** RULING-B read-back for V6: owner + all four pinned singletons + the envelope module. */
+  private async assertV6ReadBack(accountAddr: Hex, ownerAddr: string): Promise<void> {
+    const read = (fn: 'owner' | 'signingHelper' | 'decodeHelper' | 'policyHelper' | 'envelopeModule') =>
+      this.retryRead(() => this.publicClient.readContract({ address: accountAddr, abi: leashAccountV6ReadAbi, functionName: fn }));
+    const [owner, signingHelper, decodeHelper, policyHelper, envelopeModule] = await Promise.all([
+      read('owner'), read('signingHelper'), read('decodeHelper'), read('policyHelper'), read('envelopeModule'),
+    ]);
+    const want: Array<[string, string, string | undefined]> = [
+      ['owner', owner, ownerAddr],
+      ['signingHelper', signingHelper, this.opts.signingHelperAddr],
+      ['decodeHelper', decodeHelper, this.opts.decodeHelperAddr],
+      ['policyHelper', policyHelper, this.opts.policyHelperAddr],
+      ['envelopeModule', envelopeModule, this.opts.envelopeModuleAddr],
+    ];
+    for (const [field, got, expected] of want) {
+      if (!expected || got.toLowerCase() !== expected.toLowerCase()) {
+        throw new Error(`V6 read-back REFUSED: account ${accountAddr} ${field} ${got} != canonical ${expected ?? 'unset'}`);
+      }
+    }
+  }
+
+  /** PURE off-chain V6 CREATE2 derivation from the persisted tuple + salt (assertSameAddress). */
+  predictAccountV6(input: Parameters<LeashChainOps['predictAccountV5']>[0]): string {
+    const deployerAddr = this.opts.create2DeployerAddr;
+    if (!deployerAddr) throw new Error(`predictAccountV6: chain ${this.opts.chainId} has no Create2Deployer`);
+    const initcode = buildV6Initcode(this.v6ArgsFromTuple(input));
+    return predictCreate2Address(deployerAddr, ownerScopedSalt(input.ownerAddr, input.accountSalt), initcode);
+  }
+
+  /** keccak256 of the V6 initcode this lane would build (RULING-A anchor for v6 agents). */
+  v6InitCodeHash(input: Parameters<LeashChainOps['predictAccountV5']>[0]): Hex {
+    return keccak256(buildV6Initcode(this.v6ArgsFromTuple(input)));
+  }
+
+  /** The persisted-tuple → V6CtorArgs mapping (guardian comes from the TUPLE, not this lane). */
+  private v6ArgsFromTuple(input: Parameters<LeashChainOps['predictAccountV5']>[0]): V6CtorArgs {
+    return this.v6ArgsFromInputShape(input, input.guardianAddr);
+  }
+
+  private v6ArgsFromInputShape(
+    input: {
+      ownerAddr: string;
+      sessionKeyAddr: string;
+      policy: { perTransferCap: bigint; windowCap: bigint; windowSeconds: number; expiresAt: number };
+      allowlist: string[];
+      timelockDelay: number;
+      settlementToken?: string;
+      tokenPolicy?: { perTransferCapToken: bigint; windowCapToken: bigint };
+    },
+    guardianAddr: string,
+  ): V6CtorArgs {
+    return this.v6ArgsFromInput(
+      { ...input, auditPubKey: '', name: '', accountVersion: 6 } as Parameters<ChainOps['deployAndRegister']>[0],
+      guardianAddr,
+    );
   }
 
   /** The configured V5 singletons (null when the chain is not V5-enabled). */

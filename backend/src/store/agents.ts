@@ -133,7 +133,7 @@ export interface InsertAgentInput {
   /** Phase-5 (D-B9): optional freeform capability label; null when unset. */
   capabilityLabel?: string | null;
   /** SE-1 (Stage E): on-chain account version (2 legacy | 4 governed-calldata | 5 governed-signing, FP-4). */
-  accountVersion: 2 | 4 | 5;
+  accountVersion: 2 | 4 | 5 | 6;
   /**
    * SE-6: the per-agent CREATE2 salt (0x-prefixed bytes32, server-generated at a
    * deterministic v4 create; reused verbatim on every chain the agent onboards so

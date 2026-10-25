@@ -50,7 +50,7 @@ export interface ChainOps {
      * Stage F′ (FP-4 P1): 5 = governed-signing V5 — minted through the generic
      * `Create2Deployer` with backend-assembled initcode (no typed factory).
      */
-    accountVersion: 2 | 4 | 5;
+    accountVersion: 2 | 4 | 5 | 6;
     policy: { perTransferCap: bigint; windowCap: bigint; windowSeconds: number; expiresAt: number };
     allowlist: string[];
     timelockDelay: number;
@@ -74,7 +74,7 @@ export interface ChainOps {
     createTx: string;
     registerTx: string;
     guardianAddr: string;
-    accountVersion: 2 | 4 | 5;
+    accountVersion: 2 | 4 | 5 | 6;
     accountSalt: string | null;
     /**
      * SE-6: the EXACT canonical construction tuple the v4/v5 mint used

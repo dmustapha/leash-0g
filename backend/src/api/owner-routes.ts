@@ -386,9 +386,9 @@ export const createAgentSchema = z.object({
    * of the v3 settlement path). `2` pins the legacy factory (E-1 regression).
    * Stage F′ (FP-4 P1): `5` = governed-signing V5, minted through the generic
    * CREATE2 deployer (default-denied on chains missing the V5 singletons).
-   * Coerced from JSON number; only 2 | 4 | 5 accepted.
+   * Coerced from JSON number; only 2 | 4 | 5 | 6 accepted (6 = AQ-FND multi-asset).
    */
-  accountVersion: z.union([z.literal(2), z.literal(4), z.literal(5)]).default(4),
+  accountVersion: z.union([z.literal(2), z.literal(4), z.literal(5), z.literal(6)]).default(4),
   /**
    * SE-7 (spec §7.C "chain choice collected at create"): which registered
    * chain the agent's account is minted on. Default = the home 0G chain.
@@ -3012,7 +3012,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       // Whether this agent CAN onboard to another chain (deterministic V4 with
       // the persisted salt+tuple) — the FE surfaces the action only when true.
       onboardable:
-        (agent.accountVersion === 4 || agent.accountVersion === 5) &&
+        (agent.accountVersion === 4 || agent.accountVersion === 5 || agent.accountVersion === 6) &&
         !!agent.accountSalt &&
         !!agent.accountCreateTuple,
       homeChainId: agent.chainId,

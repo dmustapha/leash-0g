@@ -57,7 +57,7 @@ export class FakeChainOps implements ChainOps {
   async deployAndRegister(input: {
     ownerAddr?: string;
     sessionKeyAddr: string;
-    accountVersion?: 2 | 4 | 5;
+    accountVersion?: 2 | 4 | 5 | 6;
     accountSalt?: string;
   }): Promise<{
     accountAddr: string;
@@ -65,7 +65,7 @@ export class FakeChainOps implements ChainOps {
     createTx: string;
     registerTx: string;
     guardianAddr: string;
-    accountVersion: 2 | 4 | 5;
+    accountVersion: 2 | 4 | 5 | 6;
     accountSalt: string | null;
     accountCreateTuple: import('../../src/server.js').AccountCreateTuple | null;
     initCodeHash: string | null;

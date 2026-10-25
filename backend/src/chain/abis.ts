@@ -65,6 +65,14 @@ export const create2DeployerAbi = parseAbi([
  * input owner + the canonical ChainConfig helpers BEFORE funds route (restores the
  * correctness the typed factory gave for free). Hand-derived from LeashAccountV5.
  */
+export const leashAccountV6ReadAbi = parseAbi([
+  'function owner() view returns (address)',
+  'function signingHelper() view returns (address)',
+  'function decodeHelper() view returns (address)',
+  'function policyHelper() view returns (address)',
+  'function envelopeModule() view returns (address)',
+]);
+
 export const leashAccountV5ReadAbi = parseAbi([
   'function owner() view returns (address)',
   'function signingHelper() view returns (address)',
