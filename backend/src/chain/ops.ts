@@ -602,7 +602,9 @@ export class LeashChainOps implements ChainOps {
     return this.v5Singletons !== null;
   }
 
-  /** AQ-FND Lane-B: all FIVE V6 singletons wired ⇒ an accountVersion:6 mint can land. */
+  /** AQ-FND Lane-B: all FIVE V6 singletons wired ⇒ an accountVersion:6 mint can land.
+   *  (The GasRepayDelegate is deliberately NOT required — it is a session-EOA 7702
+   *  delegate outside the account's CREATE2 preimage; see config.ts v6Wired.) */
   supportsV6(): boolean {
     const { create2DeployerAddr, signingHelperAddr, decodeHelperAddr, policyHelperAddr, envelopeModuleAddr } = this.opts;
     return Boolean(create2DeployerAddr && signingHelperAddr && decodeHelperAddr && policyHelperAddr && envelopeModuleAddr);
@@ -914,10 +916,14 @@ export async function readPolicyView(
       client.readContract({ address, abi: leashAccountAbi, functionName: 'spentInWindow' }),
       client.readContract({ address, abi: leashAccountAbi, functionName: 'windowStart' }),
     ]);
-  } catch {
+  } catch (e) {
     // AQ-FND Lane-B: a V6 multi-asset account has no v2–v5 `policy()` surface —
-    // its native policy lives on the per-asset map. Fail through to the V6 read;
-    // a genuinely broken account still throws there (never a silent empty view).
+    // its native policy lives on the per-asset map. Fall through to the V6 read
+    // ONLY on a genuine "function does not exist here" signal (zero return data /
+    // contract revert). A transient transport failure re-throws (Gate-② B-2:
+    // misreading an RPC flake on a v4 account as "this is v6" would cascade into
+    // nonsense reads); a genuinely broken account still throws in the V6 read.
+    if (!isMissingFunctionError(e)) throw e;
     return readPolicyViewV6(client, address, allowlistCandidates, assetCandidates);
   }
   const allowlist: string[] = [];
@@ -968,6 +974,29 @@ export async function readPolicyView(
     spentInWindowToken: spentToken,
     windowStartToken: Number(windowStartToken),
   };
+}
+
+/**
+ * Gate-② B-2: "this contract has no such function" vs "the network hiccuped".
+ * viem surfaces a missing/mismatched selector as zero return data or a contract
+ * revert somewhere in the error cause chain; transport failures (HttpRequestError,
+ * timeouts, rate limits) must NOT be read as a version signal.
+ */
+export function isMissingFunctionError(err: unknown): boolean {
+  let cur: unknown = err;
+  for (let depth = 0; depth < 8 && cur instanceof Error; depth++) {
+    const name = (cur as { name?: string }).name ?? '';
+    // A selector the contract does not implement returns EMPTY data from eth_call
+    // (viem: ContractFunctionZeroDataError / AbiDecodingZeroDataError) — the one
+    // honest "wrong account shape" signal. An on-chain revert also counts (the
+    // function exists but refuses — the V6 read will throw loudly if this was a
+    // misread). Transport/timeout/rate-limit errors are NEVER a version signal.
+    if (name === 'ContractFunctionZeroDataError' || name === 'AbiDecodingZeroDataError') return true;
+    if (name === 'ContractFunctionRevertedError' || /execution reverted/i.test(cur.message)) return true;
+    if (name === 'HttpRequestError' || name === 'TimeoutError') return false;
+    cur = (cur as { cause?: unknown }).cause;
+  }
+  return false;
 }
 
 const NATIVE_ASSET = '0x0000000000000000000000000000000000000000';

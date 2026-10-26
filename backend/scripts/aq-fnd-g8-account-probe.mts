@@ -124,10 +124,20 @@ async function main() {
 
   if (!minted) {
     const sessionKey = privateKeyToAccount(generatePrivateKey());
+    // Gate-② W-5: a REAL compressed secp256k1 point (a throwaway account's own
+    // compressed pubkey), not a bit-pattern stub — the registry stores it blind,
+    // but the probe should never normalize an invalid audit key.
+    const auditAccount = privateKeyToAccount(generatePrivateKey());
+    const auditPubKeyCompressed = (() => {
+      const uncompressed = auditAccount.publicKey; // 0x04 || X(32) || Y(32)
+      const x = uncompressed.slice(4, 68);
+      const yLast = parseInt(uncompressed.slice(-2), 16);
+      return `0x${yLast % 2 === 0 ? '02' : '03'}${x}`;
+    })();
     const tuple = {
       ownerAddr: ops.address,
       sessionKeyAddr: sessionKey.address,
-      auditPubKey: `0x02${'11'.repeat(32)}`,
+      auditPubKey: auditPubKeyCompressed,
       name: 'aq-fnd g8 account probe',
       accountVersion: 6 as const,
       policy: {

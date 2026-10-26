@@ -767,10 +767,23 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     const chainDefault: 2 | 4 | 5 | 6 =
       chainDefaultRaw === 2 || chainDefaultRaw === 5 || chainDefaultRaw === 6 ? chainDefaultRaw : 4;
     const effectiveAccountVersion = isV5TraderLane ? 5 : (input.accountVersion ?? chainDefault);
-    // G-1 mirror for the v6 asset map (the constructor refuses window < perTransfer;
-    // surface it as a clean 400, not an opaque revert).
+    // Gate-② B-1: the spend-capable tokenConfig generalization is a V6 property —
+    // only the v6 per-asset map validates + meters an initial asset for a
+    // non-requester. On v4/v5 the requester (F1) stays the sole token-capable role;
+    // anything else is a typed 400, never an unvalidated settlement path.
+    if (input.tokenConfig && input.goal.type !== 'requester' && effectiveAccountVersion !== 6) {
+      res.status(400).json({
+        error: {
+          message: `tokenConfig for a ${input.goal.type ?? 'treasury'} agent requires a v6 account (this create resolves to v${effectiveAccountVersion})`,
+          reason: 'token_config_requires_v6',
+        },
+      });
+      return;
+    }
+    // G-1 mirror for ANY tokenConfig create (the v6 constructor refuses
+    // window < perTransfer; surface it as a clean 400, not an opaque revert —
+    // and never persist a window<perTransfer token policy on older versions either).
     if (
-      effectiveAccountVersion === 6 &&
       input.tokenConfig &&
       BigInt(input.tokenConfig.windowCapTokenWei) < BigInt(input.tokenConfig.perTransferCapTokenWei)
     ) {
@@ -842,8 +855,9 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
         },
         allowlist: input.allowlist,
         timelockDelay: deps.settings.defaultTimelockDelay,
-        // Phase-4: token-capable ONLY for a requester (validated above); the
-        // settlement token is immutable at create (F3).
+        // Phase-4 (F3) + AQ-FND Lane-B: the requester's settlement token on any
+        // version; other SPEND-CAPABLE roles only on v6 (typed 400 above otherwise),
+        // where it seeds one initial governed asset on the per-asset map.
         ...(input.tokenConfig
           ? {
               settlementToken: input.tokenConfig.settlementToken,

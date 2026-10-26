@@ -49,6 +49,11 @@ type Screen = 'funnel' | 'readback' | 'wizard';
  * G-10 (B-4 de-silencing): per wallet+chain cache of the KEK-signature determinism verdict.
  * A known-degraded wallet is told the passphrase story UP-FRONT and is never again asked
  * for signatures that would be discarded (F-0b-52); a retry can force a re-probe.
+ *
+ * KEK DOMAIN DECISION (Gate-② W-1, carried deliberately): the KEK message is bound to the
+ * HOME chain (`config.chainId`) even when the agent mints on another chain — every unlock
+ * surface (audit page, backups) signs the same home-chain message, so one wallet = one KEK
+ * domain regardless of where agents live. Binding per mint-chain would fragment unlocks.
  */
 function kekDeterminismKey(address: string, chainId: number): string {
   return `leash.kek-determinism.${chainId}.${address.toLowerCase()}`;
@@ -100,7 +105,7 @@ export default function CreatePage() {
   // so the wizard's review disclosure is honest BEFORE the owner commits; `probedSigRef`
   // carries the pre-commitment probe's signature to the create call (no extra popups).
   const [signingDegraded, setSigningDegraded] = useState(false);
-  const probedSigRef = useRef<{ address: string; sig: string } | null>(null);
+  const probedSigRef = useRef<{ address: string; chainId: number; sig: string } | null>(null);
   useEffect(() => {
     probedSigRef.current = null;
     if (!wallet.address) return;
@@ -139,7 +144,7 @@ export default function CreatePage() {
         /* cache is an optimization, never a gate */
       }
       setSigningDegraded(!sig);
-      probedSigRef.current = sig ? { address: wallet.address.toLowerCase(), sig } : null;
+      probedSigRef.current = sig ? { address: wallet.address.toLowerCase(), chainId: config.chainId, sig } : null;
       return sig ? 'signature' : 'passphrase';
     },
     [wallet.address, wallet.signMessage],
@@ -160,8 +165,11 @@ export default function CreatePage() {
         // Reuse the pre-commitment probe's signature; if it's missing or stale (wallet
         // switched mid-flow), re-probe — and on failure STOP with the wizard's loud
         // degradation step (PassphraseRequiredError). Never a silent fallback (G-10).
+        // Gate-② W-2: match BOTH the wallet address and the KEK domain chain —
+        // a stale probe from another identity never silently keys the lock.
         let sig =
-          probedSigRef.current?.address === wallet.address.toLowerCase()
+          probedSigRef.current?.address === wallet.address.toLowerCase() &&
+          probedSigRef.current.chainId === config.chainId
             ? probedSigRef.current.sig
             : null;
         if (!sig) {

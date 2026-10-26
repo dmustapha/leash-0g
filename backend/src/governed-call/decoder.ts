@@ -159,6 +159,12 @@ export function decodeCall(target: string, value: bigint, data: string): Decoded
     const tok = decodedAddrs[spec.spendTokenFromArg];
     if (tok) args.spendToken = tok;
   }
+  // Gate-② W-3 (CCTP maxFee): a fee word larger than the moved amount is refused —
+  // bounds the relayer-fee loss channel to the (already budget-debited) amount.
+  if (!reject && spec.feeBoundedByAmountArg !== undefined) {
+    const feeWord = words[spec.feeBoundedByAmountArg];
+    if (feeWord === undefined || BigInt('0x' + feeWord) > args.amount) reject = 'DecodeMismatch';
+  }
   return base(targetLc, value, hex, spec.signature, humanReadable(spec, targetLc, args), args, reject);
 }
 
@@ -175,7 +181,7 @@ export function decodeCall(target: string, value: bigint, data: string): Decoded
  *     classify's bridge arm — funds land only on the same-address far account).
  *
  * Word layout (14 words, 452 bytes total):
- *   0 destinationChainSelector · 1 structOffset(0x40) · 2..6 struct head
+ *   0 destinationChainSelector (→ args.bridgeDestination) · 1 structOffset(0x40) · 2..6 struct head
  *   (receiverOff 0xa0 · dataOff 0xe0 · tokenAmountsOff 0x100 · feeToken · extraArgsOff 0x160)
  *   7 receiverLen(32) · 8 receiver · 9 dataLen(0) · 10 tokenAmountsLen(1)
  *   11 token · 12 amount · 13 extraArgsLen(0)

@@ -500,7 +500,10 @@ export function buildChainConfigs(cfg: Config): ChainConfig[] {
   // (deployer + SigningLib + DecodeLib + PolicyLib + EnvelopeModule — the account's
   // CREATE2 preimage set), new agents default to the multi-asset V6 account. A
   // chain missing any singleton keeps the V4 default (fail-closed: a v6 create
-  // there is refused, never silently downgraded).
+  // there is refused, never silently downgraded). The GasRepayDelegate is
+  // DELIBERATELY not a mint precondition (Gate-② W-6): it is a session-EOA 7702
+  // delegate, not part of the account's CREATE2 preimage — without it the gas
+  // ladder simply loses its bootstrap rung (planGas degrades to ask-owner).
   const v6Wired = Boolean(
     v5.create2DeployerAddr && v5.signingHelperAddr && v5.decodeHelperAddr && v5.policyHelperAddr && v5.envelopeModuleAddr,
   );

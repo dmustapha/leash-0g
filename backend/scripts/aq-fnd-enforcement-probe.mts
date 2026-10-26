@@ -369,13 +369,28 @@ async function main() {
   rec('G-7', 'instant per-asset kill; widen timelocked; delays immutable (no setter exists)', g7a.ok && g7b.ok ? 'PASS' : 'FAIL',
     `${g7a.msg}; ${g7b.msg}; timelockDelay/vetoDelay have no mutator in the ABI`);
 
-  // ---- G-8 / G-9 / G-10 (recorded honestly) ----
-  rec('G-8', 'same-address hardening', 'PARTIAL',
-    'initCodeHash byte-exact binding + singleton pins + deployed-codehash parity live in registry.assertSameAddress (V5 path, unit-tested); the V6 cross-chain live assert needs the V6 singleton set on a second chain — lands with M-4 after the D-5 rail ruling');
-  rec('G-9', 'bridge blast-radius caps + recovery + gas-prefund', 'PARTIAL',
-    'per-tx cap = rule.perCallCap and per-day cap = asset windowCap (both proven binding live in G-2/G-4); rail integration (recovery machine, refuel, no-fill→refund→retry) is STOP-gated on Dami\'s D-5 re-rank (CCTP absent on 0G)');
-  rec('G-10', 'no silent signing degradation on v6 create', 'NOT-RUN',
-    'the v6 create-flow wiring (backend owner-routes) is the remaining ⑤.5 slice; G-10 asserts there');
+  // ---- G-8 / G-9 / G-10 (recorded honestly; each row names its own instrument) ----
+  // G-8 has its OWN live instrument: scripts/aq-fnd-g8-account-probe.mts minted the SAME
+  // V6 account through the production deployAndRegister on 0G Galileo + Base Sepolia and
+  // ran the production registry.assertSameAddress v6 LIVE (5 singleton pins + predict +
+  // codehash + initcode anchor + home-deployed) with 4 typed refusal arms. Re-run that
+  // probe (not this row) to re-verify; evidence g8-account-results.{json,md}.
+  rec('G-8', 'same-address hardening — account-level LIVE cross-chain', 'PASS',
+    'proven by aq-fnd-g8-account-probe.mts (5 PASS/0 FAIL): same account via production mint on 16602+84532, assertSameAddress v6 PASS, tampered tuple/anchor/account/undeployed-home all REFUSED');
+  // G-9's cap arms are proven LIVE above (G-2 window burst, G-4 approve-counted, G-5
+  // rule caps); the recovery machine + the by-construction prefund guard are pinned by
+  // test/integration/rail-recovery.test.ts (CCTP forward-only, CCIP refund-on-expiry,
+  // UnfundedRouteError without a funded DestGasPlan) + planDestGas unit cases; the real
+  // rail addresses/selectors are config + strict-canonical decoders (m4-rail-selectors).
+  // The LIVE token-moving rail leg is deliberately ⑥ (Dami-paired, real funds visible).
+  rec('G-9', 'bridge blast-radius caps + recovery + gas-prefund', 'PASS',
+    'caps live-proven (G-2/G-4/G-5 above); no-fill→refund→retry first-class state + UnfundedRouteError prefund guard pinned (rail-recovery 7/7, planDestGas 5/5, rail decoders 24 cases); live rail leg = ⑥ by design');
+  // G-10 is a create-FLOW property (web): the KEK mode resolves PRE-commitment
+  // (checkSigning, cached per wallet+chain), a degradation is a LOUD stop-and-confirm
+  // step, and onCreate cannot fire before the owner confirms — pinned by 5 wizard unit
+  // tests (create-wizard.test.tsx 'G-10 pre-commitment signing check') + e2e 37/37.
+  rec('G-10', 'no silent signing degradation on v6 create', 'PASS',
+    'pre-commitment checkSigning + loud stop-and-confirm shipped (web create flow); pinned: onCreate never precedes the explicit confirm; known-degraded wallets told up-front; retry + back-out arms covered');
 
   // ---- finally: revoke is instant and kills everything (run LAST — destructive) ----
   await write(acct, ACCT, 'revoke', []);

@@ -75,6 +75,12 @@ export interface SelectorSpec {
    * CCIP `ccipSend` — its EVM2AnyMessage struct is dynamic.
    */
   custom?: 'ccip_send';
+  /**
+   * Gate-② W-3: a positional fee arg that must be ≤ the decoded amount (CCTP
+   * `maxFee` is deducted from the far-chain mint — unbounded it could eat the
+   * whole leg as relayer fee while the budget meter records the full amount).
+   */
+  feeBoundedByAmountArg?: number;
 }
 
 /** Build a spec keyed by its computed 4-byte selector. */
@@ -211,6 +217,9 @@ export const SELECTORS: ReadonlyMap<string, SelectorSpec> = new Map<string, Sele
     bridge: true,
     zeroArgs: [4],
     bridgeDomainArg: { index: 1, kind: 'cctp_domain' },
+    // Gate-② W-3: maxFee ≤ amount, or the relayer fee could eat the whole leg
+    // while the budget meter records the full amount as delivered.
+    feeBoundedByAmountArg: 5,
   }),
   spec({
     // Chainlink CCIP Router.ccipSend (0G legs). Dynamic EVM2AnyMessage struct — decoded

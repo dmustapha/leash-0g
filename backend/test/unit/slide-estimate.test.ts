@@ -37,6 +37,12 @@ describe('slideEstimate — PolicyLib.slide mirror', () => {
     expect(spent).toBe(7n); // offset 0 → full prev(=old cur) weight: 7 * 100/100
   });
 
+  it('exact double-window boundary (elapsed == 2w) resets both buckets on the grid (N-1)', () => {
+    const { spent, windowStart } = slideEstimate({ cur: 10n, prev: 40n, start: 1000 }, W, 1200);
+    expect(windowStart).toBe(1200); // elapsed % w == 0 → start = now
+    expect(spent).toBe(0n);
+  });
+
   it('an unstarted meter (start=0) or zero window returns cur unchanged', () => {
     expect(slideEstimate({ cur: 0n, prev: 0n, start: 0 }, W, 5000).spent).toBe(0n);
     expect(slideEstimate({ cur: 5n, prev: 1n, start: 1000 }, 0, 5000).spent).toBe(5n);

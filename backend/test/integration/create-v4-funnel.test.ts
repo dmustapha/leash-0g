@@ -170,6 +170,26 @@ describe('AQ-FND Lane-B — chain-default accountVersion 6', () => {
     expect(row?.accountVersion).toBe(6);
   });
 
+  it('Gate-② B-1: a non-requester tokenConfig on a v4-default chain is a typed 400, never an unvalidated settlement path', async () => {
+    const owner = uniqueOwner();
+    const t = buildTestApp(db.pool); // no chainRegistry → chain default v4
+    const res = await request(t.app)
+      .post('/api/agents')
+      .set('authorization', ownerAuth(owner))
+      .send(
+        createBody('treasury-token-v4', {
+          tokenConfig: {
+            settlementToken: '0x' + 'cc'.repeat(20),
+            perTransferCapTokenWei: '1000',
+            windowCapTokenWei: '5000',
+          },
+        }),
+      );
+    expect(res.status).toBe(400);
+    expect(res.body.error?.reason).toBe('token_config_requires_v6');
+    expect(t.chain.createdVersions).toHaveLength(0);
+  });
+
   it('a spend-incapable role (sentinel) with tokenConfig is still refused at the schema', async () => {
     const owner = uniqueOwner();
     const t = withV6Default(true);

@@ -105,6 +105,15 @@ describe('M-4 decodeCall — CCTP v2 depositForBurn (strict canonical)', () => {
     expect(d.reject).toBe('DecodeMismatch');
   });
 
+  it('maxFee greater than the moved amount → DecodeMismatch (Gate-② W-3 fee bound)', () => {
+    const data = encodeFunctionData({
+      abi: cctpAbi,
+      functionName: 'depositForBurn',
+      args: [1_000_000n, 6, addr32(SELF), USDC as `0x${string}`, ZERO32, 1_000_001n, 1000],
+    });
+    expect(decodeCall(CCTP, 0n, data).reject).toBe('DecodeMismatch');
+  });
+
   it('truncated calldata → DecodeMismatch', () => {
     const d = decodeCall(CCTP, 0n, encCctp().slice(0, -64));
     expect(d.reject).toBe('DecodeMismatch');
