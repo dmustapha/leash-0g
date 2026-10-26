@@ -139,7 +139,7 @@ describe('CreateWizard', () => {
     });
   });
 
-  it('falls back to a passphrase when the wallet signs non-deterministically', async () => {
+  it('backstop: a PassphraseRequiredError from onCreate still routes to the loud degradation step', async () => {
     const user = userEvent.setup();
     const onCreate = vi
       .fn()
@@ -148,12 +148,106 @@ describe('CreateWizard', () => {
     render(<CreateWizard onCreate={onCreate} walletReady />);
     await fillToReview(user);
     await user.click(screen.getByTestId('create-agent'));
-    // wizard should now ask for a passphrase
-    const pass = await screen.findByLabelText('Passphrase');
+    // the degradation step is LOUD: an alert stating nothing has been created
+    expect(await screen.findByTestId('signing-degraded')).toBeInTheDocument();
+    expect(screen.getByRole('alert')).toHaveTextContent(/nothing has been created/i);
+    const pass = screen.getByLabelText('Passphrase');
     await user.type(pass, 'correct horse battery');
-    await user.click(screen.getByRole('button', { name: /lock my audit key/i }));
+    await user.click(screen.getByTestId('confirm-passphrase-lock'));
     expect(await screen.findByTestId('create-done')).toBeInTheDocument();
     expect(onCreate).toHaveBeenLastCalledWith(expect.anything(), 'correct horse battery');
+  });
+
+  // G-10 (B-4 de-silencing): the signing degradation is surfaced PRE-commitment —
+  // checkSigning resolves the lock mode before onCreate can fire, a degradation stops
+  // the flow for explicit confirmation, and the create call never precedes that confirm.
+  describe('G-10 pre-commitment signing check', () => {
+    it('resolves the lock mode BEFORE the create call and proceeds on a healthy wallet', async () => {
+      const user = userEvent.setup();
+      const calls: string[] = [];
+      const checkSigning = vi.fn(async () => {
+        calls.push('check');
+        return 'signature' as const;
+      });
+      const onCreate = vi.fn(async () => {
+        calls.push('create');
+        return okResult();
+      });
+      render(<CreateWizard onCreate={onCreate} checkSigning={checkSigning} walletReady />);
+      await fillToReview(user);
+      await user.click(screen.getByTestId('create-agent'));
+      expect(await screen.findByTestId('create-done')).toBeInTheDocument();
+      expect(calls).toEqual(['check', 'create']); // the check strictly precedes commitment
+      expect(onCreate).toHaveBeenCalledWith(expect.anything(), undefined);
+    });
+
+    it('a degraded wallet STOPS the flow — no create until the owner confirms the passphrase downgrade', async () => {
+      const user = userEvent.setup();
+      const checkSigning = vi.fn(async () => 'passphrase' as const);
+      const onCreate = vi.fn(async (_i: unknown, pass?: string) => ({
+        ...okResult(),
+        kekMode: (pass ? 'passphrase' : 'signature') as 'passphrase' | 'signature',
+      }));
+      render(<CreateWizard onCreate={onCreate} checkSigning={checkSigning} walletReady />);
+      await fillToReview(user);
+      await user.click(screen.getByTestId('create-agent'));
+      // loud stop, pre-commitment: the create call has NOT fired
+      expect(await screen.findByTestId('signing-degraded')).toBeInTheDocument();
+      expect(screen.getByRole('alert')).toHaveTextContent(/nothing has been created/i);
+      expect(onCreate).not.toHaveBeenCalled();
+      // explicit confirm is required — then, and only then, the create fires
+      await user.type(screen.getByLabelText('Passphrase'), 'correct horse battery');
+      await user.click(screen.getByTestId('confirm-passphrase-lock'));
+      expect(await screen.findByTestId('create-done')).toBeInTheDocument();
+      expect(onCreate).toHaveBeenCalledOnce();
+      expect(onCreate).toHaveBeenCalledWith(expect.anything(), 'correct horse battery');
+    });
+
+    it('the degraded step can retry wallet signing (forced re-probe) and create signature-locked', async () => {
+      const user = userEvent.setup();
+      const checkSigning = vi
+        .fn()
+        .mockResolvedValueOnce('passphrase')
+        .mockResolvedValueOnce('signature');
+      const onCreate = vi.fn(async () => okResult());
+      render(<CreateWizard onCreate={onCreate} checkSigning={checkSigning} walletReady />);
+      await fillToReview(user);
+      await user.click(screen.getByTestId('create-agent'));
+      expect(await screen.findByTestId('signing-degraded')).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: /try wallet signing again/i }));
+      expect(await screen.findByTestId('create-done')).toBeInTheDocument();
+      expect(checkSigning).toHaveBeenLastCalledWith({ force: true });
+      expect(onCreate).toHaveBeenCalledWith(expect.anything(), undefined);
+    });
+
+    it('the degraded step can back out to review with nothing created', async () => {
+      const user = userEvent.setup();
+      const checkSigning = vi.fn(async () => 'passphrase' as const);
+      const onCreate = vi.fn();
+      render(<CreateWizard onCreate={onCreate} checkSigning={checkSigning} walletReady />);
+      await fillToReview(user);
+      await user.click(screen.getByTestId('create-agent'));
+      expect(await screen.findByTestId('signing-degraded')).toBeInTheDocument();
+      await user.click(screen.getByRole('button', { name: /back to review/i }));
+      expect(await screen.findByTestId('review-summary')).toBeInTheDocument();
+      expect(onCreate).not.toHaveBeenCalled();
+    });
+
+    it('a known-degraded wallet gets the honest passphrase story in the review disclosure', async () => {
+      const user = userEvent.setup();
+      render(
+        <CreateWizard
+          onCreate={vi.fn()}
+          checkSigning={vi.fn(async () => 'passphrase' as const)}
+          signingDegraded
+          walletReady
+        />,
+      );
+      await fillToReview(user);
+      // native <details> content is in the DOM collapsed — query it directly
+      expect(screen.getByText(/could not produce a stable signature/i)).toBeInTheDocument();
+      expect(screen.queryByText(/that signature locks the key/i)).not.toBeInTheDocument();
+    });
   });
 
   it('disables create until the wallet is connected', async () => {

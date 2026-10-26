@@ -6,7 +6,7 @@
 // backend create call — unchanged from Phase 1–4.
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { Address } from 'viem';
 import { makeApi } from '@/lib/api';
 import { config } from '@/lib/config';
@@ -44,6 +44,15 @@ function download(filename: string, contents: string) {
 }
 
 type Screen = 'funnel' | 'readback' | 'wizard';
+
+/**
+ * G-10 (B-4 de-silencing): per wallet+chain cache of the KEK-signature determinism verdict.
+ * A known-degraded wallet is told the passphrase story UP-FRONT and is never again asked
+ * for signatures that would be discarded (F-0b-52); a retry can force a re-probe.
+ */
+function kekDeterminismKey(address: string, chainId: number): string {
+  return `leash.kek-determinism.${chainId}.${address.toLowerCase()}`;
+}
 
 export default function CreatePage() {
   const wallet = useOwnerWallet();
@@ -87,30 +96,85 @@ export default function CreatePage() {
     })();
   }, [api]);
 
+  // G-10: wallet signature-determinism state. `signingDegraded` mirrors the cached verdict
+  // so the wizard's review disclosure is honest BEFORE the owner commits; `probedSigRef`
+  // carries the pre-commitment probe's signature to the create call (no extra popups).
+  const [signingDegraded, setSigningDegraded] = useState(false);
+  const probedSigRef = useRef<{ address: string; sig: string } | null>(null);
+  useEffect(() => {
+    probedSigRef.current = null;
+    if (!wallet.address) return;
+    try {
+      setSigningDegraded(localStorage.getItem(kekDeterminismKey(wallet.address, config.chainId)) === 'nondeterministic');
+    } catch {
+      /* storage unavailable — stay optimistic; the pre-commitment probe still gates */
+    }
+  }, [wallet.address]);
+
+  // G-10: the pre-commitment signing check the wizard runs BEFORE any create call.
+  const checkSigning = useCallback(
+    async (opts?: { force?: boolean }): Promise<'signature' | 'passphrase'> => {
+      if (!wallet.address) throw new Error('Connect your wallet first.');
+      const cacheKey = kekDeterminismKey(wallet.address, config.chainId);
+      if (!opts?.force) {
+        try {
+          // Known-degraded wallet: don't solicit signatures that will be discarded (F-0b-52).
+          if (localStorage.getItem(cacheKey) === 'nondeterministic') return 'passphrase';
+        } catch {
+          /* fall through to the probe */
+        }
+      }
+      const message = kekSignMessage(wallet.address, config.chainId);
+      let sig: string | null;
+      try {
+        sig = await probeDeterministicSignature(wallet.signMessage, message);
+      } catch {
+        // ANY wallet-layer failure (user reject, extension interstitial) = degraded.
+        sig = null;
+      }
+      const verdict = sig ? 'deterministic' : 'nondeterministic';
+      try {
+        localStorage.setItem(cacheKey, verdict);
+      } catch {
+        /* cache is an optimization, never a gate */
+      }
+      setSigningDegraded(!sig);
+      probedSigRef.current = sig ? { address: wallet.address.toLowerCase(), sig } : null;
+      return sig ? 'signature' : 'passphrase';
+    },
+    [wallet.address, wallet.signMessage],
+  );
+
   const onCreate = useCallback(
     async (input: WizardInput, passphrase?: string): Promise<WizardResult> => {
       // 1. Audit keypair, in-browser. Privkey never leaves this device unencrypted.
       const keypair = generateAuditKeypair();
 
       // 2. KEK: deterministic wallet signature over an owner+chain-bound message (derive
-      //    twice + compare), else passphrase.
+      //    twice + compare, done PRE-commitment in checkSigning — G-10), else passphrase.
       let blob: EncryptedBlob;
       if (passphrase) {
         blob = await encryptWithPassphrase(hexToBytes(keypair.privKeyHex), passphrase);
       } else {
         if (!wallet.address) throw new Error('Connect your wallet first.');
-        const message = kekSignMessage(wallet.address, config.chainId);
-        // ANY wallet-layer failure (user reject, extension security interstitial killing
-        // the request) falls back to the passphrase KEK — the wizard must stay recoverable
-        // without a wallet signature.
-        let sig: string | null;
-        try {
-          sig = await probeDeterministicSignature(wallet.signMessage, message);
-        } catch {
-          sig = null;
+        // Reuse the pre-commitment probe's signature; if it's missing or stale (wallet
+        // switched mid-flow), re-probe — and on failure STOP with the wizard's loud
+        // degradation step (PassphraseRequiredError). Never a silent fallback (G-10).
+        let sig =
+          probedSigRef.current?.address === wallet.address.toLowerCase()
+            ? probedSigRef.current.sig
+            : null;
+        if (!sig) {
+          const message = kekSignMessage(wallet.address, config.chainId);
+          try {
+            sig = await probeDeterministicSignature(wallet.signMessage, message);
+          } catch {
+            sig = null;
+          }
         }
         if (!sig) throw new PassphraseRequiredError();
         blob = await encryptWithSignature(hexToBytes(keypair.privKeyHex), sig);
+        probedSigRef.current = null; // one create per probe — keep the sig's lifetime short
       }
 
       // F-11 (review fix): clear any PRIOR create's chain before this one — a default-chain
@@ -193,6 +257,8 @@ export default function CreatePage() {
       ) : (
         <CreateWizard
           onCreate={onCreate}
+          checkSigning={checkSigning}
+          signingDegraded={signingDegraded}
           walletReady={wallet.authenticated}
           fund={fund}
           jobAgents={jobAgents}

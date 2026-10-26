@@ -59,6 +59,20 @@ export type WizardPrefill = WizardInput & { capabilityLabel?: string };
 
 export type CreateWizardProps = {
   onCreate: (input: WizardInput, passphrase?: string) => Promise<WizardResult>;
+  /**
+   * G-10 (B-4 de-silencing): resolve the audit-key lock mode BEFORE anything is created.
+   * Probes the wallet's signature determinism (cached per wallet+chain upstream); `force`
+   * re-probes past a cached degradation verdict. `'passphrase'` routes the wizard to the
+   * loud stop-and-confirm step — the create call never fires until the owner confirms.
+   * Omitted (unit tests that don't exercise signing) ⇒ signature mode is assumed.
+   */
+  checkSigning?: (opts?: { force?: boolean }) => Promise<'signature' | 'passphrase'>;
+  /**
+   * G-10: true when this wallet is already KNOWN unable to sign deterministically (cached
+   * verdict) — the review disclosure tells the passphrase story up-front instead of
+   * promising a wallet-signature lock the product cannot deliver (F-0b-13).
+   */
+  signingDegraded?: boolean;
   walletReady: boolean;
   /** Fund-the-agent hooks for the done screen; omitted in unit tests. */
   fund?: {
@@ -100,6 +114,7 @@ type Step =
   | 'token-config'
   | 'expiry'
   | 'review'
+  | 'signing-check'
   | 'passphrase'
   | 'creating'
   | 'done';
@@ -267,7 +282,7 @@ function seedFromPrefill(p: WizardPrefill): {
   return { role, entryStep: entryStepFor(role, fields), fields, allowlist: p.allowlist, chainId: p.chainId, capability: p.capability };
 }
 
-export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs, networks, prefill, onStartAgent, startCreatedAgent }: CreateWizardProps) {
+export function CreateWizard({ onCreate, checkSigning, signingDegraded, walletReady, fund, jobAgents, jobSpecs, networks, prefill, onStartAgent, startCreatedAgent }: CreateWizardProps) {
   const seed = prefill ? seedFromPrefill(prefill) : null;
   const [step, setStep] = useState<Step>(seed?.entryStep ?? 'name');
   const [role, setRole] = useState<AgentRole>(seed?.role ?? 'treasury');
@@ -294,6 +309,9 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
   const [payee, setPayee] = useState(seed?.fields['payee'] ?? '');
   const [expiryDays, setExpiryDays] = useState('7');
   const [passphrase, setPassphrase] = useState('');
+  // G-10: the lock mode actually in play once create fires — keeps the 'creating' copy
+  // honest (F-0b-24: never claim a wallet signature on a passphrase-locked create).
+  const [lockMode, setLockMode] = useState<'signature' | 'passphrase'>('signature');
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<WizardResult | null>(null);
   // FR3 trader fields (token amounts entered in whole-token units, 18-decimals).
@@ -502,8 +520,10 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
   const stepIndex = stepOrder.indexOf(step);
   const fundGetBalance = fund?.getBalance;
 
-  async function submit(pass?: string) {
+  // The commitment action proper — only reached AFTER the lock mode is settled (G-10).
+  async function doCreate(pass?: string) {
     if (!input) return;
+    setLockMode(pass ? 'passphrase' : 'signature');
     setStep('creating');
     setError(null);
     try {
@@ -512,12 +532,41 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
       setStep('done');
     } catch (e) {
       if (e instanceof PassphraseRequiredError) {
+        // Backstop: the wallet degraded between the pre-commitment check and the encrypt.
+        // Same loud stop-and-confirm — never a silent fallback (G-10).
         setStep('passphrase');
         return;
       }
       setError(createErrorMessage(e));
       setStep('review');
     }
+  }
+
+  async function submit(pass?: string) {
+    if (!input) return;
+    if (pass || !checkSigning) return doCreate(pass);
+    // G-10 (B-4 de-silencing): resolve the audit-key lock mode BEFORE committing anything.
+    // A signing degradation STOPS the flow for explicit owner confirmation; the create
+    // call fires only after the owner has confirmed the passphrase downgrade.
+    setError(null);
+    setStep('signing-check');
+    const mode = await checkSigning().catch(() => 'passphrase' as const);
+    if (mode === 'passphrase') {
+      setStep('passphrase');
+      return;
+    }
+    return doCreate();
+  }
+
+  // G-10: the degraded step's escape hatch — re-probe the wallet past the cached verdict.
+  async function retrySignature() {
+    if (!checkSigning) return;
+    setError(null);
+    setStep('signing-check');
+    const mode = await checkSigning({ force: true }).catch(() => 'passphrase' as const);
+    if (mode === 'signature') return doCreate();
+    setError('Your wallet still could not produce a stable signature.');
+    setStep('passphrase');
   }
 
   const nav = (next: Step) => (
@@ -563,7 +612,11 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
     <div className="card" style={{ padding: 'clamp(1.2rem, 3vw, 2rem)', display: 'grid', gap: '1.1rem' }}>
       {step !== 'done' && step !== 'creating' ? (
         <p className="eyebrow" aria-live="polite">
-          {step === 'passphrase' ? 'One more thing' : `Step ${Math.max(stepIndex, 0) + 1} of ${stepOrder.length}`}
+          {step === 'passphrase'
+            ? 'Wallet signing failed'
+            : step === 'signing-check'
+              ? 'Checking your wallet'
+              : `Step ${Math.max(stepIndex, 0) + 1} of ${stepOrder.length}`}
         </p>
       ) : null}
 
@@ -1226,9 +1279,9 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
             ))}
           </dl>
           <Disclosure label="What happens when I press create?">
-            Your browser generates a private audit key (it never leaves this device), locks it with a
-            signature from your wallet, and LEASH deploys your agent&apos;s constrained account
-            on-chain with these limits. You will get a gateway token shown exactly once.
+            {signingDegraded
+              ? 'Your browser generates a private audit key (it never leaves this device). Last time we checked, your wallet could not produce a stable signature, so the key will be locked with a passphrase you choose — we stop and confirm that with you before anything is created (you can retry wallet signing there). LEASH then deploys your agent’s constrained account on-chain with these limits. You will get a gateway token shown exactly once.'
+              : 'Your browser generates a private audit key (it never leaves this device) and checks that your wallet can sign the lock message the same way twice. If it can, that signature locks the key; if it cannot, everything stops and you are asked to choose a passphrase BEFORE anything is created. LEASH then deploys your agent’s constrained account on-chain with these limits. You will get a gateway token shown exactly once.'}
           </Disclosure>
           {topUpExceedsCap ? (
             <p role="alert" data-testid="goal-cap-error" style={{ color: 'var(--deny)', fontSize: '0.85rem' }}>
@@ -1262,6 +1315,17 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
         </div>
       )}
 
+      {step === 'signing-check' && (
+        <div role="status" aria-live="polite" style={{ display: 'grid', gap: '0.8rem', justifyItems: 'start' }}>
+          <span className="dot-live" aria-hidden="true" />
+          <h1 style={{ fontSize: 'var(--text-h1)' }}>Checking your wallet&apos;s signing…</h1>
+          <p style={{ color: 'var(--ink-dim)', fontSize: '0.9rem' }}>
+            Before anything is created, we ask your wallet to sign the audit-key lock message twice
+            and compare the two signatures. Nothing deploys yet — approve both requests.
+          </p>
+        </div>
+      )}
+
       {step === 'passphrase' && (
         <form
           onSubmit={(e) => {
@@ -1274,11 +1338,21 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
             void submit(passphrase);
           }}
           style={{ display: 'grid', gap: '0.9rem' }}
+          data-testid="signing-degraded"
         >
-          <h1 style={{ fontSize: 'var(--text-h1)' }}>Choose a passphrase</h1>
+          {/* G-10 (B-4 de-silencing): the LOUD stop. The wallet-signature lock the product
+              promised is off the table; nothing has been created; the owner must explicitly
+              confirm the passphrase downgrade before the create call can fire. */}
+          <p role="alert" style={{ color: 'var(--deny)', fontSize: '0.9rem', fontWeight: 600 }}>
+            Your wallet could not lock the audit key — nothing has been created yet.
+          </p>
+          <h1 style={{ fontSize: 'var(--text-h1)' }}>Lock with a passphrase instead?</h1>
           <p style={{ color: 'var(--ink-dim)', fontSize: '0.9rem' }}>
-            Your wallet signs differently each time, so we cannot use it to lock your audit key.
-            Pick a passphrase instead — you will need it to read your audit trail later.
+            We planned to lock your agent&apos;s audit key with a signature from your wallet, but
+            your wallet cannot produce the same signature twice, so a signature could never unlock
+            the key again. The alternative is a passphrase you choose. That is a different
+            protection: anyone holding the passphrase can read the audit trail, and if you lose it
+            the trail cannot be unlocked.
           </p>
           <Field
             id="kek-passphrase"
@@ -1289,9 +1363,19 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
             error={error}
             autoComplete="new-password"
           />
-          <button type="submit" className="btn btn-primary">
-            Lock my audit key
-          </button>
+          <div style={{ display: 'flex', gap: '0.6rem', flexWrap: 'wrap' }}>
+            <button type="submit" className="btn btn-primary" data-testid="confirm-passphrase-lock">
+              I understand — lock with a passphrase
+            </button>
+            {checkSigning ? (
+              <button type="button" className="btn" onClick={() => void retrySignature()}>
+                Try wallet signing again
+              </button>
+            ) : null}
+            <button type="button" className="btn btn-ghost" onClick={() => { setError(null); setStep('review'); }}>
+              Back to review
+            </button>
+          </div>
         </form>
       )}
 
@@ -1300,8 +1384,9 @@ export function CreateWizard({ onCreate, walletReady, fund, jobAgents, jobSpecs,
           <span className="dot-live" aria-hidden="true" />
           <h1 style={{ fontSize: 'var(--text-h1)' }}>Creating your agent…</h1>
           <p style={{ color: 'var(--ink-dim)', fontSize: '0.9rem' }}>
-            Generating your audit key, asking your wallet for a signature, and deploying the
-            on-chain account. This can take a minute.
+            Generating your audit key, locking it with{' '}
+            {lockMode === 'passphrase' ? 'your passphrase' : 'your wallet signature'}, and deploying
+            the on-chain account. This can take a minute.
           </p>
         </div>
       )}
