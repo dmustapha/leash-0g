@@ -352,6 +352,12 @@ async function main() {
   await write(module, MOD, 'propose', [acct, 1, envPayload]);
   await sleep(DELAY + 2);
   await write(module, MOD, 'apply_', [acct, 1, envPayload]);
+  // SEQUENCING (fresh-run fix): G-1 left token2 LIVE at windowCap 5e18, and the module
+  // (correctly, M-2) treats an enable that widens LIVE policy as a veto-queue move even
+  // inside the envelope — so the "instant" arm must start from a disabled asset. The
+  // owner disable is itself the G-7 instant-tighten semantic; the live-widening queue
+  // path is exercised two lines down as the sharp arm.
+  await write(acct, ACCT, 'disableAsset', [token2]);
   await write(module, MOD, 'agentEnableAsset', [acct, [true, 2n * E18, 8n * E18, W], token2], session, sessionWallet);
   const t2b = (await pub.readContract({ address: acct, abi: ACCT, functionName: 'assetPolicy', args: [token2] })) as any[];
   // sharp (15 > 50% of 20) → queued; owner vetoes
