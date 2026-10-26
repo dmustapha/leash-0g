@@ -39,7 +39,9 @@ export interface OneShotConsumeDeps {
    * Absent = bridge one-shots REFUSE (fail-closed) — wired by the manager from
    * `ChainRegistry` (`assertBridgeRoutable`).
    */
-  bridgeGuard?: ((bridgeTarget: string) => Promise<unknown>) | undefined;
+  bridgeGuard?:
+    | ((bridgeTarget: string, decoded?: import('../governed-call/types.js').DecodedCall) => Promise<unknown>)
+    | undefined;
   /**
    * E-13 sec M-01: the chain's bridge allowlist (lowercased). The rail must key
    * on the TARGET too — an allowlisted bridge exposes non-canonical selectors
@@ -118,7 +120,7 @@ export async function consumeOneShot(
       return standDown('bridge one-shot refused: no bridge pre-routing gate configured (fail-closed)');
     }
     try {
-      await deps.bridgeGuard(target);
+      await deps.bridgeGuard(target, decoded);
     } catch (err) {
       return standDown(
         `bridge one-shot refused by the pre-routing gate: ${err instanceof Error ? err.message : String(err)}`,

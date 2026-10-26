@@ -15,8 +15,10 @@ export type ArgRole = 'spender' | 'recipient' | 'from' | 'amount' | 'approvedBoo
 
 export interface SelectorSpec {
   signature: string;
-  /** the ABI param types in order (static-position decode). */
-  paramTypes: ('address' | 'uint256' | 'uint32' | 'bool')[];
+  /** the ABI param types in order (static-position decode). `bytes32` words with a
+   *  `recipient` role decode as canonical addresses (upper 96 bits must be zero —
+   *  the CCTP EVM `mintRecipient` encoding). */
+  paramTypes: ('address' | 'uint256' | 'uint32' | 'bool' | 'bytes32')[];
   /** role of each positional arg (same length as paramTypes). */
   roles: ArgRole[];
   /**
@@ -55,6 +57,24 @@ export interface SelectorSpec {
    * the localToken's budget — unit-correct), overriding `spendToken` semantics.
    */
   spendTokenFromArg?: number;
+  /**
+   * AQ-FND M-4: positional args whose 32-byte word MUST be all-zero (canonical),
+   * else DecodeMismatch. Used to pin CCTP's `destinationCaller` open (a nonzero
+   * caller gates the far-chain mint to one address — strandable funds).
+   */
+  zeroArgs?: readonly number[];
+  /**
+   * AQ-FND M-4: which positional arg names the rail's far-chain destination
+   * (CCTP uint32 domain / CCIP uint64 selector) — extracted into
+   * `args.bridgeDestination` for the bridge-gate's resolution (`rail-domains.ts`).
+   */
+  bridgeDomainArg?: { index: number; kind: 'cctp_domain' | 'ccip_selector' };
+  /**
+   * AQ-FND M-4: this selector has a dedicated strict-canonical dynamic decoder
+   * (the static-position machinery cannot express it). The ONLY custom decoder is
+   * CCIP `ccipSend` — its EVM2AnyMessage struct is dynamic.
+   */
+  custom?: 'ccip_send';
 }
 
 /** Build a spec keyed by its computed 4-byte selector. */
@@ -164,8 +184,54 @@ export const SELECTORS: ReadonlyMap<string, SelectorSpec> = new Map<string, Sele
     valueIsAmount: true,
     bridge: true,
   }),
+  // ---- AQ-FND M-4 real rails (D-5: CCTP Base/Eth/Arb USDC legs · CCIP 0G legs) ----
+  // Off-chain curated decoders (structured:false — the on-chain wall does NOT hard-decode
+  // these; it meters them as governed calls): the TOKEN movement is hard-bounded by the
+  // exact-amount `approve` to the rail (metered on the per-asset window, G-4) and the
+  // rail call itself is bounded by its CallRule (perCallCap bounds msg.value on-chain —
+  // the CCIP native fee — and the decoded token amount off-chain). Recipients pin to
+  // SELF (classify's bridge arm): funds only ever land on the agent's own same-address
+  // far-chain account (M-4). Destination resolution: `bridgeDomainArg` → rail-domains.ts.
+  spec({
+    // Circle CCTP v2 TokenMessengerV2 (testnet 0x8FE6B999…2DAA, step-0-verified on all
+    // three Sepolias). Fully static. `mintRecipient`/`destinationCaller` are bytes32:
+    // the recipient must be a canonical EVM address word (upper 96 bits zero) and the
+    // destinationCaller is pinned ZERO (permissionless far-chain mint — a nonzero
+    // caller could strand the funds behind a key the agent does not hold).
+    signature:
+      'function depositForBurn(uint256 amount, uint32 destinationDomain, bytes32 mintRecipient, address burnToken, bytes32 destinationCaller, uint256 maxFee, uint32 minFinalityThreshold)',
+    paramTypes: ['uint256', 'uint32', 'bytes32', 'address', 'bytes32', 'uint256', 'uint32'],
+    roles: ['amount', 'ignore', 'recipient', 'ignore', 'ignore', 'ignore', 'ignore'],
+    structured: false,
+    amountIndex: 0,
+    spendToken: 'target', // overridden by spendTokenFromArg (the burnToken's budget key)
+    spendTokenFromArg: 3,
+    verb: 'bridge',
+    forbidValue: true,
+    bridge: true,
+    zeroArgs: [4],
+    bridgeDomainArg: { index: 1, kind: 'cctp_domain' },
+  }),
+  spec({
+    // Chainlink CCIP Router.ccipSend (0G legs). Dynamic EVM2AnyMessage struct — decoded
+    // by the dedicated strict-canonical decoder (decoder.ts `decodeCcipSend`): exactly
+    // ONE tokenAmount, empty data, empty extraArgs, feeToken = native (msg.value carries
+    // the fee, metered on-chain against the native budget + the rule perCallCap).
+    signature:
+      'function ccipSend(uint64 destinationChainSelector, (bytes receiver, bytes data, (address token, uint256 amount)[] tokenAmounts, address feeToken, bytes extraArgs) message)',
+    paramTypes: [],
+    roles: [],
+    structured: false,
+    amountIndex: null,
+    spendToken: 'target',
+    verb: 'bridge',
+    bridge: true,
+    custom: 'ccip_send',
+  }),
   // ---- curated router/vault set (off-chain legibility only; on-chain non-structured) ----
-  // MockRouter.swap(tokenIn,tokenOut,amountIn,amountOutMin,recipient,deadline).
+  // swap(tokenIn,tokenOut,amountIn,amountOutMin,recipient,deadline) — the curated DEX
+  // shape (dev-env MockRouter implements it; a real DEX leg must match it or get its
+  // own curated spec). Live-path config no longer names any mock (AQ-FND retire).
   spec({
     signature:
       'function swap(address tokenIn, address tokenOut, uint256 amountIn, uint256 amountOutMin, address recipient, uint256 deadline)',
@@ -177,7 +243,8 @@ export const SELECTORS: ReadonlyMap<string, SelectorSpec> = new Map<string, Sele
     verb: 'swap',
     swapArgs: { tokenIn: 0, tokenOut: 1, minOut: 3, deadline: 5 },
   }),
-  // MockVault / ERC-4626 deposit(assets, receiver).
+  // ERC-4626 deposit(assets, receiver) — the curated vault shape (dev-env MockVault
+  // implements it; live-path config no longer names any mock — AQ-FND retire).
   spec({
     signature: 'function deposit(uint256 assets, address receiver)',
     paramTypes: ['uint256', 'address'],

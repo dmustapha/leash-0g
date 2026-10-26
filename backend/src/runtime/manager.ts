@@ -252,7 +252,7 @@ export class LeashRuntimeManager implements RuntimeManager {
     return {
       bridge: {
         targets: new Set(allow.map((a) => a.toLowerCase())),
-        assertRoutable: (bridgeTarget: string) => assertBridgeRoutable(registry, agent, bridgeTarget),
+        assertRoutable: (bridgeTarget, decoded) => assertBridgeRoutable(registry, agent, bridgeTarget, decoded),
       },
     };
   }
@@ -386,7 +386,8 @@ export class LeashRuntimeManager implements RuntimeManager {
         chain,
         ...(registry
           ? {
-              bridgeGuard: (bridgeTarget: string) => assertBridgeRoutable(registry, agent, bridgeTarget),
+              bridgeGuard: (bridgeTarget: string, decoded?: import('../governed-call/types.js').DecodedCall) =>
+                assertBridgeRoutable(registry, agent, bridgeTarget, decoded),
               // E-13 sec M-01: the rail keys on bridge-allowlisted TARGETS too.
               bridgeTargets: new Set(
                 (registry.has(agent.chainId) ? (registry.getChainConfig(agent.chainId).bridgeAllowlist ?? []) : []).map(

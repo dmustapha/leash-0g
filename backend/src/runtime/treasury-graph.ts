@@ -236,7 +236,12 @@ export interface TreasuryGraphDeps {
   bridge?:
     | {
         targets: Set<string>;
-        assertRoutable: (bridgeTarget: string) => Promise<{ destinationChainId: number; verifiedAddr: string }>;
+        assertRoutable: (
+          bridgeTarget: string,
+          // AQ-FND M-4: multi-domain rails (CCTP/CCIP) resolve their far chain
+          // from the DECODED call — threaded through to the bridge-gate.
+          decoded?: import('../governed-call/types.js').DecodedCall,
+        ) => Promise<{ destinationChainId: number; verifiedAddr: string }>;
       }
     | undefined;
   gatewayUrl: string;
@@ -948,7 +953,7 @@ export function buildTreasuryGraph(
           return standDownResult('bridge call refused: no bridge lane configured (pre-routing gate unavailable)');
         }
         try {
-          const routed = await deps.bridge.assertRoutable(built.target);
+          const routed = await deps.bridge.assertRoutable(built.target, gate.decoded);
           return {
             decision,
             route: 'call',

@@ -143,13 +143,27 @@ const envSchema = z.object({
   CHAIN_MAX_ELIGIBLE_PER_HOP: z.coerce.number().int().positive().max(16).default(3),
   // Stage D governed-calldata (spec §5, config-driven testnet defaults, 07 S6).
   // The per-network TARGET CATALOG (decision (c)): logical preset keys
-  // (router/vault/settlement_token) → the deployed MOCK target addresses on 0G
-  // testnet (DEPLOYMENTS.md "Stage D"). Real protocols are Stage E. Optional so
+  // (router/vault/settlement_token) → deployed target addresses. ⚠ AQ-FND retire
+  // (M-4): LIVE config must name REAL contracts only — the Stage-D mocks
+  // (MockRouter/MockVault/MockBridge/MockArbitrumBridge) are dev/test-env only and
+  // are no longer set in the production .env (0G Galileo has no real DEX, P-GAS-3,
+  // so the 0G catalog simply has no router/vault until mainnet). Optional so
   // local/CI without a deployment still boots (preset resolve just returns
   // unresolvable_target — never a partial grant).
   CAP_ROUTER_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
   CAP_VAULT_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
   CAP_SETTLEMENT_TOKEN_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  // AQ-FND M-4 (D-5 as re-ruled): the REAL cross-chain rails. CCIP Router is
+  // PER-CHAIN (Chainlink deploys a distinct router per chain — probed live,
+  // evidence/aq-fnd/ccip-probe-results.json); CCTP v2 TokenMessenger is the SAME
+  // address on all three Sepolias (Circle, step-0-verified). These land in each
+  // chain's bridgeAllowlist WITHOUT a bridgeDestinations entry — multi-domain
+  // rails resolve their far chain from the DECODED call (rail-domains.ts).
+  CCIP_ROUTER_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(), // 0G Galileo router
+  BASE_CCIP_ROUTER_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  SEPOLIA_CCIP_ROUTER_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  ARB_CCIP_ROUTER_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  CCTP_TOKEN_MESSENGER_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
   // How long a JIT (L2) capability card stays actionable before it auto-expires
   // (the sweep resolves it). Reuses the approval-timeout posture as the default.
   JIT_TTL_MS: z.coerce.number().int().positive().default(600_000),
@@ -460,6 +474,24 @@ export function parseExtraChains(
   });
 }
 
+/**
+ * AQ-FND M-4: one chain's bridge surface — the single-destination bridge allowlist
+ * (`addr:destChainId` pairs → bridgeDestinations) merged with its multi-domain RAIL
+ * addresses (CCIP Router / CCTP TokenMessenger). Rails get NO bridgeDestinations
+ * entry: they serve many far chains from one address, so the bridge-gate resolves
+ * their destination from the DECODED call (`governed-call/rail-domains.ts`).
+ */
+function bridgeConfig(
+  allowlistEnv: string | undefined,
+  railAddrs: Array<string | undefined>,
+): Pick<ChainConfig, 'bridgeAllowlist' | 'bridgeDestinations'> | Record<string, never> {
+  const parsed = allowlistEnv ? parseBridgeAllowlist(allowlistEnv) : undefined;
+  const rails = railAddrs.filter((a): a is string => !!a).map((a) => a.toLowerCase());
+  const allow = [...new Set([...(parsed?.bridgeAllowlist ?? []), ...rails])];
+  if (allow.length === 0) return {};
+  return { bridgeAllowlist: allow, ...(parsed ? { bridgeDestinations: parsed.bridgeDestinations } : {}) };
+}
+
 export function buildChainConfigs(cfg: Config): ChainConfig[] {
   // Stage F′ (FP-4 P1): the global V5 singletons, inherited by every chain (they
   // are the SAME address on every chain). A chain missing any default-denies V5.
@@ -480,6 +512,9 @@ export function buildChainConfigs(cfg: Config): ChainConfig[] {
         settlementToken: cfg.CAP_SETTLEMENT_TOKEN_ADDR,
       },
       gasFloorWei: 2_000_000_000n, // 2 gwei — 0G node minimum
+      // AQ-FND M-4 (D-5): CCIP is the rail for every 0G leg — the 0G-side Router
+      // joins the bridge allowlist (destination decoded per call, rail-domains.ts).
+      ...bridgeConfig(undefined, [cfg.CCIP_ROUTER_ADDR]),
     },
   ];
   // SE-7: Base Sepolia (84532) — appended only when BOTH env vars are set
@@ -514,7 +549,9 @@ export function buildChainConfigs(cfg: Config): ChainConfig[] {
             }),
           }
         : {}),
-      ...(cfg.BASE_BRIDGE_ALLOWLIST ? parseBridgeAllowlist(cfg.BASE_BRIDGE_ALLOWLIST) : {}),
+      // AQ-FND M-4: OP-stack bridge entries (addr:dest) + the real rails (CCTP
+      // TokenMessenger for the USDC legs, Base's CCIP Router for the 0G legs).
+      ...bridgeConfig(cfg.BASE_BRIDGE_ALLOWLIST, [cfg.BASE_CCIP_ROUTER_ADDR, cfg.CCTP_TOKEN_MESSENGER_ADDR]),
     });
   }
   // SE-8: Ethereum Sepolia (11155111) — the OP-stack bridge DESTINATION chain.
@@ -547,6 +584,8 @@ export function buildChainConfigs(cfg: Config): ChainConfig[] {
       ...(cfg.SEPOLIA_PROTOCOL_ALLOWLIST
         ? { protocolAllowlist: parseAddressList(cfg.SEPOLIA_PROTOCOL_ALLOWLIST, 'SEPOLIA_PROTOCOL_ALLOWLIST') }
         : {}),
+      // AQ-FND M-4: the real rails on Eth Sepolia (CCTP USDC legs + CCIP 0G legs).
+      ...bridgeConfig(undefined, [cfg.SEPOLIA_CCIP_ROUTER_ADDR, cfg.CCTP_TOKEN_MESSENGER_ADDR]),
     });
   }
   // SE-9 (E-10): Arbitrum Sepolia (421614) — the DIVERGENT bridge family. Appended
@@ -577,7 +616,8 @@ export function buildChainConfigs(cfg: Config): ChainConfig[] {
             }),
           }
         : {}),
-      ...(cfg.ARB_BRIDGE_ALLOWLIST ? parseBridgeAllowlist(cfg.ARB_BRIDGE_ALLOWLIST) : {}),
+      // AQ-FND M-4: Arbitrum bridge entries (addr:dest) + the real rails.
+      ...bridgeConfig(cfg.ARB_BRIDGE_ALLOWLIST, [cfg.ARB_CCIP_ROUTER_ADDR, cfg.CCTP_TOKEN_MESSENGER_ADDR]),
     });
   }
   // SE-10 (E-11): the GENERIC chain-table — remaining top EVM testnets onboard here

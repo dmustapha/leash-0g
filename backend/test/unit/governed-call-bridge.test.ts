@@ -220,9 +220,15 @@ describe('SE-8 buildGovernedCall — never-guess-money bridge build', () => {
     expect(built).toEqual({ ok: false, reason: 'no_grant' });
   });
 
-  it('BRIDGE_SELECTORS carries exactly the structured bridge decoders (OP-stack + SE-9 Arbitrum)', () => {
+  it('BRIDGE_SELECTORS carries exactly the bridge decoders (OP-stack + SE-9 Arbitrum + M-4 rails)', () => {
+    const SEL_CCTP = toFunctionSelector(
+      'function depositForBurn(uint256,uint32,bytes32,address,bytes32,uint256,uint32)',
+    ).toLowerCase();
+    const SEL_CCIP = toFunctionSelector(
+      'function ccipSend(uint64,(bytes,bytes,(address,uint256)[],address,bytes))',
+    ).toLowerCase();
     expect([...BRIDGE_SELECTORS].sort()).toEqual(
-      [SEL_ERC20, SEL_ETH, SEL_ARB_OUTBOUND, SEL_ARB_WITHDRAW_ETH].sort(),
+      [SEL_ERC20, SEL_ETH, SEL_ARB_OUTBOUND, SEL_ARB_WITHDRAW_ETH, SEL_CCTP, SEL_CCIP].sort(),
     );
   });
 });

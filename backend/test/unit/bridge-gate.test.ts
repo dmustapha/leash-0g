@@ -148,3 +148,55 @@ describe('SE-8 assertBridgeRoutable — the HARD pre-routing gate (carry #1)', (
     expect(out.destinationChainId).toBe(DEST);
   });
 });
+
+// AQ-FND M-4 — multi-domain rails: the destination comes from the DECODED call
+// (CCTP domain / CCIP selector → rail-domains.ts), not the one-dest config map.
+describe('M-4 assertBridgeRoutable — decoded rail destinations', () => {
+  const RAIL = '0x8fe6b999dc680ccfdd5bf7eb0974218be2542daa'; // CCTP TokenMessenger (no bridgeDestinations entry)
+  const railRegistry = (over: Partial<Record<string, unknown>> = {}) =>
+    fakeRegistry({
+      getChainConfig: (id: number) => {
+        const cfgs: Record<number, unknown> = {
+          [HOME]: { chainId: HOME, bridgeAllowlist: [BRIDGE, RAIL], bridgeDestinations: { [BRIDGE]: DEST } },
+          [DEST]: { chainId: DEST },
+          421614: { chainId: 421614 },
+        };
+        const c = cfgs[id];
+        if (!c) throw new UnregisteredChainError(id);
+        return c;
+      },
+      ...over,
+    });
+  const decodedWith = (dest: { kind: 'cctp_domain' | 'ccip_selector'; value: string }) =>
+    ({ args: { bridgeDestination: dest } }) as never;
+
+  it('resolves the destination from a decoded CCTP domain when the target has no config entry', async () => {
+    const out = await assertBridgeRoutable(railRegistry(), agent(), RAIL, decodedWith({ kind: 'cctp_domain', value: '0' }));
+    expect(out.destinationChainId).toBe(DEST); // domain 0 = Eth Sepolia
+  });
+
+  it('REFUSES an unknown rail domain (default-deny, never guesses)', async () => {
+    await expect(
+      assertBridgeRoutable(railRegistry(), agent(), RAIL, decodedWith({ kind: 'cctp_domain', value: '42' })),
+    ).rejects.toMatchObject({ name: 'BridgeRoutingRefusedError', reason: 'unknown_rail_domain' });
+  });
+
+  it('REFUSES a rail call with no decoded destination AND no config entry', async () => {
+    await expect(assertBridgeRoutable(railRegistry(), agent(), RAIL)).rejects.toMatchObject({
+      name: 'BridgeRoutingRefusedError',
+      reason: 'no_destination',
+    });
+  });
+
+  it('REFUSES when the calldata destination disagrees with a config-named single destination', async () => {
+    // BRIDGE is configured for DEST; calldata names Arbitrum Sepolia (domain 3) — refuse.
+    await expect(
+      assertBridgeRoutable(railRegistry(), agent(), BRIDGE, decodedWith({ kind: 'cctp_domain', value: '3' })),
+    ).rejects.toMatchObject({ name: 'BridgeRoutingRefusedError', reason: 'destination_mismatch' });
+  });
+
+  it('config destination still wins when calldata agrees (back-compat with single-dest bridges)', async () => {
+    const out = await assertBridgeRoutable(railRegistry(), agent(), BRIDGE, decodedWith({ kind: 'cctp_domain', value: '0' }));
+    expect(out.destinationChainId).toBe(DEST);
+  });
+});

@@ -2,6 +2,8 @@ import { type AgentRow, assertNativeAgent } from '../types.js';
 import type { ChainRegistry } from '../chain/registry.js';
 import { SameAddressMismatchError, UnregisteredChainError } from '../chain/registry.js';
 import { OnboardRefusedError, parsePersistedTuple } from '../chain/onboard.js';
+import type { DecodedCall } from '../governed-call/types.js';
+import { resolveRailDestination } from '../governed-call/rail-domains.js';
 
 /**
  * SE-8 — the HARD pre-routing gate (SE-7 gate carry #1; spec §3b bridging).
@@ -28,6 +30,8 @@ export class BridgeRoutingRefusedError extends Error {
     public readonly reason:
       | 'bridge_not_allowlisted'
       | 'no_destination'
+      | 'unknown_rail_domain'
+      | 'destination_mismatch'
       | 'destination_unregistered'
       | 'destination_chainid_mismatch'
       | 'no_persisted_tuple'
@@ -45,6 +49,15 @@ export async function assertBridgeRoutable(
   registry: ChainRegistry,
   agent: AgentRow,
   bridgeTarget: string,
+  /**
+   * AQ-FND M-4: the decoded call, when the caller has one. Multi-domain rails
+   * (CCTP TokenMessenger, CCIP Router) serve many far chains from ONE address, so
+   * their destination comes from the DECODED domain/selector (`rail-domains.ts`),
+   * not the one-target→one-destination `bridgeDestinations` map. When BOTH exist
+   * they must agree (a config-named single-destination bridge can never be driven
+   * elsewhere by calldata).
+   */
+  decoded?: DecodedCall,
 ): Promise<{ destinationChainId: number; verifiedAddr: string }> {
   // SF-2: bridge routing is native-only (requires the agent's on-chain account).
   assertNativeAgent(agent);
@@ -57,11 +70,29 @@ export async function assertBridgeRoutable(
       `bridge ${target} is not in chain ${agent.chainId}'s bridge allowlist`,
     );
   }
-  const destinationChainId = cfg.bridgeDestinations?.[target];
+  const configuredDest = cfg.bridgeDestinations?.[target];
+  let decodedDest: number | undefined;
+  if (decoded?.args.bridgeDestination) {
+    const resolved = resolveRailDestination(decoded.args.bridgeDestination);
+    if (resolved === null) {
+      throw new BridgeRoutingRefusedError(
+        'unknown_rail_domain',
+        `rail ${target} names an unknown ${decoded.args.bridgeDestination.kind} ${decoded.args.bridgeDestination.value} — far leg unverifiable (default-deny)`,
+      );
+    }
+    decodedDest = resolved;
+  }
+  if (configuredDest !== undefined && decodedDest !== undefined && configuredDest !== decodedDest) {
+    throw new BridgeRoutingRefusedError(
+      'destination_mismatch',
+      `bridge ${target} is configured for chain ${configuredDest} but the calldata names ${decodedDest} — refusing`,
+    );
+  }
+  const destinationChainId = configuredDest ?? decodedDest;
   if (destinationChainId === undefined) {
     throw new BridgeRoutingRefusedError(
       'no_destination',
-      `bridge ${target} has no configured destination chain — far leg unverifiable`,
+      `bridge ${target} has no configured destination chain and the call decodes none — far leg unverifiable`,
     );
   }
   try {

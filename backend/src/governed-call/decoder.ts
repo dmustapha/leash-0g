@@ -46,6 +46,10 @@ export function decodeCall(target: string, value: bigint, data: string): Decoded
     });
   }
 
+  // AQ-FND M-4: CCIP ccipSend carries a dynamic EVM2AnyMessage — its own
+  // strict-canonical decoder (the static machinery below cannot express it).
+  if (spec.custom === 'ccip_send') return decodeCcipSend(spec, targetLc, value, hex);
+
   // Every registered signature is fully STATIC — exact length is 4 + 32*nParams.
   // SE-8 bridge shapes carry a trailing dynamic `bytes extraData` FORCED EMPTY:
   // exactly 2 extra words (canonical head offset + zero length).
@@ -98,7 +102,14 @@ export function decodeCall(target: string, value: bigint, data: string): Decoded
     const role = spec.roles[i];
     const word = words[i];
     if (type === undefined || role === undefined || word === undefined) continue;
-    if (type === 'address') {
+    // AQ-FND M-4: pinned-zero words (CCTP destinationCaller) — any nonzero bit refuses.
+    if (spec.zeroArgs?.includes(i) && BigInt('0x' + word) !== 0n) {
+      reject = 'DecodeMismatch';
+      break;
+    }
+    if (type === 'address' || (type === 'bytes32' && role === 'recipient')) {
+      // bytes32 recipients (CCTP mintRecipient) use the SAME canonical encoding as an
+      // address word — upper 96 bits zero — so the one decode covers both.
       const addr = decodeCanonicalAddress(word);
       decodedAddrs[i] = addr;
       if (addr === null) {
@@ -108,12 +119,18 @@ export function decodeCall(target: string, value: bigint, data: string): Decoded
       if (role === 'spender') args.spender = addr;
       else if (role === 'recipient') args.recipients.push(addr);
       else if (role === 'from') args.from = addr;
+    } else if (type === 'bytes32') {
+      // non-recipient bytes32 (destinationCaller): no decode — zeroArgs above pins it.
     } else if (type === 'uint32') {
       // strict canonical: bits above uint32 must be zero (contract mirrors).
       const raw = BigInt('0x' + word);
       if (raw >> 32n !== 0n) {
         reject = 'DecodeMismatch';
         break;
+      }
+      // AQ-FND M-4: extract the rail's far-chain domain for bridge-gate resolution.
+      if (spec.bridgeDomainArg?.index === i) {
+        args.bridgeDestination = { kind: spec.bridgeDomainArg.kind, value: raw.toString() };
       }
     } else if (type === 'bool') {
       const raw = BigInt('0x' + word);
@@ -143,6 +160,61 @@ export function decodeCall(target: string, value: bigint, data: string): Decoded
     if (tok) args.spendToken = tok;
   }
   return base(targetLc, value, hex, spec.signature, humanReadable(spec, targetLc, args), args, reject);
+}
+
+/**
+ * AQ-FND M-4 — strict-canonical decode of CCIP `ccipSend(uint64, EVM2AnyMessage)`.
+ *
+ * ONE governable shape (anything else is DecodeMismatch, fail-closed):
+ *   - exactly ONE tokenAmounts entry (the bridged token+amount — the budget key),
+ *   - `data` EMPTY (no arbitrary far-chain payload rides a governed bridge leg),
+ *   - `extraArgs` EMPTY (router defaults; no gas-limit smuggling),
+ *   - `feeToken` = address(0): the fee is NATIVE, carried by msg.value — which the
+ *     on-chain wall charges against the native budget and the rule's perCallCap,
+ *   - `receiver` = a canonical 32-byte address word (→ recipient, pinned self by
+ *     classify's bridge arm — funds land only on the same-address far account).
+ *
+ * Word layout (14 words, 452 bytes total):
+ *   0 destinationChainSelector · 1 structOffset(0x40) · 2..6 struct head
+ *   (receiverOff 0xa0 · dataOff 0xe0 · tokenAmountsOff 0x100 · feeToken · extraArgsOff 0x160)
+ *   7 receiverLen(32) · 8 receiver · 9 dataLen(0) · 10 tokenAmountsLen(1)
+ *   11 token · 12 amount · 13 extraArgsLen(0)
+ */
+function decodeCcipSend(spec: SelectorSpec, targetLc: string, value: bigint, hex: string): DecodedCall {
+  const args: AuthorityArgs = { structured: false, amount: 0n, spendToken: ZERO, recipients: [] };
+  const fail = (): DecodedCall =>
+    base(targetLc, value, hex, spec.signature, `${spec.verb} via ${shortAddr(targetLc)} (non-canonical)`, args, 'DecodeMismatch');
+
+  if (hexLen(hex) !== 4 + 32 * 14) return fail();
+  const word = (i: number): bigint => BigInt('0x' + hex.slice(10 + i * 64, 10 + (i + 1) * 64));
+
+  const chainSelector = word(0);
+  if (chainSelector >> 64n !== 0n) return fail(); // canonical uint64
+  const expect: Array<[number, bigint]> = [
+    [1, 0x40n], // message struct offset
+    [2, 0xa0n], // receiver offset (relative to struct)
+    [3, 0xe0n], // data offset
+    [4, 0x100n], // tokenAmounts offset
+    [5, 0n], // feeToken = address(0) → native fee via msg.value
+    [6, 0x160n], // extraArgs offset
+    [7, 32n], // receiver length (one abi word)
+    [9, 0n], // data EMPTY
+    [10, 1n], // exactly ONE tokenAmount
+    [13, 0n], // extraArgs EMPTY
+  ];
+  for (const [i, want] of expect) if (word(i) !== want) return fail();
+
+  const receiverWord = hex.slice(10 + 8 * 64, 10 + 9 * 64);
+  const receiver = decodeCanonicalAddress(receiverWord);
+  const tokenWord = hex.slice(10 + 11 * 64, 10 + 12 * 64);
+  const token = decodeCanonicalAddress(tokenWord);
+  if (receiver === null || token === null) return fail();
+
+  args.recipients.push(receiver);
+  args.spendToken = token;
+  args.amount = word(12);
+  args.bridgeDestination = { kind: 'ccip_selector', value: chainSelector.toString() };
+  return base(targetLc, value, hex, spec.signature, humanReadable(spec, targetLc, args), args);
 }
 
 function base(

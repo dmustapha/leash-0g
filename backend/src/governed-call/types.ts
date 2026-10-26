@@ -75,6 +75,14 @@ export interface AuthorityArgs {
   approvedForAll?: boolean;
   /** true iff `approve(type(uint256).max)` — forbidden on-chain. */
   infiniteApproval?: boolean;
+  /**
+   * AQ-FND M-4: the DECODED far-chain destination of a multi-domain rail leg
+   * (CCTP `destinationDomain`, CCIP `destinationChainSelector`). These rails serve
+   * many destinations from ONE contract address, so the bridge-gate resolves the
+   * destination chain from this decoded value (`rail-domains.ts`) instead of the
+   * one-target→one-destination `bridgeDestinations` config map.
+   */
+  bridgeDestination?: { kind: 'cctp_domain' | 'ccip_selector'; value: string };
 }
 
 /** Result of decoding one intended call. Mirrors the on-chain revert taxonomy where it matters. */

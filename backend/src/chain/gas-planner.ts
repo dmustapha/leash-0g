@@ -28,6 +28,7 @@
  */
 import type { Address, Hex, PublicClient, WalletClient } from 'viem';
 import { encodeFunctionData, encodeAbiParameters, keccak256, parseAbi } from 'viem';
+import type { DestGasPlan } from '../store/rail-transfers.js';
 
 export type GasPlanMode = 'has-native' | 'account-native' | 'swap-to-gas' | 'bootstrap-7702' | 'ask-owner';
 
@@ -72,6 +73,30 @@ export function planGas(cfg: GasRouteConfig, snap: GasSnapshot): GasPlan {
     return { mode: 'bootstrap-7702', reason: `GasRepayDelegate bootstrap; repay in ${token.token}` };
   }
   return { mode: 'ask-owner', reason: 'no self-funding path on this chain — surface ONE ask, never stall silently' };
+}
+
+// ---------------------------------------------------------------------------------------------
+// AQ-FND M-4 / G-9: the DESTINATION-gas plan a rail transfer must hold BEFORE it is
+// enterable. `initiateRailTransfer` refuses a route without one (UnfundedRouteError) —
+// this maps the self-funding ladder, evaluated against the DESTINATION chain's
+// snapshot, onto that plan. `ask-owner` maps to null: the route is NOT enterable;
+// the caller surfaces ONE capability ask instead of stranding funds mid-rail.
+// ---------------------------------------------------------------------------------------------
+
+export function planDestGas(cfg: GasRouteConfig, destSnap: GasSnapshot, destChainId: number): DestGasPlan | null {
+  const plan = planGas(cfg, destSnap);
+  switch (plan.mode) {
+    case 'has-native':
+      return { destChainId, fundedWei: destSnap.sessionNativeWei.toString(), source: 'prefunded' };
+    case 'account-native':
+    case 'swap-to-gas':
+      // both secure destination gas through a governed refuel leg (swap lands native first)
+      return { destChainId, fundedWei: cfg.refuelWei.toString(), source: 'refuel' };
+    case 'bootstrap-7702':
+      return { destChainId, fundedWei: cfg.refuelWei.toString(), source: 'paymaster' };
+    case 'ask-owner':
+      return null; // G-9: no funded plan ⇒ the route is not enterable
+  }
 }
 
 // ---------------------------------------------------------------------------------------------
