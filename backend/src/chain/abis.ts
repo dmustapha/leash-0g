@@ -79,6 +79,15 @@ export const leashAccountV5ReadAbi = parseAbi([
   'function decodeHelper() view returns (address)',
 ]);
 
+/** AQ-FND Lane-B: the V6 multi-asset policy read surface (PolicyView generalization). */
+export const leashAccountV6PolicyAbi = parseAbi([
+  'function session() view returns (uint32 ruleWindowSeconds, uint64 expiresAt)',
+  'function assetPolicy(address asset) view returns (bool enabled, uint128 perTransferCap, uint128 windowCap, uint32 windowSeconds)',
+  'function assetMeter(address asset) view returns (uint128 cur, uint128 prev, uint64 start)',
+  'function allowlist(address asset, address payee) view returns (bool)',
+  'function revoked() view returns (bool)',
+]);
+
 /** Minimal ERC-20 metadata reads — to detect + label the settlement asset. */
 export const erc20MetaAbi = parseAbi([
   'function decimals() view returns (uint8)',

@@ -40,7 +40,7 @@ function createBody(name: string, extra: Record<string, unknown> = {}): Record<s
   };
 }
 
-async function createAndFetch(t: TestApp, owner: string, body: Record<string, unknown>) {
+async function createAndFetch(t: Pick<TestApp, 'app'>, owner: string, body: Record<string, unknown>) {
   const res = await request(t.app).post('/api/agents').set('authorization', ownerAuth(owner)).send(body);
   expect(res.status).toBe(201);
   const row = await getAgentById(db.pool, res.body.agentId);
@@ -78,6 +78,120 @@ describe('SE-1 create funnel → version selection', () => {
       .post('/api/agents')
       .set('authorization', ownerAuth(owner))
       .send(createBody('bad', { accountVersion: 3 }));
+    expect(res.status).toBe(400);
+  });
+});
+
+/**
+ * AQ-FND Lane-B — the v6 default flip: a version-less create resolves the CHAIN's
+ * configured default (6 where the V6 singleton set is wired), fails CLOSED with a
+ * typed 409 on a chain that cannot mint v6, and keeps every explicit pin working.
+ */
+describe('AQ-FND Lane-B — chain-default accountVersion 6', () => {
+  function withV6Default(v6Supported: boolean) {
+    // buildTestApp returns ITS OWN FakeChainOps even when one is injected — build
+    // the chain first and assert against this reference, not the returned handle.
+    const base = buildTestApp(db.pool);
+    const chain = base.chain;
+    chain.v6Supported = v6Supported;
+    const t = buildTestApp(db.pool, {
+      chain,
+      chainRegistry: {
+        has: () => true,
+        getChainOps: () => chain,
+        getChainConfig: () => ({ accountVersion: 6 }),
+      } as never,
+    });
+    return { app: t.app, chain };
+  }
+
+  it('a version-less create on a v6-default chain mints V6, persists account_version=6', async () => {
+    const owner = uniqueOwner();
+    const t = withV6Default(true);
+    const { row } = await createAndFetch(t, owner, createBody('default-v6'));
+    expect(t.chain.createdVersions.at(-1)).toBe(6);
+    expect(row?.accountVersion).toBe(6);
+  });
+
+  it('a v6-default chain MISSING the singletons is a typed 409 — never a silent V4 downgrade', async () => {
+    const owner = uniqueOwner();
+    const t = withV6Default(false);
+    const res = await request(t.app)
+      .post('/api/agents')
+      .set('authorization', ownerAuth(owner))
+      .send(createBody('v6-unavailable'));
+    expect(res.status).toBe(409);
+    expect(res.body.error?.reason).toBe('v6_unavailable');
+    expect(t.chain.createdVersions).toHaveLength(0);
+  });
+
+  it('an explicit accountVersion:4 pin still mints V4 on a v6-default chain', async () => {
+    const owner = uniqueOwner();
+    const t = withV6Default(true);
+    const { row } = await createAndFetch(t, owner, createBody('pinned-v4', { accountVersion: 4 }));
+    expect(t.chain.createdVersions.at(-1)).toBe(4);
+    expect(row?.accountVersion).toBe(4);
+  });
+
+  it('G-1 mirror: a v6 tokenConfig with windowCap < perTransferCap is a clean 400', async () => {
+    const owner = uniqueOwner();
+    const t = withV6Default(true);
+    const res = await request(t.app)
+      .post('/api/agents')
+      .set('authorization', ownerAuth(owner))
+      .send(
+        createBody('bad-asset-policy', {
+          tokenConfig: {
+            settlementToken: '0x' + 'cc'.repeat(20),
+            perTransferCapTokenWei: '1000',
+            windowCapTokenWei: '999',
+          },
+        }),
+      );
+    expect(res.status).toBe(400);
+    expect(res.body.error?.reason).toBe('invalid_token_policy');
+  });
+
+  it('a spend-capable non-requester (treasury) may now seed an initial asset (generalized F1)', async () => {
+    const owner = uniqueOwner();
+    const t = withV6Default(true);
+    const { row } = await createAndFetch(
+      t,
+      owner,
+      createBody('treasury-with-asset', {
+        tokenConfig: {
+          settlementToken: '0x' + 'cc'.repeat(20),
+          perTransferCapTokenWei: '1000',
+          windowCapTokenWei: '5000',
+        },
+      }),
+    );
+    expect(t.chain.createdVersions.at(-1)).toBe(6);
+    expect(row?.accountVersion).toBe(6);
+  });
+
+  it('a spend-incapable role (sentinel) with tokenConfig is still refused at the schema', async () => {
+    const owner = uniqueOwner();
+    const t = withV6Default(true);
+    const res = await request(t.app)
+      .post('/api/agents')
+      .set('authorization', ownerAuth(owner))
+      .send({
+        ...createBody('sentinel-token', {
+          tokenConfig: {
+            settlementToken: '0x' + 'cc'.repeat(20),
+            perTransferCapTokenWei: '1000',
+            windowCapTokenWei: '5000',
+          },
+        }),
+        goal: {
+          type: 'sentinel',
+          beneficiary: '0x' + '9c'.repeat(20),
+          targetBalanceWei: '50000000000000000',
+          topUpWei: '5000000000000000',
+        },
+        allowlist: [],
+      });
     expect(res.status).toBe(400);
   });
 });

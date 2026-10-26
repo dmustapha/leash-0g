@@ -156,6 +156,12 @@ export class FakeChainOps implements ChainOps {
   supportsV5(): boolean {
     return this.v5Supported;
   }
+
+  /** AQ-FND Lane-B: the v6 fail-closed twin (default false — tests opt in). */
+  public v6Supported = false;
+  supportsV6(): boolean {
+    return this.v6Supported;
+  }
 }
 
 export class FakeRuntime implements RuntimeManager {

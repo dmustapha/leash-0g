@@ -98,7 +98,8 @@ export interface ChainOps {
    */
   revoke(accountAddr: string, accountGuardianAddr?: string | null): Promise<{ txHash: string }>;
   fundSessionKey(addr: string, amountWei: bigint): Promise<{ txHash: string }>;
-  getPolicyView(accountAddr: string, allowlistCandidates: string[]): Promise<PolicyView>;
+  /** AQ-FND Lane-B: `assetCandidates` = V6 asset-map tokens to read (the map is not enumerable). */
+  getPolicyView(accountAddr: string, allowlistCandidates: string[], assetCandidates?: string[]): Promise<PolicyView>;
   getBalance(addr: string): Promise<bigint>;
   /** Live on-chain guardian (lowercased) — M-03 stale-guardian resync. */
   getGuardian(accountAddr: string): Promise<string>;
@@ -109,6 +110,8 @@ export interface ChainOps {
    * half-wired chain. Optional — faked ops in tests may omit it.
    */
   supportsV5?(): boolean;
+  /** AQ-FND Lane-B: all five V6 singletons wired ⇒ a v6 mint can land (typed 409 otherwise). */
+  supportsV6?(): boolean;
 }
 
 export interface RuntimeManager {

@@ -251,7 +251,10 @@ contract LeashAccountV6 is ReentrancyGuard {
     // ---------- AQ-FND M-1 state: the per-asset base model (asset(0) = native) ----------
     PolicyLib.SessionPolicy public session;
     mapping(address => PolicyLib.AssetPolicy) public assetPolicy;
-    mapping(address => PolicyLib.WindowMeter) internal assetMeter;
+    /// @notice AQ-FND Lane-B observability: public so the backend PolicyView can read the
+    ///         raw two-bucket meter (cur, prev, start) and mirror PolicyLib.slide off-chain
+    ///         — enforcement stays on-chain; the getter only makes the state observable.
+    mapping(address => PolicyLib.WindowMeter) public assetMeter;
     /// @notice Per-asset payee allowlist (G-5's sibling on the simple paths): (asset, payee).
     mapping(address => mapping(address => bool)) public allowlist;
     /// @notice A payee ever allowlisted on ANY asset — the M-2 "never-seen counterparty" test

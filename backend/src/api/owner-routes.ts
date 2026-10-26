@@ -152,6 +152,8 @@ export interface OwnerChainRegistry {
     canonical?: { router?: string | undefined; vault?: string | undefined; settlementToken?: string | undefined } | undefined;
     /** F-2: per-chain session-key gas dust override (unset ⇒ global default). */
     sessionGasDustWei?: bigint | undefined;
+    /** AQ-FND Lane-B: the chain's default mint version (6 where the V6 set is wired). */
+    accountVersion?: number;
   };
 }
 
@@ -387,8 +389,10 @@ export const createAgentSchema = z.object({
    * Stage F′ (FP-4 P1): `5` = governed-signing V5, minted through the generic
    * CREATE2 deployer (default-denied on chains missing the V5 singletons).
    * Coerced from JSON number; only 2 | 4 | 5 | 6 accepted (6 = AQ-FND multi-asset).
+   * AQ-FND Lane-B: OMITTED ⇒ the CHAIN's configured default (6 where the V6
+   * singleton set is wired, else 4) — resolved at the route, not here.
    */
-  accountVersion: z.union([z.literal(2), z.literal(4), z.literal(5), z.literal(6)]).default(4),
+  accountVersion: z.union([z.literal(2), z.literal(4), z.literal(5), z.literal(6)]).optional(),
   /**
    * SE-7 (spec §7.C "chain choice collected at create"): which registered
    * chain the agent's account is minted on. Default = the home 0G chain.
@@ -436,10 +440,12 @@ export const createAgentSchema = z.object({
         issues.addIssue({ code: z.ZodIssueCode.custom, message: 'goal.feeRecipient must be in the allowlist', path: ['goal', 'feeRecipient'] });
       }
     }
-  } else if (v.tokenConfig) {
-    // Only a requester may configure a settlement token (F1) — provider/
-    // evaluator/treasury/sentinel/executor are native-only.
-    issues.addIssue({ code: z.ZodIssueCode.custom, message: 'tokenConfig is only valid for a requester goal', path: ['tokenConfig'] });
+  } else if (v.tokenConfig && (v.goal.type === 'sentinel' || v.goal.type === 'provider' || v.goal.type === 'evaluator')) {
+    // AQ-FND Lane-B (generalized from F1's requester-only rule): any SPEND-CAPABLE
+    // role may now seed an initial governed asset (the v6 multi-asset map; on v4 it
+    // maps to the settlement-token path) — but spend-INCAPABLE roles stay token-free
+    // by construction (zero caps, empty allowlist; a token policy there is a lie).
+    issues.addIssue({ code: z.ZodIssueCode.custom, message: 'tokenConfig is not valid for a spend-incapable role', path: ['tokenConfig'] });
   }
   // Provider/evaluator are spend-incapable (like sentinel): zero native caps.
   // Evaluator may have an empty allowlist (like sentinel); provider too.
@@ -752,7 +758,30 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     // that omits the oracleBand capability must NOT silently fall back to the V4 drain.
     const isV5TraderLane =
       input.capability === 'oracleBand' || input.goal.type === 'trader' || input.accountVersion === 5;
-    const effectiveAccountVersion = isV5TraderLane ? 5 : input.accountVersion;
+    // AQ-FND Lane-B: no client-pinned version ⇒ the CHAIN's configured default
+    // (6 where the V6 singleton set is wired — config.ts `defaultAccountVersion`).
+    // The trader/oracleBand lane keeps its RH2-ruled V5 pin (the swap wall).
+    const chainDefaultRaw = deps.chainRegistry?.has(createChainId)
+      ? deps.chainRegistry.getChainConfig(createChainId).accountVersion
+      : 4;
+    const chainDefault: 2 | 4 | 5 | 6 =
+      chainDefaultRaw === 2 || chainDefaultRaw === 5 || chainDefaultRaw === 6 ? chainDefaultRaw : 4;
+    const effectiveAccountVersion = isV5TraderLane ? 5 : (input.accountVersion ?? chainDefault);
+    // G-1 mirror for the v6 asset map (the constructor refuses window < perTransfer;
+    // surface it as a clean 400, not an opaque revert).
+    if (
+      effectiveAccountVersion === 6 &&
+      input.tokenConfig &&
+      BigInt(input.tokenConfig.windowCapTokenWei) < BigInt(input.tokenConfig.perTransferCapTokenWei)
+    ) {
+      res.status(400).json({
+        error: {
+          message: 'windowCapTokenWei must be >= perTransferCapTokenWei (the on-chain per-asset policy refuses it)',
+          reason: 'invalid_token_policy',
+        },
+      });
+      return;
+    }
     if (input.capability && !isV5TraderLane) {
       // RH2 (two-factory): a NON-oracleBand named capability still mints through its
       // operator-configured V4 factory. Default-deny: the capability must be
@@ -774,6 +803,15 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     if (isV5TraderLane && !createChain.supportsV5?.()) {
       res.status(409).json({
         error: { message: `chain ${createChainId} is missing the V5 singletons (deployer/signingHelper/decodeHelper)`, reason: 'v5_unavailable' },
+        chainId: createChainId,
+      });
+      return;
+    }
+    // AQ-FND Lane-B fail-closed twin: a v6 create on a chain missing ANY of the five
+    // V6 singletons is a typed 409 — never a silent downgrade to V4.
+    if (effectiveAccountVersion === 6 && !createChain.supportsV6?.()) {
+      res.status(409).json({
+        error: { message: `chain ${createChainId} is missing the V6 singletons (deployer/signing/decode/policy/envelope)`, reason: 'v6_unavailable' },
         chainId: createChainId,
       });
       return;
@@ -1221,7 +1259,17 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       // Role-aware allowlist candidate (spec §3b): treasury/sentinel =
       // beneficiary, requester = fee recipient, executor/provider/evaluator =
       // none. The view still returns caps/expiry/revoked regardless.
-      chainForAgent(agent).getPolicyView(agent.accountAddr, goalAllowlistCandidates(agent.goal)),
+      chainForAgent(agent).getPolicyView(
+        agent.accountAddr,
+        goalAllowlistCandidates(agent.goal),
+        // AQ-FND Lane-B: a V6 account's asset map is not enumerable on-chain — name
+        // the create-time settlement token as the candidate (post-create assets are
+        // owner-proposed and can be added here when a tracked set lands).
+        ((): string[] => {
+          const t = (agent.accountCreateTuple as { settlementToken?: unknown } | null | undefined)?.settlementToken;
+          return typeof t === 'string' && /^0x[0-9a-fA-F]{40}$/.test(t) && !/^0x0+$/i.test(t) ? [t] : [];
+        })(),
+      ),
       chainForAgent(agent).getBalance(agent.accountAddr),
     ]);
     // Shape = FE AgentDetail (web/lib/types.ts): running|paused|revoked, wei-string

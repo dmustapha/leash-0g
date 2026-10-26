@@ -71,6 +71,27 @@ export interface PolicyView {
   tokenWindowCap?: bigint;
   spentInWindowToken?: bigint;
   windowStartToken?: number;
+  /**
+   * AQ-FND Lane-B (V6 multi-asset accounts only): the per-asset policy map — the
+   * native asset (token = 0x0) plus every caller-named asset candidate with an
+   * ENABLED on-chain policy. `spentInWindow` is the PolicyLib two-bucket sliding
+   * estimate at read time (mirrored off-chain, `slideEstimate`); the contract's
+   * meter stays the sole enforcement. Absent on v2–v5 accounts. The on-chain
+   * mapping is not enumerable, so this reflects the CANDIDATE set, not a proof
+   * of absence of other assets.
+   */
+  assets?: AssetPolicyView[];
+}
+
+/** One V6 per-asset policy row (asset 0x0 = native). */
+export interface AssetPolicyView {
+  token: string;
+  enabled: boolean;
+  perTransferCap: bigint;
+  windowCap: bigint;
+  windowSeconds: number;
+  spentInWindow: bigint;
+  windowStart: number;
 }
 
 export interface AuditBatch {

@@ -30,7 +30,7 @@ export interface GrantStateCandidates {
  */
 export interface RuntimeChain {
   getBalance(addr: string): Promise<bigint>;
-  getPolicyView(accountAddr: string, allowlistCandidates: string[]): Promise<PolicyView>;
+  getPolicyView(accountAddr: string, allowlistCandidates: string[], assetCandidates?: string[]): Promise<PolicyView>;
   executeTransfer(input: {
     sessionPrivateKey: string;
     accountAddr: string;
@@ -161,8 +161,8 @@ export class SessionChain implements RuntimeChain {
     return this.publicClient.getBalance({ address: addr as Hex });
   }
 
-  async getPolicyView(accountAddr: string, allowlistCandidates: string[]): Promise<PolicyView> {
-    return readPolicyView(this.publicClient, accountAddr, allowlistCandidates);
+  async getPolicyView(accountAddr: string, allowlistCandidates: string[], assetCandidates: string[] = []): Promise<PolicyView> {
+    return readPolicyView(this.publicClient, accountAddr, allowlistCandidates, assetCandidates);
   }
 
   async getReceiptStatus(txHash: string): Promise<'success' | 'reverted' | 'pending'> {

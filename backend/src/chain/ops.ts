@@ -20,12 +20,12 @@ import {
   registryAbi,
   leashAccountAbi,
   create2DeployerAbi,
-  leashAccountV5ReadAbi, leashAccountV6ReadAbi,
+  leashAccountV5ReadAbi, leashAccountV6ReadAbi, leashAccountV6PolicyAbi,
 } from './abis.js';
 import { buildV5Initcode, ownerScopedSalt, predictCreate2Address } from './v5-initcode.js';
 import { buildV6Initcode, type V6CtorArgs } from './v6-initcode.js';
 import type { AccountCreateTuple, ChainOps } from '../server.js';
-import type { PolicyView } from '../types.js';
+import type { AssetPolicyView, PolicyView } from '../types.js';
 
 export interface LeashChainOptions {
   rpcUrl: string;
@@ -602,6 +602,12 @@ export class LeashChainOps implements ChainOps {
     return this.v5Singletons !== null;
   }
 
+  /** AQ-FND Lane-B: all FIVE V6 singletons wired ⇒ an accountVersion:6 mint can land. */
+  supportsV6(): boolean {
+    const { create2DeployerAddr, signingHelperAddr, decodeHelperAddr, policyHelperAddr, envelopeModuleAddr } = this.opts;
+    return Boolean(create2DeployerAddr && signingHelperAddr && decodeHelperAddr && policyHelperAddr && envelopeModuleAddr);
+  }
+
   /** Cross-check: the on-chain deployer.predict must agree with our off-chain CREATE2. */
   private async crossCheckOnChainPredict(deployerAddr: Hex, salt: Hex, initCodeHash: Hex, predicted: Hex): Promise<void> {
     const onchain = (await this.publicClient.readContract({
@@ -855,9 +861,41 @@ export class LeashChainOps implements ChainOps {
     return (g as string).toLowerCase();
   }
 
-  async getPolicyView(accountAddr: string, allowlistCandidates: string[]): Promise<PolicyView> {
-    return readPolicyView(this.publicClient, accountAddr, allowlistCandidates);
+  async getPolicyView(accountAddr: string, allowlistCandidates: string[], assetCandidates: string[] = []): Promise<PolicyView> {
+    return readPolicyView(this.publicClient, accountAddr, allowlistCandidates, assetCandidates);
   }
+}
+
+/**
+ * AQ-FND Lane-B: the off-chain mirror of `PolicyLib.slide` — the two-bucket sliding
+ * estimate of spend-in-window at `nowSec`, from the RAW meter (cur, prev, start).
+ * OBSERVABILITY ONLY: the contract recomputes this at every debit and is the sole
+ * enforcement; a drift here can mislead a display, never widen authority.
+ */
+export function slideEstimate(
+  meter: { cur: bigint; prev: bigint; start: number },
+  windowSeconds: number,
+  nowSec: number,
+): { spent: bigint; windowStart: number } {
+  const w = windowSeconds;
+  if (w <= 0 || meter.start <= 0 || nowSec < meter.start) {
+    return { spent: meter.cur, windowStart: meter.start };
+  }
+  let { cur, prev } = meter;
+  let start = meter.start;
+  const elapsed = nowSec - start;
+  if (elapsed >= 2 * w) {
+    prev = 0n;
+    cur = 0n;
+    start = nowSec - (elapsed % w); // keep the bucket grid aligned (contract line-for-line)
+  } else if (elapsed >= w) {
+    prev = cur;
+    cur = 0n;
+    start = start + w;
+  }
+  const offset = nowSec - start; // 0 .. w-1
+  const spent = (prev * BigInt(w - offset)) / BigInt(w) + cur;
+  return { spent, windowStart: start };
 }
 
 /** Read the live on-chain policy for a LeashAccount (shared by ops + runtime). */
@@ -865,14 +903,23 @@ export async function readPolicyView(
   client: PublicClient,
   accountAddr: string,
   allowlistCandidates: string[],
+  assetCandidates: string[] = [],
 ): Promise<PolicyView> {
   const address = accountAddr as Hex;
-  const [policy, revoked, spentInWindow, windowStart] = await Promise.all([
-    client.readContract({ address, abi: leashAccountAbi, functionName: 'policy' }),
-    client.readContract({ address, abi: leashAccountAbi, functionName: 'revoked' }),
-    client.readContract({ address, abi: leashAccountAbi, functionName: 'spentInWindow' }),
-    client.readContract({ address, abi: leashAccountAbi, functionName: 'windowStart' }),
-  ]);
+  let policy, revoked, spentInWindow, windowStart;
+  try {
+    [policy, revoked, spentInWindow, windowStart] = await Promise.all([
+      client.readContract({ address, abi: leashAccountAbi, functionName: 'policy' }),
+      client.readContract({ address, abi: leashAccountAbi, functionName: 'revoked' }),
+      client.readContract({ address, abi: leashAccountAbi, functionName: 'spentInWindow' }),
+      client.readContract({ address, abi: leashAccountAbi, functionName: 'windowStart' }),
+    ]);
+  } catch {
+    // AQ-FND Lane-B: a V6 multi-asset account has no v2–v5 `policy()` surface —
+    // its native policy lives on the per-asset map. Fail through to the V6 read;
+    // a genuinely broken account still throws there (never a silent empty view).
+    return readPolicyViewV6(client, address, allowlistCandidates, assetCandidates);
+  }
   const allowlist: string[] = [];
   for (const candidate of allowlistCandidates) {
     const allowed = await client.readContract({
@@ -920,5 +967,85 @@ export async function readPolicyView(
     tokenWindowCap: tp[1],
     spentInWindowToken: spentToken,
     windowStartToken: Number(windowStartToken),
+  };
+}
+
+const NATIVE_ASSET = '0x0000000000000000000000000000000000000000';
+
+/**
+ * AQ-FND Lane-B — the V6 (multi-asset) PolicyView. Maps the per-asset model back
+ * onto the shared view: the base fields come from the NATIVE asset's policy +
+ * meter (asset 0x0) + the session expiry; `assets` carries native plus every
+ * caller-named asset candidate (the on-chain mapping is not enumerable). For
+ * back-compat with the token-aware surfaces, the FIRST enabled non-native
+ * candidate also populates the legacy settlementToken fields.
+ */
+async function readPolicyViewV6(
+  client: PublicClient,
+  address: Hex,
+  allowlistCandidates: string[],
+  assetCandidates: string[],
+): Promise<PolicyView> {
+  const read = <F extends 'session' | 'assetPolicy' | 'assetMeter' | 'allowlist' | 'revoked'>(
+    functionName: F,
+    args?: readonly unknown[],
+  ) =>
+    client.readContract({
+      address,
+      abi: leashAccountV6PolicyAbi,
+      functionName,
+      ...(args ? { args: args as never } : {}),
+    });
+  const [session, revoked] = await Promise.all([read('session'), read('revoked')]);
+  const nowSec = Math.floor(Date.now() / 1000);
+
+  const assetView = async (token: string): Promise<AssetPolicyView> => {
+    const t = token.toLowerCase();
+    const [p, m] = await Promise.all([read('assetPolicy', [t]), read('assetMeter', [t])]);
+    const [enabled, perTransferCap, windowCap, windowSeconds] = p as readonly [boolean, bigint, bigint, number];
+    const [cur, prev, start] = m as readonly [bigint, bigint, bigint];
+    const slid = slideEstimate({ cur, prev, start: Number(start) }, windowSeconds, nowSec);
+    return {
+      token: t,
+      enabled,
+      perTransferCap,
+      windowCap,
+      windowSeconds,
+      spentInWindow: slid.spent,
+      windowStart: slid.windowStart,
+    };
+  };
+
+  const candidateTokens = [...new Set(assetCandidates.map((a) => a.toLowerCase()).filter((a) => a !== NATIVE_ASSET))];
+  const [native, ...tokens] = await Promise.all([assetView(NATIVE_ASSET), ...candidateTokens.map(assetView)]);
+
+  const allowlist: string[] = [];
+  for (const candidate of allowlistCandidates) {
+    // V6 allowlists are per-asset; the base view keeps the NATIVE payee semantics.
+    const allowed = await read('allowlist', [NATIVE_ASSET, candidate.toLowerCase()]);
+    if (allowed) allowlist.push(candidate.toLowerCase());
+  }
+
+  const [, expiresAt] = session as readonly [number, bigint];
+  const firstToken = tokens.find((t) => t.enabled);
+  return {
+    perTransferCap: native.perTransferCap,
+    windowCap: native.windowCap,
+    windowSeconds: native.windowSeconds,
+    expiresAt: Number(expiresAt),
+    allowlist,
+    revoked: revoked as boolean,
+    spentInWindow: native.spentInWindow,
+    windowStart: native.windowStart,
+    assets: [native, ...tokens],
+    ...(firstToken
+      ? {
+          settlementToken: firstToken.token,
+          tokenPerTransferCap: firstToken.perTransferCap,
+          tokenWindowCap: firstToken.windowCap,
+          spentInWindowToken: firstToken.spentInWindow,
+          windowStartToken: firstToken.windowStart,
+        }
+      : {}),
   };
 }

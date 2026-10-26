@@ -496,6 +496,15 @@ export function buildChainConfigs(cfg: Config): ChainConfig[] {
   // Stage F′ (FP-4 P1): the global V5 singletons, inherited by every chain (they
   // are the SAME address on every chain). A chain missing any default-denies V5.
   const v5 = globalV5Singletons(cfg);
+  // AQ-FND Lane-B (the v6 default flip): where ALL FIVE V6 singletons are wired
+  // (deployer + SigningLib + DecodeLib + PolicyLib + EnvelopeModule — the account's
+  // CREATE2 preimage set), new agents default to the multi-asset V6 account. A
+  // chain missing any singleton keeps the V4 default (fail-closed: a v6 create
+  // there is refused, never silently downgraded).
+  const v6Wired = Boolean(
+    v5.create2DeployerAddr && v5.signingHelperAddr && v5.decodeHelperAddr && v5.policyHelperAddr && v5.envelopeModuleAddr,
+  );
+  const defaultAccountVersion = v6Wired ? 6 : 4;
   const chains: ChainConfig[] = [
     {
       chainId: cfg.ZERO_G_CHAIN_ID,
@@ -505,7 +514,7 @@ export function buildChainConfigs(cfg: Config): ChainConfig[] {
       factoryV4Addr: cfg.LEASH_FACTORY_V4_ADDR,
       ...v5,
       registryAddr: cfg.AGENT_REGISTRY_ADDR,
-      accountVersion: 4, // SD-E7: governed calldata is the create default
+      accountVersion: defaultAccountVersion, // AQ-FND Lane-B: 6 where the V6 singletons are wired (was SD-E7's 4)
       canonical: {
         router: cfg.CAP_ROUTER_ADDR,
         vault: cfg.CAP_VAULT_ADDR,
@@ -528,7 +537,7 @@ export function buildChainConfigs(cfg: Config): ChainConfig[] {
       factoryV4Addr: cfg.LEASH_FACTORY_V4_ADDR,
       ...v5,
       registryAddr: cfg.AGENT_REGISTRY_BASE_ADDR,
-      accountVersion: 4,
+      accountVersion: defaultAccountVersion, // AQ-FND Lane-B
       canonical: {
         router: cfg.BASE_CAP_ROUTER_ADDR,
         vault: cfg.BASE_CAP_VAULT_ADDR,
@@ -566,7 +575,7 @@ export function buildChainConfigs(cfg: Config): ChainConfig[] {
       factoryV4Addr: cfg.LEASH_FACTORY_V4_ADDR,
       ...v5,
       registryAddr: cfg.AGENT_REGISTRY_SEPOLIA_ADDR,
-      accountVersion: 4,
+      accountVersion: defaultAccountVersion, // AQ-FND Lane-B
       gasFloorWei: 0n,
       // SE-10 (E-11): PROMOTION — when the real-protocol targets are configured, Eth
       // Sepolia becomes a FULL governed home chain (a home agent can be minted here
@@ -600,7 +609,7 @@ export function buildChainConfigs(cfg: Config): ChainConfig[] {
       factoryV4Addr: cfg.LEASH_FACTORY_V4_ADDR,
       ...v5,
       registryAddr: cfg.AGENT_REGISTRY_ARBITRUM_ADDR,
-      accountVersion: 4,
+      accountVersion: defaultAccountVersion, // AQ-FND Lane-B
       canonical: {
         settlementToken: cfg.ARB_CAP_BRIDGE_TOKEN_L2,
       },
