@@ -80,8 +80,27 @@ export const LEASH_ACCOUNT_V5_ABI = [
   ...LEASH_ACCOUNT_V5_BAND_ABI,
 ] as const;
 
-/** The account grammar versions the FE can arm against. V5 is a superset of V4. */
-export type AccountVersion = 4 | 5;
+// AQ-FND (⑥ live fix): the V6 unified per-asset grammar. V6 keeps the shared call-rule /
+// band / authorizeOnce selectors byte-identical, but REPLACES the dedicated budget pair
+// (proposeSpendBudget/applySpendBudget — absent from V6 bytecode) with ONE generic timelocked
+// propose→apply pair over kinded payloads: kind 1 = abi.encode(address asset, AssetPolicy
+// (bool enabled, uint128 perTransferCap, uint128 windowCap, uint32 windowSeconds)).
+// chain.ts version-gates the budget helpers so a V6 account never encodes the dead V5 pair.
+export const LEASH_ACCOUNT_V6_GOVERNED_ABI = parseAbi([
+  'function proposeGoverned(uint8 kind, bytes payload)',
+  'function applyGoverned(uint8 kind, bytes payload)',
+  'function assetPolicy(address) view returns (bool enabled, uint128 perTransferCap, uint128 windowCap, uint32 windowSeconds)',
+  'error BudgetNotSet(address token)',
+]);
+
+export const LEASH_ACCOUNT_V6_ABI = [
+  ...LEASH_ACCOUNT_V5_ABI,
+  ...LEASH_ACCOUNT_V6_GOVERNED_ABI,
+] as const;
+
+/** The account grammar versions the FE can arm against. V5 is a superset of V4; V6 swaps the
+ *  budget pair for the generic governed (kinded) pair. */
+export type AccountVersion = 4 | 5 | 6;
 
 /**
  * Version-aware account-ABI selector. Given an account's grammar version, return the ABI the FE
@@ -91,5 +110,5 @@ export type AccountVersion = 4 | 5;
  * account's version and encode against the returned ABI.
  */
 export function accountAbiForVersion(version: AccountVersion) {
-  return version === 5 ? LEASH_ACCOUNT_V5_ABI : LEASH_ACCOUNT_V4_ABI;
+  return version === 6 ? LEASH_ACCOUNT_V6_ABI : version === 5 ? LEASH_ACCOUNT_V5_ABI : LEASH_ACCOUNT_V4_ABI;
 }

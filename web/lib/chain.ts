@@ -8,6 +8,7 @@ import {
   createWalletClient,
   custom,
   defineChain,
+  encodeAbiParameters,
   encodePacked,
   http,
   keccak256,
@@ -408,6 +409,32 @@ export function authorizeOnceOnchain(
   return writeAccountVersioned(provider, owner, account, 'authorizeOnce', [callHash, BigInt(expiryUnixSec)], chainId, version);
 }
 
+// AQ-FND (⑥ live fix): V6 unified the per-token budget into the kinded governed pair —
+// proposeGoverned(1, abi.encode(asset, AssetPolicy)) → applyGoverned with the SAME payload
+// (on-chain commit check). The form's single "budget per window" maps to an enabled policy
+// with perTransferCap == windowCap (one transfer may use the full window — the == case G-1
+// explicitly allows) over the cockpit's standing 24h window.
+const V6_GOVERNED_KIND_ASSET = 1;
+const V6_BUDGET_WINDOW_SECONDS = 86400;
+function v6BudgetPayload(token: Address, windowCap: string): Hex {
+  const cap = BigInt(windowCap);
+  return encodeAbiParameters(
+    [
+      { type: 'address' },
+      {
+        type: 'tuple',
+        components: [
+          { name: 'enabled', type: 'bool' },
+          { name: 'perTransferCap', type: 'uint128' },
+          { name: 'windowCap', type: 'uint128' },
+          { name: 'windowSeconds', type: 'uint32' },
+        ],
+      },
+    ],
+    [token, { enabled: true, perTransferCap: cap, windowCap: cap, windowSeconds: V6_BUDGET_WINDOW_SECONDS }],
+  );
+}
+
 /** Propose a per-token cumulative outflow budget. TIMELOCKED — apply after its eta. */
 export function proposeSpendBudgetOnchain(
   provider: EIP1193Provider,
@@ -418,6 +445,12 @@ export function proposeSpendBudgetOnchain(
   chainId?: number,
   version?: AccountVersion,
 ) {
+  if (version === 6) {
+    return writeAccountVersioned(
+      provider, owner, account, 'proposeGoverned',
+      [V6_GOVERNED_KIND_ASSET, v6BudgetPayload(token, windowCap)], chainId, version,
+    );
+  }
   return writeAccountVersioned(provider, owner, account, 'proposeSpendBudget', [token, BigInt(windowCap)], chainId, version);
 }
 
@@ -477,14 +510,23 @@ export async function readRequireBandForSwap(account: Address, chainId?: number)
   })) as boolean;
 }
 
-/** Apply the pending spend budget once its eta has passed. */
+/** Apply the pending spend budget once its eta has passed. On V6 the apply must re-submit the
+ *  SAME (token, windowCap) payload the propose committed to — the account checks the commit. */
 export function applySpendBudgetOnchain(
   provider: EIP1193Provider,
   owner: Address,
   account: Address,
+  token: Address,
+  windowCap: string,
   chainId?: number,
   version?: AccountVersion,
 ) {
+  if (version === 6) {
+    return writeAccountVersioned(
+      provider, owner, account, 'applyGoverned',
+      [V6_GOVERNED_KIND_ASSET, v6BudgetPayload(token, windowCap)], chainId, version,
+    );
+  }
   return writeAccountVersioned(provider, owner, account, 'applySpendBudget', [], chainId, version);
 }
 

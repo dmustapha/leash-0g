@@ -30,10 +30,11 @@ export function CapabilityGrant({
   onProposeBudget,
   onApplyBudget,
 }: {
-  /** FR3 (F-8b): owner signs proposeSpendBudget(token, windowCap) — timelocked. */
+  /** FR3 (F-8b): owner signs the budget propose (version-aware in chain.ts) — timelocked. */
   onProposeBudget?: (token: string, windowCap: string) => Promise<void>;
-  /** FR3 (F-8b): owner signs applySpendBudget once the pending budget's eta passed. */
-  onApplyBudget?: () => Promise<void>;
+  /** FR3 (F-8b): owner signs the budget apply once the pending eta passed. V6 re-submits the
+   *  same (token, windowCap) payload for the on-chain commit check, so the form passes them. */
+  onApplyBudget?: (token: string, windowCap: string) => Promise<void>;
 } & {
   /** Preview a preset's resolved rules (no signing). */
   onResolvePreset: (key: PresetKey) => Promise<ResolvedPreset>;
@@ -78,7 +79,7 @@ function SpendBudgetForm({
   onApplyBudget,
 }: {
   onProposeBudget: (token: string, windowCap: string) => Promise<void>;
-  onApplyBudget: () => Promise<void>;
+  onApplyBudget: (token: string, windowCap: string) => Promise<void>;
 }) {
   const [token, setToken] = useState('');
   const [windowCap, setWindowCap] = useState('');
@@ -106,7 +107,7 @@ function SpendBudgetForm({
     setBusy(true);
     setError(null);
     try {
-      await onApplyBudget();
+      await onApplyBudget(token.trim(), windowCap.trim());
       setToken('');
       setWindowCap('');
       setPhase('propose');

@@ -87,13 +87,14 @@ import type { SigningEnvelopeView, SigningDescriptorView } from '@/lib/types';
 type Approval = Extract<StreamEvent, { type: 'approval' }>;
 type Connection = 'connecting' | 'open' | 'reconnecting' | 'closed';
 
-/** RH2 (B1): the account grammar version the owner-arming txs encode against. The backend
- *  surfaces `agent.accountVersion` on `GET /:id` (read-model projection); only 4 and 5 expose
- *  the governed-calldata owner-write grammar these panels drive, so a V5 account encodes against
- *  the V5 superset ABI and everything else (legacy v2, or an absent field) falls back to V4 —
- *  byte-identical for the shared call-rule/band/spend selectors. */
+/** RH2 (B1) + AQ-FND (⑥ live fix): the account grammar version the owner-arming txs encode
+ *  against. The backend surfaces `agent.accountVersion` on `GET /:id` (read-model projection).
+ *  V6 (the create default) keeps the shared call-rule/band selectors byte-identical but swaps
+ *  the budget pair for the kinded governed pair — chain.ts gates on this version. Legacy v2 or
+ *  an absent field falls back to V4. */
 function accountVersionFor(detail: AgentDetail | null): AccountVersion {
-  return detail?.agent?.accountVersion === 5 ? 5 : 4;
+  const v = detail?.agent?.accountVersion;
+  return v === 6 ? 6 : v === 5 ? 5 : 4;
 }
 
 export default function CockpitPage({ params }: { params: Promise<{ id: string }> }) {
@@ -441,10 +442,13 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
     [requireProvider],
   );
 
-  const applyBudget = useCallback(async () => {
-    const { provider, owner, account, chainId, version } = await requireProvider();
-    await applySpendBudgetOnchain(provider, owner, account, chainId, version);
-  }, [requireProvider]);
+  const applyBudget = useCallback(
+    async (token: string, windowCap: string) => {
+      const { provider, owner, account, chainId, version } = await requireProvider();
+      await applySpendBudgetOnchain(provider, owner, account, token as Address, windowCap, chainId, version);
+    },
+    [requireProvider],
+  );
 
   // FR4 (F-9): arm the band wall in-product — two owner txs on the agent's chain.
   const homeNetwork = useMemo(
