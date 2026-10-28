@@ -544,13 +544,16 @@ export function applySpendBudgetOnchain(
 
 /** kind 1 = envelope entry; kind 2 = veto config (module proposal kinds). */
 const ENV_KIND_ENTRY = 1;
+const ENV_KIND_VETO = 2;
 
 export const LEASH_ENVELOPE_MODULE_ABI = parseAbi([
   'function propose(address account, uint8 kind, bytes payload)',
   'function apply_(address account, uint8 kind, bytes payload)',
   'function tightenEnvelope(address account, address asset, (bool set, uint128 maxPerTransferCap, uint128 maxWindowCap, uint32 minWindowSeconds) e)',
   'function removeEnvelope(address account, address asset)',
+  'function tightenVetoConfig(address account, uint64 vetoDelay, uint32 sharpBps)',
   'function envelope(address account, address asset) view returns (bool set, uint128 maxPerTransferCap, uint128 maxWindowCap, uint32 minWindowSeconds)',
+  'function vetoConfig(address account) view returns (bool set, uint64 vetoDelay, uint32 sharpBps)',
   'function pendingEta(address account) view returns (uint64)',
 ]);
 
@@ -675,6 +678,64 @@ export async function readEnvelopePendingEta(account: Address, chainId?: number)
     functionName: 'pendingEta',
     args: [account],
   })) as bigint;
+}
+
+// ── Veto config (account-wide): the sharp threshold (sharpBps of the envelope ceiling) and the
+// veto delay a sharp agent move waits behind. First set = timelocked propose→apply (a loosen);
+// tightening (longer delay / lower sharp bps) is instant. Without a veto config EVERY agent
+// self-extension is treated as sharp and queues — so this is the switch that turns on the G-6 B
+// (instant) arm. kind 2 payload = abi.encode(VetoConfig{set, vetoDelay, sharpBps}).
+export type VetoConfigInput = { vetoDelaySeconds: number; sharpBps: number };
+export type VetoConfigView = { set: boolean; vetoDelaySeconds: number; sharpBps: number };
+
+const VETO_TUPLE = {
+  type: 'tuple',
+  components: [
+    { name: 'set', type: 'bool' },
+    { name: 'vetoDelay', type: 'uint64' },
+    { name: 'sharpBps', type: 'uint32' },
+  ],
+} as const;
+
+function vetoPayload(v: VetoConfigInput): Hex {
+  return encodeAbiParameters(
+    [VETO_TUPLE],
+    [{ set: false, vetoDelay: BigInt(v.vetoDelaySeconds), sharpBps: v.sharpBps }],
+  );
+}
+
+/** Propose the account's veto config. TIMELOCKED — apply after its eta. */
+export function proposeVetoConfigOnchain(
+  provider: EIP1193Provider,
+  owner: Address,
+  account: Address,
+  v: VetoConfigInput,
+  chainId?: number,
+) {
+  return writeEnvelopeModule(provider, owner, account, 'propose', [account, ENV_KIND_VETO, vetoPayload(v)], chainId);
+}
+
+/** Apply the pending veto config — re-submit the SAME payload the propose committed to. */
+export function applyVetoConfigOnchain(
+  provider: EIP1193Provider,
+  owner: Address,
+  account: Address,
+  v: VetoConfigInput,
+  chainId?: number,
+) {
+  return writeEnvelopeModule(provider, owner, account, 'apply_', [account, ENV_KIND_VETO, vetoPayload(v)], chainId);
+}
+
+/** The live veto config — the panel shows THIS. */
+export async function readVetoConfig(account: Address, chainId?: number): Promise<VetoConfigView> {
+  const module = await readEnvelopeModule(account, chainId);
+  const r = (await publicClientFor(chainId).readContract({
+    address: module,
+    abi: LEASH_ENVELOPE_MODULE_ABI,
+    functionName: 'vetoConfig',
+    args: [account],
+  })) as readonly [boolean, bigint, number];
+  return { set: r[0], vetoDelaySeconds: Number(r[1]), sharpBps: r[2] };
 }
 
 /**

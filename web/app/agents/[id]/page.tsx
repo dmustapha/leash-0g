@@ -81,10 +81,13 @@ import {
   proposeEnvelopeOnchain,
   applyEnvelopeOnchain,
   readEnvelope,
+  proposeVetoConfigOnchain,
+  applyVetoConfigOnchain,
+  readVetoConfig,
   type CallRuleInput,
   type EnvelopeEntryInput,
 } from '@/lib/chain';
-import { EnvelopeForm, type EnvelopeFields } from '@/components/cockpit/EnvelopeForm';
+import { EnvelopeForm, VetoConfigForm, type EnvelopeFields, type VetoFields } from '@/components/cockpit/EnvelopeForm';
 import type { AccountVersion } from '@/lib/abi/leashAccountV5';
 import { SigningGrantPanel, type ProposeGrantArgs } from '@/components/cockpit/SigningGrantPanel';
 import type { SigningEnvelopeView, SigningDescriptorView } from '@/lib/types';
@@ -483,6 +486,28 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
       const { account, chainId } = await requireProvider();
       const e = await readEnvelope(account, asset as Address, chainId);
       return e.set ? e : null;
+    },
+    [requireProvider],
+  );
+  const proposeVeto = useCallback(
+    async (f: VetoFields) => {
+      const { provider, owner, account, chainId } = await requireProvider();
+      await proposeVetoConfigOnchain(provider, owner, account, f, chainId);
+    },
+    [requireProvider],
+  );
+  const applyVeto = useCallback(
+    async (f: VetoFields) => {
+      const { provider, owner, account, chainId } = await requireProvider();
+      await applyVetoConfigOnchain(provider, owner, account, f, chainId);
+    },
+    [requireProvider],
+  );
+  const readVetoCfg = useCallback(
+    async () => {
+      const { account, chainId } = await requireProvider();
+      const v = await readVetoConfig(account, chainId);
+      return v.set ? v : null;
     },
     [requireProvider],
   );
@@ -897,6 +922,7 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
             <section aria-label="Owner envelope" className="card" id="owner-envelope" data-testid="owner-envelope" style={{ padding: '1rem 1.1rem', display: 'grid', gap: '0.8rem' }}>
               <h2 style={{ fontSize: '1rem', margin: 0 }}>Set what the agent may do on its own</h2>
               <EnvelopeForm onProposeEnvelope={proposeEnvelope} onApplyEnvelope={applyEnvelope} onReadEnvelope={readEnvelopeForAsset} />
+              <VetoConfigForm onProposeVeto={proposeVeto} onApplyVeto={applyVeto} onReadVeto={readVetoCfg} />
             </section>
           ) : null}
           {capabilities ? <CapabilityEnvelope envelope={capabilities} onApplyGrant={applyGrant} /> : null}

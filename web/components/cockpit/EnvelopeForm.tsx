@@ -17,6 +17,8 @@ const ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
 
 export type EnvelopeFields = { asset: string; maxPerTransferCap: string; maxWindowCap: string; minWindowSeconds: number };
 export type EnvelopeCurrent = { set: boolean; maxPerTransferCap: bigint; maxWindowCap: bigint; minWindowSeconds: number };
+export type VetoFields = { vetoDelaySeconds: number; sharpBps: number };
+export type VetoCurrent = { set: boolean; vetoDelaySeconds: number; sharpBps: number };
 
 export function EnvelopeForm({
   onProposeEnvelope,
@@ -139,6 +141,97 @@ export function EnvelopeForm({
           <div>
             <button type="button" className="btn btn-primary btn-sm" data-testid="env-apply" disabled={busy} onClick={() => void apply()}>
               {busy ? 'Waiting for wallet…' : 'Apply envelope'}
+            </button>
+          </div>
+        </div>
+      )}
+    </form>
+  );
+}
+
+// ── Veto config: the account-wide switch that turns on the instant (no-click) arm. The sharp
+// threshold is a % of each envelope's window ceiling; a widening at or above it is held for the
+// veto delay instead of landing instantly. First set is timelocked (a loosen) → propose then apply.
+export function VetoConfigForm({
+  onProposeVeto,
+  onApplyVeto,
+  onReadVeto,
+}: {
+  onProposeVeto: (f: VetoFields) => Promise<void>;
+  onApplyVeto: (f: VetoFields) => Promise<void>;
+  onReadVeto: () => Promise<VetoCurrent | null>;
+}) {
+  const [sharpPct, setSharpPct] = useState('50');
+  const [vetoMinutes, setVetoMinutes] = useState('15');
+  const [phase, setPhase] = useState<Phase>('propose');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [current, setCurrent] = useState<VetoCurrent | null>(null);
+
+  function fields(): VetoFields {
+    return { vetoDelaySeconds: Math.round(Number(vetoMinutes.trim()) * 60), sharpBps: Math.round(Number(sharpPct.trim()) * 100) };
+  }
+  function validate(): string | null {
+    const p = Number(sharpPct.trim());
+    const m = Number(vetoMinutes.trim());
+    if (!(p >= 0 && p <= 100)) return 'Sharp threshold is a percent 0–100.';
+    if (!(m > 0)) return 'Veto delay must be more than 0 minutes.';
+    return null;
+  }
+  async function refresh() {
+    try { setCurrent(await onReadVeto()); } catch { /* non-fatal convenience */ }
+  }
+  async function propose(e: React.FormEvent) {
+    e.preventDefault();
+    const v = validate();
+    if (v) return setError(v);
+    setBusy(true); setError(null);
+    try { await onProposeVeto(fields()); setPhase('apply'); }
+    catch (err) { setError(err instanceof Error ? err.message : 'The wallet transaction failed.'); }
+    finally { setBusy(false); }
+  }
+  async function apply() {
+    setBusy(true); setError(null);
+    try { await onApplyVeto(fields()); setPhase('propose'); await refresh(); }
+    catch (err) { setError(err instanceof Error ? err.message : 'The wallet transaction failed.'); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <form onSubmit={(e) => void propose(e)} data-testid="veto-form" style={{ display: 'grid', gap: '0.6rem' }}>
+      <h3 className="label" style={{ margin: 0 }}>Tune the veto (how bold a move it may make alone)</h3>
+      <p style={{ margin: 0, fontSize: '0.84rem', color: 'var(--ink-dim)' }}>
+        A change inside the envelope that stays under the sharp threshold lands instantly. A bolder
+        widening is held for the veto delay so you can stop it. Until you set this, every move the
+        agent makes on its own is held — nothing lands instantly.
+      </p>
+
+      <label className="label" htmlFor="veto-sharp">Sharp threshold (% of the envelope's window ceiling)</label>
+      <input id="veto-sharp" className="field" data-testid="veto-sharp" inputMode="numeric" value={sharpPct} onChange={(e) => setSharpPct(e.target.value)} placeholder="50" disabled={busy || phase === 'apply'} />
+
+      <label className="label" htmlFor="veto-delay">Veto delay (minutes)</label>
+      <input id="veto-delay" className="field" data-testid="veto-delay" inputMode="numeric" value={vetoMinutes} onChange={(e) => setVetoMinutes(e.target.value)} placeholder="15" disabled={busy || phase === 'apply'} />
+
+      {current?.set ? (
+        <p style={{ margin: 0, fontSize: '0.82rem', color: 'var(--ink-dim)' }} data-testid="veto-current">
+          Live: moves under {(current.sharpBps / 100).toString()}% of the window ceiling are instant; bolder ones wait {Math.round(current.vetoDelaySeconds / 60)} min for your veto.
+        </p>
+      ) : null}
+
+      {error ? <p role="alert" style={{ color: 'var(--deny)', fontSize: '0.84rem', margin: 0 }}>{error}</p> : null}
+
+      {phase === 'propose' ? (
+        <div>
+          <button type="submit" className="btn btn-primary btn-sm" data-testid="veto-propose" disabled={busy}>
+            {busy ? 'Waiting for wallet…' : 'Propose veto settings'}
+          </button>
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gap: '0.4rem' }}>
+          <p style={{ margin: 0, fontSize: '0.82rem', color: 'var(--accent)' }}>Signed — takes effect in ~15 min. Come back and apply it.</p>
+          <div>
+            <button type="button" className="btn btn-primary btn-sm" data-testid="veto-apply" disabled={busy} onClick={() => void apply()}>
+              {busy ? 'Waiting for wallet…' : 'Apply veto settings'}
             </button>
           </div>
         </div>
