@@ -10,6 +10,7 @@ import {
   defineChain,
   encodeAbiParameters,
   encodePacked,
+  parseAbi,
   http,
   keccak256,
   type Address,
@@ -528,6 +529,152 @@ export function applySpendBudgetOnchain(
     );
   }
   return writeAccountVersioned(provider, owner, account, 'applySpendBudget', [], chainId, version);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AQ-FND M-2 — the owner ENVELOPE (LeashEnvelopeModuleV6). The envelope is the
+// ceiling the owner commits ONCE (per asset: max per-transfer, max window, min
+// window-seconds); the agent then self-extends an asset policy INSIDE it with no
+// owner click (G-6 B arm), or has a sharp widening queued behind a veto (G-6 C).
+// The module's owner writes take the ACCOUNT as their first arg and are called ON
+// the MODULE contract (not the account). propose/apply_ are timelocked on the
+// account's own timelockDelay; tighten/remove are instant. The account names its
+// module via `envelopeModule()`, so the FE never needs a separate address env.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** kind 1 = envelope entry; kind 2 = veto config (module proposal kinds). */
+const ENV_KIND_ENTRY = 1;
+
+export const LEASH_ENVELOPE_MODULE_ABI = parseAbi([
+  'function propose(address account, uint8 kind, bytes payload)',
+  'function apply_(address account, uint8 kind, bytes payload)',
+  'function tightenEnvelope(address account, address asset, (bool set, uint128 maxPerTransferCap, uint128 maxWindowCap, uint32 minWindowSeconds) e)',
+  'function removeEnvelope(address account, address asset)',
+  'function envelope(address account, address asset) view returns (bool set, uint128 maxPerTransferCap, uint128 maxWindowCap, uint32 minWindowSeconds)',
+  'function pendingEta(address account) view returns (uint64)',
+]);
+
+/** The owner-committed ceiling for one asset. Caps are base-unit strings. */
+export type EnvelopeEntryInput = {
+  asset: Address;
+  maxPerTransferCap: string;
+  maxWindowCap: string;
+  minWindowSeconds: number;
+};
+
+const ENV_ENTRY_TUPLE = {
+  type: 'tuple',
+  components: [
+    { name: 'set', type: 'bool' },
+    { name: 'maxPerTransferCap', type: 'uint128' },
+    { name: 'maxWindowCap', type: 'uint128' },
+    { name: 'minWindowSeconds', type: 'uint32' },
+  ],
+} as const;
+
+function envelopePayload(e: EnvelopeEntryInput): Hex {
+  return encodeAbiParameters(
+    [{ type: 'address' }, ENV_ENTRY_TUPLE],
+    [
+      e.asset,
+      // `set` is ignored on propose (validated) and forced true on apply; send false.
+      { set: false, maxPerTransferCap: BigInt(e.maxPerTransferCap), maxWindowCap: BigInt(e.maxWindowCap), minWindowSeconds: e.minWindowSeconds },
+    ],
+  );
+}
+
+/** Read the account's bound envelope module (the account names it on-chain). */
+export async function readEnvelopeModule(account: Address, chainId?: number): Promise<Address> {
+  return (await publicClientFor(chainId).readContract({
+    address: account,
+    abi: parseAbi(['function envelopeModule() view returns (address)']),
+    functionName: 'envelopeModule',
+  })) as Address;
+}
+
+/** Owner-sign a write on the account's envelope module (module is the target contract). */
+async function writeEnvelopeModule(
+  provider: EIP1193Provider,
+  owner: Address,
+  account: Address,
+  functionName: string,
+  args: readonly unknown[],
+  chainId?: number,
+): Promise<Hex> {
+  await ensureWalletChain(provider, chainId ?? config.chainId);
+  const module = await readEnvelopeModule(account, chainId);
+  const wallet = walletClientFor(provider, owner, chainId);
+  const { request } = await publicClientFor(chainId).simulateContract({
+    address: module,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    abi: LEASH_ENVELOPE_MODULE_ABI as any,
+    functionName,
+    args: args as unknown[],
+    account: owner,
+  });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return wallet.writeContract(request as any);
+}
+
+/** Propose an envelope ceiling for an asset. TIMELOCKED — apply after its eta. */
+export function proposeEnvelopeOnchain(
+  provider: EIP1193Provider,
+  owner: Address,
+  account: Address,
+  entry: EnvelopeEntryInput,
+  chainId?: number,
+) {
+  return writeEnvelopeModule(provider, owner, account, 'propose', [account, ENV_KIND_ENTRY, envelopePayload(entry)], chainId);
+}
+
+/** Apply the pending envelope — re-submit the SAME payload the propose committed to. */
+export function applyEnvelopeOnchain(
+  provider: EIP1193Provider,
+  owner: Address,
+  account: Address,
+  entry: EnvelopeEntryInput,
+  chainId?: number,
+) {
+  return writeEnvelopeModule(provider, owner, account, 'apply_', [account, ENV_KIND_ENTRY, envelopePayload(entry)], chainId);
+}
+
+/** Shrink an envelope ceiling — INSTANT (owner). */
+export function tightenEnvelopeOnchain(
+  provider: EIP1193Provider,
+  owner: Address,
+  account: Address,
+  entry: EnvelopeEntryInput,
+  chainId?: number,
+) {
+  return writeEnvelopeModule(provider, owner, account, 'tightenEnvelope', [
+    account,
+    entry.asset,
+    { set: true, maxPerTransferCap: BigInt(entry.maxPerTransferCap), maxWindowCap: BigInt(entry.maxWindowCap), minWindowSeconds: entry.minWindowSeconds },
+  ], chainId);
+}
+
+/** The live envelope for an asset — the panel shows THIS, never a cached mirror. */
+export type EnvelopeView = { set: boolean; maxPerTransferCap: bigint; maxWindowCap: bigint; minWindowSeconds: number };
+export async function readEnvelope(account: Address, asset: Address, chainId?: number): Promise<EnvelopeView> {
+  const module = await readEnvelopeModule(account, chainId);
+  const r = (await publicClientFor(chainId).readContract({
+    address: module,
+    abi: LEASH_ENVELOPE_MODULE_ABI,
+    functionName: 'envelope',
+    args: [account, asset],
+  })) as readonly [boolean, bigint, bigint, number];
+  return { set: r[0], maxPerTransferCap: r[1], maxWindowCap: r[2], minWindowSeconds: r[3] };
+}
+
+/** Pending envelope-proposal eta on the module (0 = nothing pending). */
+export async function readEnvelopePendingEta(account: Address, chainId?: number): Promise<bigint> {
+  const module = await readEnvelopeModule(account, chainId);
+  return (await publicClientFor(chainId).readContract({
+    address: module,
+    abi: LEASH_ENVELOPE_MODULE_ABI,
+    functionName: 'pendingEta',
+    args: [account],
+  })) as bigint;
 }
 
 /**

@@ -78,8 +78,13 @@ import {
   applySigningGrantOnchain,
   tightenSigningGrantOnchain,
   removeSigningDescriptorOnchain,
+  proposeEnvelopeOnchain,
+  applyEnvelopeOnchain,
+  readEnvelope,
   type CallRuleInput,
+  type EnvelopeEntryInput,
 } from '@/lib/chain';
+import { EnvelopeForm, type EnvelopeFields } from '@/components/cockpit/EnvelopeForm';
 import type { AccountVersion } from '@/lib/abi/leashAccountV5';
 import { SigningGrantPanel, type ProposeGrantArgs } from '@/components/cockpit/SigningGrantPanel';
 import type { SigningEnvelopeView, SigningDescriptorView } from '@/lib/types';
@@ -446,6 +451,38 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
     async (token: string, windowCap: string) => {
       const { provider, owner, account, chainId, version } = await requireProvider();
       await applySpendBudgetOnchain(provider, owner, account, token as Address, windowCap, chainId, version);
+    },
+    [requireProvider],
+  );
+
+  // AQ-FND M-2: owner envelope (the ceiling the agent self-extends within). propose (timelocked)
+  // + apply (re-submits the same payload for the module's commit check), both owner-signed on the
+  // account's bound envelope module; the live envelope is read on-chain for the display.
+  const toEnvelopeEntry = (f: EnvelopeFields): EnvelopeEntryInput => ({
+    asset: f.asset as Address,
+    maxPerTransferCap: f.maxPerTransferCap,
+    maxWindowCap: f.maxWindowCap,
+    minWindowSeconds: f.minWindowSeconds,
+  });
+  const proposeEnvelope = useCallback(
+    async (f: EnvelopeFields) => {
+      const { provider, owner, account, chainId } = await requireProvider();
+      await proposeEnvelopeOnchain(provider, owner, account, toEnvelopeEntry(f), chainId);
+    },
+    [requireProvider],
+  );
+  const applyEnvelope = useCallback(
+    async (f: EnvelopeFields) => {
+      const { provider, owner, account, chainId } = await requireProvider();
+      await applyEnvelopeOnchain(provider, owner, account, toEnvelopeEntry(f), chainId);
+    },
+    [requireProvider],
+  );
+  const readEnvelopeForAsset = useCallback(
+    async (asset: string) => {
+      const { account, chainId } = await requireProvider();
+      const e = await readEnvelope(account, asset as Address, chainId);
+      return e.set ? e : null;
     },
     [requireProvider],
   );
@@ -855,6 +892,12 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
                 onApplyBudget={applyBudget}
               />
             </div>
+          ) : null}
+          {detail && detail.status !== 'revoked' && accountVersionFor(detail) === 6 ? (
+            <section aria-label="Owner envelope" className="card" id="owner-envelope" data-testid="owner-envelope" style={{ padding: '1rem 1.1rem', display: 'grid', gap: '0.8rem' }}>
+              <h2 style={{ fontSize: '1rem', margin: 0 }}>Set what the agent may do on its own</h2>
+              <EnvelopeForm onProposeEnvelope={proposeEnvelope} onApplyEnvelope={applyEnvelope} onReadEnvelope={readEnvelopeForAsset} />
+            </section>
           ) : null}
           {capabilities ? <CapabilityEnvelope envelope={capabilities} onApplyGrant={applyGrant} /> : null}
           {/* RH2 B2 (TA-ABI-5 close): the owner governed-signing grant surface — V5 accounts only.
