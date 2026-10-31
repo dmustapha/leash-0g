@@ -19,6 +19,7 @@ import {
   updateAgentGuardian,
   listAgentsByOwner,
   updateAgentRules,
+  setAllowRelayerBootstrap,
 } from '../store/agents.js';
 import { reserveCreate, releaseReservation } from '../store/reservations.js';
 import type { AlertService } from '../alerts/service.js';
@@ -195,6 +196,7 @@ const gatewayRuleSchema = z.object({
   replacement: z.string().optional(),
 });
 
+const gasPolicyPatchSchema = z.object({ allowRelayerBootstrap: z.boolean() }).strict();
 const rulesPatchSchema = z.object({ rules: z.array(gatewayRuleSchema) });
 
 const linkCreateSchema = z.object({
@@ -1241,6 +1243,20 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     });
     deps.hub.emit(agent.id, 'trace', traceEvent(rec));
     res.json({ ok: true, rules: parsed.data.rules });
+  }));
+
+  // AQ-FND M-3: owner opt-in for the relayer gas bootstrap (default off; D-4: LEASH
+  // sponsors nothing unless the owner explicitly allows it).
+  router.patch('/api/agents/:id/gas-policy', asyncRoute(async (req: OwnerRequest, res) => {
+    const agent = await requireOwnedAgent(req, res);
+    if (!agent) return;
+    const parsed = gasPolicyPatchSchema.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: { message: 'invalid request body' } });
+      return;
+    }
+    await setAllowRelayerBootstrap(deps.pool, agent.id, parsed.data.allowRelayerBootstrap);
+    res.json({ ok: true, allowRelayerBootstrap: parsed.data.allowRelayerBootstrap });
   }));
 
   router.get('/api/agents/:id', asyncRoute(async (req: OwnerRequest, res) => {
@@ -3307,6 +3323,8 @@ function publicAgent(agent: AgentRow): Record<string, unknown> {
     // against — 5 = V5 superset (band propose/apply + signing), 4 = V4, 2 = legacy.
     // Read-model only; the on-chain account stays the sole enforcement authority.
     accountVersion: agent.accountVersion,
+    // AQ-FND M-3: owner opt-in for the relayer gas bootstrap (default false).
+    allowRelayerBootstrap: agent.allowRelayerBootstrap,
     createdAt: agent.createdAt,
   };
 }

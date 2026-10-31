@@ -76,6 +76,189 @@ export function planGas(cfg: GasRouteConfig, snap: GasSnapshot): GasPlan {
 }
 
 // ---------------------------------------------------------------------------------------------
+// AQ-FND M-3 (cross-chain gas routing): the MULTI-CHAIN route planner. Pure + deterministic.
+//
+// PER-LEG PRINCIPLE: every leg runs on a chain and costs native gas on THAT chain (a CCIP bridge
+// also pays its fee in native on the source). A route is therefore feasible only when each leg's
+// chain can pay for that leg. An agent with zero native on every chain cannot route itself to gas:
+// it can only ask the owner or (explicit owner opt-in) use the RELAYER bootstrap.
+//
+// Fixed preference order, first feasible wins (NOT cost optimisation):
+//   has-native -> account-native -> swap-to-gas -> bridge-then-swap -> bootstrap-7702 (opt-in) -> ask-owner.
+// An `unknown` chain (unreadable RPC) is excluded from routing - fail closed, never zero.
+// `planGas` above is untouched; single-chain callers keep using it.
+// ---------------------------------------------------------------------------------------------
+
+export interface ChainGasView extends GasSnapshot {
+  chainId: number;
+  /** `unknown` = the chain's RPC could not be read; excluded from routing, never treated as zero. */
+  status: 'ok' | 'unknown';
+}
+
+export interface GasSurvey {
+  views: ChainGasView[];
+}
+
+export interface RouteChainCfg extends GasRouteConfig {
+  chainId: number;
+  /** below this the key needs gas; defaults to gasFloorWei (identical to the has-native threshold today) */
+  refillTriggerWei?: bigint;
+  /** native gas the swap leg costs on this chain */
+  swapLegGasWei: bigint;
+  /** native gas the follow-up refuel leg (account -> session key) costs on this chain */
+  refuelLegGasWei: bigint;
+  /** tokens with a verified DEX route to native on this chain */
+  dexPairs?: Array<{ tokenIn: Address }>;
+}
+
+export interface GasRouteLeg {
+  kind: 'refuel' | 'swap' | 'bridge' | 'bootstrap';
+  /** the chain this leg executes on */
+  chainId: number;
+  token?: Address;
+  /** the chain whose native gas this leg is meant to produce */
+  gasOnChainId: number;
+  /** native gas (wei) this leg consumes on its own chain */
+  gasNeededWei: bigint;
+  requiresGrants: string[];
+}
+
+export type GasRouteMode = GasPlanMode | 'bridge-then-swap';
+
+export interface GasRoute {
+  mode: GasRouteMode;
+  targetChainId: number;
+  legs: GasRouteLeg[];
+  reason: string;
+  ask?: { surveyedChains: number[]; unknownChains: number[]; missing: string[] };
+}
+
+export interface GasRouteOpts {
+  /** owner opt-in (agents.allow_relayer_bootstrap): LEASH-ops may front gas, repaid in token */
+  allowRelayerBootstrap: boolean;
+  /** bridge lanes available between chains (from config); undefined/empty => the bridge rung is never chosen */
+  lanes?: Array<{ from: number; to: number; token: Address }>;
+}
+
+const ZERO_ADDR = '0x0000000000000000000000000000000000000000';
+const SWAP_GRANTS = ['swap rule on router', 'exact-amount approve', 'token budget'];
+
+function hasDelegate(cfg: RouteChainCfg): boolean {
+  return !!cfg.gasRepayDelegate && cfg.gasRepayDelegate !== ZERO_ADDR;
+}
+
+function planBridgeThenSwap(
+  cfgByChain: Record<number, RouteChainCfg>,
+  okViews: ChainGasView[],
+  target: ChainGasView,
+  targetCfg: RouteChainCfg,
+  lanes: NonNullable<GasRouteOpts['lanes']>,
+): GasRoute | null {
+  if (!targetCfg.dexRouteAvailable) return null;
+  for (const lane of lanes) {
+    if (lane.to !== target.chainId || lane.from === target.chainId) continue;
+    const src = okViews.find((v) => v.chainId === lane.from);
+    const srcCfg = cfgByChain[lane.from];
+    if (!src || !srcCfg) continue;
+    const held = src.spendableTokens.find((t) => t.token.toLowerCase() === lane.token.toLowerCase() && t.balance > 0n);
+    // the bridge fee is paid in NATIVE on the source chain, so the source key must hold gas there
+    const bridgeGas = srcCfg.refuelLegGasWei;
+    if (!held || src.sessionNativeWei < bridgeGas) continue;
+    return {
+      mode: 'bridge-then-swap',
+      targetChainId: target.chainId,
+      legs: [
+        { kind: 'bridge', chainId: src.chainId, token: lane.token, gasOnChainId: target.chainId, gasNeededWei: bridgeGas, requiresGrants: ['bridge rule on lane router', 'exact-amount approve', 'token budget'] },
+        { kind: 'swap', chainId: target.chainId, token: lane.token, gasOnChainId: target.chainId, gasNeededWei: targetCfg.swapLegGasWei, requiresGrants: SWAP_GRANTS },
+      ],
+      reason: `bridge ${lane.token} from chain ${src.chainId} (fee paid in native on ${src.chainId}), then swap to native on chain ${target.chainId}`,
+    };
+  }
+  return null;
+}
+
+function buildAsk(
+  cfg: RouteChainCfg,
+  view: ChainGasView,
+  survey: GasSurvey,
+  opts: GasRouteOpts,
+): NonNullable<GasRoute['ask']> {
+  const id = view.chainId;
+  const missing: string[] = [];
+  if (!view.spendableTokens.some((t) => t.balance > 0n)) missing.push(`enable token policy / fund a spendable token on chain ${id}`);
+  if (!cfg.dexRouteAvailable || (cfg.dexPairs?.length ?? 0) === 0) missing.push(`DEX route on chain ${id}`);
+  if (view.accountNativeWei < cfg.refuelWei) missing.push(`account native funds on chain ${id} (>= ${cfg.refuelWei} wei)`);
+  else if (!view.sessionKeyNativeAllowlisted) missing.push(`allowlist the session key as a native payee on chain ${id}`);
+  missing.push(`gas on chain ${id} for the swap+refuel legs (>= ${cfg.swapLegGasWei + cfg.refuelLegGasWei} wei in the session key)`);
+  if (!opts.allowRelayerBootstrap) missing.push('owner opt-in for relayer bootstrap');
+  else if (!hasDelegate(cfg)) missing.push(`GasRepayDelegate on chain ${id}`);
+  return {
+    surveyedChains: survey.views.filter((v) => v.status === 'ok').map((v) => v.chainId),
+    unknownChains: survey.views.filter((v) => v.status === 'unknown').map((v) => v.chainId),
+    missing,
+  };
+}
+
+function askUnreadableTarget(survey: GasSurvey, targetChainId: number, view: ChainGasView | undefined): GasRoute {
+  const unknown = survey.views.filter((v) => v.status === 'unknown').map((v) => v.chainId);
+  if (!view && !unknown.includes(targetChainId)) unknown.push(targetChainId);
+  return {
+    mode: 'ask-owner',
+    targetChainId,
+    legs: [],
+    reason: `target chain ${targetChainId} is unreadable or not configured (unknown) - fail closed, no route`,
+    ask: {
+      surveyedChains: survey.views.filter((v) => v.status === 'ok').map((v) => v.chainId),
+      unknownChains: unknown,
+      missing: [`readable RPC and gas config for chain ${targetChainId}`],
+    },
+  };
+}
+
+export function planGasRoute(
+  cfgByChain: Record<number, RouteChainCfg>,
+  survey: GasSurvey,
+  targetChainId: number,
+  opts: GasRouteOpts,
+): GasRoute {
+  const view = survey.views.find((v) => v.chainId === targetChainId);
+  const cfg = cfgByChain[targetChainId];
+  if (!view || view.status === 'unknown' || !cfg) return askUnreadableTarget(survey, targetChainId, view);
+
+  if (view.sessionNativeWei >= (cfg.refillTriggerWei ?? cfg.gasFloorWei)) {
+    return { mode: 'has-native', targetChainId, legs: [], reason: `session key holds ${view.sessionNativeWei} wei on chain ${targetChainId}` };
+  }
+  const refuel: GasRouteLeg = {
+    kind: 'refuel', chainId: targetChainId, gasOnChainId: targetChainId, gasNeededWei: cfg.refuelLegGasWei,
+    requiresGrants: ['native payee allowlist for the session key', 'native per-transfer cap'],
+  };
+  if (view.accountNativeWei >= cfg.refuelWei && view.sessionKeyNativeAllowlisted && view.sessionNativeWei >= cfg.refuelLegGasWei) {
+    return { mode: 'account-native', targetChainId, legs: [refuel], reason: 'account native funds refuel the key through the governed wall' };
+  }
+  const dexToken = view.spendableTokens.find((t) => t.balance > 0n && cfg.dexPairs?.some((p) => p.tokenIn.toLowerCase() === t.token.toLowerCase()));
+  if (dexToken && cfg.dexRouteAvailable && view.sessionNativeWei >= cfg.swapLegGasWei + cfg.refuelLegGasWei) {
+    const swap: GasRouteLeg = { kind: 'swap', chainId: targetChainId, token: dexToken.token, gasOnChainId: targetChainId, gasNeededWei: cfg.swapLegGasWei, requiresGrants: SWAP_GRANTS };
+    return { mode: 'swap-to-gas', targetChainId, legs: [swap, refuel], reason: `governed DEX leg converts ${dexToken.token} to native on chain ${targetChainId}, then the account refuels the key` };
+  }
+  const okViews = survey.views.filter((v) => v.status === 'ok');
+  const bridged = opts.lanes && opts.lanes.length > 0 ? planBridgeThenSwap(cfgByChain, okViews, view, cfg, opts.lanes) : null;
+  if (bridged) return bridged;
+  const token = view.spendableTokens.find((t) => t.balance > 0n);
+  if (opts.allowRelayerBootstrap && hasDelegate(cfg) && token) {
+    const leg: GasRouteLeg = { kind: 'bootstrap', chainId: targetChainId, token: token.token, gasOnChainId: targetChainId, gasNeededWei: 0n, requiresGrants: ['repayment payee for the relayer', 'token budget'] };
+    return {
+      mode: 'bootstrap-7702', targetChainId, legs: [leg],
+      reason: `RELAYER-funded bootstrap (owner opt-in): LEASH-ops fronts the gas and is repaid in ${token.token} through the governed wall - not self-funded`,
+    };
+  }
+  return {
+    mode: 'ask-owner', targetChainId, legs: [],
+    reason: 'no gas-feasible self-funding route - surface ONE ask, never stall silently',
+    ask: buildAsk(cfg, view, survey, opts),
+  };
+}
+
+// ---------------------------------------------------------------------------------------------
 // AQ-FND M-4 / G-9: the DESTINATION-gas plan a rail transfer must hold BEFORE it is
 // enterable. `initiateRailTransfer` refuses a route without one (UnfundedRouteError) —
 // this maps the self-funding ladder, evaluated against the DESTINATION chain's

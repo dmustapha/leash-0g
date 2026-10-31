@@ -34,6 +34,7 @@ interface DbAgentRow {
   account_create_tuple: Record<string, unknown> | null;
   init_code_hash: string | null;
   bind_mode: 'external' | null;
+  allow_relayer_bootstrap: boolean;
   created_at: Date;
 }
 
@@ -62,6 +63,7 @@ function mapRow(r: DbAgentRow): AgentRow {
     accountCreateTuple: r.account_create_tuple,
     initCodeHash: r.init_code_hash,
     bindMode: r.bind_mode,
+    allowRelayerBootstrap: r.allow_relayer_bootstrap,
     createdAt: r.created_at.toISOString(),
   };
 }
@@ -69,7 +71,7 @@ function mapRow(r: DbAgentRow): AgentRow {
 const COLS = `id, chain_agent_id, chain_id, owner_addr, account_addr, session_key_addr, session_key_enc,
   audit_pubkey, token_id, token_hash, name, status, gateway_rules, goal, encrypted_audit_key,
   gateway_token_enc, guardian_addr, capability_label, account_version, account_salt, account_create_tuple,
-  init_code_hash, bind_mode, created_at`;
+  init_code_hash, bind_mode, allow_relayer_bootstrap, created_at`;
 
 export async function getAgentById(pool: Pool, id: string): Promise<AgentRow | null> {
   if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
@@ -348,6 +350,11 @@ function parseAgentCursor(raw: string): { createdAt: string; id: string } | null
 }
 
 /** Replace gateway_rules wholesale (PATCH /api/agents/:id/rules — traced 'config' by the route). */
+/** AQ-FND M-3: owner opt-in for the LEASH-ops relayer gas bootstrap (default false). */
+export async function setAllowRelayerBootstrap(pool: Pool, id: string, value: boolean): Promise<void> {
+  await pool.query(`UPDATE agents SET allow_relayer_bootstrap = $2 WHERE id = $1`, [id, value]);
+}
+
 export async function updateAgentRules(pool: Pool, id: string, rules: GatewayRule[]): Promise<void> {
   await pool.query(`UPDATE agents SET gateway_rules = $2 WHERE id = $1`, [id, JSON.stringify(rules)]);
 }
