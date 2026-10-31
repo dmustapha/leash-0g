@@ -60,6 +60,9 @@ export interface RuntimeSettings {
   chainConfig?: ChainConfig | undefined;
   /** Stage D (D-8): how long a JIT capability card stays actionable (ms; default 10 min). */
   jitTtlMs?: number | undefined;
+  /** AQ-FND M-3: global session-key gas dust default (wei) — used by the gas ladder when a
+   *  chain does not override `sessionGasDustWei`. Unset ⇒ 0.002 0G (the config default). */
+  globalDustWei?: bigint | undefined;
   fetchFn?: typeof fetch;
 }
 
@@ -257,6 +260,28 @@ export class LeashRuntimeManager implements RuntimeManager {
     };
   }
 
+  /**
+   * AQ-FND M-3: the self-funding gas-ladder deps for a treasury agent — the chain
+   * config the ladder reads (`buildGasRouteConfig`) plus the rung-4 bootstrap executor
+   * primitives (ops/session wallets, delegate, relayer address). Both come from the
+   * registry; absent registry/chain ⇒ no ladder (the token top-up acts as the native
+   * path, no regression). bootstrapGas is null when the chain declares no delegate.
+   */
+  private gasDeps(agent: AgentRow): {
+    gasConfig?: import('./treasury-graph.js').TreasuryGraphDeps['gasConfig'];
+    bootstrapGas?: import('./treasury-graph.js').TreasuryGraphDeps['bootstrapGas'];
+  } {
+    const registry = this.deps.chainRegistry;
+    if (!registry || !registry.has(agent.chainId)) return {};
+    const chainConfig = registry.getChainConfig(agent.chainId);
+    const globalDustWei = this.deps.settings.globalDustWei ?? 2_000_000_000_000_000n; // 0.002 0G
+    const bootstrapGas = registry.getBootstrapGas(agent.chainId);
+    return {
+      gasConfig: { chainConfig, globalDustWei },
+      ...(bootstrapGas ? { bootstrapGas } : {}),
+    };
+  }
+
   /** A job role cannot run without the 0G Storage uploader (deliverable/PoA sink). */
   private requireUploader(): StorageUploader {
     if (!this.deps.uploader) throw new Error('job role requires a StorageUploader (uploader dep missing)');
@@ -330,6 +355,9 @@ export class LeashRuntimeManager implements RuntimeManager {
             // agent's chain AND that chain has an owner-configured bridge allowlist.
             // Absent = fail-closed (a bridge call classifies forbidden / stands down).
             ...(this.bridgeDeps(agent) ?? {}),
+            // AQ-FND M-3: the self-funding gas ladder (config + rung-4 executor). Absent
+            // ⇒ token top-up acts as the native path (no regression).
+            ...this.gasDeps(agent),
             ...(this.deps.settings.fetchFn ? { fetchFn: this.deps.settings.fetchFn } : {}),
           },
           ctx,

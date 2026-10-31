@@ -212,6 +212,9 @@ async function main(): Promise<void> {
       jobEvaluatorModel: cfg.JOB_EVALUATOR_MODEL,
       chainConfig: { maxDepth: cfg.CHAIN_MAX_DEPTH, maxEligiblePerHop: cfg.CHAIN_MAX_ELIGIBLE_PER_HOP },
       jitTtlMs: cfg.JIT_TTL_MS,
+      // AQ-FND M-3: global session-key gas dust default — the gas ladder's rung-2/4 refuel
+      // size when a chain does not override sessionGasDustWei.
+      globalDustWei: BigInt(cfg.SESSION_GAS_DUST_WEI),
     },
   });
 

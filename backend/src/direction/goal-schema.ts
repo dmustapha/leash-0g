@@ -44,6 +44,10 @@ const treasuryGoalSchema = z
     beneficiary: addrSchema,
     targetBalanceWei: weiSchema,
     topUpWei: weiSchema,
+    // AQ-FND M-3: optional ERC-20 top-up denomination. Money-authority (owner-typed
+    // at create, like `beneficiary`) — NOT in DESCRIPTIVE_FIELDS, so it is never
+    // chat-patchable. Absent ⇒ native treasury, byte-identical.
+    token: addrSchema.optional(),
     model: modelSchema,
   })
   .strict();

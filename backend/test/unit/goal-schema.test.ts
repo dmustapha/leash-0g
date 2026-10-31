@@ -114,6 +114,43 @@ describe('applyRecipient — owner-typed out-of-band re-target', () => {
   });
 });
 
+// ─── AQ-FND M-3: token-denominated treasury goal ───────────────────────────────
+describe('token treasury goal (AQ-FND M-3) — optional ERC-20 denomination', () => {
+  const TOKEN_TREASURY: AgentGoal = {
+    type: 'treasury',
+    beneficiary: '0x' + '11'.repeat(20),
+    targetBalanceWei: '1000000000000000000',
+    topUpWei: '500000000000000000',
+    token: '0x' + 'ec'.repeat(20),
+  };
+
+  it('accepts a treasury goal carrying a token (strict parse)', () => {
+    expect(goalSchema.safeParse(TOKEN_TREASURY).success).toBe(true);
+  });
+  it('still accepts a native treasury goal with NO token (byte-identical, no regression)', () => {
+    expect(goalSchema.safeParse(TREASURY).success).toBe(true);
+  });
+  it('rejects a malformed token address', () => {
+    expect(goalSchema.safeParse({ ...TOKEN_TREASURY, token: 'not-an-addr' }).success).toBe(false);
+  });
+  it('rejects an unknown key alongside token (strict)', () => {
+    expect(goalSchema.safeParse({ ...TOKEN_TREASURY, rugPull: true }).success).toBe(false);
+  });
+  it('REJECTS arming token via chat — it is money-authority, not descriptive', () => {
+    const r = applyGoalPatch(TREASURY, { token: '0x' + 'ec'.repeat(20) });
+    expect(r.ok).toBe(false);
+  });
+  it('a descriptive threshold change still merges on a token goal', () => {
+    const r = applyGoalPatch(TOKEN_TREASURY, { targetBalanceWei: '2000000000000000000' });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect((r.goal as { targetBalanceWei: string }).targetBalanceWei).toBe('2000000000000000000');
+      // the token survives the merge (owner-typed, untouched)
+      expect((r.goal as { token?: string }).token).toBe('0x' + 'ec'.repeat(20));
+    }
+  });
+});
+
 // ─── FR3 (F-8): trader goal — descriptive vs money-invariant surface ───────────
 describe('trader goal (FR3) — R-1 descriptive/money split', () => {
   const TRADER: AgentGoal = {

@@ -223,6 +223,14 @@ export interface TreasuryGoal {
   beneficiary: string;
   targetBalanceWei: string;
   topUpWei: string;
+  /**
+   * AQ-FND M-3 (optional): when set, the agent keeps the beneficiary topped up in
+   * this ERC-20 (target/topUp denominated in the token's base units) instead of
+   * native 0G. Absent ⇒ native behaviour, byte-identical. It is MONEY-AUTHORITY
+   * (owner-typed at create, like `beneficiary`) — never chat-patchable, never in
+   * DESCRIPTIVE_FIELDS. The self-funding gas ladder pays for the token top-up.
+   */
+  token?: string | undefined;
   model?: string | undefined;
 }
 
@@ -494,6 +502,7 @@ export type AlertKind =
   | 'tool_request' // decision (SF-3 L2 JIT) — an off-chain tool call needs an owner grant (approve-once / always-allow / deny)
   | 'signing_request' // decision (F′ FP-2 L2 JIT) — a sensitive off-chain signing needs owner consent (approve-once / always-allow / deny)
   | 'limit_hit' // decision — NOT approvable (the contract reverts regardless); adjust/dismiss
+  | 'gas_request' // decision (AQ-FND M-3 rung-5) — the agent has no self-funding gas path; the owner sends a little native coin so it can act
   | 'revoked' // info
   | 'revoke_failed' // info — actionable steer to owner-wallet fallback
   | 'delegation_terminal' // info — failed | expired | declined | cancelled

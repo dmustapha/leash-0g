@@ -1,6 +1,6 @@
 import { createPublicClient, createWalletClient, encodePacked, http, keccak256, type Hex, type PublicClient } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
-import { aggregatorV3Abi, leashAccountAbi, leashAccountV4Abi, leashAccountV5SigningAbi, erc20MetaAbi } from '../chain/abis.js';
+import { aggregatorV3Abi, leashAccountAbi, leashAccountV4Abi, leashAccountV5SigningAbi, leashAccountV6PolicyAbi, erc20MetaAbi } from '../chain/abis.js';
 import { readPolicyView, zeroGChain } from '../chain/ops.js';
 import type { PolicyView } from '../types.js';
 import { waitReceipt } from '../chain/wait-receipt.js';
@@ -88,6 +88,20 @@ export interface RuntimeChain {
    * the wall's own staleness/deviation predicates remain the enforcement.
    */
   getSwapBandPrice18(accountAddr: string, target: string, selector: string): Promise<bigint | null>;
+  /**
+   * AQ-FND M-3: is a token SPENDABLE from this V6 account toward the given payees?
+   * Reads `assetPolicy(token).enabled` and, for each payee candidate,
+   * `allowlist(token, payee)` — both LIVE on-chain (the account is the sole
+   * authority). The gas ladder's spendable-token filter (D-4) and the novel-token
+   * one-ask hinge (D-1) consult this, never model text. Optional so coordination-
+   * free test fakes need not implement it (absent ⇒ treated as not-spendable →
+   * ask-owner, fail-closed); prod SessionChain does.
+   */
+  getAssetPolicy?(
+    accountAddr: string,
+    token: string,
+    payeeCandidates: string[],
+  ): Promise<{ enabled: boolean; allowedPayees: string[] }>;
   /**
    * Stage D (D-10): live-read the on-chain governed-call envelope for the given
    * candidates and build the authoritative `GrantState` the off-chain classify +
@@ -237,6 +251,35 @@ export class SessionChain implements RuntimeChain {
       console.warn(`band price read failed for ${accountAddr} ${target}:${selector}: ${err instanceof Error ? err.message : String(err)}`);
       return null;
     }
+  }
+
+  async getAssetPolicy(
+    accountAddr: string,
+    token: string,
+    payeeCandidates: string[],
+  ): Promise<{ enabled: boolean; allowedPayees: string[] }> {
+    const asset = token.toLowerCase() as Hex;
+    const policy = await this.publicClient.readContract({
+      address: accountAddr as Hex,
+      abi: leashAccountV6PolicyAbi,
+      functionName: 'assetPolicy',
+      args: [asset],
+    });
+    const enabled = policy[0];
+    const uniquePayees = [...new Set(payeeCandidates.map((p) => p.toLowerCase()))];
+    const allowedPayees: string[] = [];
+    await Promise.all(
+      uniquePayees.map(async (payee) => {
+        const ok = await this.publicClient.readContract({
+          address: accountAddr as Hex,
+          abi: leashAccountV6PolicyAbi,
+          functionName: 'allowlist',
+          args: [asset, payee as Hex],
+        });
+        if (ok) allowedPayees.push(payee);
+      }),
+    );
+    return { enabled, allowedPayees };
   }
 
   async executeTransfer(input: {
