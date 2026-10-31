@@ -4,8 +4,8 @@
  * native): holding a spendable token → bootstrap-7702; no spendable token → ask-owner.
  */
 import { describe, it, expect } from 'vitest';
-import { buildGasRouteConfig, buildGasSnapshot } from '../../src/runtime/gas.js';
-import { planGas } from '../../src/chain/gas-planner.js';
+import { buildGasRouteConfig, buildGasSnapshot, buildRouteChainCfg, buildGasSurvey, describeGasAsk } from '../../src/runtime/gas.js';
+import { planGas, planGasRoute } from '../../src/chain/gas-planner.js';
 import type { ChainConfig } from '../../src/chain/registry.js';
 import type { RuntimeChain } from '../../src/runtime/session-chain.js';
 
@@ -127,5 +127,157 @@ describe('buildGasSnapshot + planGas — the Galileo ladder outcome', () => {
     expect(snap.spendableTokens).toHaveLength(0);
     expect(snap.sessionKeyNativeAllowlisted).toBe(false);
     expect(planGas(cfg, snap).mode).toBe('ask-owner');
+  });
+});
+
+describe('buildRouteChainCfg — AQ-FND M-3 inc-2 route config', () => {
+  it('extends the route config with chainId, leg-gas estimates and (no router) no DEX pairs', () => {
+    const cfg = buildRouteChainCfg(GALILEO, GLOBAL_DUST);
+    expect(cfg.chainId).toBe(16602);
+    expect(cfg.gasRepayDelegate).toBe(DELEGATE);
+    // floor (2 gwei) is above the 1 gwei minimum ⇒ price = floor; estimates = units × price
+    expect(cfg.swapLegGasWei).toBe(250_000n * 2_000_000_000n);
+    expect(cfg.refuelLegGasWei).toBe(60_000n * 2_000_000_000n);
+    expect(cfg.dexPairs).toEqual([]);
+  });
+
+  it('a gas floor below 1 gwei is priced at the 1 gwei minimum', () => {
+    const cfg = buildRouteChainCfg({ ...GALILEO, gasFloorWei: 12_000_000n }, GLOBAL_DUST);
+    expect(cfg.swapLegGasWei).toBe(250_000n * 1_000_000_000n);
+    expect(cfg.refuelLegGasWei).toBe(60_000n * 1_000_000_000n);
+  });
+
+  it('router + settlementToken ⇒ one lowercased DEX pair; router alone ⇒ none', () => {
+    const router = '0x' + 'ab'.repeat(20);
+    const usdc = '0x' + 'CD'.repeat(20);
+    const withPair = buildRouteChainCfg({ ...GALILEO, canonical: { router, settlementToken: usdc } }, GLOBAL_DUST);
+    expect(withPair.dexRouteAvailable).toBe(true);
+    expect(withPair.dexPairs).toEqual([{ tokenIn: usdc.toLowerCase() }]);
+    expect(buildRouteChainCfg({ ...GALILEO, canonical: { router } }, GLOBAL_DUST).dexPairs).toEqual([]);
+    expect(buildRouteChainCfg({ ...GALILEO, canonical: { settlementToken: usdc } }, GLOBAL_DUST).dexPairs).toEqual([]);
+  });
+});
+
+describe('buildGasSurvey — multi-chain, fail-closed per chain', () => {
+  const TOKEN_B = '0x' + 'ab'.repeat(20);
+  const survey = (
+    resolve: (id: number) => RuntimeChain,
+    chainIds: number[],
+    tokensByChain: Record<number, string[]> = {},
+    timeoutMs?: number,
+  ) =>
+    buildGasSurvey({
+      resolveChain: resolve,
+      chainIds,
+      accountAddr: ACCOUNT,
+      sessionKeyAddr: SESSION,
+      opsRelayerAddr: OPS,
+      tokensByChain,
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    });
+  const rejecting = {
+    async getBalance(): Promise<bigint> {
+      throw new Error('rpc down');
+    },
+  } as unknown as RuntimeChain;
+
+  it('reads each ok chain independently (native balances + spendable tokens)', async () => {
+    const funded = fakeChain({ sessionNative: 5n, accountNative: 7n, tokenBalance: 9n, tokenEnabled: true, tokenPayees: [OPS] });
+    const empty = fakeChain({});
+    const out = await survey((id) => (id === 1 ? funded : empty), [1, 2], { 1: [TOKEN] });
+    const [a, b] = out.views;
+    expect(a).toMatchObject({ chainId: 1, status: 'ok', sessionNativeWei: 5n, accountNativeWei: 7n });
+    expect(a!.spendableTokens).toEqual([{ token: TOKEN, balance: 9n }]);
+    expect(b).toMatchObject({ chainId: 2, status: 'ok', sessionNativeWei: 0n });
+    expect(b!.spendableTokens).toEqual([]);
+  });
+
+  it('lists multiple tokens; only the spendable ones appear', async () => {
+    const chain = {
+      ...fakeChain({ tokenBalance: 3n }),
+      async getBalance(): Promise<bigint> {
+        return 0n;
+      },
+      async getErc20Balance(): Promise<bigint> {
+        return 3n;
+      },
+      async getAssetPolicy(_a: string, token: string, payees: string[]) {
+        const spendable = token.toLowerCase() === TOKEN.toLowerCase();
+        return { enabled: spendable, allowedPayees: spendable ? payees.map((p) => p.toLowerCase()) : [] };
+      },
+    } as unknown as RuntimeChain;
+    const out = await survey(() => chain, [1], { 1: [TOKEN, TOKEN_B] });
+    expect(out.views[0]!.spendableTokens.map((t) => t.token)).toEqual([TOKEN]);
+  });
+
+  it('a chain whose read throws is `unknown` (zeros), the others are still read; never throws', async () => {
+    const ok = fakeChain({ sessionNative: 1n });
+    const out = await survey((id) => (id === 1 ? rejecting : ok), [1, 2]);
+    expect(out.views[0]).toMatchObject({ chainId: 1, status: 'unknown', sessionNativeWei: 0n, accountNativeWei: 0n, spendableTokens: [] });
+    expect(out.views[1]).toMatchObject({ chainId: 2, status: 'ok', sessionNativeWei: 1n });
+  });
+
+  it('a resolver that throws (unregistered chain) is `unknown` too', async () => {
+    const out = await survey(() => {
+      throw new Error('unregistered');
+    }, [9]);
+    expect(out.views[0]).toMatchObject({ chainId: 9, status: 'unknown' });
+  });
+
+  it('a chain slower than the budget is `unknown` (timeout), not waited on', async () => {
+    const slow = { getBalance: () => new Promise<bigint>(() => undefined) } as unknown as RuntimeChain;
+    const out = await survey(() => slow, [1], {}, 20);
+    expect(out.views[0]).toMatchObject({ chainId: 1, status: 'unknown' });
+  });
+
+  it('an unknown chain is excluded from routing: the planner never treats it as zero', async () => {
+    const out = await survey(() => rejecting, [16602]);
+    const route = planGasRoute({ 16602: buildRouteChainCfg(GALILEO, GLOBAL_DUST) }, out, 16602, { allowRelayerBootstrap: true });
+    expect(route.mode).toBe('ask-owner');
+    expect(route.ask?.unknownChains).toEqual([16602]);
+  });
+});
+
+describe('describeGasAsk — plain wording, no raw wei', () => {
+  const names: Record<number, string> = { 16602: '0G Galileo', 84532: 'Base Sepolia' };
+  const chainName = (id: number) => names[id] ?? `chain ${id}`;
+
+  it('ask-owner names the target, surveyed + unreadable chains and what would unblock', async () => {
+    const broken = {
+      async getBalance(): Promise<bigint> {
+        throw new Error('x');
+      },
+    } as unknown as RuntimeChain;
+    const out = await buildGasSurvey({
+      resolveChain: (id) => (id === 84532 ? broken : fakeChain({})),
+      chainIds: [16602, 84532],
+      accountAddr: ACCOUNT,
+      sessionKeyAddr: SESSION,
+      opsRelayerAddr: OPS,
+      tokensByChain: {},
+    });
+    const route = planGasRoute({ 16602: buildRouteChainCfg(GALILEO, GLOBAL_DUST) }, out, 16602, { allowRelayerBootstrap: false });
+    const text = describeGasAsk({ agentName: 'Treasury', route, chainName });
+    expect(text).toContain('Treasury needs a little gas on 0G Galileo');
+    expect(text).toContain('Checked: 0G Galileo');
+    expect(text).toContain('Could not read: Base Sepolia');
+    expect(text).toContain('owner opt-in for relayer bootstrap');
+    expect(text).not.toMatch(/\d+ wei/);
+    expect(text).not.toContain('chain 16602');
+  });
+
+  it('swap-to-gas states the route and the grants it needs', () => {
+    const text = describeGasAsk({
+      agentName: 'Treasury',
+      chainName,
+      route: {
+        mode: 'swap-to-gas',
+        targetChainId: 84532,
+        reason: 'x',
+        legs: [{ kind: 'swap', chainId: 84532, gasOnChainId: 84532, gasNeededWei: 1n, requiresGrants: ['swap rule on router', 'exact-amount approve'] }],
+      },
+    });
+    expect(text).toContain('swap some of its tokens for gas on Base Sepolia');
+    expect(text).toContain('swap rule on router, exact-amount approve');
   });
 });

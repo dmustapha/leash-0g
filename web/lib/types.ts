@@ -212,6 +212,8 @@ export type AgentDetail = {
      *  detail payloads → the owner-write path falls back to V4 (byte-identical for the
      *  shared call-rule/band/spend fragments). */
     accountVersion?: number;
+    /** AQ-FND M-3: owner opt-in — LEASH-ops may front gas (repaid in the agent's token). Default off. */
+    allowRelayerBootstrap?: boolean;
   };
 };
 
@@ -383,7 +385,8 @@ export type AlertKind =
   | 'delegation_terminal' // info
   | 'runtime_error' // info, coalesced
   | 'throttle' // info, coalesced
-  | 'alert_storm'; // info — rate guard tripped
+  | 'alert_storm' // info — rate guard tripped
+  | 'gas_request'; // decision — the agent found no way to pay its own gas (AQ-FND M-3)
 export type AlertStatus = 'unread' | 'read' | 'resolved' | 'dismissed';
 export type AlertResolution = 'approve' | 'deny' | 'expired' | 'dismissed';
 export type AlertChannel = 'app' | 'telegram' | 'system';
@@ -751,6 +754,32 @@ export type AgentNetworksView = {
   onboardable: boolean;
   homeChainId: number;
   chains: AgentNetworkRow[];
+};
+
+/** GET /api/agents/:id/gas-survey (AQ-FND M-3): holdings per chain + the gas route the agent would take. */
+export type GasSurveyChain = {
+  chainId: number;
+  name: string;
+  /** `unknown` = the chain could not be read; it is NOT zero. */
+  status: 'ok' | 'unknown';
+  /** wei, as a decimal string */
+  sessionNativeWei: string;
+  accountNativeWei: string;
+  spendableTokens: Array<{ token: Address; balance: string }>;
+};
+
+export type GasSurveyRoute = {
+  mode: 'has-native' | 'account-native' | 'swap-to-gas' | 'bridge-then-swap' | 'bootstrap-7702' | 'ask-owner';
+  reason: string;
+  legs: Array<{ kind: 'refuel' | 'swap' | 'bridge' | 'bootstrap'; chainId: number; requiresGrants: string[] }>;
+  ask?: { surveyedChains: number[]; unknownChains: number[]; missing: string[] };
+};
+
+export type GasSurveyView = {
+  homeChainId: number;
+  allowRelayerBootstrap: boolean;
+  chains: GasSurveyChain[];
+  route: GasSurveyRoute;
 };
 
 /** POST /api/agents/:id/networks success body (201, or 200 when alreadyOnboarded). */

@@ -28,6 +28,7 @@ import {
 } from '../coordination/chain.js';
 import type { Json } from '../crypto/canonical.js';
 import type { RuntimeChain } from './session-chain.js';
+import { loadGasRouteInputs } from './gas.js';
 import type { ChainRegistry } from '../chain/registry.js';
 import { assertBridgeRoutable } from './bridge-gate.js';
 import { buildTreasuryGraph, type TreasuryGraph } from './treasury-graph.js';
@@ -270,14 +271,32 @@ export class LeashRuntimeManager implements RuntimeManager {
   private gasDeps(agent: AgentRow): {
     gasConfig?: import('./treasury-graph.js').TreasuryGraphDeps['gasConfig'];
     bootstrapGas?: import('./treasury-graph.js').TreasuryGraphDeps['bootstrapGas'];
+    gasRoute?: import('./treasury-graph.js').TreasuryGraphDeps['gasRoute'];
   } {
     const registry = this.deps.chainRegistry;
     if (!registry || !registry.has(agent.chainId)) return {};
     const chainConfig = registry.getChainConfig(agent.chainId);
     const globalDustWei = this.deps.settings.globalDustWei ?? 2_000_000_000_000_000n; // 0.002 0G
     const bootstrapGas = registry.getBootstrapGas(agent.chainId);
+    // AQ-FND M-3 inc-2: the multi-chain survey inputs, re-read every cycle by the graph
+    // (deployments + the owner's relayer opt-in can change while the agent runs).
+    const gasRoute: NonNullable<import('./treasury-graph.js').TreasuryGraphDeps['gasRoute']> = {
+      opsRelayerAddr: registry.getOpsRelayerAddr(),
+      resolveChain: (chainId) => registry.getSessionChain(chainId),
+      chainName: (chainId) => (registry.has(chainId) ? registry.getChainConfig(chainId).name : `chain ${chainId}`),
+      load: (homeGoalToken) =>
+        loadGasRouteInputs({
+          pool: this.deps.pool,
+          registry,
+          agentId: agent.id,
+          homeChainId: agent.chainId,
+          goalToken: homeGoalToken,
+          globalDustWei,
+        }),
+    };
     return {
       gasConfig: { chainConfig, globalDustWei },
+      gasRoute,
       ...(bootstrapGas ? { bootstrapGas } : {}),
     };
   }

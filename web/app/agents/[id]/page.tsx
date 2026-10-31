@@ -60,6 +60,8 @@ import { PriceBandPanel } from '@/components/cockpit/PriceBandPanel';
 import { CapabilityDecisionCard } from '@/components/cockpit/CapabilityDecisionCard';
 import { CapabilityEnvelope } from '@/components/cockpit/CapabilityEnvelope';
 import { NetworksPanel } from '@/components/cockpit/NetworksPanel';
+import { GasPolicyToggle } from '@/components/cockpit/GasPolicyToggle';
+import { GasRoutePlan } from '@/components/cockpit/GasRoutePlan';
 import { nativeSymbol } from '@/lib/networks';
 import {
   applyCallRuleOnchain,
@@ -90,7 +92,7 @@ import {
 import { EnvelopeForm, VetoConfigForm, type EnvelopeFields, type VetoFields } from '@/components/cockpit/EnvelopeForm';
 import type { AccountVersion } from '@/lib/abi/leashAccountV5';
 import { SigningGrantPanel, type ProposeGrantArgs } from '@/components/cockpit/SigningGrantPanel';
-import type { SigningEnvelopeView, SigningDescriptorView } from '@/lib/types';
+import type { SigningEnvelopeView, SigningDescriptorView, GasSurveyView } from '@/lib/types';
 
 type Approval = Extract<StreamEvent, { type: 'approval' }>;
 type Connection = 'connecting' | 'open' | 'reconnecting' | 'closed';
@@ -131,6 +133,8 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
   // that is the delegation graph above).
   const [networks, setNetworks] = useState<NetworkChain[]>([]);
   const [agentNetworks, setAgentNetworks] = useState<AgentNetworksView | null>(null);
+  // AQ-FND M-3: per-chain holdings + the planned gas route (null = not read / unavailable).
+  const [gasSurvey, setGasSurvey] = useState<GasSurveyView | null>(null);
   // FR4 (F-9): live requireBandForSwap() for the band-arm panel (null = not read yet).
   const [bandArmed, setBandArmed] = useState<boolean | null>(null);
   const [bandSet, setBandSet] = useState<boolean>(false);
@@ -165,6 +169,14 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
     }
   }, [api, id]);
 
+  const loadGasSurvey = useCallback(async () => {
+    try {
+      setGasSurvey(await api.getGasSurvey(id));
+    } catch {
+      /* non-fatal: the survey is a read-only convenience (503 for external/unwired agents) */
+    }
+  }, [api, id]);
+
   const loadChains = useCallback(async () => {
     try {
       const { chains: all } = await api.listChains();
@@ -194,8 +206,9 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
       void loadCapabilities();
       void loadSigning();
       void loadNetworks();
+      void loadGasSurvey();
     })();
-  }, [api, id, loadChains, loadCapabilities, loadSigning, loadNetworks]);
+  }, [api, id, loadChains, loadCapabilities, loadSigning, loadNetworks, loadGasSurvey]);
   const seqRef = useRef(0);
 
   const refresh = useCallback(async () => {
@@ -975,9 +988,21 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
             onOnboard={async (chainId) => {
               const result = await api.onboardNetwork(id, chainId);
               await loadNetworks();
+              void loadGasSurvey();
               return result;
             }}
           />
+          {/* AQ-FND M-3: where the agent gets gas (per-chain holdings + route) and the relayer opt-in. */}
+          <GasRoutePlan survey={gasSurvey} />
+          {detail && accountVersionFor(detail) === 6 ? (
+            <GasPolicyToggle
+              initial={detail.agent?.allowRelayerBootstrap === true}
+              setGasPolicy={async (next) => {
+                await api.setGasPolicy(id, next);
+                void loadGasSurvey();
+              }}
+            />
+          ) : null}
         </div>
       </div>
 

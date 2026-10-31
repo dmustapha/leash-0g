@@ -26,6 +26,7 @@ const KIND_LABEL: Record<Alert['kind'], string> = {
   runtime_error: 'Agent errors',
   throttle: 'Requests throttled',
   alert_storm: 'Alert storm contained',
+  gas_request: 'Needs gas to act',
 };
 
 const RESOLUTION_LABEL: Record<NonNullable<Alert['resolution']>, string> = {

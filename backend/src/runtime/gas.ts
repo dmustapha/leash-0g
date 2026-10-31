@@ -10,10 +10,25 @@
  * only counts as `spendable` when its on-chain V6 asset policy is ENABLED and the repay
  * recipient (the ops relayer) is an allowlisted payee for it — otherwise the rung-4
  * bootstrap could not repay the relayer in that token, so it must not be offered.
+ *
+ * Increment 2 adds the MULTI-CHAIN side (`buildGasSurvey`, `loadGasRouteInputs`,
+ * `planAgentGasRoute`, `describeGasAsk`) that feeds `planGasRoute`.
  */
 import type { Address } from 'viem';
+import type { Pool } from 'pg';
 import type { ChainConfig } from '../chain/registry.js';
-import type { GasRouteConfig, GasSnapshot } from '../chain/gas-planner.js';
+import {
+  planGasRoute,
+  type ChainGasView,
+  type GasRoute,
+  type GasRouteConfig,
+  type GasSnapshot,
+  type GasSurvey,
+  type RouteChainCfg,
+} from '../chain/gas-planner.js';
+import { getAgentById } from '../store/agents.js';
+import { listChainDeployments } from '../store/chain-deployments.js';
+import type { AgentGoal } from '../types.js';
 import type { RuntimeChain } from './session-chain.js';
 
 /** The ladder decision + its inputs, so the runtime can trace exactly what it read. */
@@ -66,19 +81,34 @@ export async function buildGasSnapshot(opts: {
   ]);
 
   const spendableTokens: Array<{ token: Address; balance: bigint }> = [];
-  if (token && chain.getAssetPolicy) {
-    const [balance, assetPolicy] = await Promise.all([
-      chain.getErc20Balance(token, accountAddr),
-      chain.getAssetPolicy(accountAddr, token, [opsRelayerAddr]),
-    ]);
-    // Spendable ⇔ enabled policy AND the relayer is a payee (so rung-4 can repay).
-    const relayerIsPayee = assetPolicy.allowedPayees.includes(opsRelayerAddr.toLowerCase());
-    if (balance > 0n && assetPolicy.enabled && relayerIsPayee) {
-      spendableTokens.push({ token: token.toLowerCase() as Address, balance });
-    }
+  if (token) {
+    const spendable = await readSpendableToken(chain, accountAddr, token, opsRelayerAddr);
+    if (spendable) spendableTokens.push(spendable);
   }
 
   return { sessionNativeWei, accountNativeWei, spendableTokens, sessionKeyNativeAllowlisted };
+}
+
+/**
+ * The token's balance when it is SPENDABLE (balance > 0 ∧ policy enabled ∧ the ops relayer is an
+ * allowlisted payee), else null. Shared by the single-chain snapshot and the multi-chain survey.
+ */
+async function readSpendableToken(
+  chain: RuntimeChain,
+  accountAddr: string,
+  token: string,
+  opsRelayerAddr: string,
+): Promise<{ token: Address; balance: bigint } | null> {
+  if (!chain.getAssetPolicy) return null;
+  const [balance, assetPolicy] = await Promise.all([
+    chain.getErc20Balance(token, accountAddr),
+    chain.getAssetPolicy(accountAddr, token, [opsRelayerAddr]),
+  ]);
+  const relayerIsPayee = assetPolicy.allowedPayees.includes(opsRelayerAddr.toLowerCase());
+  if (balance > 0n && assetPolicy.enabled && relayerIsPayee) {
+    return { token: token.toLowerCase() as Address, balance };
+  }
+  return null;
 }
 
 /** Is the session key an allowlisted NATIVE payee (rung-2 precondition)? Fail-closed. */
@@ -90,4 +120,234 @@ async function isNativePayee(chain: RuntimeChain, accountAddr: string, sessionKe
     [sessionKeyAddr],
   );
   return nativePolicy.allowedPayees.includes(sessionKeyAddr.toLowerCase());
+}
+
+// ---------------------------------------------------------------------------------------------
+// AQ-FND M-3 (cross-chain gas routing, Increment 2): the multi-chain survey + planner inputs.
+// Everything here is READ-ONLY and derived from config + chain reads + the owner-typed goal -
+// nothing comes from model text.
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * ESTIMATES of the native gas one leg burns, in gas units. Increment 3 replaces these with
+ * simulated figures once the swap/bridge executors exist; until then they only decide
+ * "can the key afford this leg" for the route/ask, never the amount of any transaction.
+ */
+const SWAP_LEG_GAS_UNITS = 250_000n;
+const REFUEL_LEG_GAS_UNITS = 60_000n;
+/** Gas-price floor (wei) used to turn the units into wei on chains whose own floor is lower. */
+const MIN_ESTIMATE_GAS_PRICE_WEI = 1_000_000_000n; // 1 gwei
+/** Per-chain read budget; a slower chain is reported `unknown`, never waited on. */
+const SURVEY_CHAIN_TIMEOUT_MS = 8_000;
+
+/** buildGasRouteConfig + the per-leg gas estimates and DEX pair the route planner reads. */
+export function buildRouteChainCfg(chainConfig: ChainConfig, globalDustWei: bigint): RouteChainCfg {
+  const gasPriceWei =
+    chainConfig.gasFloorWei > MIN_ESTIMATE_GAS_PRICE_WEI ? chainConfig.gasFloorWei : MIN_ESTIMATE_GAS_PRICE_WEI;
+  const settlementToken = chainConfig.canonical?.settlementToken;
+  return {
+    ...buildGasRouteConfig(chainConfig, globalDustWei),
+    chainId: chainConfig.chainId,
+    swapLegGasWei: SWAP_LEG_GAS_UNITS * gasPriceWei,
+    refuelLegGasWei: REFUEL_LEG_GAS_UNITS * gasPriceWei,
+    dexPairs:
+      chainConfig.canonical?.router && settlementToken ? [{ tokenIn: settlementToken.toLowerCase() as Address }] : [],
+  };
+}
+
+function unknownView(chainId: number): ChainGasView {
+  return {
+    chainId,
+    status: 'unknown',
+    sessionNativeWei: 0n,
+    accountNativeWei: 0n,
+    spendableTokens: [],
+    sessionKeyNativeAllowlisted: false,
+  };
+}
+
+async function readChainView(opts: {
+  chain: RuntimeChain;
+  chainId: number;
+  accountAddr: string;
+  sessionKeyAddr: string;
+  opsRelayerAddr: string;
+  tokens: string[];
+}): Promise<ChainGasView> {
+  const { chain, chainId, accountAddr, sessionKeyAddr, opsRelayerAddr, tokens } = opts;
+  const [sessionNativeWei, accountNativeWei, sessionKeyNativeAllowlisted, held] = await Promise.all([
+    chain.getBalance(sessionKeyAddr),
+    chain.getBalance(accountAddr),
+    isNativePayee(chain, accountAddr, sessionKeyAddr),
+    Promise.all(tokens.map((t) => readSpendableToken(chain, accountAddr, t, opsRelayerAddr))),
+  ]);
+  const spendableTokens = held.filter((h): h is { token: Address; balance: bigint } => h !== null);
+  return { chainId, status: 'ok', sessionNativeWei, accountNativeWei, spendableTokens, sessionKeyNativeAllowlisted };
+}
+
+async function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`chain read timed out after ${ms}ms`)), ms);
+  });
+  try {
+    return await Promise.race([work, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+/**
+ * Survey every chain the agent is deployed on. Each chain is read in its own try/catch under a
+ * timeout: ANY failure ⇒ that chain is `unknown` (excluded from routing, NEVER treated as zero).
+ * Never throws. The same account / session-key address is used on every chain (CREATE2).
+ */
+export async function buildGasSurvey(opts: {
+  resolveChain: (chainId: number) => RuntimeChain;
+  chainIds: number[];
+  accountAddr: string;
+  sessionKeyAddr: string;
+  opsRelayerAddr: string;
+  tokensByChain: Record<number, string[]>;
+  /** per-chain read budget (ms); defaults to 8s. Exposed for tests. */
+  timeoutMs?: number;
+}): Promise<GasSurvey> {
+  const views = await Promise.all(
+    opts.chainIds.map(async (chainId): Promise<ChainGasView> => {
+      try {
+        const read = readChainView({
+          chain: opts.resolveChain(chainId),
+          chainId,
+          accountAddr: opts.accountAddr,
+          sessionKeyAddr: opts.sessionKeyAddr,
+          opsRelayerAddr: opts.opsRelayerAddr,
+          tokens: opts.tokensByChain[chainId] ?? [],
+        });
+        return await withTimeout(read, opts.timeoutMs ?? SURVEY_CHAIN_TIMEOUT_MS);
+      } catch {
+        return unknownView(chainId);
+      }
+    }),
+  );
+  return { views };
+}
+
+/** The slice of the ChainRegistry the route planner needs (structural; tests fake it). */
+export interface GasRouteRegistry {
+  has(chainId: number): boolean;
+  getChainConfig(chainId: number): ChainConfig;
+  getSessionChain(chainId: number): RuntimeChain;
+}
+
+/** GasRouteRegistry plus the ops relayer address (the owner-route surface). */
+export interface GasRouteSurface extends GasRouteRegistry {
+  opsRelayerAddr: string;
+}
+
+/** Everything the planner needs that can change between cycles (re-read every cycle). */
+export interface GasRouteInputs {
+  homeChainId: number;
+  chainIds: number[];
+  cfgByChain: Record<number, RouteChainCfg>;
+  tokensByChain: Record<number, string[]>;
+  allowRelayerBootstrap: boolean;
+}
+
+/** The ERC-20 an owner-typed treasury goal is denominated in (lowercased), else null. */
+export function goalTokenOf(goal: AgentGoal): string | null {
+  if ((goal.type ?? 'treasury') !== 'treasury') return null;
+  const token = (goal as { token?: string | undefined }).token;
+  return token ? token.toLowerCase() : null;
+}
+
+/**
+ * Resolve the survey scope: home ∪ onboarded deployments, restricted to registered chains. The
+ * opt-in is re-read from the DB so an owner toggle takes effect without an agent restart; a read
+ * failure fails CLOSED (opt-in false).
+ */
+export async function loadGasRouteInputs(opts: {
+  pool: Pool;
+  registry: GasRouteRegistry;
+  agentId: string;
+  homeChainId: number;
+  goalToken: string | null;
+  globalDustWei: bigint;
+}): Promise<GasRouteInputs> {
+  const { pool, registry, agentId, homeChainId, goalToken, globalDustWei } = opts;
+  const deployments = await listChainDeployments(pool, agentId);
+  const chainIds = [...new Set([homeChainId, ...deployments.map((d) => d.chainId)])].filter((id) => registry.has(id));
+  const cfgByChain: Record<number, RouteChainCfg> = {};
+  const tokensByChain: Record<number, string[]> = {};
+  for (const id of chainIds) {
+    const cfg = registry.getChainConfig(id);
+    cfgByChain[id] = buildRouteChainCfg(cfg, globalDustWei);
+    const settlement = cfg.canonical?.settlementToken;
+    tokensByChain[id] = id === homeChainId ? (goalToken ? [goalToken] : []) : settlement ? [settlement] : [];
+  }
+  const allowRelayerBootstrap = await readRelayerOptIn(pool, agentId);
+  return { homeChainId, chainIds, cfgByChain, tokensByChain, allowRelayerBootstrap };
+}
+
+async function readRelayerOptIn(pool: Pool, agentId: string): Promise<boolean> {
+  try {
+    return (await getAgentById(pool, agentId))?.allowRelayerBootstrap === true;
+  } catch {
+    return false;
+  }
+}
+
+/** Survey + plan in one read-only step (shared by the act loop and GET /gas-survey). */
+export async function planAgentGasRoute(opts: {
+  inputs: GasRouteInputs;
+  resolveChain: (chainId: number) => RuntimeChain;
+  accountAddr: string;
+  sessionKeyAddr: string;
+  opsRelayerAddr: string;
+}): Promise<{ survey: GasSurvey; route: GasRoute }> {
+  const { inputs } = opts;
+  const survey = await buildGasSurvey({
+    resolveChain: opts.resolveChain,
+    chainIds: inputs.chainIds,
+    accountAddr: opts.accountAddr,
+    sessionKeyAddr: opts.sessionKeyAddr,
+    opsRelayerAddr: opts.opsRelayerAddr,
+    tokensByChain: inputs.tokensByChain,
+  });
+  const route = planGasRoute(inputs.cfgByChain, survey, inputs.homeChainId, {
+    allowRelayerBootstrap: inputs.allowRelayerBootstrap,
+  });
+  return { survey, route };
+}
+
+/** "(>= 123 wei ...)" figures and bare chain ids in the planner's `missing` lines, made readable. */
+function plainMissing(line: string, chainName: (chainId: number) => string): string {
+  return line
+    .replace(/\s*\(>= \d+ wei[^)]*\)/g, '')
+    .replace(/chain (\d+)/g, (_m, id: string) => chainName(Number(id)));
+}
+
+/**
+ * The owner-facing text of a route that cannot run on its own. Plain wording, chain names from
+ * config, no raw wei: what was looked at, what could not be read, and what would unblock it.
+ */
+export function describeGasAsk(opts: {
+  agentName: string;
+  route: GasRoute;
+  chainName: (chainId: number) => string;
+}): string {
+  const { agentName, route, chainName } = opts;
+  const target = chainName(route.targetChainId);
+  if (route.mode === 'swap-to-gas' || route.mode === 'bridge-then-swap') {
+    const grants = [...new Set(route.legs.flatMap((l) => l.requiresGrants))];
+    const how = route.mode === 'swap-to-gas' ? 'swap some of its tokens for gas' : 'bridge tokens in and swap them for gas';
+    return `${agentName} could ${how} on ${target}, but that needs your approval first: ${grants.join(', ')}.`;
+  }
+  const looked = (route.ask?.surveyedChains ?? []).map(chainName);
+  const unreadable = (route.ask?.unknownChains ?? []).map(chainName);
+  const parts = [`${agentName} needs a little gas on ${target} to act and found no way to pay for it itself.`];
+  if (looked.length > 0) parts.push(`Checked: ${looked.join(', ')}.`);
+  if (unreadable.length > 0) parts.push(`Could not read: ${unreadable.join(', ')}.`);
+  const missing = (route.ask?.missing ?? []).map((m) => plainMissing(m, chainName));
+  if (missing.length > 0) parts.push(`What would unblock it: ${missing.join('; ')}.`);
+  return parts.join(' ');
 }

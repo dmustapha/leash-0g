@@ -4,6 +4,7 @@ import { privateKeyToAccount } from 'viem/accounts';
 import { LeashChainOps, zeroGChain } from './ops.js';
 import { SessionChain, type RuntimeChain } from '../runtime/session-chain.js';
 import type { ChainOps } from '../server.js';
+import type { GasRouteSurface } from '../runtime/gas.js';
 
 /**
  * AQ-FND M-3 rung-4: the chain primitives the runtime's EIP-7702 bootstrap executor
@@ -633,6 +634,21 @@ export class ChainRegistry {
     const sc = new SessionChain({ rpcUrl: c.rpcUrl, chainId: c.chainId });
     this.sessionCache.set(chainId, sc);
     return sc;
+  }
+
+  /** AQ-FND M-3: the ops relayer's address (public; the key never leaves the registry). */
+  getOpsRelayerAddr(): string {
+    return privateKeyToAccount(this.signing.opsPrivateKey as Hex).address;
+  }
+
+  /** AQ-FND M-3 inc-2: the read-only surface the gas-route survey (owner route) needs. */
+  getGasRouteSurface(): GasRouteSurface {
+    return {
+      has: (chainId) => this.has(chainId),
+      getChainConfig: (chainId) => this.getChainConfig(chainId),
+      getSessionChain: (chainId) => this.getSessionChain(chainId),
+      opsRelayerAddr: this.getOpsRelayerAddr(),
+    };
   }
 
   /**

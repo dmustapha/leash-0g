@@ -125,6 +125,7 @@ import type { Json } from '../crypto/canonical.js';
 import type { ChainOps, RuntimeManager, Settings } from '../server.js';
 import { onboardAgentToChain, OnboardRefusedError, type OnboardChainOps } from '../chain/onboard.js';
 import { UnregisteredChainError } from '../chain/registry.js';
+import { goalTokenOf, loadGasRouteInputs, planAgentGasRoute, type GasRouteSurface } from '../runtime/gas.js';
 import { listChainDeployments, getOwnedAgentIdByDeployment } from '../store/chain-deployments.js';
 import { getAgentByAccountAndChain, countAgentsByOwner } from '../store/agents.js';
 import { getBoundAgent, updateBoundTokenHash } from '../store/bound-agents.js';
@@ -147,6 +148,8 @@ export interface OwnerChainRegistry {
   /** RH2 (two-factory): ops lane for a configured capability factory (default-deny otherwise). */
   getChainOpsForFactory?(chainId: number, factoryV4Addr: string): OnboardChainOps;
   /** SE-8 (carry #2): the grant surface reads the chain's protocol/bridge allowlists. */
+  /** AQ-FND M-3 inc-2: the read-only surface GET /gas-survey needs (absent ⇒ 503). */
+  getGasRouteSurface?(): GasRouteSurface;
   getChainConfig(chainId: number): {
     protocolAllowlist?: readonly string[] | undefined;
     bridgeAllowlist?: readonly string[] | undefined;
@@ -3106,6 +3109,52 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
           createdAt: d.createdAt,
         })),
       ],
+    });
+  }));
+
+  // GET /api/agents/:id/gas-survey - AQ-FND M-3 inc-2. Read-only: what the agent holds on every
+  // chain it is deployed on and the gas route it would take. A chain that cannot be read is
+  // reported `unknown` (never zero) and the endpoint still answers 200.
+  router.get('/api/agents/:id/gas-survey', asyncRoute(async (req: OwnerRequest, res) => {
+    const agent = await requireOwnedAgent(req, res);
+    if (!agent) return;
+    const surface = deps.chainRegistry?.getGasRouteSurface?.();
+    if (!surface || agent.bindMode === 'external' || !agent.accountAddr || !agent.sessionKeyAddr) {
+      res.status(503).json({ error: { message: 'gas_survey_unavailable' } });
+      return;
+    }
+    const inputs = await loadGasRouteInputs({
+      pool: deps.pool,
+      registry: surface,
+      agentId: agent.id,
+      homeChainId: agent.chainId,
+      goalToken: goalTokenOf(agent.goal),
+      globalDustWei: deps.settings.sessionGasDustWei,
+    });
+    const { survey, route } = await planAgentGasRoute({
+      inputs,
+      resolveChain: (chainId) => surface.getSessionChain(chainId),
+      accountAddr: agent.accountAddr,
+      sessionKeyAddr: agent.sessionKeyAddr,
+      opsRelayerAddr: surface.opsRelayerAddr,
+    });
+    res.json({
+      homeChainId: agent.chainId,
+      allowRelayerBootstrap: inputs.allowRelayerBootstrap,
+      chains: survey.views.map((v) => ({
+        chainId: v.chainId,
+        name: surface.getChainConfig(v.chainId).name,
+        status: v.status,
+        sessionNativeWei: v.sessionNativeWei.toString(),
+        accountNativeWei: v.accountNativeWei.toString(),
+        spendableTokens: v.spendableTokens.map((t) => ({ token: t.token, balance: t.balance.toString() })),
+      })),
+      route: {
+        mode: route.mode,
+        reason: route.reason,
+        legs: route.legs.map((l) => ({ kind: l.kind, chainId: l.chainId, requiresGrants: l.requiresGrants })),
+        ...(route.ask ? { ask: route.ask } : {}),
+      },
     });
   }));
 

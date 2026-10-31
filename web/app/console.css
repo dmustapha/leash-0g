@@ -146,7 +146,7 @@
   padding: 2px 8px; border-radius: 4px; color: var(--ink-dim); background: var(--ink-06); white-space: nowrap; }
 .console-view .kind-chip.approval_required { color: var(--ember); background: var(--ember-16); }
 .console-view .kind-chip.limit_hit, .console-view .kind-chip.revoked, .console-view .kind-chip.revoke_failed { color: var(--deny); background: var(--deny-14); }
-.console-view .kind-chip.runtime_error, .console-view .kind-chip.throttle, .console-view .kind-chip.alert_storm, .console-view .kind-chip.delegation_terminal { color: var(--ember); background: var(--ember-16); }
+.console-view .kind-chip.runtime_error, .console-view .kind-chip.throttle, .console-view .kind-chip.alert_storm, .console-view .kind-chip.delegation_terminal, .console-view .kind-chip.gas_request { color: var(--ember); background: var(--ember-16); }
 .console-view .unverified { font-family: var(--font-mono); font-size: 9px; letter-spacing: .1em; text-transform: uppercase;
   color: var(--ink-faint); border: 1px solid var(--border); border-radius: 4px; padding: 2px 6px; }
 .console-view .dot-live { width: 7px; height: 7px; border-radius: var(--r-full); background: var(--accent); display: inline-block; }

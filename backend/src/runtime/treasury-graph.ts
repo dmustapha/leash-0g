@@ -20,8 +20,9 @@ import { appendMemory } from '../store/agent-memory.js';
 import { formatG, shortAddr, inMinutes, sanitizeAgentIntent } from '../util/format.js';
 import type { DecodedLeashError } from '../types.js';
 import type { RuntimeChain } from './session-chain.js';
-import { buildGasRouteConfig, buildGasSnapshot } from './gas.js';
-import { planGas, executeBootstrap, buildAccountNativeRefuel, type BootstrapCall } from '../chain/gas-planner.js';
+import { buildGasRouteConfig, buildRouteChainCfg, describeGasAsk, planAgentGasRoute, type GasRouteInputs } from './gas.js';
+import type { GasRoute } from '../chain/gas-planner.js';
+import { executeBootstrap, buildAccountNativeRefuel, type BootstrapCall } from '../chain/gas-planner.js';
 import type { ChainConfig } from '../chain/registry.js';
 import { loadGrantState } from './grant-state.js';
 import { buildGovernedCall, BRIDGE_SELECTORS, SELECTORS } from '../governed-call/index.js';
@@ -264,6 +265,21 @@ export interface TreasuryGraphDeps {
    * dust default is carried alongside for chains that do not override it.
    */
   gasConfig?: { chainConfig: ChainConfig; globalDustWei: bigint } | undefined;
+  /**
+   * AQ-FND M-3 inc-2: the MULTI-CHAIN gas-route inputs. `load()` re-reads (every cycle) the
+   * chains the agent is deployed on + the owner's relayer opt-in, so a toggle or a new
+   * onboarding takes effect without a restart. Absent (single-chain test setups) ⇒ the route
+   * is planned over the home chain only, from `gasConfig` + `chain`.
+   */
+  gasRoute?:
+    | {
+        opsRelayerAddr: string;
+        resolveChain: (chainId: number) => RuntimeChain;
+        /** human label for a chain id (config name) used in owner-facing ask text */
+        chainName: (chainId: number) => string;
+        load: (homeGoalToken: string | null) => Promise<GasRouteInputs>;
+      }
+    | undefined;
   /**
    * AQ-FND M-3 rung-4: the EIP-7702 bootstrap executor's chain primitives. Mirrors
    * the `bridge` dep — supplied from the manager (where ops access lives). Absent ⇒
@@ -972,11 +988,11 @@ export function buildTreasuryGraph(
    *   1. Spendability (D-1 hinge): the token's V6 asset policy must be ENABLED and the
    *      beneficiary an allowlisted payee for it. If not → ONE owner ask ("set a budget")
    *      and stand down — never a doomed tx. Deduped per token.
-   *   2. Gas ladder (D-4): build the route config + live snapshot and call planGas.
+   *   2. Gas route (D-4): survey every chain the agent is on and call planGasRoute (home target).
    *      has-native → submit the token transfer directly (via the tokenAct node).
    *      bootstrap-7702 → the rung-4 self-funding batch [top-up, repay-in-token] here.
    *      account-native → refuel the key through the wall, then act as has-native.
-   *      ask-owner → ONE gas ask + stand down (deduped per chain).
+   *      swap-to-gas|bridge-then-swap|ask-owner → ONE gas ask + stand down (deduped per chain+mode).
    */
   async function decideTokenAct(state: State, decision: AgentDecision): Promise<Partial<State>> {
     if (state.policy.revoked) return standDownToken('account revoked since sense');
@@ -1007,21 +1023,19 @@ export function buildTreasuryGraph(
       return { decision, route: 'token_act', tokenActToken: token, tokenActAmountWei: amountWei.toString(), tokenActGasRung: 'has-native' };
     }
     const sessionKeyAddr = ctx.agentRow.sessionKeyAddr ?? '';
-    const opsRelayerAddr = deps.bootstrapGas?.opsRelayerAddr ?? '';
-    const cfg = buildGasRouteConfig(deps.gasConfig.chainConfig, deps.gasConfig.globalDustWei);
-    const snap = await buildGasSnapshot({
-      chain: deps.chain,
-      accountAddr: ctx.accountAddr,
-      sessionKeyAddr,
-      token,
-      opsRelayerAddr,
-    });
-    const plan = planGas(cfg, snap);
-    const chainName = String(deps.gasConfig.chainConfig.chainId);
+    const opsRelayerAddr = deps.gasRoute?.opsRelayerAddr ?? deps.bootstrapGas?.opsRelayerAddr ?? '';
+    const gasConfig = deps.gasConfig;
+    const cfg = buildGasRouteConfig(gasConfig.chainConfig, gasConfig.globalDustWei);
+    const route = await planTokenGasRoute(gasConfig, token, sessionKeyAddr, opsRelayerAddr);
+    const chainId = route.targetChainId;
+    const actWith = (rung: string): Partial<State> =>
+      ({ decision, route: 'token_act', tokenActToken: token, tokenActAmountWei: amountWei.toString(), tokenActGasRung: rung });
+    const gasAsk = (reason: string): Promise<Partial<State>> =>
+      askOwnerAndStandDown('gas_request', gasAskSummary(gasConfig, route), `gas_request:${ctx.agentId}:${chainId}:${route.mode}`, reason);
 
-    switch (plan.mode) {
+    switch (route.mode) {
       case 'has-native':
-        return { decision, route: 'token_act', tokenActToken: token, tokenActAmountWei: amountWei.toString(), tokenActGasRung: 'has-native' };
+        return actWith('has-native');
       case 'account-native': {
         // Refuel the key through the governed wall, then act (treated as has-native this cycle).
         try {
@@ -1036,47 +1050,65 @@ export function buildTreasuryGraph(
         } catch (err) {
           return standDownToken(`account-native refuel failed: ${err instanceof Error ? err.message : String(err)}`);
         }
-        return { decision, route: 'token_act', tokenActToken: token, tokenActAmountWei: amountWei.toString(), tokenActGasRung: 'account-native' };
+        return actWith('account-native');
       }
-      case 'bootstrap-7702':
+      case 'bootstrap-7702': {
+        // Reachable ONLY for an owner-opted-in agent (planGasRoute gates it on the opt-in).
         // Rung-4 precondition (D-4): a bootstrap executor whose relayer is an allowlisted
-        // token payee. Without it the relayer cannot be repaid → fall to ask-owner, never
-        // a relayer-fronted tx the agent can't repay.
-        if (!deps.bootstrapGas || !opsRelayerAddr) {
-          return askOwnerAndStandDown(
-            'gas_request',
-            `${ctx.agentRow.name} needs a little native coin on chain ${chainName} to act.`,
-            `gas_request:${ctx.agentId}:${chainName}`,
-            'no bootstrap executor configured — raised one gas ask',
-          );
+        // token payee. Without it the relayer cannot be repaid → ask, never a
+        // relayer-fronted tx the agent can't repay.
+        if (!deps.bootstrapGas || !opsRelayerAddr) return gasAsk('no bootstrap executor configured — raised one gas ask');
+        const relayerPolicy = await deps.chain.getAssetPolicy(ctx.accountAddr, token, [opsRelayerAddr]);
+        if (!relayerPolicy.allowedPayees.includes(opsRelayerAddr.toLowerCase())) {
+          return gasAsk('relayer is not a token payee — cannot repay gas; raised one gas ask (D-4: never sponsored)');
         }
-        if (!(await deps.chain.getAssetPolicy(ctx.accountAddr, token, [opsRelayerAddr])).allowedPayees.includes(opsRelayerAddr.toLowerCase())) {
-          return askOwnerAndStandDown(
-            'gas_request',
-            `${ctx.agentRow.name} needs a little native coin on chain ${chainName} to act.`,
-            `gas_request:${ctx.agentId}:${chainName}`,
-            'relayer is not a token payee — cannot repay gas; raised one gas ask (D-4: never sponsored)',
-          );
-        }
-        return { decision, route: 'token_act', tokenActToken: token, tokenActAmountWei: amountWei.toString(), tokenActGasRung: 'bootstrap-7702' };
+        return actWith('bootstrap-7702');
+      }
       case 'swap-to-gas':
-        // Not available on testnet (no DEX); planGas only returns this when a DEX route
-        // exists, so it is effectively unreachable on 0G Galileo. Treat as ask-owner.
-        return askOwnerAndStandDown(
-          'gas_request',
-          `${ctx.agentRow.name} needs a little native coin on chain ${chainName} to act.`,
-          `gas_request:${ctx.agentId}:${chainName}`,
-          'swap-to-gas not wired in this slice — raised one gas ask',
-        );
+      case 'bridge-then-swap':
+        // Honest ask: the route exists but its executors (Increment 3) are not wired and it
+        // needs owner grants — state the route + grants, never execute.
+        return gasAsk(`${route.mode} route found but not executable yet — raised one gas ask with the required grants`);
       case 'ask-owner':
       default:
-        return askOwnerAndStandDown(
-          'gas_request',
-          `${ctx.agentRow.name} needs a little native coin on chain ${chainName} to act.`,
-          `gas_request:${ctx.agentId}:${chainName}`,
-          `no self-funding gas path (${plan.reason}) — raised one gas ask, never a silent stall`,
-        );
+        return gasAsk(`no self-funding gas path (${route.reason}) — raised one gas ask, never a silent stall`);
     }
+  }
+
+  /** Survey every chain the agent is on and plan the HOME-chain gas route (read-only). */
+  async function planTokenGasRoute(
+    gasConfig: NonNullable<TreasuryGraphDeps['gasConfig']>,
+    token: string,
+    sessionKeyAddr: string,
+    opsRelayerAddr: string,
+  ): Promise<GasRoute> {
+    const { chainConfig, globalDustWei } = gasConfig;
+    const inputs: GasRouteInputs = deps.gasRoute
+      ? await deps.gasRoute.load(token)
+      : {
+          homeChainId: chainConfig.chainId,
+          chainIds: [chainConfig.chainId],
+          cfgByChain: { [chainConfig.chainId]: buildRouteChainCfg(chainConfig, globalDustWei) },
+          tokensByChain: { [chainConfig.chainId]: [token] },
+          allowRelayerBootstrap: ctx.agentRow.allowRelayerBootstrap,
+        };
+    const { route } = await planAgentGasRoute({
+      inputs,
+      resolveChain: deps.gasRoute?.resolveChain ?? (() => deps.chain),
+      accountAddr: ctx.accountAddr,
+      sessionKeyAddr,
+      opsRelayerAddr,
+    });
+    return route;
+  }
+
+  /** The owner-facing, plain-wording summary of a route that cannot run by itself. */
+  function gasAskSummary(gasConfig: NonNullable<TreasuryGraphDeps['gasConfig']>, route: GasRoute): string {
+    return describeGasAsk({
+      agentName: ctx.agentRow.name,
+      route,
+      chainName: (id) => deps.gasRoute?.chainName(id) ?? (id === gasConfig.chainConfig.chainId ? gasConfig.chainConfig.name : `chain ${id}`),
+    });
   }
 
   function standDownToken(reason: string): Partial<State> {
