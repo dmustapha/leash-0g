@@ -118,7 +118,10 @@ const startedAgents: string[] = [];
 // makes tsc validate each mocked member's signature against the real interface, so
 // future drift (e.g. SE-9's added `getChainOps` destination cross-check) fails the
 // build instead of surfacing only as a runtime "is not a function" at test time.
-type FakeChainRegistry = Pick<ChainRegistry, 'has' | 'getChainConfig' | 'getChainOps' | 'assertSameAddress'>;
+type FakeChainRegistry = Pick<
+  ChainRegistry,
+  'has' | 'getChainConfig' | 'getChainOps' | 'assertSameAddress' | 'getBootstrapGas' | 'getOpsRelayerAddr' | 'getSessionChain'
+>;
 
 function fakeRegistry(): ChainRegistry {
   const fake: FakeChainRegistry = {
@@ -138,6 +141,12 @@ function fakeRegistry(): ChainRegistry {
     // chain id — the fake ops lane reports its own id so the happy path passes.
     getChainOps: (id: number) => ({ getChainId: async () => id }) as unknown as LeashChainOps,
     assertSameAddress: sameAddressMock,
+    // AQ-FND M-3: `gasDeps()` (every cycle) asks the registry for the 7702 bootstrap primitives
+    // and the multi-chain gas-route surface. This bridge lane has no GasRepayDelegate, so the
+    // bootstrap is unavailable (null) and the route resolver is the same fake chain.
+    getBootstrapGas: () => null,
+    getOpsRelayerAddr: () => '0x00000000000000000000000000000000000000a5',
+    getSessionChain: () => fakeChain,
   };
   return fake as ChainRegistry;
 }
