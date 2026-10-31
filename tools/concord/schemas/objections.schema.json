@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["objections"],
+  "additionalProperties": false,
+  "properties": {
+    "objections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "type", "claim", "evidence_demand", "status"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "type": { "enum": ["SECURITY", "REGRESSION", "CONTRACT", "SCOPE"] },
+          "claim": { "type": "string", "minLength": 10 },
+          "evidence_demand": {
+            "type": "object",
+            "required": ["stage", "check", "expect"],
+            "properties": {
+              "stage": { "enum": ["verify", "secure", "release", "monitor"] },
+              "check": { "type": "string" },
+              "expect": { "type": "string" }
+            }
+          },
+          "status": { "enum": ["open", "resolved", "withdrawn"] },
+          "resolution_ref": { "type": "string" }
+        }
+      }
+    }
+  }
+}

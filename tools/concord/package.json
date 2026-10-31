@@ -1,0 +1,26 @@
+{
+  "name": "@leash/concord",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "concord": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:live": "vitest run test/*.live.ts",
+    "verify-claims": "tsx scripts/verify-claims.ts"
+  },
+  "dependencies": {
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^3.2.7"
+  }
+}
