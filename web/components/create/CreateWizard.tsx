@@ -10,6 +10,7 @@ import { isAddress, type Address } from 'viem';
 import { ApiError } from '@/lib/api';
 import { config } from '@/lib/config';
 import { isValidOgAmount, ogToWei, weiToOg } from '@/lib/format';
+import { nativeSymbol } from '@/lib/networks';
 import type { AgentGoal, CreateAgentResponse, Hex, JobSpecSummary, NetworkChain, PolicyInput, TokenConfigInput } from '@/lib/types';
 import { Disclosure } from '@/components/ui/Disclosure';
 import { Field } from '@/components/ui/Field';
@@ -296,6 +297,7 @@ export function CreateWizard({ onCreate, checkSigning, signingDegraded, walletRe
   // SE-7: the chain to mint on. Defaults to the home 0G chain; the picker appears only
   // when the networks table carries more than the home chain.
   const [chainId, setChainId] = useState<number>(seed?.chainId ?? config.chainId);
+  const coin = nativeSymbol(chainId);
   // RH2: opt-in to the price-band wall when the selected chain advertises `oracleBand`.
   // A prefill carrying the band capability seeds the checkbox on; the chainSupportsBand
   // guard still gates whether it reaches the POST.
@@ -853,7 +855,7 @@ export function CreateWizard({ onCreate, checkSigning, signingDegraded, walletRe
                   value={targetBalance}
                   onChange={(e) => setTargetBalance(e.target.value)}
                   inputMode="decimal"
-                  suffix="0G"
+                  suffix={coin}
                 />
                 <Field
                   id="goal-topup"
@@ -861,7 +863,7 @@ export function CreateWizard({ onCreate, checkSigning, signingDegraded, walletRe
                   value={topUp}
                   onChange={(e) => setTopUp(e.target.value)}
                   inputMode="decimal"
-                  suffix="0G"
+                  suffix={coin}
                 />
               </>
             ) : role === 'executor' ? (
@@ -1113,10 +1115,10 @@ export function CreateWizard({ onCreate, checkSigning, signingDegraded, walletRe
               value={perTransfer}
               onChange={(e) => setPerTransfer(e.target.value)}
               inputMode="decimal"
-              suffix="0G"
+              suffix={coin}
             />
             <Disclosure label="How is this enforced?">
-              This limit lives in a smart contract on the 0G blockchain (the per-transfer cap in your
+              This limit lives in a smart contract on the {selectedChain?.name ?? '0G'} blockchain (the per-transfer cap in your
               agent&apos;s LeashAccount). The agent&apos;s key physically cannot sign a bigger payment; the
               chain rejects it.
             </Disclosure>
@@ -1137,7 +1139,7 @@ export function CreateWizard({ onCreate, checkSigning, signingDegraded, walletRe
               value={windowAmount}
               onChange={(e) => setWindowAmount(e.target.value)}
               inputMode="decimal"
-              suffix="0G"
+              suffix={coin}
             />
             <Field
               id="window-hours"
@@ -1228,8 +1230,8 @@ export function CreateWizard({ onCreate, checkSigning, signingDegraded, walletRe
               ...(isTopUpRole(role)
                 ? [
                     [role === 'sentinel' ? 'Watches' : 'Keeps topped up', beneficiary],
-                    ['Keep them at', `${targetBalance} 0G`],
-                    [role === 'sentinel' ? 'Asks for, per top-up' : 'Per top-up', `${topUp} 0G max`],
+                    ['Keep them at', `${targetBalance} ${coin}`],
+                    [role === 'sentinel' ? 'Asks for, per top-up' : 'Per top-up', `${topUp} ${coin} max`],
                   ]
                 : []),
               // FR3 trader rows
@@ -1265,8 +1267,8 @@ export function CreateWizard({ onCreate, checkSigning, signingDegraded, walletRe
                   : isJobRole(role)
                   ? [['Moves native funds', role === 'requester' ? 'no — settles ERC-20 only' : 'no — spend-incapable']]
                   : [
-                      ['Per payment', `${weiToOg(input?.policy.perTransferCapWei ?? '0')} 0G max`],
-                      ['Budget', `${weiToOg(input?.policy.windowCapWei ?? '0')} 0G every ${windowHours} hours`],
+                      ['Per payment', `${weiToOg(input?.policy.perTransferCapWei ?? '0')} ${coin} max`],
+                      ['Budget', `${weiToOg(input?.policy.windowCapWei ?? '0')} ${coin} every ${windowHours} hours`],
                       ['Can pay', payee],
                     ]),
               ...(capabilityLabel.trim() ? [['What it’s for', capabilityLabel.trim()]] : []),
@@ -1285,8 +1287,8 @@ export function CreateWizard({ onCreate, checkSigning, signingDegraded, walletRe
           </Disclosure>
           {topUpExceedsCap ? (
             <p role="alert" data-testid="goal-cap-error" style={{ color: 'var(--deny)', fontSize: '0.85rem' }}>
-              The per-top-up amount ({topUp} 0G) is higher than the per-payment limit ({perTransfer}{' '}
-              0G), so a top-up could never go through. Lower the top-up or raise the per-payment
+              The per-top-up amount ({topUp} {coin}) is higher than the per-payment limit ({perTransfer}{' '}
+              {coin}), so a top-up could never go through. Lower the top-up or raise the per-payment
               limit.
             </p>
           ) : null}
@@ -1443,7 +1445,7 @@ export function CreateWizard({ onCreate, checkSigning, signingDegraded, walletRe
             <section aria-label="Fund your agent" className="panel" style={{ padding: '0.9rem 1rem', display: 'grid', gap: '0.7rem' }}>
               <h2 style={{ fontSize: '1rem' }}>Fund your agent</h2>
               <p style={{ color: 'var(--ink-dim)', fontSize: '0.88rem', margin: 0 }}>
-                The agent pays from its own on-chain account, which starts empty. Send some 0G so
+                The agent pays from its own on-chain account, which starts empty. Send some {coin} so
                 it can actually pay when the time comes.
               </p>
               <FundPanel
