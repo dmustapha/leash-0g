@@ -180,8 +180,6 @@ export interface AgentRow {
    * authority, governed only at the SF-1/SF-3 gateway egress boundary).
    */
   bindMode: 'external' | null;
-  /** AQ-FND M-3: owner opt-in for the LEASH-ops relayer gas bootstrap. Default false. */
-  allowRelayerBootstrap: boolean;
   createdAt: string;
 }
 

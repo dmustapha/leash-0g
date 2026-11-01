@@ -212,8 +212,6 @@ export type AgentDetail = {
      *  detail payloads → the owner-write path falls back to V4 (byte-identical for the
      *  shared call-rule/band/spend fragments). */
     accountVersion?: number;
-    /** AQ-FND M-3: owner opt-in — LEASH-ops may front gas (repaid in the agent's token). Default off. */
-    allowRelayerBootstrap?: boolean;
   };
 };
 
@@ -769,15 +767,14 @@ export type GasSurveyChain = {
 };
 
 export type GasSurveyRoute = {
-  mode: 'has-native' | 'account-native' | 'swap-to-gas' | 'bridge-then-swap' | 'bootstrap-7702' | 'ask-owner';
+  mode: 'has-native' | 'account-native' | 'swap-to-gas' | 'bridge-then-swap' | 'ask-owner';
   reason: string;
-  legs: Array<{ kind: 'refuel' | 'swap' | 'bridge' | 'bootstrap'; chainId: number; requiresGrants: string[] }>;
+  legs: Array<{ kind: 'refuel' | 'swap' | 'bridge'; chainId: number; requiresGrants: string[] }>;
   ask?: { surveyedChains: number[]; unknownChains: number[]; missing: string[] };
 };
 
 export type GasSurveyView = {
   homeChainId: number;
-  allowRelayerBootstrap: boolean;
   chains: GasSurveyChain[];
   route: GasSurveyRoute;
 };

@@ -57,7 +57,6 @@ const envSchema = z.object({
   // AQ-FND: the V6 singleton set (deterministic via the 0x4e59 std proxy, same addr everywhere).
   LEASH_POLICY_HELPER_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
   LEASH_ENVELOPE_MODULE_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
-  LEASH_GAS_REPAY_DELEGATE_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
   PORT: z.coerce.number().int().positive().default(8080),
   HOST: z.string().min(1).default('127.0.0.1'), // M-01 dev bind; Render sets 0.0.0.0
   // M-01: the gateway listens on its OWN server, always bound to 127.0.0.1 —
@@ -360,11 +359,10 @@ const extraChainSchema = z.object({
   create2DeployerAddr: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
   signingHelperAddr: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
   decodeHelperAddr: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
-  // AQ-FND: per-chain V6 singletons (PolicyLib + EnvelopeModule + GasRepayDelegate).
+  // AQ-FND: per-chain V6 singletons (PolicyLib + EnvelopeModule).
   // Unset ⇒ inherit the global LEASH_* defaults. A V6 create missing any default-denies.
   policyHelperAddr: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
   envelopeModuleAddr: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
-  gasRepayDelegateAddr: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
   protocolAllowlist: z.array(z.string().regex(/^0x[0-9a-fA-F]{40}$/)).optional(),
   bridgeAllowlist: z.string().optional(), // "addr:destChainId" comma-list (same grammar as the per-chain vars)
   canonical: z
@@ -410,7 +408,6 @@ interface V5Singletons {
   // AQ-FND V6 additions (optional — a chain without them refuses V6 creates, V5 unaffected)
   policyHelperAddr?: string;
   envelopeModuleAddr?: string;
-  gasRepayDelegateAddr?: string;
 }
 
 function globalV5Singletons(cfg: Config): V5Singletons {
@@ -420,7 +417,6 @@ function globalV5Singletons(cfg: Config): V5Singletons {
     ...(cfg.LEASH_DECODE_HELPER_ADDR ? { decodeHelperAddr: cfg.LEASH_DECODE_HELPER_ADDR.toLowerCase() } : {}),
     ...(cfg.LEASH_POLICY_HELPER_ADDR ? { policyHelperAddr: cfg.LEASH_POLICY_HELPER_ADDR.toLowerCase() } : {}),
     ...(cfg.LEASH_ENVELOPE_MODULE_ADDR ? { envelopeModuleAddr: cfg.LEASH_ENVELOPE_MODULE_ADDR.toLowerCase() } : {}),
-    ...(cfg.LEASH_GAS_REPAY_DELEGATE_ADDR ? { gasRepayDelegateAddr: cfg.LEASH_GAS_REPAY_DELEGATE_ADDR.toLowerCase() } : {}),
   };
 }
 

@@ -359,11 +359,7 @@ export function makeApi(getToken: TokenGetter) {
     // The agent's per-chain presence: home chain + onboarded chains, one address everywhere.
     getAgentNetworks: (agentId: string) =>
       request<AgentNetworksView>(getToken, 'GET', `/api/agents/${agentId}/networks`),
-    // AQ-FND M-3: owner opt-in for the relayer gas bootstrap (default off) + the read-only survey.
-    setGasPolicy: (agentId: string, allowRelayerBootstrap: boolean) =>
-      request<{ ok: true; allowRelayerBootstrap: boolean }>(getToken, 'PATCH', `/api/agents/${agentId}/gas-policy`, {
-        allowRelayerBootstrap,
-      }),
+    // AQ-FND M-3: the read-only gas survey.
     getGasSurvey: (agentId: string) =>
       request<GasSurveyView>(getToken, 'GET', `/api/agents/${agentId}/gas-survey`),
     // Onboard the agent's account onto another registered network (byte-exact tuple replay).

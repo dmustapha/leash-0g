@@ -9,7 +9,6 @@ import { generateGatewayToken, hashTokenSecret } from '../../src/crypto/token.js
 import { encryptSecret } from '../../src/crypto/keycrypt.js';
 import { listTraces } from '../../src/trace/trace-store.js';
 import { listAlerts } from '../../src/alerts/store.js';
-import { setAllowRelayerBootstrap } from '../../src/store/agents.js';
 import { LeashRuntimeManager } from '../../src/runtime/manager.js';
 import type { ChainConfig, ChainRegistry } from '../../src/chain/registry.js';
 import type { RuntimeChain } from '../../src/runtime/session-chain.js';
@@ -19,8 +18,7 @@ import type { PolicyView } from '../../src/types.js';
 /**
  * AQ-FND M-3 inc-2 — the planner is wired into the act loop. A zero-native session key with a
  * spendable token:
- *  - opt-in FALSE (the default) ⇒ exactly ONE specific `gas_request`, NO transaction, relayer idle;
- *  - opt-in TRUE  ⇒ the rung-4 relayer bootstrap runs (repaid in token);
+ *  - no self-funding route ⇒ exactly ONE specific `gas_request`, NO transaction (LEASH never fronts gas);
  *  - funded key   ⇒ plain token transfer, no alert (unchanged behaviour);
  *  - a second cycle does not raise a duplicate ask.
  */
@@ -29,8 +27,6 @@ const HOME = 16602;
 const OWNER = '0x' + '4b'.repeat(20);
 const BENEFICIARY = '0x' + '9c'.repeat(20);
 const TOKEN = '0x' + 'ec'.repeat(20);
-const OPS = '0x' + '0f'.repeat(20);
-const DELEGATE = '0x' + 'de'.repeat(20);
 const SESSION_PK = '0x' + '6d'.repeat(32);
 const SESSION_ADDR = '0x' + 'cb'.repeat(20);
 const CAP = 10n ** 16n;
@@ -42,7 +38,6 @@ const HOME_CONFIG: ChainConfig = {
   registryAddr: '0x' + '00'.repeat(20),
   accountVersion: 6,
   gasFloorWei: 2_000_000_000n,
-  gasRepayDelegateAddr: DELEGATE,
 };
 
 class FakeRuntimeChain implements RuntimeChain {
@@ -50,8 +45,8 @@ class FakeRuntimeChain implements RuntimeChain {
   public tokenTransfers: Array<{ token: string; to: string; amountWei: bigint }> = [];
   public executeCalls = 0;
   public tokenEnabled = true;
-  /** lowercased payees allowlisted for TOKEN (beneficiary + the ops relayer). */
-  public tokenPayees: string[] = [BENEFICIARY.toLowerCase(), OPS.toLowerCase()];
+  /** lowercased payees allowlisted for TOKEN. */
+  public tokenPayees: string[] = [BENEFICIARY.toLowerCase()];
   public accountAddr = '';
   /** the ACCOUNT's balance in TOKEN (what the agent can spend / repay with). */
   public accountTokenBalance = 10n ** 18n;
@@ -108,39 +103,7 @@ class FakeRuntimeChain implements RuntimeChain {
   }
 }
 
-/** The rung-4 executor's chain primitives, recorded so a test can prove the relayer fired. */
-interface RelayerSpy {
-  submitted: Array<{ to: string | undefined; type: string | undefined; hasAuthorization: boolean }>;
-}
-
-function fakeBootstrap(spy: RelayerSpy) {
-  const opsWallet = {
-    account: { address: OPS },
-    chain: undefined,
-    async sendTransaction(tx: { to?: string; type?: string; authorizationList?: unknown[] }) {
-      spy.submitted.push({ to: tx.to, type: tx.type, hasAuthorization: (tx.authorizationList?.length ?? 0) > 0 });
-      return '0x' + 'ab'.repeat(32);
-    },
-  };
-  const sessionWallet = {
-    account: { address: SESSION_ADDR },
-    async signAuthorization() {
-      return { chainId: HOME, address: DELEGATE, nonce: 0, r: '0x01', s: '0x02', yParity: 0 };
-    },
-    async signMessage() {
-      return '0x' + '11'.repeat(65);
-    },
-  };
-  return {
-    publicClient: { getChainId: async () => HOME },
-    opsWallet,
-    opsRelayerAddr: OPS,
-    delegate: DELEGATE,
-    buildSessionWallet: () => sessionWallet,
-  };
-}
-
-type FakeRegistry = Pick<ChainRegistry, 'has' | 'getChainConfig' | 'getBootstrapGas' | 'getSessionChain' | 'getOpsRelayerAddr'>;
+type FakeRegistry = Pick<ChainRegistry, 'has' | 'getChainConfig' | 'getSessionChain'>;
 
 let db: TestDb;
 let t: TestApp;
@@ -148,7 +111,6 @@ let server: Server;
 let gatewayUrl: string;
 let checkpointer: PostgresSaver;
 let fakeChain: FakeRuntimeChain;
-let relayer: RelayerSpy;
 let manager: LeashRuntimeManager;
 const startedAgents: string[] = [];
 
@@ -168,13 +130,10 @@ beforeAll(async () => {
 
 beforeEach(() => {
   fakeChain = new FakeRuntimeChain();
-  relayer = { submitted: [] };
   const registry: FakeRegistry = {
     has: (id) => id === HOME,
     getChainConfig: () => HOME_CONFIG,
-    getBootstrapGas: () => fakeBootstrap(relayer) as unknown as ReturnType<ChainRegistry['getBootstrapGas']>,
     getSessionChain: () => fakeChain,
-    getOpsRelayerAddr: () => OPS,
   };
   manager = new LeashRuntimeManager({
     pool: db.pool,
@@ -205,7 +164,7 @@ afterAll(async () => {
   await db.drop();
 });
 
-async function seedGasAgent(opts: { sessionNative: bigint; optIn: boolean }): Promise<string> {
+async function seedGasAgent(opts: { sessionNative: bigint }): Promise<string> {
   const gen = generateGatewayToken();
   const account = `0x${randomBytes(20).toString('hex')}`;
   fakeChain.accountAddr = account;
@@ -227,7 +186,6 @@ async function seedGasAgent(opts: { sessionNative: bigint; optIn: boolean }): Pr
       model: 'test-model',
     },
   });
-  if (opts.optIn) await setAllowRelayerBootstrap(db.pool, id, true);
   return id;
 }
 
@@ -261,11 +219,10 @@ async function runOneCycle(id: string, expectedDecisions: number): Promise<void>
 }
 
 describe('AQ-FND M-3 inc-2 — gas route wired into the act loop', () => {
-  it('(a) zero native + opt-in FALSE ⇒ exactly ONE specific gas_request, no tx, relayer never fires', async () => {
-    const id = await seedGasAgent({ sessionNative: 0n, optIn: false });
+  it('(a) zero native, no self-funding route ⇒ exactly ONE specific gas_request, no tx', async () => {
+    const id = await seedGasAgent({ sessionNative: 0n });
     await runOneCycle(id, 1);
 
-    expect(relayer.submitted).toHaveLength(0); // the relayer is NOT the default
     expect(fakeChain.tokenTransfers).toHaveLength(0);
     expect(fakeChain.executeCalls).toBe(0);
     const { alerts } = await listAlerts(db.pool, OWNER, { kind: 'gas_request', agentId: id });
@@ -273,35 +230,23 @@ describe('AQ-FND M-3 inc-2 — gas route wired into the act loop', () => {
     const alert = alerts[0]!;
     expect(alert.dedupKey).toBe(`gas_request:${id}:${HOME}:ask-owner`);
     expect(alert.summary).toContain('0G Galileo');
-    expect(alert.summary).toContain('owner opt-in for relayer bootstrap');
+    expect(alert.summary).not.toMatch(/relayer|opt-in/i);
     expect(alert.summary).not.toMatch(/\d+ wei/);
   });
 
-  it('(b) zero native + opt-in TRUE ⇒ the rung-4 relayer bootstrap is invoked, no alert', async () => {
-    const id = await seedGasAgent({ sessionNative: 0n, optIn: true });
-    await runOneCycle(id, 1);
-    await waitFor(() => relayer.submitted.length > 0);
-
-    expect(relayer.submitted[0]).toMatchObject({ to: SESSION_ADDR, type: 'eip7702', hasAuthorization: true });
-    expect(fakeChain.tokenTransfers).toHaveLength(0); // the top-up rides inside the relayed batch
-    const { alerts } = await listAlerts(db.pool, OWNER, { kind: 'gas_request', agentId: id });
-    expect(alerts).toHaveLength(0);
-  });
-
-  it('(c) funded session key ⇒ plain token transfer, no alert, relayer idle', async () => {
-    const id = await seedGasAgent({ sessionNative: 10n ** 16n, optIn: false });
+  it('(c) funded session key ⇒ plain token transfer, no alert', async () => {
+    const id = await seedGasAgent({ sessionNative: 10n ** 16n });
     await runOneCycle(id, 1);
     await waitFor(() => fakeChain.tokenTransfers.length > 0);
 
     expect(fakeChain.tokenTransfers).toHaveLength(1);
     expect(fakeChain.tokenTransfers[0]!.to.toLowerCase()).toBe(BENEFICIARY.toLowerCase());
-    expect(relayer.submitted).toHaveLength(0);
     const { alerts } = await listAlerts(db.pool, OWNER, { kind: 'gas_request', agentId: id });
     expect(alerts).toHaveLength(0);
   });
 
   it('(d) a second cycle does not raise a duplicate ask', async () => {
-    const id = await seedGasAgent({ sessionNative: 0n, optIn: false });
+    const id = await seedGasAgent({ sessionNative: 0n });
     await runOneCycle(id, 1);
     mockSend();
     manager.nudge(id);
@@ -310,19 +255,5 @@ describe('AQ-FND M-3 inc-2 — gas route wired into the act loop', () => {
 
     const { alerts } = await listAlerts(db.pool, OWNER, { kind: 'gas_request', agentId: id });
     expect(alerts).toHaveLength(1);
-    expect(relayer.submitted).toHaveLength(0);
-  });
-
-  it('an owner opt-in flipped while the agent runs takes effect on the next cycle (no restart)', async () => {
-    const id = await seedGasAgent({ sessionNative: 0n, optIn: false });
-    await runOneCycle(id, 1);
-    expect(relayer.submitted).toHaveLength(0);
-
-    await setAllowRelayerBootstrap(db.pool, id, true);
-    mockSend();
-    manager.nudge(id);
-    await waitFor(() => relayer.submitted.length > 0);
-    await manager.settle(id);
-    expect(relayer.submitted[0]).toMatchObject({ type: 'eip7702' });
   });
 });

@@ -54,7 +54,6 @@ export interface LeashChainOptions {
   /** AQ-FND V6 singletons (a chain missing either refuses accountVersion:6 creates). */
   policyHelperAddr?: string;
   envelopeModuleAddr?: string;
-  gasRepayDelegateAddr?: string;
   /** Stage F′ (RULING-B): canonical SigningLib singleton baked into V5 initcode + read-back-asserted. */
   signingHelperAddr?: string;
   /** Stage F′ (RULING-B): canonical DecodeLib singleton baked into V5 initcode + read-back-asserted. */

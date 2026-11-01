@@ -1,7 +1,7 @@
 /**
  * AQ-FND M-3 — the runtime gas adapters (buildGasRouteConfig / buildGasSnapshot) feeding
  * the ratified planGas ladder. Pins the 0G-Galileo shape (no DEX, delegate set, zero
- * native): holding a spendable token → bootstrap-7702; no spendable token → ask-owner.
+ * native): a token with no DEX route → ask-owner (there is no relayer rung).
  */
 import { describe, it, expect } from 'vitest';
 import { buildGasRouteConfig, buildGasSnapshot, buildRouteChainCfg, buildGasSurvey, describeGasAsk } from '../../src/runtime/gas.js';
@@ -9,7 +9,6 @@ import { planGas, planGasRoute } from '../../src/chain/gas-planner.js';
 import type { ChainConfig } from '../../src/chain/registry.js';
 import type { RuntimeChain } from '../../src/runtime/session-chain.js';
 
-const DELEGATE = '0xBcfA2994636D73Ea21625f83422a08B45e8c88C6';
 const TOKEN = '0xec0259bc14580e81cfe87c0bdc39ca6b0bd97526';
 const ACCOUNT = '0xe55296662581971d8cd7e26fc214b4a68d2c83ca';
 const SESSION = '0xcb2a000000000000000000000000000000000001';
@@ -24,7 +23,6 @@ const GALILEO: ChainConfig = {
   registryAddr: '0x' + '00'.repeat(20),
   accountVersion: 6,
   gasFloorWei: 2_000_000_000n,
-  gasRepayDelegateAddr: DELEGATE,
 };
 
 /** A minimal chain fake: configurable balances + per-token policy/payees. */
@@ -62,7 +60,6 @@ describe('buildGasRouteConfig — the 0G Galileo route shape', () => {
   it('no canonical router ⇒ dexRouteAvailable false (rung-3 off)', () => {
     const cfg = buildGasRouteConfig(GALILEO, GLOBAL_DUST);
     expect(cfg.dexRouteAvailable).toBe(false);
-    expect(cfg.gasRepayDelegate).toBe(DELEGATE);
     expect(cfg.gasFloorWei).toBe(GALILEO.gasFloorWei);
     expect(cfg.refuelWei).toBe(GLOBAL_DUST);
   });
@@ -79,13 +76,13 @@ describe('buildGasRouteConfig — the 0G Galileo route shape', () => {
 describe('buildGasSnapshot + planGas — the Galileo ladder outcome', () => {
   async function plan(chain: RuntimeChain, token: string | null) {
     const cfg = buildGasRouteConfig(GALILEO, GLOBAL_DUST);
-    const snap = await buildGasSnapshot({ chain, accountAddr: ACCOUNT, sessionKeyAddr: SESSION, token, opsRelayerAddr: OPS });
+    const snap = await buildGasSnapshot({ chain, accountAddr: ACCOUNT, sessionKeyAddr: SESSION, token });
     return planGas(cfg, snap);
   }
 
-  it('zero native, holds a SPENDABLE token (enabled + relayer payee) ⇒ bootstrap-7702', async () => {
+  it('zero native, holds a SPENDABLE token, no DEX on Galileo ⇒ ask-owner (no relayer rung)', async () => {
     const chain = fakeChain({ tokenBalance: 10n ** 18n, tokenEnabled: true, tokenPayees: [OPS] });
-    expect((await plan(chain, TOKEN)).mode).toBe('bootstrap-7702');
+    expect((await plan(chain, TOKEN)).mode).toBe('ask-owner');
   });
 
   it('zero native, NO token goal (native cycle) ⇒ ask-owner', async () => {
@@ -98,15 +95,10 @@ describe('buildGasSnapshot + planGas — the Galileo ladder outcome', () => {
     expect((await plan(chain, TOKEN)).mode).toBe('ask-owner');
   });
 
-  it('holds the token, enabled, but relayer NOT a payee ⇒ cannot repay ⇒ ask-owner (D-4)', async () => {
+  it('an enabled token is spendable regardless of any relayer payee (no relayer concept)', async () => {
     const chain = fakeChain({ tokenBalance: 10n ** 18n, tokenEnabled: true, tokenPayees: [] });
-    expect((await plan(chain, TOKEN)).mode).toBe('ask-owner');
-  });
-
-  it('enabled token, relayer NOT a payee ⇒ still SPENDABLE (swap route) but repayable=false', async () => {
-    const chain = fakeChain({ tokenBalance: 10n ** 18n, tokenEnabled: true, tokenPayees: [] });
-    const snap = await buildGasSnapshot({ chain, accountAddr: ACCOUNT, sessionKeyAddr: SESSION, token: TOKEN, opsRelayerAddr: OPS });
-    expect(snap.spendableTokens).toEqual([{ token: TOKEN.toLowerCase(), balance: 10n ** 18n, repayable: false }]);
+    const snap = await buildGasSnapshot({ chain, accountAddr: ACCOUNT, sessionKeyAddr: SESSION, token: TOKEN });
+    expect(snap.spendableTokens).toEqual([{ token: TOKEN.toLowerCase(), balance: 10n ** 18n }]);
   });
 
   it('session key already funded ⇒ has-native (ladder short-circuits)', async () => {
@@ -129,7 +121,7 @@ describe('buildGasSnapshot + planGas — the Galileo ladder outcome', () => {
       },
     } as unknown as RuntimeChain;
     const cfg = buildGasRouteConfig(GALILEO, GLOBAL_DUST);
-    const snap = await buildGasSnapshot({ chain, accountAddr: ACCOUNT, sessionKeyAddr: SESSION, token: TOKEN, opsRelayerAddr: OPS });
+    const snap = await buildGasSnapshot({ chain, accountAddr: ACCOUNT, sessionKeyAddr: SESSION, token: TOKEN });
     expect(snap.spendableTokens).toHaveLength(0);
     expect(snap.sessionKeyNativeAllowlisted).toBe(false);
     expect(planGas(cfg, snap).mode).toBe('ask-owner');
@@ -140,7 +132,6 @@ describe('buildRouteChainCfg — AQ-FND M-3 inc-2 route config', () => {
   it('extends the route config with chainId, leg-gas estimates and (no router) no DEX pairs', () => {
     const cfg = buildRouteChainCfg(GALILEO, GLOBAL_DUST);
     expect(cfg.chainId).toBe(16602);
-    expect(cfg.gasRepayDelegate).toBe(DELEGATE);
     // floor (2 gwei) is above the 1 gwei minimum ⇒ price = floor; estimates = units × price
     // 3 swap-side txs (approve + exactInputSingle + withdraw) => 400k units (inc-3a; was 250k for 1 swap)
     expect(cfg.swapLegGasWei).toBe(400_000n * 2_000_000_000n);
@@ -174,7 +165,6 @@ describe('buildRouteChainCfg — inc-3a swap-to-gas executor constants', () => {
     chainId: 84532,
     name: 'Base Sepolia',
     gasFloorWei: 0n,
-    gasRepayDelegateAddr: undefined,
     canonical: { router: ROUTER, settlementToken: USDC },
     gasSwap: { wrappedNative: WETH, dexFeeTier: 3000, tokenAmount: 5_000_000n },
   };
@@ -220,7 +210,7 @@ describe('buildRouteChainCfg — inc-3a swap-to-gas executor constants', () => {
         ],
       },
       84532,
-      { allowRelayerBootstrap: false },
+      {},
     );
     expect(route.mode).toBe('swap-to-gas');
     expect(route.legs.map((l) => l.kind)).toEqual(['swap', 'refuel']);
@@ -241,7 +231,6 @@ describe('buildGasSurvey — multi-chain, fail-closed per chain', () => {
       chainIds,
       accountAddr: ACCOUNT,
       sessionKeyAddr: SESSION,
-      opsRelayerAddr: OPS,
       tokensByChain,
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     });
@@ -257,7 +246,7 @@ describe('buildGasSurvey — multi-chain, fail-closed per chain', () => {
     const out = await survey((id) => (id === 1 ? funded : empty), [1, 2], { 1: [TOKEN] });
     const [a, b] = out.views;
     expect(a).toMatchObject({ chainId: 1, status: 'ok', sessionNativeWei: 5n, accountNativeWei: 7n });
-    expect(a!.spendableTokens).toEqual([{ token: TOKEN, balance: 9n, repayable: true }]);
+    expect(a!.spendableTokens).toEqual([{ token: TOKEN, balance: 9n }]);
     expect(b).toMatchObject({ chainId: 2, status: 'ok', sessionNativeWei: 0n });
     expect(b!.spendableTokens).toEqual([]);
   });
@@ -302,7 +291,7 @@ describe('buildGasSurvey — multi-chain, fail-closed per chain', () => {
 
   it('an unknown chain is excluded from routing: the planner never treats it as zero', async () => {
     const out = await survey(() => rejecting, [16602]);
-    const route = planGasRoute({ 16602: buildRouteChainCfg(GALILEO, GLOBAL_DUST) }, out, 16602, { allowRelayerBootstrap: true });
+    const route = planGasRoute({ 16602: buildRouteChainCfg(GALILEO, GLOBAL_DUST) }, out, 16602, {});
     expect(route.mode).toBe('ask-owner');
     expect(route.ask?.unknownChains).toEqual([16602]);
   });
@@ -323,15 +312,14 @@ describe('describeGasAsk — plain wording, no raw wei', () => {
       chainIds: [16602, 84532],
       accountAddr: ACCOUNT,
       sessionKeyAddr: SESSION,
-      opsRelayerAddr: OPS,
       tokensByChain: {},
     });
-    const route = planGasRoute({ 16602: buildRouteChainCfg(GALILEO, GLOBAL_DUST) }, out, 16602, { allowRelayerBootstrap: false });
+    const route = planGasRoute({ 16602: buildRouteChainCfg(GALILEO, GLOBAL_DUST) }, out, 16602, {});
     const text = describeGasAsk({ agentName: 'Treasury', route, chainName });
     expect(text).toContain('Treasury needs a little gas on 0G Galileo');
     expect(text).toContain('Checked: 0G Galileo');
     expect(text).toContain('Could not read: Base Sepolia');
-    expect(text).toContain('owner opt-in for relayer bootstrap');
+    expect(text).not.toMatch(/relayer|opt-in/i);
     expect(text).not.toMatch(/\d+ wei/);
     expect(text).not.toContain('chain 16602');
   });

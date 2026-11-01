@@ -25,8 +25,6 @@ function planSentence(route: GasSurveyRoute, homeName: string): string {
       return `The agent could swap some of its tokens for gas on ${homeName}. That needs your approval first.`;
     case 'bridge-then-swap':
       return `The agent could bring tokens over from another network and swap them for gas on ${homeName}. That needs your approval first.`;
-    case 'bootstrap-7702':
-      return `LEASH's relayer will front the gas on ${homeName} (you allowed this) and be repaid from the agent's tokens. This is not self-funding.`;
     case 'ask-owner':
       return `The agent has no way to pay for gas itself on ${homeName}. If it needs gas it will ask you, once.`;
   }

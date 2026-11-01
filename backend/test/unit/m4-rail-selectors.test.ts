@@ -256,14 +256,8 @@ describe('G-9 planDestGas — the ladder → DestGasPlan mapping (route enterabi
       planDestGas({ ...cfg, dexRouteAvailable: true }, snap({ spendableTokens: [{ token: USDC as `0x${string}`, balance: 9n }] }), 16602),
     ).toEqual({ destChainId: 16602, fundedWei: '500', source: 'refuel' });
   });
-  it('bootstrap-7702 → paymaster', () => {
-    expect(
-      planDestGas(
-        { ...cfg, gasRepayDelegate: ('0x' + 'ab'.repeat(20)) as `0x${string}` },
-        snap({ spendableTokens: [{ token: USDC as `0x${string}`, balance: 9n }] }),
-        16602,
-      ),
-    ).toEqual({ destChainId: 16602, fundedWei: '500', source: 'paymaster' });
+  it('token with no DEX (no relayer rung) → null: not enterable', () => {
+    expect(planDestGas(cfg, snap({ spendableTokens: [{ token: USDC as `0x${string}`, balance: 9n }] }), 16602)).toBeNull();
   });
   it('ask-owner → null: the route is NOT enterable (G-9 by construction)', () => {
     expect(planDestGas(cfg, snap({}), 16602)).toBeNull();

@@ -3,13 +3,12 @@
  * pays out of the agent's own funds; the only non-self-funding outcome is an explicit ask.
  */
 import { describe, it, expect } from 'vitest';
-import { planGas, voucherDigest, type GasRouteConfig, type GasSnapshot } from '../../src/chain/gas-planner.js';
+import { planGas, type GasRouteConfig, type GasSnapshot } from '../../src/chain/gas-planner.js';
 
 const OG_TESTNET: GasRouteConfig = {
   gasFloorWei: 10n ** 15n, // 0.001
   refuelWei: 2n * 10n ** 15n,
   dexRouteAvailable: false, // P-GAS-3: no DEX on Galileo
-  gasRepayDelegate: '0x1111111111111111111111111111111111111111',
 };
 const OG_MAINNET: GasRouteConfig = { ...OG_TESTNET, dexRouteAvailable: true }; // P-GAS-3: SwapRouter live
 
@@ -44,35 +43,25 @@ describe('planGas — the self-funding ladder (D-4: LEASH never sponsors)', () =
     expect(p.mode).toBe('swap-to-gas');
   });
 
-  it('rung 4: token, no DEX (Galileo) → the 7702 bootstrap', () => {
+  it('rung 4: token but no DEX (Galileo) → ONE explicit ask, never a relayer-fronted tx or a silent stall', () => {
     const p = planGas(OG_TESTNET, snap({ spendableTokens: [{ token: TOKEN, balance: 5n * 10n ** 18n }] }));
-    expect(p.mode).toBe('bootstrap-7702');
+    expect(p.mode).toBe('ask-owner');
   });
 
-  it('rung 5: nothing self-funding → ONE explicit ask, never a silent stall', () => {
-    const p = planGas({ ...OG_TESTNET, gasRepayDelegate: undefined }, snap({ spendableTokens: [{ token: TOKEN, balance: 1n }] }));
-    expect(p.mode).toBe('ask-owner');
+  it('there is no sponsored/relayer rung in the mode set (LEASH never fronts gas)', () => {
+    const modes = new Set<string>();
+    for (const cfg of [OG_TESTNET, OG_MAINNET]) {
+      for (const tokens of [[], [{ token: TOKEN, balance: 1n }]]) {
+        for (const native of [0n, 10n ** 16n]) {
+          modes.add(planGas(cfg, snap({ sessionNativeWei: native, spendableTokens: tokens })).mode);
+        }
+      }
+    }
+    expect([...modes].sort()).toEqual(['ask-owner', 'has-native', 'swap-to-gas']);
   });
 
   it('zero-balance token does not count as spendable', () => {
     const p = planGas(OG_TESTNET, snap({ spendableTokens: [{ token: TOKEN, balance: 0n }] }));
     expect(p.mode).toBe('ask-owner');
-  });
-});
-
-describe('voucherDigest — chain-pinned, batch-committing', () => {
-  const calls: Array<{ target: `0x${string}`; value: bigint; data: `0x${string}` }> = [
-    { target: TOKEN, value: 0n, data: '0xdeadbeef' },
-  ];
-  const base = voucherDigest(16602n, TOKEN, 1n, 100n, TOKEN, calls);
-
-  it('is deterministic', () => {
-    expect(voucherDigest(16602n, TOKEN, 1n, 100n, TOKEN, calls)).toBe(base);
-  });
-  it('changes with chain id (cross-chain replay pinned out)', () => {
-    expect(voucherDigest(16661n, TOKEN, 1n, 100n, TOKEN, calls)).not.toBe(base);
-  });
-  it('changes when the batch is tampered', () => {
-    expect(voucherDigest(16602n, TOKEN, 1n, 100n, TOKEN, [{ target: TOKEN, value: 0n, data: '0xdeadbeee' }])).not.toBe(base);
   });
 });

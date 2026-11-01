@@ -60,7 +60,6 @@ import { PriceBandPanel } from '@/components/cockpit/PriceBandPanel';
 import { CapabilityDecisionCard } from '@/components/cockpit/CapabilityDecisionCard';
 import { CapabilityEnvelope } from '@/components/cockpit/CapabilityEnvelope';
 import { NetworksPanel } from '@/components/cockpit/NetworksPanel';
-import { GasPolicyToggle } from '@/components/cockpit/GasPolicyToggle';
 import { GasRoutePlan } from '@/components/cockpit/GasRoutePlan';
 import { nativeSymbol } from '@/lib/networks';
 import {
@@ -992,17 +991,8 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
               return result;
             }}
           />
-          {/* AQ-FND M-3: where the agent gets gas (per-chain holdings + route) and the relayer opt-in. */}
+          {/* AQ-FND M-3: where the agent gets gas (per-chain holdings + route). */}
           <GasRoutePlan survey={gasSurvey} />
-          {detail && accountVersionFor(detail) === 6 ? (
-            <GasPolicyToggle
-              initial={detail.agent?.allowRelayerBootstrap === true}
-              setGasPolicy={async (next) => {
-                await api.setGasPolicy(id, next);
-                void loadGasSurvey();
-              }}
-            />
-          ) : null}
         </div>
       </div>
 

@@ -13,7 +13,6 @@ import {
 } from '../../src/chain/gas-planner.js';
 
 const TOKEN = '0x2222222222222222222222222222222222222222' as const;
-const DELEGATE = '0x1111111111111111111111111111111111111111' as const;
 const BASE = 84532;
 const OG = 16602;
 const ETH = 11155111;
@@ -24,7 +23,6 @@ function cfg(chainId: number, over: Partial<RouteChainCfg> = {}): RouteChainCfg 
     gasFloorWei: 1000n,
     refuelWei: 2000n,
     dexRouteAvailable: true,
-    gasRepayDelegate: DELEGATE,
     swapLegGasWei: 300n,
     refuelLegGasWei: 200n,
     dexPairs: [{ tokenIn: TOKEN }],
@@ -45,8 +43,7 @@ function view(chainId: number, over: Partial<ChainGasView> = {}): ChainGasView {
 }
 
 const CFGS = { [BASE]: cfg(BASE), [OG]: cfg(OG), [ETH]: cfg(ETH) };
-const NO_OPT: GasRouteOpts = { allowRelayerBootstrap: false };
-const OPT_IN: GasRouteOpts = { allowRelayerBootstrap: true };
+const NO_OPT: GasRouteOpts = {};
 
 describe('planGasRoute - has-native', () => {
   it('refillTrigger defaults to the gas floor (identical to today\'s threshold)', () => {
@@ -107,27 +104,10 @@ describe('planGasRoute - swap-to-gas', () => {
     expect(r.mode).toBe('ask-owner');
   });
 
-  it('does NOT need the relayer to be a payee (repayable=false still swaps)', () => {
-    const noRepay = [{ token: TOKEN, balance: 100n, repayable: false }];
-    const r = planGasRoute(CFGS, { views: [view(BASE, { sessionNativeWei: 500n, spendableTokens: noRepay })] }, BASE, OPT_IN);
-    expect(r.mode).toBe('swap-to-gas');
-  });
-
-  it('relayer bootstrap IS refused for a non-repayable token even when opted in', () => {
-    const noRepay = [{ token: TOKEN, balance: 100n, repayable: false }];
-    const r = planGasRoute(CFGS, { views: [view(BASE, { spendableTokens: noRepay })] }, BASE, OPT_IN);
-    expect(r.mode).toBe('ask-owner');
-  });
-
-  it('ZERO-native key + liquid DEX + token => ask-owner when opted out', () => {
+  it('ZERO-native key + liquid DEX + token => ask-owner (no relayer rung)', () => {
     const r = planGasRoute(CFGS, { views: [view(BASE, { spendableTokens: held })] }, BASE, NO_OPT);
     expect(r.mode).toBe('ask-owner');
     expect(r.ask?.missing).toContain(`gas on chain ${BASE} for the swap+refuel legs (>= 500 wei in the session key)`);
-  });
-
-  it('ZERO-native key + liquid DEX + token => bootstrap when opted in', () => {
-    const r = planGasRoute(CFGS, { views: [view(BASE, { spendableTokens: held })] }, BASE, OPT_IN);
-    expect(r.mode).toBe('bootstrap-7702');
   });
 
   it('requires the token to be in dexPairs and the chain DEX flag', () => {
@@ -141,7 +121,7 @@ describe('planGasRoute - swap-to-gas', () => {
 
 describe('planGasRoute - unknown chains fail closed', () => {
   it('unknown target => ask-owner naming it', () => {
-    const r = planGasRoute(CFGS, { views: [view(BASE, { status: 'unknown' })] }, BASE, OPT_IN);
+    const r = planGasRoute(CFGS, { views: [view(BASE, { status: 'unknown' })] }, BASE, NO_OPT);
     expect(r.mode).toBe('ask-owner');
     expect(r.ask?.unknownChains).toEqual([BASE]);
     expect(r.reason).toContain(String(BASE));
@@ -162,37 +142,25 @@ describe('planGasRoute - unknown chains fail closed', () => {
         view(OG, { status: 'unknown', sessionNativeWei: 10n ** 18n, spendableTokens: [{ token: TOKEN, balance: 9n }] }),
       ],
     };
-    const r = planGasRoute(CFGS, survey, BASE, { allowRelayerBootstrap: false, lanes });
+    const r = planGasRoute(CFGS, survey, BASE, { lanes });
     expect(r.mode).toBe('ask-owner');
     expect(r.ask?.unknownChains).toEqual([OG]);
     expect(r.ask?.surveyedChains).toEqual([BASE]);
   });
 });
 
-describe('planGasRoute - bootstrap-7702 is opt-in only and honest', () => {
-  const v = view(BASE, { spendableTokens: [{ token: TOKEN, balance: 1n }] });
-
-  it('never chosen when allowRelayerBootstrap=false', () => {
-    expect(planGasRoute(CFGS, { views: [v] }, BASE, NO_OPT).mode).not.toBe('bootstrap-7702');
-  });
-
-  it('reason says relayer-funded, never self-funded', () => {
-    const r = planGasRoute(CFGS, { views: [v] }, BASE, OPT_IN);
-    expect(r.mode).toBe('bootstrap-7702');
-    expect(r.reason).toMatch(/RELAYER-funded/);
-    expect(r.reason).toMatch(/not self-funded/);
-    expect(r.legs[0]).toMatchObject({ kind: 'bootstrap', chainId: BASE, gasNeededWei: 0n });
-  });
-
-  it('needs a delegate and a spendable token', () => {
-    const noDelegate = { [BASE]: cfg(BASE, { gasRepayDelegate: undefined }) };
-    expect(planGasRoute(noDelegate, { views: [v] }, BASE, OPT_IN).mode).toBe('ask-owner');
-    expect(planGasRoute(CFGS, { views: [view(BASE)] }, BASE, OPT_IN).mode).toBe('ask-owner');
+describe('planGasRoute - there is no relayer rung', () => {
+  it('a zero-native agent holding a token with no feasible route asks the owner; never a sponsored mode', () => {
+    const v = view(BASE, { spendableTokens: [{ token: TOKEN, balance: 1n }] });
+    const r = planGasRoute(CFGS, { views: [v] }, BASE, NO_OPT);
+    expect(r.mode).toBe('ask-owner');
+    expect(r.legs).toEqual([]);
+    expect(JSON.stringify(r)).not.toMatch(/bootstrap|relayer/i);
   });
 });
 
 describe('planGasRoute - ask-owner contents', () => {
-  it('zero everything, opted out: precise missing list + surveyed chains', () => {
+  it('zero everything: precise missing list + surveyed chains', () => {
     const noDex = { ...CFGS, [BASE]: cfg(BASE, { dexRouteAvailable: false, dexPairs: [] }) };
     const r = planGasRoute(noDex, { views: [view(BASE), view(OG, { status: 'unknown' })] }, BASE, NO_OPT);
     expect(r.mode).toBe('ask-owner');
@@ -203,15 +171,7 @@ describe('planGasRoute - ask-owner contents', () => {
       `DEX route on chain ${BASE}`,
       `account native funds on chain ${BASE} (>= 2000 wei)`,
       `gas on chain ${BASE} for the swap+refuel legs (>= 500 wei in the session key)`,
-      'owner opt-in for relayer bootstrap',
     ]);
-  });
-
-  it('opted in without a delegate asks for the delegate instead of the opt-in', () => {
-    const noDelegate = { [BASE]: cfg(BASE, { gasRepayDelegate: undefined }) };
-    const r = planGasRoute(noDelegate, { views: [view(BASE)] }, BASE, OPT_IN);
-    expect(r.ask?.missing).toContain(`GasRepayDelegate on chain ${BASE}`);
-    expect(r.ask?.missing).not.toContain('owner opt-in for relayer bootstrap');
   });
 });
 
@@ -222,11 +182,11 @@ describe('planGasRoute - bridge-then-swap', () => {
   it('never chosen without lanes (undefined or empty)', () => {
     const survey = { views: [view(BASE), src] };
     expect(planGasRoute(CFGS, survey, BASE, NO_OPT).mode).toBe('ask-owner');
-    expect(planGasRoute(CFGS, survey, BASE, { allowRelayerBootstrap: false, lanes: [] }).mode).toBe('ask-owner');
+    expect(planGasRoute(CFGS, survey, BASE, { lanes: [] }).mode).toBe('ask-owner');
   });
 
   it('chosen with a lane, source gas, and a target DEX; legs run on their own chains', () => {
-    const r = planGasRoute(CFGS, { views: [view(BASE), src] }, BASE, { allowRelayerBootstrap: false, lanes });
+    const r = planGasRoute(CFGS, { views: [view(BASE), src] }, BASE, { lanes });
     expect(r.mode).toBe('bridge-then-swap');
     expect(r.legs.map((l) => [l.kind, l.chainId, l.gasOnChainId])).toEqual([
       ['bridge', OG, BASE],
@@ -236,26 +196,26 @@ describe('planGasRoute - bridge-then-swap', () => {
 
   it('skipped when the source chain has no native for the bridge fee', () => {
     const broke = view(OG, { sessionNativeWei: 0n, spendableTokens: [{ token: TOKEN, balance: 50n }] });
-    expect(planGasRoute(CFGS, { views: [view(BASE), broke] }, BASE, { allowRelayerBootstrap: false, lanes }).mode).toBe('ask-owner');
+    expect(planGasRoute(CFGS, { views: [view(BASE), broke] }, BASE, { lanes }).mode).toBe('ask-owner');
   });
 
   it('skipped when the target chain has no DEX', () => {
     const noDex = { ...CFGS, [BASE]: cfg(BASE, { dexRouteAvailable: false }) };
-    expect(planGasRoute(noDex, { views: [view(BASE), src] }, BASE, { allowRelayerBootstrap: false, lanes }).mode).toBe('ask-owner');
+    expect(planGasRoute(noDex, { views: [view(BASE), src] }, BASE, { lanes }).mode).toBe('ask-owner');
   });
 
   it('skipped when the lane does not carry a token the source holds', () => {
     const other = '0x4444444444444444444444444444444444444444' as const;
     const wrong = [{ from: OG, to: BASE, token: other }];
-    expect(planGasRoute(CFGS, { views: [view(BASE), src] }, BASE, { allowRelayerBootstrap: false, lanes: wrong }).mode).toBe('ask-owner');
+    expect(planGasRoute(CFGS, { views: [view(BASE), src] }, BASE, { lanes: wrong }).mode).toBe('ask-owner');
   });
 });
 
 describe('planGasRoute - determinism', () => {
   it('same inputs produce identical output', () => {
     const survey = { views: [view(BASE, { spendableTokens: [{ token: TOKEN, balance: 3n }] }), view(OG, { status: 'unknown' })] };
-    const a = planGasRoute(CFGS, survey, BASE, OPT_IN);
-    const b = planGasRoute(CFGS, survey, BASE, OPT_IN);
+    const a = planGasRoute(CFGS, survey, BASE, NO_OPT);
+    const b = planGasRoute(CFGS, survey, BASE, NO_OPT);
     expect(b).toEqual(a);
   });
 });

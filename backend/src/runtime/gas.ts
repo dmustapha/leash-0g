@@ -7,9 +7,8 @@
  *   buildGasSnapshot(...)             — the live balances + spendability (I/O via chain).
  *
  * D-4 (LEASH never sponsors): the ladder either self-funds or asks the owner. A token
- * only counts as `spendable` when its on-chain V6 asset policy is ENABLED and the repay
- * recipient (the ops relayer) is an allowlisted payee for it — otherwise the rung-4
- * bootstrap could not repay the relayer in that token, so it must not be offered.
+ * only counts as `spendable` when its on-chain V6 asset policy is ENABLED and the account
+ * holds a balance. There is no relayer/sponsored rung.
  *
  * Increment 2 adds the MULTI-CHAIN side (`buildGasSurvey`, `loadGasRouteInputs`,
  * `planAgentGasRoute`, `describeGasAsk`) that feeds `planGasRoute`.
@@ -26,7 +25,6 @@ import {
   type GasSurvey,
   type RouteChainCfg,
 } from '../chain/gas-planner.js';
-import { getAgentById } from '../store/agents.js';
 import { listChainDeployments } from '../store/chain-deployments.js';
 import type { AgentGoal } from '../types.js';
 import type { RuntimeChain } from './session-chain.js';
@@ -48,18 +46,13 @@ export function buildGasRouteConfig(chainConfig: ChainConfig, globalDustWei: big
     gasFloorWei: chainConfig.gasFloorWei,
     refuelWei: chainConfig.sessionGasDustWei ?? globalDustWei,
     dexRouteAvailable: Boolean(chainConfig.canonical?.router),
-    ...(chainConfig.gasRepayDelegateAddr
-      ? { gasRepayDelegate: chainConfig.gasRepayDelegateAddr as Address }
-      : {}),
   };
 }
 
 /**
  * Read the live gas snapshot for a (session key, account) on the agent's chain. The
- * token leg is filtered to SPENDABLE tokens only: policy enabled AND the repay
- * recipient (ops relayer) allowlisted as a payee — the rung-4 precondition (D-4). A
- * token held with no enabled policy / no relayer payee is NOT spendable here, so the
- * ladder falls to ask-owner rather than offering a bootstrap that cannot repay.
+ * token leg is filtered to SPENDABLE tokens only (balance > 0 and an enabled asset policy);
+ * a token with no enabled policy is NOT spendable, so the ladder falls to ask-owner.
  *
  * `getAssetPolicy` is optional on the chain surface (test fakes may omit it); when
  * absent, no token is spendable (fail-closed) and a zero-native agent asks the owner.
@@ -70,19 +63,17 @@ export async function buildGasSnapshot(opts: {
   sessionKeyAddr: string;
   /** The ERC-20 the goal spends (the top-up + repay token), or null for a native cycle. */
   token: string | null;
-  /** The ops relayer that fronts + is repaid gas — must be an allowlisted payee of `token`. */
-  opsRelayerAddr: string;
 }): Promise<GasSnapshot> {
-  const { chain, accountAddr, sessionKeyAddr, token, opsRelayerAddr } = opts;
+  const { chain, accountAddr, sessionKeyAddr, token } = opts;
   const [sessionNativeWei, accountNativeWei, sessionKeyNativeAllowlisted] = await Promise.all([
     chain.getBalance(sessionKeyAddr),
     chain.getBalance(accountAddr),
     isNativePayee(chain, accountAddr, sessionKeyAddr),
   ]);
 
-  const spendableTokens: Array<{ token: Address; balance: bigint; repayable: boolean }> = [];
+  const spendableTokens: Array<{ token: Address; balance: bigint }> = [];
   if (token) {
-    const spendable = await readSpendableToken(chain, accountAddr, token, opsRelayerAddr);
+    const spendable = await readSpendableToken(chain, accountAddr, token);
     if (spendable) spendableTokens.push(spendable);
   }
 
@@ -90,23 +81,21 @@ export async function buildGasSnapshot(opts: {
 }
 
 /**
- * The token's balance when it is SPENDABLE (balance > 0 ∧ policy enabled), else null; `repayable` says whether the
- * ops relayer is also an allowlisted payee (only the relayer-bootstrap route needs that). Shared by the single-chain snapshot and the multi-chain survey.
+ * The token's balance when it is SPENDABLE (balance > 0 ∧ policy enabled), else null.
+ * Shared by the single-chain snapshot and the multi-chain survey.
  */
 async function readSpendableToken(
   chain: RuntimeChain,
   accountAddr: string,
   token: string,
-  opsRelayerAddr: string,
-): Promise<{ token: Address; balance: bigint; repayable: boolean } | null> {
+): Promise<{ token: Address; balance: bigint } | null> {
   if (!chain.getAssetPolicy) return null;
   const [balance, assetPolicy] = await Promise.all([
     chain.getErc20Balance(token, accountAddr),
-    chain.getAssetPolicy(accountAddr, token, [opsRelayerAddr]),
+    chain.getAssetPolicy(accountAddr, token, []),
   ]);
-  const repayable = assetPolicy.allowedPayees.includes(opsRelayerAddr.toLowerCase());
   if (balance > 0n && assetPolicy.enabled) {
-    return { token: token.toLowerCase() as Address, balance, repayable };
+    return { token: token.toLowerCase() as Address, balance };
   }
   return null;
 }
@@ -205,17 +194,16 @@ async function readChainView(opts: {
   chainId: number;
   accountAddr: string;
   sessionKeyAddr: string;
-  opsRelayerAddr: string;
   tokens: string[];
 }): Promise<ChainGasView> {
-  const { chain, chainId, accountAddr, sessionKeyAddr, opsRelayerAddr, tokens } = opts;
+  const { chain, chainId, accountAddr, sessionKeyAddr, tokens } = opts;
   const [sessionNativeWei, accountNativeWei, sessionKeyNativeAllowlisted, held] = await Promise.all([
     chain.getBalance(sessionKeyAddr),
     chain.getBalance(accountAddr),
     isNativePayee(chain, accountAddr, sessionKeyAddr),
-    Promise.all(tokens.map((t) => readSpendableToken(chain, accountAddr, t, opsRelayerAddr))),
+    Promise.all(tokens.map((t) => readSpendableToken(chain, accountAddr, t))),
   ]);
-  const spendableTokens = held.filter((h): h is { token: Address; balance: bigint; repayable: boolean } => h !== null);
+  const spendableTokens = held.filter((h): h is { token: Address; balance: bigint } => h !== null);
   return { chainId, status: 'ok', sessionNativeWei, accountNativeWei, spendableTokens, sessionKeyNativeAllowlisted };
 }
 
@@ -241,7 +229,6 @@ export async function buildGasSurvey(opts: {
   chainIds: number[];
   accountAddr: string;
   sessionKeyAddr: string;
-  opsRelayerAddr: string;
   tokensByChain: Record<number, string[]>;
   /** per-chain read budget (ms); defaults to 8s. Exposed for tests. */
   timeoutMs?: number;
@@ -254,7 +241,6 @@ export async function buildGasSurvey(opts: {
           chainId,
           accountAddr: opts.accountAddr,
           sessionKeyAddr: opts.sessionKeyAddr,
-          opsRelayerAddr: opts.opsRelayerAddr,
           tokens: opts.tokensByChain[chainId] ?? [],
         });
         return await withTimeout(read, opts.timeoutMs ?? SURVEY_CHAIN_TIMEOUT_MS);
@@ -273,10 +259,8 @@ export interface GasRouteRegistry {
   getSessionChain(chainId: number): RuntimeChain;
 }
 
-/** GasRouteRegistry plus the ops relayer address (the owner-route surface). */
-export interface GasRouteSurface extends GasRouteRegistry {
-  opsRelayerAddr: string;
-}
+/** The owner-route surface (GET /gas-survey) reads the same registry slice. */
+export type GasRouteSurface = GasRouteRegistry;
 
 /** Everything the planner needs that can change between cycles (re-read every cycle). */
 export interface GasRouteInputs {
@@ -284,7 +268,6 @@ export interface GasRouteInputs {
   chainIds: number[];
   cfgByChain: Record<number, RouteChainCfg>;
   tokensByChain: Record<number, string[]>;
-  allowRelayerBootstrap: boolean;
 }
 
 /** The ERC-20 an owner-typed treasury goal is denominated in (lowercased), else null. */
@@ -295,9 +278,8 @@ export function goalTokenOf(goal: AgentGoal): string | null {
 }
 
 /**
- * Resolve the survey scope: home ∪ onboarded deployments, restricted to registered chains. The
- * opt-in is re-read from the DB so an owner toggle takes effect without an agent restart; a read
- * failure fails CLOSED (opt-in false).
+ * Resolve the survey scope: home ∪ onboarded deployments, restricted to registered chains,
+ * re-read every cycle so a new onboarding takes effect without an agent restart.
  */
 export async function loadGasRouteInputs(opts: {
   pool: Pool;
@@ -318,16 +300,7 @@ export async function loadGasRouteInputs(opts: {
     const settlement = cfg.canonical?.settlementToken;
     tokensByChain[id] = id === homeChainId ? (goalToken ? [goalToken] : []) : settlement ? [settlement] : [];
   }
-  const allowRelayerBootstrap = await readRelayerOptIn(pool, agentId);
-  return { homeChainId, chainIds, cfgByChain, tokensByChain, allowRelayerBootstrap };
-}
-
-async function readRelayerOptIn(pool: Pool, agentId: string): Promise<boolean> {
-  try {
-    return (await getAgentById(pool, agentId))?.allowRelayerBootstrap === true;
-  } catch {
-    return false;
-  }
+  return { homeChainId, chainIds, cfgByChain, tokensByChain };
 }
 
 /** Survey + plan in one read-only step (shared by the act loop and GET /gas-survey). */
@@ -336,7 +309,6 @@ export async function planAgentGasRoute(opts: {
   resolveChain: (chainId: number) => RuntimeChain;
   accountAddr: string;
   sessionKeyAddr: string;
-  opsRelayerAddr: string;
 }): Promise<{ survey: GasSurvey; route: GasRoute }> {
   const { inputs } = opts;
   const survey = await buildGasSurvey({
@@ -344,12 +316,9 @@ export async function planAgentGasRoute(opts: {
     chainIds: inputs.chainIds,
     accountAddr: opts.accountAddr,
     sessionKeyAddr: opts.sessionKeyAddr,
-    opsRelayerAddr: opts.opsRelayerAddr,
     tokensByChain: inputs.tokensByChain,
   });
-  const route = planGasRoute(inputs.cfgByChain, survey, inputs.homeChainId, {
-    allowRelayerBootstrap: inputs.allowRelayerBootstrap,
-  });
+  const route = planGasRoute(inputs.cfgByChain, survey, inputs.homeChainId, {});
   return { survey, route };
 }
 

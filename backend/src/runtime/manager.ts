@@ -263,25 +263,21 @@ export class LeashRuntimeManager implements RuntimeManager {
 
   /**
    * AQ-FND M-3: the self-funding gas-ladder deps for a treasury agent — the chain
-   * config the ladder reads (`buildGasRouteConfig`) plus the rung-4 bootstrap executor
-   * primitives (ops/session wallets, delegate, relayer address). Both come from the
-   * registry; absent registry/chain ⇒ no ladder (the token top-up acts as the native
-   * path, no regression). bootstrapGas is null when the chain declares no delegate.
+   * config the ladder reads (`buildGasRouteConfig`) plus the multi-chain survey inputs.
+   * Both come from the registry; absent registry/chain ⇒ no ladder (the token top-up acts
+   * as the native path, no regression). There is no relayer/sponsored rung.
    */
   private gasDeps(agent: AgentRow): {
     gasConfig?: import('./treasury-graph.js').TreasuryGraphDeps['gasConfig'];
-    bootstrapGas?: import('./treasury-graph.js').TreasuryGraphDeps['bootstrapGas'];
     gasRoute?: import('./treasury-graph.js').TreasuryGraphDeps['gasRoute'];
   } {
     const registry = this.deps.chainRegistry;
     if (!registry || !registry.has(agent.chainId)) return {};
     const chainConfig = registry.getChainConfig(agent.chainId);
     const globalDustWei = this.deps.settings.globalDustWei ?? 2_000_000_000_000_000n; // 0.002 0G
-    const bootstrapGas = registry.getBootstrapGas(agent.chainId);
     // AQ-FND M-3 inc-2: the multi-chain survey inputs, re-read every cycle by the graph
-    // (deployments + the owner's relayer opt-in can change while the agent runs).
+    // (deployments can change while the agent runs).
     const gasRoute: NonNullable<import('./treasury-graph.js').TreasuryGraphDeps['gasRoute']> = {
-      opsRelayerAddr: registry.getOpsRelayerAddr(),
       resolveChain: (chainId) => registry.getSessionChain(chainId),
       chainName: (chainId) => (registry.has(chainId) ? registry.getChainConfig(chainId).name : `chain ${chainId}`),
       load: (homeGoalToken) =>
@@ -297,7 +293,6 @@ export class LeashRuntimeManager implements RuntimeManager {
     return {
       gasConfig: { chainConfig, globalDustWei },
       gasRoute,
-      ...(bootstrapGas ? { bootstrapGas } : {}),
     };
   }
 

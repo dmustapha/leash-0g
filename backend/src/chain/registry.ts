@@ -1,23 +1,8 @@
 import type { PublicClient, WalletClient } from 'viem';
-import { createPublicClient, createWalletClient, http, type Hex } from 'viem';
-import { privateKeyToAccount } from 'viem/accounts';
-import { LeashChainOps, zeroGChain } from './ops.js';
+import { LeashChainOps } from './ops.js';
 import { SessionChain, type RuntimeChain } from '../runtime/session-chain.js';
 import type { ChainOps } from '../server.js';
 import type { GasRouteSurface } from '../runtime/gas.js';
-
-/**
- * AQ-FND M-3 rung-4: the chain primitives the runtime's EIP-7702 bootstrap executor
- * needs. `opsRelayerAddr` (the ops key's address) is the repay recipient (config,
- * never model-derived) and must be an allowlisted token payee for the agent's account.
- */
-export interface BootstrapGasPrimitives {
-  publicClient: PublicClient;
-  opsWallet: WalletClient;
-  opsRelayerAddr: string;
-  delegate: string;
-  buildSessionWallet: (sessionPrivateKey: string) => WalletClient;
-}
 
 /**
  * SE-5 (Stage E, E-5) — the multichain backbone. One `ChainConfig` per deployed
@@ -70,11 +55,10 @@ export interface ChainConfig {
    * create is DEFAULT-DENIED on a chain missing ANY of the three singletons.
    */
   decodeHelperAddr?: string | undefined;
-  /** AQ-FND V6 singletons (PolicyLib / EnvelopeModule / GasRepayDelegate) — same-address-pinned;
+  /** AQ-FND V6 singletons (PolicyLib / EnvelopeModule) — same-address-pinned;
    *  a V6 create or verify is DEFAULT-DENIED on a chain missing any required one. */
   policyHelperAddr?: string | undefined;
   envelopeModuleAddr?: string | undefined;
-  gasRepayDelegateAddr?: string | undefined;
   /** Default account version minted on this chain (SD-E7: 4 = governed calldata). */
   accountVersion: number;
   /** Canonical deployed targets on this chain (mock/real per stage). */
@@ -288,7 +272,6 @@ export class ChainRegistry {
       ...(c.decodeHelperAddr ? { decodeHelperAddr: c.decodeHelperAddr } : {}),
       ...(c.policyHelperAddr ? { policyHelperAddr: c.policyHelperAddr } : {}),
       ...(c.envelopeModuleAddr ? { envelopeModuleAddr: c.envelopeModuleAddr } : {}),
-      ...(c.gasRepayDelegateAddr ? { gasRepayDelegateAddr: c.gasRepayDelegateAddr } : {}),
       registryAddr: c.registryAddr,
       ...(clients ? { clients } : {}),
     });
@@ -652,45 +635,15 @@ export class ChainRegistry {
     return sc;
   }
 
-  /** AQ-FND M-3: the ops relayer's address (public; the key never leaves the registry). */
-  getOpsRelayerAddr(): string {
-    return privateKeyToAccount(this.signing.opsPrivateKey as Hex).address;
-  }
-
   /** AQ-FND M-3 inc-2: the read-only surface the gas-route survey (owner route) needs. */
   getGasRouteSurface(): GasRouteSurface {
     return {
       has: (chainId) => this.has(chainId),
       getChainConfig: (chainId) => this.getChainConfig(chainId),
       getSessionChain: (chainId) => this.getSessionChain(chainId),
-      opsRelayerAddr: this.getOpsRelayerAddr(),
     };
   }
 
-  /**
-   * AQ-FND M-3 rung-4: the EIP-7702 bootstrap primitives for a chain, or null when the
-   * chain declares no GasRepayDelegate (bootstrap unavailable → the ladder asks the
-   * owner, fail-closed). The ops key stays INSIDE the registry — the runtime receives
-   * only ready-built wallet clients, never the key. A test-injected client is reused so
-   * hermetic tests do not dial RPC.
-   */
-  getBootstrapGas(chainId: number): BootstrapGasPrimitives | null {
-    const c = this.getChainConfig(chainId);
-    if (!c.gasRepayDelegateAddr) return null;
-    const clients = this.testClients.get(chainId);
-    const viemChain = zeroGChain(c.rpcUrl, c.chainId);
-    const opsAccount = privateKeyToAccount(this.signing.opsPrivateKey as Hex);
-    const publicClient = clients?.publicClient ?? createPublicClient({ chain: viemChain, transport: http(c.rpcUrl) });
-    const opsWallet = clients?.opsWallet ?? createWalletClient({ chain: viemChain, transport: http(c.rpcUrl), account: opsAccount });
-    return {
-      publicClient,
-      opsWallet,
-      opsRelayerAddr: opsAccount.address,
-      delegate: c.gasRepayDelegateAddr,
-      buildSessionWallet: (sessionPrivateKey: string) =>
-        createWalletClient({ chain: viemChain, transport: http(c.rpcUrl), account: privateKeyToAccount(sessionPrivateKey as Hex) }),
-    };
-  }
 }
 
 // Re-export so callers can depend on the registry module for the ops contract.

@@ -3,7 +3,6 @@ import request from 'supertest';
 import { createTestDb, seedAgent, type TestDb } from '../helpers/db.js';
 import { buildTestApp, ownerAuth, type TestApp } from '../helpers/app.js';
 import { insertChainDeployment } from '../../src/store/chain-deployments.js';
-import { setAllowRelayerBootstrap } from '../../src/store/agents.js';
 import type { ChainConfig } from '../../src/chain/registry.js';
 import type { RuntimeChain } from '../../src/runtime/session-chain.js';
 import type { OwnerChainRegistry } from '../../src/api/owner-routes.js';
@@ -17,7 +16,6 @@ const HOME = 16602;
 const BASE = 84532;
 const OWNER = '0x' + '5a'.repeat(20);
 const OTHER_OWNER = '0x' + '6b'.repeat(20);
-const OPS = '0x' + '0f'.repeat(20);
 const SESSION = '0x' + 'c3'.repeat(20);
 const TOKEN = '0x' + 'ec'.repeat(20);
 const USDC = '0x' + 'a5'.repeat(20);
@@ -66,7 +64,6 @@ function fakeRegistry(sessionChains: Record<number, RuntimeChain>): OwnerChainRe
       has: (id) => id in CONFIGS,
       getChainConfig: (id) => CONFIGS[id]!,
       getSessionChain: (id) => sessionChains[id]!,
-      opsRelayerAddr: OPS,
     }),
   };
 }
@@ -107,29 +104,17 @@ describe('GET /api/agents/:id/gas-survey (AQ-FND M-3 inc-2)', () => {
     const res = await get(id, OWNER);
     expect(res.status).toBe(200);
     expect(res.body.homeChainId).toBe(HOME);
-    expect(res.body.allowRelayerBootstrap).toBe(false);
     expect(res.body.chains).toHaveLength(2);
     const home = res.body.chains.find((c: { chainId: number }) => c.chainId === HOME);
     expect(home).toMatchObject({ name: '0G Galileo', status: 'ok', sessionNativeWei: '0', accountNativeWei: '0' });
     expect(home.spendableTokens).toEqual([{ token: TOKEN, balance: '7' }]);
     const base = res.body.chains.find((c: { chainId: number }) => c.chainId === BASE);
     expect(base.spendableTokens).toEqual([{ token: USDC, balance: '9' }]);
-    // zero native everywhere, no opt-in ⇒ an ask, with a machine-readable list of what is missing
+    // zero native everywhere ⇒ an ask, with a machine-readable list of what is missing
     expect(res.body.route.mode).toBe('ask-owner');
     expect(res.body.route.legs).toEqual([]);
     expect(res.body.route.ask.surveyedChains).toEqual([HOME, BASE]);
-    expect(res.body.route.ask.missing).toContain('owner opt-in for relayer bootstrap');
-  });
-
-  it('reflects the opt-in flag in the route (opt-in + delegate would allow bootstrap)', async () => {
-    const id = await seedSurveyAgent(false);
-    await setAllowRelayerBootstrap(db.pool, id, true);
-    t = buildTestApp(db.pool, { chainRegistry: fakeRegistry({ [HOME]: readableChain(7n) }) });
-    const res = await get(id, OWNER);
-    expect(res.status).toBe(200);
-    expect(res.body.allowRelayerBootstrap).toBe(true);
-    // the home chain declares no GasRepayDelegate ⇒ still an ask, never a relayer route
-    expect(res.body.route.mode).toBe('ask-owner');
+    expect(JSON.stringify(res.body.route.ask.missing)).not.toMatch(/relayer|opt-in/i);
   });
 
   it('a chain that cannot be read is `unknown` (never zero) and the endpoint still answers 200', async () => {

@@ -10,7 +10,6 @@ import { generateGatewayToken, hashTokenSecret } from '../../src/crypto/token.js
 import { encryptSecret } from '../../src/crypto/keycrypt.js';
 import { listTraces } from '../../src/trace/trace-store.js';
 import { listAlerts } from '../../src/alerts/store.js';
-import { setAllowRelayerBootstrap } from '../../src/store/agents.js';
 import { listRecentRequests } from '../../src/store/capabilities.js';
 import { LeashRuntimeManager } from '../../src/runtime/manager.js';
 import { buildGasSwapCalls, buildWrappedNativeUnwrap, ruleKey, type CallRule, type GrantState } from '../../src/governed-call/index.js';
@@ -26,7 +25,7 @@ import type { PolicyView } from '../../src/types.js';
  *  (b) router rule missing => ONE capability request for the swap leg, NO executeCall;
  *  (c) zero native => unchanged (not swap-to-gas): one gas_request ask;
  *  (d) a reverting leg => failed outcome, no further legs, no loop;
- *  (e) the relayer opt-in does not change swap-to-gas behaviour.
+ *  (e) there is no relayer: swap-to-gas is the only self-funding rung with a token on a DEX chain.
  */
 
 const HOME = 84532;
@@ -36,7 +35,6 @@ const TOKEN = '0x' + 'ec'.repeat(20); // the settlement token == the goal token 
 const ROUTER = '0x' + 'dd'.repeat(20);
 const WETH = '0x' + 'ee'.repeat(20);
 const OPS = '0x' + '0f'.repeat(20);
-const DELEGATE = '0x' + 'de'.repeat(20);
 const SESSION_PK = '0x' + '6d'.repeat(32);
 const SESSION_ADDR = '0x' + 'cb'.repeat(20);
 const CAP = 10n ** 16n;
@@ -55,7 +53,6 @@ const HOME_CONFIG: ChainConfig = {
   registryAddr: '0x' + '00'.repeat(20),
   accountVersion: 6,
   gasFloorWei: 0n, // Base has no static floor
-  gasRepayDelegateAddr: DELEGATE,
   canonical: { router: ROUTER, settlementToken: TOKEN },
   gasSwap: { wrappedNative: WETH, dexFeeTier: 3000, tokenAmount: SALE },
 };
@@ -169,36 +166,7 @@ class FakeRuntimeChain implements RuntimeChain {
   }
 }
 
-interface RelayerSpy {
-  submitted: unknown[];
-}
-
-function fakeBootstrap(spy: RelayerSpy) {
-  return {
-    publicClient: { getChainId: async () => HOME },
-    opsWallet: {
-      account: { address: OPS },
-      chain: undefined,
-      async sendTransaction(tx: unknown) {
-        spy.submitted.push(tx);
-        return '0x' + 'ab'.repeat(32);
-      },
-    },
-    opsRelayerAddr: OPS,
-    delegate: DELEGATE,
-    buildSessionWallet: () => ({
-      account: { address: SESSION_ADDR },
-      async signAuthorization() {
-        return { chainId: HOME, address: DELEGATE, nonce: 0, r: '0x01', s: '0x02', yParity: 0 };
-      },
-      async signMessage() {
-        return '0x' + '11'.repeat(65);
-      },
-    }),
-  };
-}
-
-type FakeRegistry = Pick<ChainRegistry, 'has' | 'getChainConfig' | 'getBootstrapGas' | 'getSessionChain' | 'getOpsRelayerAddr'>;
+type FakeRegistry = Pick<ChainRegistry, 'has' | 'getChainConfig' | 'getSessionChain'>;
 
 let db: TestDb;
 let t: TestApp;
@@ -206,7 +174,6 @@ let server: Server;
 let gatewayUrl: string;
 let checkpointer: PostgresSaver;
 let fakeChain: FakeRuntimeChain;
-let relayer: RelayerSpy;
 let manager: LeashRuntimeManager;
 const startedAgents: string[] = [];
 
@@ -226,13 +193,10 @@ beforeAll(async () => {
 
 beforeEach(() => {
   fakeChain = new FakeRuntimeChain();
-  relayer = { submitted: [] };
   const registry: FakeRegistry = {
     has: (id) => id === HOME,
     getChainConfig: () => HOME_CONFIG,
-    getBootstrapGas: () => fakeBootstrap(relayer) as unknown as ReturnType<ChainRegistry['getBootstrapGas']>,
     getSessionChain: () => fakeChain,
-    getOpsRelayerAddr: () => OPS,
   };
   manager = new LeashRuntimeManager({
     pool: db.pool,
@@ -264,7 +228,7 @@ afterAll(async () => {
   await db.drop();
 });
 
-async function seedGasAgent(opts: { sessionNative: bigint; optIn?: boolean }): Promise<string> {
+async function seedGasAgent(opts: { sessionNative: bigint }): Promise<string> {
   const gen = generateGatewayToken();
   const account = `0x${randomBytes(20).toString('hex')}`;
   fakeChain.accountAddr = account;
@@ -287,7 +251,6 @@ async function seedGasAgent(opts: { sessionNative: bigint; optIn?: boolean }): P
       model: 'test-model',
     },
   });
-  if (opts.optIn) await setAllowRelayerBootstrap(db.pool, id, true);
   return id;
 }
 
@@ -343,7 +306,6 @@ describe('AQ-FND M-3 inc-3a — swap-to-gas executor through the governed wall',
     // the refuel is a DIRECT session-key native transfer (account.execute), never an executeCall to self
     expect(fakeChain.nativeTransfers).toEqual([{ to: SESSION_ADDR.toLowerCase(), valueWei: WETH_OUT }]);
     expect(fakeChain.tokenTransfers).toHaveLength(0); // the cycle stands down on buying gas
-    expect(relayer.submitted).toHaveLength(0);
 
     const traces = await listTraces(db.pool, id);
     const actions = traces.filter((r) => r.kind === 'action');
@@ -411,13 +373,12 @@ describe('AQ-FND M-3 inc-3a — swap-to-gas executor through the governed wall',
     expect(fakeChain.calls).toHaveLength(2);
   });
 
-  it.each([false, true])('(e) relayer opt-in=%s does not change swap-to-gas behaviour', async (optIn) => {
-    const id = await seedGasAgent({ sessionNative: LOW_NATIVE, optIn });
+  it('(e) a low-native agent with a spendable token swaps for gas and raises no gas_request', async () => {
+    const id = await seedGasAgent({ sessionNative: LOW_NATIVE });
     await runOneCycle(id);
 
     expect(fakeChain.calls.map((c) => c.target)).toEqual([TOKEN, ROUTER, WETH]);
     expect(fakeChain.nativeTransfers.map((t) => t.to)).toEqual([SESSION_ADDR.toLowerCase()]);
-    expect(relayer.submitted).toHaveLength(0); // swap-to-gas outranks the relayer; it is never used
     const { alerts } = await listAlerts(db.pool, OWNER, { kind: 'gas_request', agentId: id });
     expect(alerts).toHaveLength(0);
   });

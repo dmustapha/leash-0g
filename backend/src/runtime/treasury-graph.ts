@@ -1,6 +1,5 @@
 import { Annotation, END, START, StateGraph, interrupt, type BaseCheckpointSaver } from '@langchain/langgraph';
-import { encodeFunctionData, type Address } from 'viem';
-import { leashAccountAbi } from '../chain/abis.js';
+import type { Address } from 'viem';
 import { z } from 'zod';
 import type { Pool } from 'pg';
 import type { SseHub } from '../sse/hub.js';
@@ -22,7 +21,6 @@ import type { DecodedLeashError } from '../types.js';
 import type { RuntimeChain } from './session-chain.js';
 import { buildGasRouteConfig, buildRouteChainCfg, describeGasAsk, planAgentGasRoute, type GasRouteInputs } from './gas.js';
 import type { GasRoute } from '../chain/gas-planner.js';
-import { executeBootstrap, type BootstrapCall } from '../chain/gas-planner.js';
 import type { ChainConfig } from '../chain/registry.js';
 import { loadGrantState } from './grant-state.js';
 import { buildGovernedCall, BRIDGE_SELECTORS, SELECTORS } from '../governed-call/index.js';
@@ -196,7 +194,7 @@ const TreasuryState = Annotation.Root({
   /** AQ-FND M-3: the resolved token top-up for the `token_act` route (decide → tokenAct). */
   tokenActToken: Annotation<string>,
   tokenActAmountWei: Annotation<string>,
-  /** AQ-FND M-3: the gas rung the ladder picked this cycle ('has-native' | 'bootstrap-7702' | 'account-native'). */
+  /** AQ-FND M-3: the gas rung the ladder picked this cycle ('has-native' | 'account-native'). */
   tokenActGasRung: Annotation<string>,
   /** AQ-FND M-3 inc-3a: the `gas_swap` route's resolved sale (decide -> gasSwapAct). */
   gasSwapToken: Annotation<string>,
@@ -263,7 +261,7 @@ export interface TreasuryGraphDeps {
     | undefined;
   /**
    * AQ-FND M-3: the agent's chain config — the self-funding gas ladder reads
-   * `gasFloorWei` / `sessionGasDustWei` / `canonical.router` / `gasRepayDelegateAddr`
+   * `gasFloorWei` / `sessionGasDustWei` / `canonical.router`
    * from here (`buildGasRouteConfig`). Optional: absent ⇒ no gas ladder engages and
    * the token top-up proceeds exactly as the native path (no regression). The global
    * dust default is carried alongside for chains that do not override it.
@@ -271,33 +269,16 @@ export interface TreasuryGraphDeps {
   gasConfig?: { chainConfig: ChainConfig; globalDustWei: bigint } | undefined;
   /**
    * AQ-FND M-3 inc-2: the MULTI-CHAIN gas-route inputs. `load()` re-reads (every cycle) the
-   * chains the agent is deployed on + the owner's relayer opt-in, so a toggle or a new
+   * chains the agent is deployed on, so a new
    * onboarding takes effect without a restart. Absent (single-chain test setups) ⇒ the route
    * is planned over the home chain only, from `gasConfig` + `chain`.
    */
   gasRoute?:
     | {
-        opsRelayerAddr: string;
         resolveChain: (chainId: number) => RuntimeChain;
         /** human label for a chain id (config name) used in owner-facing ask text */
         chainName: (chainId: number) => string;
         load: (homeGoalToken: string | null) => Promise<GasRouteInputs>;
-      }
-    | undefined;
-  /**
-   * AQ-FND M-3 rung-4: the EIP-7702 bootstrap executor's chain primitives. Mirrors
-   * the `bridge` dep — supplied from the manager (where ops access lives). Absent ⇒
-   * rung-4 is unavailable → the ladder falls to ask-owner (fail-closed, D-4: never a
-   * relayer-fronted tx the agent cannot repay). `opsRelayerAddr` is the repay
-   * recipient (config, never model-derived) and MUST be an allowlisted token payee.
-   */
-  bootstrapGas?:
-    | {
-        publicClient: import('viem').PublicClient;
-        opsWallet: import('viem').WalletClient;
-        opsRelayerAddr: string;
-        delegate: string;
-        buildSessionWallet: (sessionPrivateKey: string) => import('viem').WalletClient;
       }
     | undefined;
   gatewayUrl: string;
@@ -994,7 +975,6 @@ export function buildTreasuryGraph(
    *      and stand down — never a doomed tx. Deduped per token.
    *   2. Gas route (D-4): survey every chain the agent is on and call planGasRoute (home target).
    *      has-native → submit the token transfer directly (via the tokenAct node).
-   *      bootstrap-7702 → the rung-4 self-funding batch [top-up, repay-in-token] here.
    *      account-native → refuel the key through the wall, then act as has-native.
    *      swap-to-gas|bridge-then-swap|ask-owner → ONE gas ask + stand down (deduped per chain+mode).
    */
@@ -1027,10 +1007,9 @@ export function buildTreasuryGraph(
       return { decision, route: 'token_act', tokenActToken: token, tokenActAmountWei: amountWei.toString(), tokenActGasRung: 'has-native' };
     }
     const sessionKeyAddr = ctx.agentRow.sessionKeyAddr ?? '';
-    const opsRelayerAddr = deps.gasRoute?.opsRelayerAddr ?? deps.bootstrapGas?.opsRelayerAddr ?? '';
     const gasConfig = deps.gasConfig;
     const cfg = buildGasRouteConfig(gasConfig.chainConfig, gasConfig.globalDustWei);
-    const route = await planTokenGasRoute(gasConfig, token, sessionKeyAddr, opsRelayerAddr);
+    const route = await planTokenGasRoute(gasConfig, token, sessionKeyAddr);
     const chainId = route.targetChainId;
     const actWith = (rung: string): Partial<State> =>
       ({ decision, route: 'token_act', tokenActToken: token, tokenActAmountWei: amountWei.toString(), tokenActGasRung: rung });
@@ -1053,18 +1032,6 @@ export function buildTreasuryGraph(
           return standDownToken(`account-native refuel failed: ${err instanceof Error ? err.message : String(err)}`);
         }
         return actWith('account-native');
-      }
-      case 'bootstrap-7702': {
-        // Reachable ONLY for an owner-opted-in agent (planGasRoute gates it on the opt-in).
-        // Rung-4 precondition (D-4): a bootstrap executor whose relayer is an allowlisted
-        // token payee. Without it the relayer cannot be repaid → ask, never a
-        // relayer-fronted tx the agent can't repay.
-        if (!deps.bootstrapGas || !opsRelayerAddr) return gasAsk('no bootstrap executor configured — raised one gas ask');
-        const relayerPolicy = await deps.chain.getAssetPolicy(ctx.accountAddr, token, [opsRelayerAddr]);
-        if (!relayerPolicy.allowedPayees.includes(opsRelayerAddr.toLowerCase())) {
-          return gasAsk('relayer is not a token payee — cannot repay gas; raised one gas ask (D-4: never sponsored)');
-        }
-        return actWith('bootstrap-7702');
       }
       case 'swap-to-gas':
         return decideGasSwap(decision, route, gasConfig, sessionKeyAddr, gasAsk);
@@ -1173,7 +1140,6 @@ export function buildTreasuryGraph(
     gasConfig: NonNullable<TreasuryGraphDeps['gasConfig']>,
     token: string,
     sessionKeyAddr: string,
-    opsRelayerAddr: string,
   ): Promise<GasRoute> {
     const { chainConfig, globalDustWei } = gasConfig;
     const inputs: GasRouteInputs = deps.gasRoute
@@ -1183,14 +1149,12 @@ export function buildTreasuryGraph(
           chainIds: [chainConfig.chainId],
           cfgByChain: { [chainConfig.chainId]: buildRouteChainCfg(chainConfig, globalDustWei) },
           tokensByChain: { [chainConfig.chainId]: [token] },
-          allowRelayerBootstrap: ctx.agentRow.allowRelayerBootstrap,
         };
     const { route } = await planAgentGasRoute({
       inputs,
       resolveChain: deps.gasRoute?.resolveChain ?? (() => deps.chain),
       accountAddr: ctx.accountAddr,
       sessionKeyAddr,
-      opsRelayerAddr,
     });
     return route;
   }
@@ -1209,12 +1173,9 @@ export function buildTreasuryGraph(
   }
 
   /**
-   * AQ-FND M-3: the token top-up executor. has-native/account-native → a single governed
-   * executeTokenTransfer (the on-chain wall meters it). bootstrap-7702 → the rung-4
-   * self-funding batch: in ONE relayer-submitted type-4 tx the zero-native session key
-   * (a) does the governed token top-up and (b) repays the relayer in the SAME token for
-   * the gas it fronted (D-4: LEASH never sponsors). The repay recipient is the config ops
-   * relayer, never model-derived; the delegation is revoked after (plain key again).
+   * AQ-FND M-3: the token top-up executor: a single governed executeTokenTransfer (the on-chain
+   * wall meters it), after the gas ladder has secured native gas for the session key. There is
+   * no relayer-fronted path: LEASH never sponsors gas.
    */
   async function tokenAct(state: State): Promise<Partial<State>> {
     const token = state.tokenActToken;
@@ -1222,73 +1183,13 @@ export function buildTreasuryGraph(
     const amountWei = BigInt(state.tokenActAmountWei);
     const rung = state.tokenActGasRung;
     try {
-      if (rung !== 'bootstrap-7702') {
-        const { txHash } = await deps.chain.executeTokenTransfer({
-          sessionPrivateKey: ctx.sessionPrivateKey,
-          accountAddr: ctx.accountAddr,
-          token,
-          to,
-          amountWei,
-        });
-        return { outcome: { type: 'acted', txHash, valueWei: amountWei.toString(), token, gasRung: rung } };
-      }
-      // Rung-4 self-funding bootstrap.
-      const bg = deps.bootstrapGas;
-      if (!bg) return { outcome: { type: 'failed', reason: 'bootstrap executor vanished before submit' } };
-      const refuelWei = deps.gasConfig
-        ? buildGasRouteConfig(deps.gasConfig.chainConfig, deps.gasConfig.globalDustWei).refuelWei
-        : 0n;
-      // repay ≥ estimated gas at 1:1 notional — the chain-priced session dust is the
-      // gas estimate (same figure rung-2 refuels with); fall back to a small floor.
-      const repayWei = refuelWei > 0n ? refuelWei : 2n * 10n ** 15n;
-      const toHex = to as Address;
-      const tokenHex = token as Address;
-      const opsHex = bg.opsRelayerAddr as Address;
-      const topUpCall: BootstrapCall = {
-        target: ctx.accountAddr as Address,
-        value: 0n,
-        data: encodeFunctionData({ abi: leashAccountAbi, functionName: 'executeTokenTransfer', args: [tokenHex, toHex, amountWei] }),
-      };
-      const repayCall: BootstrapCall = {
-        target: ctx.accountAddr as Address,
-        value: 0n,
-        data: encodeFunctionData({ abi: leashAccountAbi, functionName: 'executeTokenTransfer', args: [tokenHex, opsHex, repayWei] }),
-      };
-      const sessionWallet = bg.buildSessionWallet(ctx.sessionPrivateKey);
-      const { txHash } = await executeBootstrap({
-        publicClient: bg.publicClient,
-        sessionWallet,
-        opsWallet: bg.opsWallet,
-        delegate: bg.delegate as Address,
-        calls: [topUpCall, repayCall],
+      const { txHash } = await deps.chain.executeTokenTransfer({
+        sessionPrivateKey: ctx.sessionPrivateKey,
+        accountAddr: ctx.accountAddr,
+        token,
+        to,
+        amountWei,
       });
-      // Revoke the delegation (ops-relayed) so the session EOA is a plain key again.
-      try {
-        const chainId = await bg.publicClient.getChainId();
-        const sessionAccount = sessionWallet.account;
-        if (sessionAccount) {
-          const clearAuth = await sessionWallet.signAuthorization({
-            account: sessionAccount,
-            contractAddress: '0x0000000000000000000000000000000000000000',
-            chainId,
-          });
-          const opsAccount = bg.opsWallet.account;
-          if (opsAccount) {
-            await bg.opsWallet.sendTransaction({
-              account: opsAccount,
-              chain: bg.opsWallet.chain,
-              to: opsAccount.address,
-              value: 0n,
-              authorizationList: [clearAuth],
-              type: 'eip7702',
-            });
-          }
-        }
-      } catch (revokeErr) {
-        // The top-up + repay already landed; a failed revoke leaves the delegation set
-        // but harmless (the delegate only acts on a fresh voucher). Log, don't fail.
-        console.warn(`[runtime] agent ${ctx.agentId}: bootstrap delegation revoke failed: ${revokeErr instanceof Error ? revokeErr.message : String(revokeErr)}`);
-      }
       return { outcome: { type: 'acted', txHash, valueWei: amountWei.toString(), token, gasRung: rung } };
     } catch (err) {
       const decoded = decodeLeashError(err);
@@ -1736,7 +1637,7 @@ export function buildTreasuryGraph(
                   : o.callTarget
                   ? `governed call to ${shortAddr(o.callTarget)}${o.valueWei !== '0' ? ` (${formatG(o.valueWei)})` : ''}`
                   : o.token
-                    ? `topped up ${shortAddr(state.effectiveBeneficiary)} with ${o.valueWei} units of ${shortAddr(o.token)}${o.gasRung === 'bootstrap-7702' ? ' (gas self-funded, relayer repaid in token)' : ''}`
+                    ? `topped up ${shortAddr(state.effectiveBeneficiary)} with ${o.valueWei} units of ${shortAddr(o.token)}`
                     : `sent ${formatG(o.valueWei)} to ${shortAddr(state.effectiveBeneficiary)}${o.approved ? ' (owner-approved)' : ''}`,
                 // Q5: carry the model's own plain-language WHY so the cockpit shows why it acted.
                 ...(state.decision?.reason ? { reason: state.decision.reason } : {}),
