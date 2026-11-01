@@ -80,7 +80,7 @@ export async function buildGasSnapshot(opts: {
     isNativePayee(chain, accountAddr, sessionKeyAddr),
   ]);
 
-  const spendableTokens: Array<{ token: Address; balance: bigint }> = [];
+  const spendableTokens: Array<{ token: Address; balance: bigint; repayable: boolean }> = [];
   if (token) {
     const spendable = await readSpendableToken(chain, accountAddr, token, opsRelayerAddr);
     if (spendable) spendableTokens.push(spendable);
@@ -90,23 +90,23 @@ export async function buildGasSnapshot(opts: {
 }
 
 /**
- * The token's balance when it is SPENDABLE (balance > 0 ∧ policy enabled ∧ the ops relayer is an
- * allowlisted payee), else null. Shared by the single-chain snapshot and the multi-chain survey.
+ * The token's balance when it is SPENDABLE (balance > 0 ∧ policy enabled), else null; `repayable` says whether the
+ * ops relayer is also an allowlisted payee (only the relayer-bootstrap route needs that). Shared by the single-chain snapshot and the multi-chain survey.
  */
 async function readSpendableToken(
   chain: RuntimeChain,
   accountAddr: string,
   token: string,
   opsRelayerAddr: string,
-): Promise<{ token: Address; balance: bigint } | null> {
+): Promise<{ token: Address; balance: bigint; repayable: boolean } | null> {
   if (!chain.getAssetPolicy) return null;
   const [balance, assetPolicy] = await Promise.all([
     chain.getErc20Balance(token, accountAddr),
     chain.getAssetPolicy(accountAddr, token, [opsRelayerAddr]),
   ]);
-  const relayerIsPayee = assetPolicy.allowedPayees.includes(opsRelayerAddr.toLowerCase());
-  if (balance > 0n && assetPolicy.enabled && relayerIsPayee) {
-    return { token: token.toLowerCase() as Address, balance };
+  const repayable = assetPolicy.allowedPayees.includes(opsRelayerAddr.toLowerCase());
+  if (balance > 0n && assetPolicy.enabled) {
+    return { token: token.toLowerCase() as Address, balance, repayable };
   }
   return null;
 }
@@ -215,7 +215,7 @@ async function readChainView(opts: {
     isNativePayee(chain, accountAddr, sessionKeyAddr),
     Promise.all(tokens.map((t) => readSpendableToken(chain, accountAddr, t, opsRelayerAddr))),
   ]);
-  const spendableTokens = held.filter((h): h is { token: Address; balance: bigint } => h !== null);
+  const spendableTokens = held.filter((h): h is { token: Address; balance: bigint; repayable: boolean } => h !== null);
   return { chainId, status: 'ok', sessionNativeWei, accountNativeWei, spendableTokens, sessionKeyNativeAllowlisted };
 }
 

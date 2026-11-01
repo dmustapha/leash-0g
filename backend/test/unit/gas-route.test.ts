@@ -107,6 +107,18 @@ describe('planGasRoute - swap-to-gas', () => {
     expect(r.mode).toBe('ask-owner');
   });
 
+  it('does NOT need the relayer to be a payee (repayable=false still swaps)', () => {
+    const noRepay = [{ token: TOKEN, balance: 100n, repayable: false }];
+    const r = planGasRoute(CFGS, { views: [view(BASE, { sessionNativeWei: 500n, spendableTokens: noRepay })] }, BASE, OPT_IN);
+    expect(r.mode).toBe('swap-to-gas');
+  });
+
+  it('relayer bootstrap IS refused for a non-repayable token even when opted in', () => {
+    const noRepay = [{ token: TOKEN, balance: 100n, repayable: false }];
+    const r = planGasRoute(CFGS, { views: [view(BASE, { spendableTokens: noRepay })] }, BASE, OPT_IN);
+    expect(r.mode).toBe('ask-owner');
+  });
+
   it('ZERO-native key + liquid DEX + token => ask-owner when opted out', () => {
     const r = planGasRoute(CFGS, { views: [view(BASE, { spendableTokens: held })] }, BASE, NO_OPT);
     expect(r.mode).toBe('ask-owner');

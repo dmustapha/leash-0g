@@ -103,6 +103,12 @@ describe('buildGasSnapshot + planGas — the Galileo ladder outcome', () => {
     expect((await plan(chain, TOKEN)).mode).toBe('ask-owner');
   });
 
+  it('enabled token, relayer NOT a payee ⇒ still SPENDABLE (swap route) but repayable=false', async () => {
+    const chain = fakeChain({ tokenBalance: 10n ** 18n, tokenEnabled: true, tokenPayees: [] });
+    const snap = await buildGasSnapshot({ chain, accountAddr: ACCOUNT, sessionKeyAddr: SESSION, token: TOKEN, opsRelayerAddr: OPS });
+    expect(snap.spendableTokens).toEqual([{ token: TOKEN.toLowerCase(), balance: 10n ** 18n, repayable: false }]);
+  });
+
   it('session key already funded ⇒ has-native (ladder short-circuits)', async () => {
     const chain = fakeChain({ sessionNative: 10n ** 16n, tokenBalance: 10n ** 18n, tokenEnabled: true, tokenPayees: [OPS] });
     expect((await plan(chain, TOKEN)).mode).toBe('has-native');
@@ -251,7 +257,7 @@ describe('buildGasSurvey — multi-chain, fail-closed per chain', () => {
     const out = await survey((id) => (id === 1 ? funded : empty), [1, 2], { 1: [TOKEN] });
     const [a, b] = out.views;
     expect(a).toMatchObject({ chainId: 1, status: 'ok', sessionNativeWei: 5n, accountNativeWei: 7n });
-    expect(a!.spendableTokens).toEqual([{ token: TOKEN, balance: 9n }]);
+    expect(a!.spendableTokens).toEqual([{ token: TOKEN, balance: 9n, repayable: true }]);
     expect(b).toMatchObject({ chainId: 2, status: 'ok', sessionNativeWei: 0n });
     expect(b!.spendableTokens).toEqual([]);
   });

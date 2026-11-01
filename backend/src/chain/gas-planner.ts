@@ -46,8 +46,12 @@ export interface GasRouteConfig {
 export interface GasSnapshot {
   sessionNativeWei: bigint;
   accountNativeWei: bigint;
-  /** token balances the account holds with an ENABLED v6 asset policy + ops repayment payee */
-  spendableTokens: Array<{ token: Address; balance: bigint }>;
+  /**
+   * token balances the account holds with an ENABLED v6 asset policy. `repayable` = the ops relayer
+   * is also an allowlisted payee (the rung-4 bootstrap precondition); only that route needs it -
+   * swap-to-gas never pays the relayer. Absent = treated as repayable (callers that predate the flag).
+   */
+  spendableTokens: Array<{ token: Address; balance: bigint; repayable?: boolean }>;
   /** sessionKey is an allowlisted payee on the native asset (rung 2 precondition) */
   sessionKeyNativeAllowlisted: boolean;
 }
@@ -69,8 +73,9 @@ export function planGas(cfg: GasRouteConfig, snap: GasSnapshot): GasPlan {
   if (token && cfg.dexRouteAvailable) {
     return { mode: 'swap-to-gas', reason: `governed DEX leg can convert ${token.token} to native` };
   }
-  if (token && cfg.gasRepayDelegate && cfg.gasRepayDelegate !== '0x0000000000000000000000000000000000000000') {
-    return { mode: 'bootstrap-7702', reason: `GasRepayDelegate bootstrap; repay in ${token.token}` };
+  const repayToken = snap.spendableTokens.find((t) => t.balance > 0n && t.repayable !== false);
+  if (repayToken && cfg.gasRepayDelegate && cfg.gasRepayDelegate !== '0x0000000000000000000000000000000000000000') {
+    return { mode: 'bootstrap-7702', reason: `GasRepayDelegate bootstrap; repay in ${repayToken.token}` };
   }
   return { mode: 'ask-owner', reason: 'no self-funding path on this chain — surface ONE ask, never stall silently' };
 }
@@ -252,7 +257,7 @@ export function planGasRoute(
   const okViews = survey.views.filter((v) => v.status === 'ok');
   const bridged = opts.lanes && opts.lanes.length > 0 ? planBridgeThenSwap(cfgByChain, okViews, view, cfg, opts.lanes) : null;
   if (bridged) return bridged;
-  const token = view.spendableTokens.find((t) => t.balance > 0n);
+  const token = view.spendableTokens.find((t) => t.balance > 0n && t.repayable !== false);
   if (opts.allowRelayerBootstrap && hasDelegate(cfg) && token) {
     const leg: GasRouteLeg = { kind: 'bootstrap', chainId: targetChainId, token: token.token, gasOnChainId: targetChainId, gasNeededWei: 0n, requiresGrants: ['repayment payee for the relayer', 'token budget'] };
     return {
