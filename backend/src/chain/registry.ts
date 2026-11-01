@@ -83,6 +83,22 @@ export interface ChainConfig {
     vault?: string | undefined;
     settlementToken?: string | undefined;
   };
+  /**
+   * AQ-FND M-3 inc-3a: the swap-to-gas executor's per-chain constants (a chain whose
+   * `canonical.router` is a Uniswap V3 SwapRouter02). OWNER/OPERATOR config - never
+   * model-derived. Unset => the planner may still find `swap-to-gas` (router configured) but
+   * nothing executes: the runtime raises the honest ask instead.
+   */
+  gasSwap?:
+    | {
+        /** the chain's WETH9 (swap output; `withdraw` unwraps it to native). Lowercased. */
+        wrappedNative: string;
+        /** the WETH/settlement-token pool fee tier (probe: Base 3000, Eth 10000, Arb 3000). */
+        dexFeeTier: number;
+        /** token base units sold per gas swap, e.g. 5 USDC = 5_000_000 (6 decimals). */
+        tokenAmount: bigint;
+      }
+    | undefined;
   /** 0G enforces a 2-gwei floor; other chains have their own. Applied at send time. */
   gasFloorWei: bigint;
   /**

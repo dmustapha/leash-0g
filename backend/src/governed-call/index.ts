@@ -19,3 +19,10 @@ export {
   type TargetKey,
 } from './presets.js';
 export { SELECTORS, WRAPPER_SELECTORS, SELF_EDIT_SELECTORS, BRIDGE_SELECTORS } from './selectors.js';
+export {
+  buildGasSwapCalls,
+  buildWrappedNativeUnwrap,
+  GAS_SWAP_AMOUNT_OUT_MINIMUM,
+  type GasSwapCall,
+  type GasSwapParams,
+} from './gas-swap.js';

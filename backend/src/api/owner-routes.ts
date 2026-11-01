@@ -156,6 +156,8 @@ export interface OwnerChainRegistry {
     canonical?: { router?: string | undefined; vault?: string | undefined; settlementToken?: string | undefined } | undefined;
     /** F-2: per-chain session-key gas dust override (unset ⇒ global default). */
     sessionGasDustWei?: bigint | undefined;
+    /** AQ-FND M-3 inc-3a: the swap-to-gas constants (WETH9 feeds the gas_swap preset catalog). */
+    gasSwap?: { wrappedNative: string } | undefined;
     /** AQ-FND Lane-B: the chain's default mint version (6 where the V6 set is wired). */
     accountVersion?: number;
   };
@@ -1128,8 +1130,10 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     if (agent.chainId === deps.settings.defaultChainId || !deps.chainRegistry) {
       return deps.settings.capabilityCatalog;
     }
-    const canonical = deps.chainRegistry.getChainConfig(agent.chainId).canonical;
+    const chainCfg = deps.chainRegistry.getChainConfig(agent.chainId);
+    const canonical = chainCfg.canonical;
     return {
+      ...(chainCfg.gasSwap ? { wrapped_native: chainCfg.gasSwap.wrappedNative.toLowerCase() } : {}),
       ...(canonical?.router ? { router: canonical.router.toLowerCase() } : {}),
       ...(canonical?.vault ? { vault: canonical.vault.toLowerCase() } : {}),
       ...(canonical?.settlementToken ? { settlement_token: canonical.settlementToken.toLowerCase() } : {}),
@@ -1165,6 +1169,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
         cfg.canonical?.router,
         cfg.canonical?.vault,
         cfg.canonical?.settlementToken,
+        cfg.gasSwap?.wrappedNative,
       ]
         .filter((a): a is string => typeof a === 'string')
         .map((a) => a.toLowerCase()),

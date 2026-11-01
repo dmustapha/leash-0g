@@ -133,25 +133,59 @@ async function isNativePayee(chain: RuntimeChain, accountAddr: string, sessionKe
  * simulated figures once the swap/bridge executors exist; until then they only decide
  * "can the key afford this leg" for the route/ask, never the amount of any transaction.
  */
-const SWAP_LEG_GAS_UNITS = 250_000n;
+/**
+ * The swap-to-gas route burns THREE swap-side txs on the target chain: approve (~50k) +
+ * SwapRouter02 exactInputSingle (~200k) + WETH9 withdraw (~35k); 400k leaves headroom. The
+ * fourth tx (the account->key refuel) is `REFUEL_LEG_GAS_UNITS`.
+ */
+const SWAP_LEG_GAS_UNITS = 400_000n;
 const REFUEL_LEG_GAS_UNITS = 60_000n;
+/** Gas units of ordinary actions the key should still be able to afford before it refills. */
+const ACTION_HEADROOM_GAS_UNITS = 300_000n;
 /** Gas-price floor (wei) used to turn the units into wei on chains whose own floor is lower. */
 const MIN_ESTIMATE_GAS_PRICE_WEI = 1_000_000_000n; // 1 gwei
 /** Per-chain read budget; a slower chain is reported `unknown`, never waited on. */
 const SURVEY_CHAIN_TIMEOUT_MS = 8_000;
+
+/**
+ * Where the key counts as "low on gas" on a swap-to-gas chain: the swap+refuel legs it must still
+ * afford PLUS headroom for ordinary actions. The planner's has-native test defaults to the chain's
+ * gas-PRICE floor (0 on Base; 2 gwei on 0G) - orders of magnitude below what the legs cost - so
+ * without this a swap-to-gas route is either never needed (floor 0) or never feasible (the key
+ * must hold the leg gas to run it). Clamped to the refuel amount: a refuel that cannot lift the
+ * key back above the trigger would re-run the swap every cycle. Only set when the chain carries
+ * `gasSwap` config, so every other chain keeps its existing behaviour.
+ */
+function swapRefillTrigger(refuelWei: bigint, swapLegGasWei: bigint, refuelLegGasWei: bigint, gasPriceWei: bigint): bigint {
+  const wanted = swapLegGasWei + refuelLegGasWei + ACTION_HEADROOM_GAS_UNITS * gasPriceWei;
+  return wanted < refuelWei ? wanted : refuelWei;
+}
 
 /** buildGasRouteConfig + the per-leg gas estimates and DEX pair the route planner reads. */
 export function buildRouteChainCfg(chainConfig: ChainConfig, globalDustWei: bigint): RouteChainCfg {
   const gasPriceWei =
     chainConfig.gasFloorWei > MIN_ESTIMATE_GAS_PRICE_WEI ? chainConfig.gasFloorWei : MIN_ESTIMATE_GAS_PRICE_WEI;
   const settlementToken = chainConfig.canonical?.settlementToken;
+  const base = buildGasRouteConfig(chainConfig, globalDustWei);
+  const swapLegGasWei = SWAP_LEG_GAS_UNITS * gasPriceWei;
+  const refuelLegGasWei = REFUEL_LEG_GAS_UNITS * gasPriceWei;
   return {
-    ...buildGasRouteConfig(chainConfig, globalDustWei),
+    ...base,
     chainId: chainConfig.chainId,
-    swapLegGasWei: SWAP_LEG_GAS_UNITS * gasPriceWei,
-    refuelLegGasWei: REFUEL_LEG_GAS_UNITS * gasPriceWei,
+    swapLegGasWei,
+    refuelLegGasWei,
+    ...(chainConfig.gasSwap
+      ? { refillTriggerWei: swapRefillTrigger(base.refuelWei, swapLegGasWei, refuelLegGasWei, gasPriceWei) }
+      : {}),
     dexPairs:
       chainConfig.canonical?.router && settlementToken ? [{ tokenIn: settlementToken.toLowerCase() as Address }] : [],
+    ...(chainConfig.gasSwap
+      ? {
+          wrappedNative: chainConfig.gasSwap.wrappedNative.toLowerCase() as Address,
+          dexFeeTier: chainConfig.gasSwap.dexFeeTier,
+          gasSwapTokenAmount: chainConfig.gasSwap.tokenAmount,
+        }
+      : {}),
   };
 }
 

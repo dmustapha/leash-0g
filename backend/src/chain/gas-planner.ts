@@ -109,6 +109,15 @@ export interface RouteChainCfg extends GasRouteConfig {
   refuelLegGasWei: bigint;
   /** tokens with a verified DEX route to native on this chain */
   dexPairs?: Array<{ tokenIn: Address }>;
+  /**
+   * AQ-FND M-3 inc-3a: the swap-to-gas EXECUTOR constants (owner/operator config; the planner
+   * itself never reads them - its ordering/semantics are unchanged). All three present =>
+   * the runtime can execute a `swap-to-gas` route; any absent => it raises the honest ask.
+   */
+  wrappedNative?: Address | undefined;
+  dexFeeTier?: number | undefined;
+  /** token base units sold per gas swap (e.g. 5 USDC = 5_000_000); a config figure, never model-derived */
+  gasSwapTokenAmount?: bigint | undefined;
 }
 
 export interface GasRouteLeg {

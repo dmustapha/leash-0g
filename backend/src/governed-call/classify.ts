@@ -52,6 +52,16 @@ export function classify(decoded: DecodedCall, grant: GrantState, self: string):
     return { lane: 'forbidden', reason: 'bridge_undecodable' };
   }
 
+  // AQ-FND M-3 inc-3a: a swap-to-gas call may only BUY the chain's wrapped-native. Fail-closed:
+  // a decoded output token outside the pinned set is never JIT-grantable as a gas swap.
+  if (
+    decoded.args.swapTokenOut !== undefined &&
+    grant.swapOutputTokens !== undefined &&
+    !grant.swapOutputTokens.has(decoded.args.swapTokenOut.toLowerCase())
+  ) {
+    return { lane: 'forbidden', reason: 'swap_output_not_allowed' };
+  }
+
   const key = ruleKey(decoded.target, decoded.selector);
   const rule = grant.rules.get(key);
   const novelty: Novelty[] = [];

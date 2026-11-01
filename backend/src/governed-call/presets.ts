@@ -13,13 +13,15 @@ import type { CallRule, CapabilityPreset, DenyTrigger, PresetKey } from './types
  * (mock targets on 0G testnet, decision (c); real protocols are Stage E).
  */
 
-export type TargetKey = 'router' | 'vault' | 'settlement_token';
+export type TargetKey = 'router' | 'vault' | 'settlement_token' | 'wrapped_native';
 
 /** Per-network resolution of logical keys → concrete lowercased addresses. */
 export interface TargetCatalog {
   router?: string;
   vault?: string;
   settlement_token?: string;
+  /** the chain's WETH9 (`ChainConfig.gasSwap.wrappedNative`) — the swap-to-gas output + unwrap target. */
+  wrapped_native?: string;
 }
 
 interface Capability {
@@ -115,6 +117,21 @@ const PRESETS: readonly PresetDef[] = [
       { target: 'vault', signature: 'function deposit(uint256,address)', recipientMode: 'self', perCallCap: '50000000', windowCapCall: '250000000' },
     ],
     budgets: [{ token: 'settlement_token', windowCap: '250000000' }],
+  },
+  {
+    // AQ-FND M-3 inc-3a: the rules the swap-to-gas executor (`buildGasSwapCalls`) needs.
+    // The owner ALSO needs (not call rules, so not expressible here): the session key as an
+    // allowlisted NATIVE payee (the final account->session-key refuel), and the WETH9 /
+    // router in the chain's protocol allowlist. perCallCap bounds one gas swap (e.g. 20 USDC).
+    key: 'gas_swap',
+    label: 'Gas Swap',
+    description: 'Let the agent sell a small, fixed amount of its settlement token for the chain\'s native gas coin, only through the chain\'s Uniswap router, and only into its own account. Asks you before any other swap, token, or recipient.',
+    capabilities: [
+      { target: 'settlement_token', signature: 'function approve(address,uint256)', recipientMode: 'self', spenders: ['router'], perCallCap: '20000000', windowCapCall: '100000000' },
+      { target: 'router', signature: 'function exactInputSingle((address,address,uint24,address,uint256,uint256,uint160))', recipientMode: 'self', perCallCap: '20000000', windowCapCall: '100000000' },
+      { target: 'wrapped_native', signature: 'function withdraw(uint256)', recipientMode: 'self', perCallCap: '1000000000000000000', windowCapCall: '5000000000000000000' },
+    ],
+    budgets: [{ token: 'settlement_token', windowCap: '100000000' }],
   },
 ];
 

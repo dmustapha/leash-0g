@@ -113,3 +113,32 @@ describe('SE-7 Base Sepolia chain config (config-only onboarding)', () => {
     ).rejects.toThrow(/no legacy factory/);
   });
 });
+
+describe('AQ-FND M-3 inc-3a swap-to-gas chain config (optional, off by default)', () => {
+  const BASE_ON = { BASE_SEPOLIA_RPC: 'http://base.leash-test.local', AGENT_REGISTRY_BASE_ADDR: '0x' + 'ee'.repeat(20) };
+
+  it('unset => no gasSwap on any chain (existing agents unaffected)', () => {
+    const chains = buildChainConfigs(cfgWith(BASE_ON));
+    expect(chains.every((c) => c.gasSwap === undefined)).toBe(true);
+  });
+
+  it('all three vars => a lowercased gasSwap block', () => {
+    const chains = buildChainConfigs(
+      cfgWith({
+        ...BASE_ON,
+        BASE_GAS_SWAP_WETH_ADDR: '0x' + 'AB'.repeat(20),
+        BASE_GAS_SWAP_FEE_TIER: '3000',
+        BASE_GAS_SWAP_TOKEN_AMOUNT: '5000000',
+      }),
+    );
+    expect(chains.find((c) => c.chainId === 84532)?.gasSwap).toEqual({
+      wrappedNative: '0x' + 'ab'.repeat(20),
+      dexFeeTier: 3000,
+      tokenAmount: 5_000_000n,
+    });
+  });
+
+  it('a partial set FAILS startup rather than booting a half-configured executor', () => {
+    expect(() => buildChainConfigs(cfgWith({ ...BASE_ON, BASE_GAS_SWAP_FEE_TIER: '3000' }))).toThrow(/must be set together/);
+  });
+});

@@ -18,7 +18,7 @@ export interface SelectorSpec {
   /** the ABI param types in order (static-position decode). `bytes32` words with a
    *  `recipient` role decode as canonical addresses (upper 96 bits must be zero —
    *  the CCTP EVM `mintRecipient` encoding). */
-  paramTypes: ('address' | 'uint256' | 'uint32' | 'bool' | 'bytes32')[];
+  paramTypes: ('address' | 'uint256' | 'uint24' | 'uint32' | 'uint160' | 'bool' | 'bytes32')[];
   /** role of each positional arg (same length as paramTypes). */
   roles: ArgRole[];
   /**
@@ -81,6 +81,11 @@ export interface SelectorSpec {
    * whole leg as relayer fee while the budget meter records the full amount).
    */
   feeBoundedByAmountArg?: number;
+  /**
+   * AQ-FND M-3 inc-3a: which positional arg is the swap's OUTPUT token — extracted into
+   * `args.swapTokenOut` so classify can pin it (SwapRouter02 `exactInputSingle`).
+   */
+  swapTokenOutArg?: number;
 }
 
 /** Build a spec keyed by its computed 4-byte selector. */
@@ -236,6 +241,42 @@ export const SELECTORS: ReadonlyMap<string, SelectorSpec> = new Map<string, Sele
     verb: 'bridge',
     bridge: true,
     custom: 'ccip_send',
+  }),
+  // ---- AQ-FND M-3 inc-3a: swap-to-gas legs (Uniswap V3 SwapRouter02 + WETH9) ----
+  // Off-chain curated decoders (structured:false — the on-chain wall meters them as governed
+  // calls; the token OUTFLOW is hard-bounded on-chain by the exact-amount `approve` to the
+  // router, so the router can pull no more than the approved amountIn). Every arg is
+  // server-determined by `buildGasSwapCalls`, never model text.
+  spec({
+    // SwapRouter02 (NO `deadline` field, unlike SwapRouter v1). The struct is all-static, so
+    // the calldata is a flat 7-word tuple (no offset). tokenIn budget-keyed via arg 0;
+    // recipient pinned (self-mode rule); tokenOut pinned to wrapped-native by classify;
+    // sqrtPriceLimitX96 pinned zero (no price-limit smuggling).
+    signature:
+      'function exactInputSingle((address tokenIn, address tokenOut, uint24 fee, address recipient, uint256 amountIn, uint256 amountOutMinimum, uint160 sqrtPriceLimitX96) params)',
+    paramTypes: ['address', 'address', 'uint24', 'address', 'uint256', 'uint256', 'uint160'],
+    roles: ['ignore', 'ignore', 'ignore', 'recipient', 'amount', 'ignore', 'ignore'],
+    structured: false,
+    amountIndex: 4,
+    spendToken: 'target', // overridden by spendTokenFromArg (the tokenIn's budget key)
+    spendTokenFromArg: 0,
+    verb: 'swap',
+    forbidValue: true,
+    zeroArgs: [6],
+    swapTokenOutArg: 1,
+  }),
+  // WETH9 withdraw(wad): unwraps the caller's WETH to NATIVE sent back to msg.sender (the
+  // account). Nothing leaves the account, so there is no token budget to debit
+  // (spendToken native/zero); the rule's perCallCap still bounds the unwrapped amount.
+  spec({
+    signature: 'function withdraw(uint256 wad)',
+    paramTypes: ['uint256'],
+    roles: ['amount'],
+    structured: false,
+    amountIndex: 0,
+    spendToken: 'native',
+    verb: 'unwrap',
+    forbidValue: true,
   }),
   // ---- curated router/vault set (off-chain legibility only; on-chain non-structured) ----
   // swap(tokenIn,tokenOut,amountIn,amountOutMin,recipient,deadline) — the curated DEX

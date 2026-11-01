@@ -112,6 +112,7 @@ export function decodeCall(target: string, value: bigint, data: string): Decoded
       // address word — upper 96 bits zero — so the one decode covers both.
       const addr = decodeCanonicalAddress(word);
       decodedAddrs[i] = addr;
+      if (spec.swapTokenOutArg === i && addr !== null) args.swapTokenOut = addr;
       if (addr === null) {
         reject = 'DecodeMismatch';
         break;
@@ -121,10 +122,10 @@ export function decodeCall(target: string, value: bigint, data: string): Decoded
       else if (role === 'from') args.from = addr;
     } else if (type === 'bytes32') {
       // non-recipient bytes32 (destinationCaller): no decode — zeroArgs above pins it.
-    } else if (type === 'uint32') {
-      // strict canonical: bits above uint32 must be zero (contract mirrors).
+    } else if (type === 'uint32' || type === 'uint24') {
+      // strict canonical: bits above uint32/uint24 must be zero (contract mirrors).
       const raw = BigInt('0x' + word);
-      if (raw >> 32n !== 0n) {
+      if (raw >> (type === 'uint24' ? 24n : 32n) !== 0n) {
         reject = 'DecodeMismatch';
         break;
       }

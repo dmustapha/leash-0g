@@ -136,14 +136,15 @@ describe('buildRouteChainCfg — AQ-FND M-3 inc-2 route config', () => {
     expect(cfg.chainId).toBe(16602);
     expect(cfg.gasRepayDelegate).toBe(DELEGATE);
     // floor (2 gwei) is above the 1 gwei minimum ⇒ price = floor; estimates = units × price
-    expect(cfg.swapLegGasWei).toBe(250_000n * 2_000_000_000n);
+    // 3 swap-side txs (approve + exactInputSingle + withdraw) => 400k units (inc-3a; was 250k for 1 swap)
+    expect(cfg.swapLegGasWei).toBe(400_000n * 2_000_000_000n);
     expect(cfg.refuelLegGasWei).toBe(60_000n * 2_000_000_000n);
     expect(cfg.dexPairs).toEqual([]);
   });
 
   it('a gas floor below 1 gwei is priced at the 1 gwei minimum', () => {
     const cfg = buildRouteChainCfg({ ...GALILEO, gasFloorWei: 12_000_000n }, GLOBAL_DUST);
-    expect(cfg.swapLegGasWei).toBe(250_000n * 1_000_000_000n);
+    expect(cfg.swapLegGasWei).toBe(400_000n * 1_000_000_000n);
     expect(cfg.refuelLegGasWei).toBe(60_000n * 1_000_000_000n);
   });
 
@@ -155,6 +156,69 @@ describe('buildRouteChainCfg — AQ-FND M-3 inc-2 route config', () => {
     expect(withPair.dexPairs).toEqual([{ tokenIn: usdc.toLowerCase() }]);
     expect(buildRouteChainCfg({ ...GALILEO, canonical: { router } }, GLOBAL_DUST).dexPairs).toEqual([]);
     expect(buildRouteChainCfg({ ...GALILEO, canonical: { settlementToken: usdc } }, GLOBAL_DUST).dexPairs).toEqual([]);
+  });
+});
+
+describe('buildRouteChainCfg — inc-3a swap-to-gas executor constants', () => {
+  const ROUTER = '0x' + 'ab'.repeat(20);
+  const USDC = '0x' + 'cd'.repeat(20);
+  const WETH = '0x' + 'EF'.repeat(20);
+  const BASE: ChainConfig = {
+    ...GALILEO,
+    chainId: 84532,
+    name: 'Base Sepolia',
+    gasFloorWei: 0n,
+    gasRepayDelegateAddr: undefined,
+    canonical: { router: ROUTER, settlementToken: USDC },
+    gasSwap: { wrappedNative: WETH, dexFeeTier: 3000, tokenAmount: 5_000_000n },
+  };
+
+  it('carries wrappedNative (lowercased), dexFeeTier and gasSwapTokenAmount from the chain config', () => {
+    const cfg = buildRouteChainCfg(BASE, GLOBAL_DUST);
+    expect(cfg.wrappedNative).toBe(WETH.toLowerCase());
+    expect(cfg.dexFeeTier).toBe(3000);
+    expect(cfg.gasSwapTokenAmount).toBe(5_000_000n);
+    expect(cfg.dexPairs).toEqual([{ tokenIn: USDC }]);
+  });
+
+  it('a swap chain refills below (swap + refuel + headroom) legs, clamped to the refuel amount', () => {
+    const cfg = buildRouteChainCfg(BASE, GLOBAL_DUST);
+    const price = 1_000_000_000n; // floor 0 => 1 gwei minimum estimate price
+    expect(cfg.refillTriggerWei).toBe((400_000n + 60_000n + 300_000n) * price);
+    const clamped = buildRouteChainCfg({ ...BASE, sessionGasDustWei: 10n }, GLOBAL_DUST);
+    expect(clamped.refillTriggerWei).toBe(10n);
+  });
+
+  it('no gasSwap config => no executor fields and no refill trigger (existing chains unchanged)', () => {
+    const cfg = buildRouteChainCfg({ ...BASE, gasSwap: undefined }, GLOBAL_DUST);
+    expect(cfg.wrappedNative).toBeUndefined();
+    expect(cfg.refillTriggerWei).toBeUndefined();
+  });
+
+  it('planGasRoute still returns swap-to-gas with the raised leg-gas estimate', () => {
+    const cfg = buildRouteChainCfg(BASE, GLOBAL_DUST);
+    const sessionNativeWei = cfg.swapLegGasWei + cfg.refuelLegGasWei; // can afford the legs, below the trigger
+    expect(sessionNativeWei).toBeLessThan(cfg.refillTriggerWei ?? 0n);
+    const route = planGasRoute(
+      { 84532: cfg },
+      {
+        views: [
+          {
+            chainId: 84532,
+            status: 'ok',
+            sessionNativeWei,
+            accountNativeWei: 0n,
+            spendableTokens: [{ token: USDC as `0x${string}`, balance: 9_000_000n }],
+            sessionKeyNativeAllowlisted: true,
+          },
+        ],
+      },
+      84532,
+      { allowRelayerBootstrap: false },
+    );
+    expect(route.mode).toBe('swap-to-gas');
+    expect(route.legs.map((l) => l.kind)).toEqual(['swap', 'refuel']);
+    expect(route.legs[0]?.gasNeededWei).toBe(400_000n * 1_000_000_000n);
   });
 });
 

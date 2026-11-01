@@ -210,6 +210,20 @@ const envSchema = z.object({
   ARB_CAP_BRIDGE_TOKEN_L2: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
   /** SE-9: its Ethereum-Sepolia (L1) counterpart — the `outboundTransfer` arg0 (remote token). */
   ARB_CAP_BRIDGE_TOKEN_L1: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  /**
+   * AQ-FND M-3 inc-3a: swap-to-gas constants per DEX chain (WETH9 + pool fee tier + token base
+   * units sold per swap). ALL THREE or none; unset (the default) leaves the executor off and
+   * existing agents unaffected. Probe: Base 3000, Eth Sepolia 10000, Arb Sepolia 3000.
+   */
+  BASE_GAS_SWAP_WETH_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  BASE_GAS_SWAP_FEE_TIER: z.string().regex(/^\d{1,6}$/).optional(),
+  BASE_GAS_SWAP_TOKEN_AMOUNT: z.string().regex(/^\d{1,30}$/).optional(),
+  SEPOLIA_GAS_SWAP_WETH_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  SEPOLIA_GAS_SWAP_FEE_TIER: z.string().regex(/^\d{1,6}$/).optional(),
+  SEPOLIA_GAS_SWAP_TOKEN_AMOUNT: z.string().regex(/^\d{1,30}$/).optional(),
+  ARB_GAS_SWAP_WETH_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  ARB_GAS_SWAP_FEE_TIER: z.string().regex(/^\d{1,6}$/).optional(),
+  ARB_GAS_SWAP_TOKEN_AMOUNT: z.string().regex(/^\d{1,30}$/).optional(),
   // SE-10 (E-11): PROMOTE Ethereum Sepolia (11155111) from a bridge DESTINATION-only
   // chain (SE-8) to a FULL governed HOME chain — a home-on-Eth-Sepolia agent runs its
   // full sense→decide→gate→act loop and lands a governed call against a REAL protocol
@@ -360,6 +374,14 @@ const extraChainSchema = z.object({
       settlementToken: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
     })
     .optional(),
+  // AQ-FND M-3 inc-3a: swap-to-gas constants (see ChainConfig.gasSwap).
+  gasSwap: z
+    .object({
+      wrappedNative: z.string().regex(/^0x[0-9a-fA-F]{40}$/),
+      dexFeeTier: z.number().int().positive().max(1_000_000),
+      tokenAmount: z.string().regex(/^[1-9]\d{0,29}$/),
+    })
+    .optional(),
   gasFloorWei: z.string().regex(/^\d{1,30}$/).optional(),
   // F-2: per-chain session-key gas dust (wei). Unset ⇒ SESSION_GAS_DUST_WEI.
   sessionGasDustWei: z.string().regex(/^\d{1,30}$/).optional(),
@@ -447,6 +469,15 @@ export function parseExtraChains(
         : {}),
       gasFloorWei: e.gasFloorWei ? BigInt(e.gasFloorWei) : 0n,
       ...(e.sessionGasDustWei ? { sessionGasDustWei: BigInt(e.sessionGasDustWei) } : {}),
+      ...(e.gasSwap
+        ? {
+            gasSwap: {
+              wrappedNative: e.gasSwap.wrappedNative.toLowerCase(),
+              dexFeeTier: e.gasSwap.dexFeeTier,
+              tokenAmount: BigInt(e.gasSwap.tokenAmount),
+            },
+          }
+        : {}),
       ...(e.canonical
         ? {
             canonical: {
@@ -490,6 +521,25 @@ function bridgeConfig(
   const allow = [...new Set([...(parsed?.bridgeAllowlist ?? []), ...rails])];
   if (allow.length === 0) return {};
   return { bridgeAllowlist: allow, ...(parsed ? { bridgeDestinations: parsed.bridgeDestinations } : {}) };
+}
+
+/**
+ * AQ-FND M-3 inc-3a: the optional swap-to-gas constants of one env-configured chain. All three
+ * vars or none - a partial set FAILS startup (a half-configured executor must never boot).
+ */
+function gasSwapConfig(
+  label: string,
+  weth: string | undefined,
+  feeTier: string | undefined,
+  tokenAmount: string | undefined,
+): Pick<ChainConfig, 'gasSwap'> | Record<string, never> {
+  if (!weth && !feeTier && !tokenAmount) return {};
+  if (!weth || !feeTier || !tokenAmount) {
+    throw new Error(`${label}_GAS_SWAP_WETH_ADDR, _FEE_TIER and _TOKEN_AMOUNT must be set together`);
+  }
+  const amount = BigInt(tokenAmount);
+  if (amount <= 0n) throw new Error(`${label}_GAS_SWAP_TOKEN_AMOUNT must be positive`);
+  return { gasSwap: { wrappedNative: weth.toLowerCase(), dexFeeTier: Number(feeTier), tokenAmount: amount } };
 }
 
 export function buildChainConfigs(cfg: Config): ChainConfig[] {
@@ -564,6 +614,7 @@ export function buildChainConfigs(cfg: Config): ChainConfig[] {
       // AQ-FND M-4: OP-stack bridge entries (addr:dest) + the real rails (CCTP
       // TokenMessenger for the USDC legs, Base's CCIP Router for the 0G legs).
       ...bridgeConfig(cfg.BASE_BRIDGE_ALLOWLIST, [cfg.BASE_CCIP_ROUTER_ADDR, cfg.CCTP_TOKEN_MESSENGER_ADDR]),
+      ...gasSwapConfig('BASE', cfg.BASE_GAS_SWAP_WETH_ADDR, cfg.BASE_GAS_SWAP_FEE_TIER, cfg.BASE_GAS_SWAP_TOKEN_AMOUNT),
     });
   }
   // SE-8: Ethereum Sepolia (11155111) — the OP-stack bridge DESTINATION chain.
@@ -598,6 +649,7 @@ export function buildChainConfigs(cfg: Config): ChainConfig[] {
         : {}),
       // AQ-FND M-4: the real rails on Eth Sepolia (CCTP USDC legs + CCIP 0G legs).
       ...bridgeConfig(undefined, [cfg.SEPOLIA_CCIP_ROUTER_ADDR, cfg.CCTP_TOKEN_MESSENGER_ADDR]),
+      ...gasSwapConfig('SEPOLIA', cfg.SEPOLIA_GAS_SWAP_WETH_ADDR, cfg.SEPOLIA_GAS_SWAP_FEE_TIER, cfg.SEPOLIA_GAS_SWAP_TOKEN_AMOUNT),
     });
   }
   // SE-9 (E-10): Arbitrum Sepolia (421614) — the DIVERGENT bridge family. Appended
@@ -630,6 +682,7 @@ export function buildChainConfigs(cfg: Config): ChainConfig[] {
         : {}),
       // AQ-FND M-4: Arbitrum bridge entries (addr:dest) + the real rails.
       ...bridgeConfig(cfg.ARB_BRIDGE_ALLOWLIST, [cfg.ARB_CCIP_ROUTER_ADDR, cfg.CCTP_TOKEN_MESSENGER_ADDR]),
+      ...gasSwapConfig('ARB', cfg.ARB_GAS_SWAP_WETH_ADDR, cfg.ARB_GAS_SWAP_FEE_TIER, cfg.ARB_GAS_SWAP_TOKEN_AMOUNT),
     });
   }
   // SE-10 (E-11): the GENERIC chain-table — remaining top EVM testnets onboard here

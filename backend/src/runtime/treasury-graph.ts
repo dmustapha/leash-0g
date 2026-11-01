@@ -29,6 +29,7 @@ import { buildGovernedCall, BRIDGE_SELECTORS, SELECTORS } from '../governed-call
 import { SELECTOR_APPROVE } from '../governed-call/selectors.js';
 import type { TradeFill } from '../governed-call/call-builder.js';
 import { classifyIntendedCall } from '../gateway/call-gate.js';
+import { executeGasSwap, GasSwapLegError, precheckGasSwap, gasSwapSetup, type GasSwapEnv } from './gas-swap.js';
 import { raiseCapabilityRequest, type CapabilityDeps } from '../capabilities/service.js';
 import { listGrants } from '../store/capabilities.js';
 import { gateToolCall } from '../gateway/mcp/tool-gate.js';
@@ -87,7 +88,7 @@ import {
  */
 
 export type CycleOutcome =
-  | { type: 'acted'; txHash: string; valueWei: string; approved?: boolean; callTarget?: string; token?: string; gasRung?: string }
+  | { type: 'acted'; txHash: string; valueWei: string; approved?: boolean; callTarget?: string; token?: string; gasRung?: string; gasBought?: string }
   | { type: 'delegated'; delegationId: string }
   | { type: 'stood_down'; reason: string }
   | { type: 'denied'; reason: string }
@@ -98,7 +99,7 @@ export type CycleOutcome =
   | { type: 'signed'; digest: string; descriptorId: number }
   | { type: 'signing_requested'; descriptorId: number };
 
-type Route = 'act' | 'token_act' | 'approval' | 'delegate' | 'call' | 'tool_call' | 'sign' | 'stand_down';
+type Route = 'act' | 'token_act' | 'gas_swap' | 'approval' | 'delegate' | 'call' | 'tool_call' | 'sign' | 'stand_down';
 
 /**
  * FP-3 — the runtime signing rail (OPTIONAL, mirror of `toolRail`). When wired, the decide node
@@ -197,6 +198,9 @@ const TreasuryState = Annotation.Root({
   tokenActAmountWei: Annotation<string>,
   /** AQ-FND M-3: the gas rung the ladder picked this cycle ('has-native' | 'bootstrap-7702' | 'account-native'). */
   tokenActGasRung: Annotation<string>,
+  /** AQ-FND M-3 inc-3a: the `gas_swap` route's resolved sale (decide -> gasSwapAct). */
+  gasSwapToken: Annotation<string>,
+  gasSwapAmountIn: Annotation<string>,
   /** SF-3: the resolved L1 tool call for the `tool_call` route (egress leg). */
   toolName: Annotation<string>,
   toolEndpoint: Annotation<string>,
@@ -1065,13 +1069,104 @@ export function buildTreasuryGraph(
         return actWith('bootstrap-7702');
       }
       case 'swap-to-gas':
+        return decideGasSwap(decision, route, gasConfig, sessionKeyAddr, gasAsk);
       case 'bridge-then-swap':
-        // Honest ask: the route exists but its executors (Increment 3) are not wired and it
-        // needs owner grants — state the route + grants, never execute.
+        // Honest ask: bridge-then-swap's bridge executor is Increment 3b - state the route
+        // + grants, never execute.
         return gasAsk(`${route.mode} route found but not executable yet — raised one gas ask with the required grants`);
       case 'ask-owner':
       default:
         return gasAsk(`no self-funding gas path (${route.reason}) — raised one gas ask, never a silent stall`);
+    }
+  }
+
+  /**
+   * AQ-FND M-3 inc-3a: resolve a `swap-to-gas` route. Every swap-side leg is built server-side
+   * (`buildGasSwapCalls`) and run through the EXISTING classify against the owner's live grants:
+   *   all L1      -> route `gas_swap` (gasSwapAct runs the legs; the NEXT cycle re-plans has-native)
+   *   a leg is L2 -> the EXISTING capability request for the FIRST uncovered leg (deduped by callHash)
+   *   forbidden / no executor config / no native payee -> ONE `gas_request` ask naming the blocker
+   * Nothing is submitted here. The relayer is never involved.
+   */
+  async function decideGasSwap(
+    decision: AgentDecision,
+    route: GasRoute,
+    gasConfig: NonNullable<TreasuryGraphDeps['gasConfig']>,
+    sessionKeyAddr: string,
+    gasAsk: (reason: string) => Promise<Partial<State>>,
+  ): Promise<Partial<State>> {
+    const token = route.legs.find((l) => l.kind === 'swap')?.token;
+    if (!token || !gasSwapSetup(gasConfig.chainConfig)) {
+      return gasAsk('swap-to-gas route found but this chain has no gas-swap config — raised one gas ask with the required grants');
+    }
+    const pre = await precheckGasSwap(gasSwapEnv(gasConfig), token, sessionKeyAddr);
+    if (pre.ok) {
+      return { decision, route: 'gas_swap', gasSwapToken: token, gasSwapAmountIn: pre.amountIn.toString() };
+    }
+    if (pre.kind === 'l2') {
+      if (!deps.capabilities) return standDownToken('swap-to-gas leg needs owner approval — no capability rail configured, standing down');
+      await raiseCapabilityRequest(deps.capabilities, ctx.agentRow, pre.gate);
+      return standDownToken(`swap-to-gas ${pre.leg} leg is not covered by the owner's grants — raised a capability request`);
+    }
+    if (pre.kind === 'forbidden') {
+      return askOwnerAndStandDown(
+        'gas_request',
+        `${gasAskSummary(gasConfig, route)} The ${pre.leg} step is blocked (${pre.reason}).`,
+        `gas_request:${ctx.agentId}:${route.targetChainId}:swap-to-gas:${pre.leg}:${pre.reason}`,
+        `swap-to-gas ${pre.leg} leg forbidden (${pre.reason}) — raised one gas ask`,
+      );
+    }
+    return gasAsk(`swap-to-gas not executable (${pre.reason}) — raised one gas ask with the required grants`);
+  }
+
+  function gasSwapEnv(gasConfig: NonNullable<TreasuryGraphDeps['gasConfig']>): GasSwapEnv {
+    return {
+      pool: deps.pool,
+      chain: deps.chain,
+      agentId: ctx.agentId,
+      accountAddr: ctx.accountAddr,
+      chainConfig: gasConfig.chainConfig,
+      bridgeTargets: deps.bridge?.targets,
+    };
+  }
+
+  /**
+   * AQ-FND M-3 inc-3a: run the swap-to-gas legs (approve -> swap -> unwrap -> refuel) with the
+   * SESSION key, each awaited to a successful receipt. ONE outcome per cycle; a failed leg stops
+   * the sequence (no retry loop - the next cycle re-plans from chain state). A success stands the
+   * cycle down on the top-up itself: the next cycle sees native and proceeds as has-native.
+   */
+  async function gasSwapAct(state: State): Promise<Partial<State>> {
+    const gasConfig = deps.gasConfig;
+    if (!gasConfig) return { outcome: { type: 'failed', reason: 'gas-swap config vanished before submit' } };
+    const token = state.gasSwapToken as Address;
+    const amountIn = BigInt(state.gasSwapAmountIn);
+    try {
+      const hashes = await executeGasSwap(gasSwapEnv(gasConfig), {
+        sessionPrivateKey: ctx.sessionPrivateKey,
+        sessionKeyAddr: ctx.agentRow.sessionKeyAddr ?? '',
+        token,
+        amountIn,
+        refuelWei: buildGasRouteConfig(gasConfig.chainConfig, gasConfig.globalDustWei).refuelWei,
+      });
+      return {
+        outcome: {
+          type: 'acted',
+          txHash: hashes[hashes.length - 1] ?? '',
+          valueWei: amountIn.toString(),
+          token,
+          gasRung: 'swap-to-gas',
+          gasBought: `bought gas: swapped ${amountIn.toString()} units of ${shortAddr(token)} for native on ${gasConfig.chainConfig.name}`,
+        },
+      };
+    } catch (err) {
+      const leg = err instanceof GasSwapLegError ? err.leg : 'swap-to-gas';
+      const cause = err instanceof GasSwapLegError ? err.cause : err;
+      const decoded = decodeLeashError(cause);
+      const reason = decoded
+        ? `swap-to-gas ${leg} leg refused: ${decoded.plain}`
+        : `swap-to-gas ${leg} leg failed: ${cause instanceof Error ? cause.message : String(cause)}`;
+      return { outcome: { type: 'failed', reason, ...(decoded ? { decoded } : {}) } };
     }
   }
 
@@ -1638,7 +1733,9 @@ export function buildTreasuryGraph(
                 valueWei: o.valueWei,
                 txHash: o.txHash,
                 // Q5 (presentation): human-legible amount (0G) + short address, not raw wei.
-                summary: o.callTarget
+                summary: o.gasBought
+                  ? o.gasBought
+                  : o.callTarget
                   ? `governed call to ${shortAddr(o.callTarget)}${o.valueWei !== '0' ? ` (${formatG(o.valueWei)})` : ''}`
                   : o.token
                     ? `topped up ${shortAddr(state.effectiveBeneficiary)} with ${o.valueWei} units of ${shortAddr(o.token)}${o.gasRung === 'bootstrap-7702' ? ' (gas self-funded, relayer repaid in token)' : ''}`
@@ -1681,7 +1778,9 @@ export function buildTreasuryGraph(
         content: {
           summary:
             o.type === 'acted'
-              ? o.callTarget
+              ? o.gasBought
+                ? o.gasBought
+                : o.callTarget
                 ? `governed call to ${shortAddr(o.callTarget)}`
                 : o.token
                   ? `topped up ${shortAddr(state.effectiveBeneficiary)} in ${shortAddr(o.token)}`
@@ -1851,6 +1950,7 @@ export function buildTreasuryGraph(
     .addNode('decide', decide)
     .addNode('act', act)
     .addNode('tokenAct', tokenAct)
+    .addNode('gasSwapAct', gasSwapAct)
     .addNode('callAct', callAct)
     .addNode('toolAct', toolAct)
     .addNode('signAct', signAct)
@@ -1865,6 +1965,7 @@ export function buildTreasuryGraph(
     .addConditionalEdges('decide', (state: State) => state.route, {
       act: 'act',
       token_act: 'tokenAct',
+      gas_swap: 'gasSwapAct',
       call: 'callAct',
       tool_call: 'toolAct',
       sign: 'signAct',
@@ -1874,6 +1975,7 @@ export function buildTreasuryGraph(
     })
     .addEdge('act', 'record')
     .addEdge('tokenAct', 'record')
+    .addEdge('gasSwapAct', 'record')
     .addEdge('callAct', 'record')
     .addEdge('toolAct', 'record')
     .addEdge('signAct', 'record')

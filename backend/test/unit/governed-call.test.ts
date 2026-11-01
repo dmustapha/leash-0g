@@ -222,7 +222,7 @@ describe('classify — three-lane routing', () => {
 
 // ---------- presets (D-9) ----------
 describe('expandPreset — the broad-grant UX', () => {
-  const catalog = { router: ROUTER, vault: VAULT, settlement_token: TOKEN };
+  const catalog = { router: ROUTER, vault: VAULT, settlement_token: TOKEN, wrapped_native: '0x' + 'e7'.repeat(20) };
 
   it('every preset key expands fully against a complete catalog', () => {
     for (const k of presetKeys()) {

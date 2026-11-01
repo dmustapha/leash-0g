@@ -46,7 +46,8 @@ export type PresetKey =
   | 'treasury_topper'
   | 'dca'
   | 'rebalancer'
-  | 'leverage_adv';
+  | 'leverage_adv'
+  | 'gas_swap';
 
 /** The global JIT deny-list categories (brief §6) — a match forces L2 even inside a grant. */
 export type DenyTrigger =
@@ -83,6 +84,12 @@ export interface AuthorityArgs {
    * one-target→one-destination `bridgeDestinations` config map.
    */
   bridgeDestination?: { kind: 'cctp_domain' | 'ccip_selector'; value: string };
+  /**
+   * AQ-FND M-3 inc-3a: the DECODED output token of a single-hop swap whose spec names a
+   * `swapTokenOutArg` (SwapRouter02 `exactInputSingle`). classify pins it to the chain's
+   * wrapped-native when the grant state carries `swapOutputTokens`.
+   */
+  swapTokenOut?: string;
 }
 
 /** Result of decoding one intended call. Mirrors the on-chain revert taxonomy where it matters. */
@@ -120,6 +127,13 @@ export interface GrantState {
    * default-DENY). Absent/empty = no bridging is possible on this chain.
    */
   bridgeTargets?: Set<string>;
+  /**
+   * AQ-FND M-3 inc-3a: the tokens a governed single-hop swap may BUY (lowercased) — the
+   * chain's wrapped-native (`ChainConfig.gasSwap.wrappedNative`) for the swap-to-gas rail.
+   * When SET, classify refuses a swap-family call (spec `swapTokenOutArg`) whose decoded
+   * output token is outside it; absent = no pin (legacy behaviour, nothing builds such a call).
+   */
+  swapOutputTokens?: Set<string>;
 }
 
 /** Classification of an intended call against the on-chain envelope (the three-lane model). */
@@ -149,4 +163,6 @@ export type ForbiddenReason =
   | 'delegatecall'
   // SE-8 (BR-2): bridge lane refusals — no structured decoder / off-allowlist bridge.
   | 'bridge_undecodable'
-  | 'bridge_not_allowlisted';
+  | 'bridge_not_allowlisted'
+  // AQ-FND M-3 inc-3a: a gas swap may only BUY the chain's wrapped-native.
+  | 'swap_output_not_allowed';
