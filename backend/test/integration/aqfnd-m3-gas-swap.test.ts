@@ -2,7 +2,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from
 import { randomBytes } from 'node:crypto';
 import type { Server } from 'node:http';
 import nock from 'nock';
-import { decodeFunctionData, parseAbi, toFunctionSelector } from 'viem';
+import { toFunctionSelector } from 'viem';
 import { PostgresSaver } from '@langchain/langgraph-checkpoint-postgres';
 import { createTestDb, seedAgent, type TestDb } from '../helpers/db.js';
 import { buildTestApp, TEST_KEYRING, UPSTREAM, type TestApp } from '../helpers/app.js';
@@ -13,7 +13,6 @@ import { listAlerts } from '../../src/alerts/store.js';
 import { setAllowRelayerBootstrap } from '../../src/store/agents.js';
 import { listRecentRequests } from '../../src/store/capabilities.js';
 import { LeashRuntimeManager } from '../../src/runtime/manager.js';
-import { buildAccountNativeRefuel } from '../../src/chain/gas-planner.js';
 import { buildGasSwapCalls, buildWrappedNativeUnwrap, ruleKey, type CallRule, type GrantState } from '../../src/governed-call/index.js';
 import type { ChainConfig, ChainRegistry } from '../../src/chain/registry.js';
 import type { RuntimeChain } from '../../src/runtime/session-chain.js';
@@ -22,7 +21,7 @@ import type { PolicyView } from '../../src/types.js';
 /**
  * AQ-FND M-3 inc-3a — the swap-to-gas EXECUTOR through the governed wall. A low-but-nonzero
  * session key on a DEX chain, holding a spendable token:
- *  (a) every leg granted (L1) => exactly 4 executeCall [approve, swap, withdraw, refuel] with the
+ *  (a) every leg granted (L1) => exactly 3 executeCall [approve, swap, withdraw] + 1 direct native refuel transfer, with the
  *      exact calldata, ONE action trace, and the NEXT cycle re-plans has-native;
  *  (b) router rule missing => ONE capability request for the swap leg, NO executeCall;
  *  (c) zero native => unchanged (not swap-to-gas): one gas_request ask;
@@ -61,7 +60,6 @@ const HOME_CONFIG: ChainConfig = {
   gasSwap: { wrappedNative: WETH, dexFeeTier: 3000, tokenAmount: SALE },
 };
 
-const accountAbi = parseAbi(['function execute(address to, uint256 value, bytes data)']);
 
 interface RecordedCall {
   target: string;
@@ -124,7 +122,13 @@ class FakeRuntimeChain implements RuntimeChain {
     const set = new Set(payees.map((p) => p.toLowerCase()));
     return { enabled: true, allowedPayees: payeeCandidates.map((p) => p.toLowerCase()).filter((p) => set.has(p)) };
   }
-  async executeTransfer(): Promise<{ txHash: string }> {
+  /** every session-key native transfer (account.execute(to, value, '0x')) - the refuel leg */
+  public nativeTransfers: Array<{ to: string; valueWei: bigint }> = [];
+  async executeTransfer(input: { to: string; valueWei: bigint }): Promise<{ txHash: string }> {
+    this.nativeTransfers.push({ to: input.to.toLowerCase(), valueWei: input.valueWei });
+    if (input.to.toLowerCase() === SESSION_ADDR.toLowerCase()) {
+      this.balances.set(SESSION_ADDR.toLowerCase(), (this.balances.get(SESSION_ADDR.toLowerCase()) ?? 0n) + input.valueWei);
+    }
     return { txHash: '0x' + 'ee'.repeat(32) };
   }
   async executeTokenTransfer(input: { token: string; to: string; amountWei: bigint }): Promise<{ txHash: string }> {
@@ -134,21 +138,21 @@ class FakeRuntimeChain implements RuntimeChain {
   async executeCall(input: { target: string; valueWei: bigint; data: string }): Promise<{ txHash: string }> {
     const target = input.target.toLowerCase();
     this.calls.push({ target, value: input.valueWei, data: input.data });
+    // The real account refuses executeCall(target == itself) with SelfCallForbidden; the fake must too,
+    // or a self-targeted refuel passes here and reverts live (the Tier B finding).
+    if (target === this.accountAddr.toLowerCase()) throw new Error('SelfCallForbidden');
     if (this.revertTarget && target === this.revertTarget) throw new Error('execution reverted: swap failed');
-    this.applyEffect(target, input.data);
+    this.applyEffect(target);
     return { txHash: '0x' + String(this.calls.length).padStart(2, '0').repeat(32) };
   }
   /** model just enough of the chain that later legs and the next cycle see the earlier legs' effects */
-  private applyEffect(target: string, data: string): void {
+  private applyEffect(target: string): void {
     if (target === ROUTER) {
       this.accountToken -= SALE;
       this.accountWeth += WETH_OUT;
     } else if (target === WETH) {
       this.balances.set(this.accountAddr.toLowerCase(), this.accountWeth);
       this.accountWeth = 0n;
-    } else if (target === this.accountAddr.toLowerCase()) {
-      const [, value] = decodeFunctionData({ abi: accountAbi, data: data as `0x${string}` }).args;
-      this.balances.set(SESSION_ADDR.toLowerCase(), (this.balances.get(SESSION_ADDR.toLowerCase()) ?? 0n) + value);
     }
   }
   async getErc20Allowance(): Promise<bigint> {
@@ -317,7 +321,7 @@ async function runOneCycle(id: string): Promise<void> {
 }
 
 describe('AQ-FND M-3 inc-3a — swap-to-gas executor through the governed wall', () => {
-  it('(a) all legs granted: exactly 4 executeCalls in order with the exact calldata, ONE trace, then has-native', async () => {
+  it('(a) all legs granted: exactly 3 executeCalls + 1 native refuel transfer, in order with the exact calldata, ONE trace, then has-native', async () => {
     const id = await seedGasAgent({ sessionNative: LOW_NATIVE });
     await runOneCycle(id);
 
@@ -330,14 +334,14 @@ describe('AQ-FND M-3 inc-3a — swap-to-gas executor through the governed wall',
       amountIn: SALE,
     });
     const unwrap = buildWrappedNativeUnwrap(WETH as `0x${string}`, WETH_OUT);
-    const refuel = buildAccountNativeRefuel(SESSION_ADDR as `0x${string}`, WETH_OUT);
 
     expect(fakeChain.calls).toEqual([
       { target: TOKEN, value: 0n, data: approve.data },
       { target: ROUTER, value: 0n, data: swap.data },
       { target: WETH, value: 0n, data: unwrap.data },
-      { target: fakeChain.accountAddr.toLowerCase(), value: 0n, data: refuel.data },
     ]);
+    // the refuel is a DIRECT session-key native transfer (account.execute), never an executeCall to self
+    expect(fakeChain.nativeTransfers).toEqual([{ to: SESSION_ADDR.toLowerCase(), valueWei: WETH_OUT }]);
     expect(fakeChain.tokenTransfers).toHaveLength(0); // the cycle stands down on buying gas
     expect(relayer.submitted).toHaveLength(0);
 
@@ -352,7 +356,8 @@ describe('AQ-FND M-3 inc-3a — swap-to-gas executor through the governed wall',
     manager.nudge(id);
     await waitFor(() => fakeChain.tokenTransfers.length > 0);
     await manager.settle(id);
-    expect(fakeChain.calls).toHaveLength(4); // no second swap
+    expect(fakeChain.calls).toHaveLength(3); // no second swap
+    expect(fakeChain.nativeTransfers).toHaveLength(1);
     expect(fakeChain.tokenTransfers[0]?.to.toLowerCase()).toBe(BENEFICIARY.toLowerCase());
   });
 
@@ -410,7 +415,8 @@ describe('AQ-FND M-3 inc-3a — swap-to-gas executor through the governed wall',
     const id = await seedGasAgent({ sessionNative: LOW_NATIVE, optIn });
     await runOneCycle(id);
 
-    expect(fakeChain.calls.map((c) => c.target)).toEqual([TOKEN, ROUTER, WETH, fakeChain.accountAddr.toLowerCase()]);
+    expect(fakeChain.calls.map((c) => c.target)).toEqual([TOKEN, ROUTER, WETH]);
+    expect(fakeChain.nativeTransfers.map((t) => t.to)).toEqual([SESSION_ADDR.toLowerCase()]);
     expect(relayer.submitted).toHaveLength(0); // swap-to-gas outranks the relayer; it is never used
     const { alerts } = await listAlerts(db.pool, OWNER, { kind: 'gas_request', agentId: id });
     expect(alerts).toHaveLength(0);

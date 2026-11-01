@@ -22,7 +22,7 @@ import type { DecodedLeashError } from '../types.js';
 import type { RuntimeChain } from './session-chain.js';
 import { buildGasRouteConfig, buildRouteChainCfg, describeGasAsk, planAgentGasRoute, type GasRouteInputs } from './gas.js';
 import type { GasRoute } from '../chain/gas-planner.js';
-import { executeBootstrap, buildAccountNativeRefuel, type BootstrapCall } from '../chain/gas-planner.js';
+import { executeBootstrap, type BootstrapCall } from '../chain/gas-planner.js';
 import type { ChainConfig } from '../chain/registry.js';
 import { loadGrantState } from './grant-state.js';
 import { buildGovernedCall, BRIDGE_SELECTORS, SELECTORS } from '../governed-call/index.js';
@@ -1043,13 +1043,11 @@ export function buildTreasuryGraph(
       case 'account-native': {
         // Refuel the key through the governed wall, then act (treated as has-native this cycle).
         try {
-          const refuel = buildAccountNativeRefuel(sessionKeyAddr as Address, cfg.refuelWei);
-          await deps.chain.executeCall({
+          await deps.chain.executeTransfer({
             sessionPrivateKey: ctx.sessionPrivateKey,
             accountAddr: ctx.accountAddr,
-            target: ctx.accountAddr,
-            valueWei: 0n,
-            data: refuel.data,
+            to: sessionKeyAddr,
+            valueWei: cfg.refuelWei,
           });
         } catch (err) {
           return standDownToken(`account-native refuel failed: ${err instanceof Error ? err.message : String(err)}`);

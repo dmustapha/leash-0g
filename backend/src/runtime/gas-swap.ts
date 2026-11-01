@@ -26,7 +26,6 @@
 import type { Address } from 'viem';
 import type { Pool } from 'pg';
 import type { ChainConfig } from '../chain/registry.js';
-import { buildAccountNativeRefuel } from '../chain/gas-planner.js';
 import { classifyIntendedCall, type GateResult } from '../gateway/call-gate.js';
 import {
   buildGasSwapCalls,
@@ -194,7 +193,18 @@ export async function executeGasSwap(env: GasSwapEnv, input: GasSwapExecInput): 
   const accountNative = await env.chain.getBalance(env.accountAddr);
   const refuelWei = accountNative < input.refuelWei ? accountNative : input.refuelWei;
   if (refuelWei <= 0n) throw new GasSwapLegError('refuel', new Error('the account holds no native after the unwrap'));
-  const refuel = buildAccountNativeRefuel(input.sessionKeyAddr as Address, refuelWei);
-  await submit('refuel', env.accountAddr, 0n, refuel.data);
+  // The session key calls account.execute(sessionKey, wei) DIRECTLY (executeTransfer). Routing it
+  // through executeCall with the account as its own target is refused on-chain (SelfCallForbidden).
+  try {
+    const { txHash } = await env.chain.executeTransfer({
+      sessionPrivateKey: input.sessionPrivateKey,
+      accountAddr: env.accountAddr,
+      to: input.sessionKeyAddr,
+      valueWei: refuelWei,
+    });
+    hashes.push(txHash);
+  } catch (err) {
+    throw new GasSwapLegError('refuel', err);
+  }
   return hashes;
 }
