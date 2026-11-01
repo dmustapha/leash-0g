@@ -28,7 +28,15 @@ const SEND = process.argv.includes('--send');
 const STD_PROXY = '0x4e59b44847b379578588920cA78FbF26c0B4956C' as Address;
 
 const HOME = { id: 16602, name: '0G Galileo', rpc: 'https://evmrpc-testnet.0g.ai' };
-const DEST = { id: 84532, name: 'Base Sepolia', rpc: 'https://base-sepolia.drpc.org' };
+const DESTS = {
+  base: { id: 84532, name: 'Base Sepolia', rpc: 'https://base-sepolia.drpc.org' },
+  eth: { id: 11155111, name: 'Ethereum Sepolia', rpc: 'https://ethereum-sepolia-rpc.publicnode.com' },
+  arb: { id: 421614, name: 'Arbitrum Sepolia', rpc: 'https://sepolia-rollup.arbitrum.io/rpc' },
+} as const;
+const destKey = (process.argv.find((a) => a.startsWith('--dest='))?.slice(7) ?? 'base') as keyof typeof DESTS;
+if (!DESTS[destKey]) throw new Error(`--dest must be one of ${Object.keys(DESTS).join('|')}`);
+const DEST = DESTS[destKey];
+const SUFFIX = destKey === 'base' ? '' : `-${destKey}`; // base keeps its original evidence filenames
 
 const artifact = (rel: string): Hex =>
   JSON.parse(readFileSync(`/Users/MAC/leash/contracts/out/${rel}`, 'utf8')).bytecode.object as Hex;
@@ -65,7 +73,7 @@ async function main() {
   mkdirSync(OUT, { recursive: true });
   const ops = SEND ? privateKeyToAccount(process.env.OPS as Hex) : null;
   const destWallet = ops ? createWalletClient({ account: ops, chain: chain(DEST), transport: http(DEST.rpc, { timeout: 60_000 }) }) : null;
-  if (ops) console.log(`ops ${ops.address}, Base Sepolia balance ${await pub(DEST).getBalance({ address: ops.address })} wei`);
+  if (ops) console.log(`ops ${ops.address}, ${DEST.name} balance ${await pub(DEST).getBalance({ address: ops.address })} wei`);
 
   // 1) deploy the 3 V6 singletons on the DEST chain (idempotent), same salts → same addresses
   for (const s of SINGLETONS) {
@@ -93,12 +101,12 @@ async function main() {
   }
 
   const stamp = new Date().toISOString();
-  writeFileSync(`${OUT}/g8-xchain-results.json`, JSON.stringify({ stamp, home: HOME.id, dest: DEST.id, send: SEND, rows }, null, 2));
+  writeFileSync(`${OUT}/g8-xchain-results${SUFFIX}.json`, JSON.stringify({ stamp, home: HOME.id, dest: DEST.id, send: SEND, rows }, null, 2));
   const md = [`# AQ-FND G-8 cross-chain same-address — ${stamp}`, '', `home ${HOME.name} (${HOME.id}) ⇄ dest ${DEST.name} (${DEST.id})`, '',
     '| check | result | verdict |', '|---|---|---|', ...rows.map((r) => `| ${r.check} | ${r.result} | **${r.verdict}** |`)].join('\n');
-  writeFileSync(`${OUT}/g8-xchain-results.md`, md);
+  writeFileSync(`${OUT}/g8-xchain-results${SUFFIX}.md`, md);
   const fails = rows.filter((r) => r.verdict === 'FAIL').length;
-  console.log(`\n${rows.filter((r) => r.verdict === 'PASS').length} PASS · ${fails} FAIL · written → ${OUT}/g8-xchain-results.{json,md}`);
+  console.log(`\n${rows.filter((r) => r.verdict === 'PASS').length} PASS · ${fails} FAIL · written → ${OUT}/g8-xchain-results${SUFFIX}.{json,md}`);
   process.exit(fails > 0 ? 1 : 0);
 }
 
