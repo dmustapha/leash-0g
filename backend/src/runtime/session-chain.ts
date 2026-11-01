@@ -342,6 +342,32 @@ export class SessionChain implements RuntimeChain {
     return { txHash };
   }
 
+  /**
+   * The token's cumulative window cap, or null when no budget is set. V4/V5 accounts keep it in
+   * `spendBudget`; a V6 account has no such function (the budget IS the enabled asset policy's
+   * windowCap), so a revert there falls through to `assetPolicy`. A V4 read that fails for any
+   * other reason also reaches the V6 read, which then fails loudly rather than reading as "no budget".
+   */
+  private async readTokenWindowCap(account: Hex, token: Hex): Promise<bigint | null> {
+    try {
+      const b = await this.publicClient.readContract({
+        address: account,
+        abi: leashAccountV4Abi,
+        functionName: 'spendBudget',
+        args: [token],
+      });
+      return b[0] ? b[1] : null;
+    } catch {
+      const p = await this.publicClient.readContract({
+        address: account,
+        abi: leashAccountV6PolicyAbi,
+        functionName: 'assetPolicy',
+        args: [token],
+      });
+      return p[0] ? p[2] : null; // (enabled, perTransferCap, windowCap, windowSeconds)
+    }
+  }
+
   async readCallGrantState(candidates: GrantStateCandidates): Promise<GrantState> {
     const account = candidates.accountAddr as Hex;
     const rules = new Map<string, CallRule>();
@@ -383,13 +409,8 @@ export class SessionChain implements RuntimeChain {
         });
       }),
       ...[...new Set(candidates.tokens.map((t) => t.toLowerCase()))].map(async (token) => {
-        const b = (await this.publicClient.readContract({
-          address: account,
-          abi: leashAccountV4Abi,
-          functionName: 'spendBudget',
-          args: [token as Hex],
-        }));
-        if (b[0]) budgets.set(token, b[1].toString()); // set → windowCap
+        const windowCap = await this.readTokenWindowCap(account, token as Hex);
+        if (windowCap !== null) budgets.set(token, windowCap.toString());
       }),
     ]);
 
