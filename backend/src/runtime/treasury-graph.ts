@@ -144,6 +144,8 @@ const TreasuryState = Annotation.Root({
   beneficiaryBalanceWei: Annotation<string>,
   /** AQ-FND M-3: the beneficiary's balance in the goal's ERC-20 (token goals only; '0' for native). */
   beneficiaryTokenBalanceWei: Annotation<string>,
+  /** C9: the ACCOUNT's balance in the goal's ERC-20 (token goals only; '0' for native). */
+  accountTokenBalanceWei: Annotation<string>,
   accountBalanceWei: Annotation<string>,
   /** Transfer target this cycle: goal beneficiary, or the inbound request's. */
   effectiveBeneficiary: Annotation<string>,
@@ -627,9 +629,12 @@ export function buildTreasuryGraph(
     // AQ-FND M-3: a token-denominated treasury goal watches the beneficiary's ERC-20
     // balance (not native). The token is owner-typed on the goal — never model text.
     const goalToken = treasuryGoalToken(autoGoal);
-    const [beneficiaryBalance, beneficiaryTokenBalance, account, policy, capabilities] = await Promise.all([
+    const [beneficiaryBalance, beneficiaryTokenBalance, accountTokenBalance, goalTokenMeta, account, policy, capabilities] = await Promise.all([
       deps.chain.getBalance(beneficiary),
       goalToken && beneficiary ? deps.chain.getErc20Balance(goalToken, beneficiary) : Promise.resolve(0n),
+      goalToken ? deps.chain.getErc20Balance(goalToken, ctx.accountAddr) : Promise.resolve(0n),
+      // symbol/decimals so DISPLAY labels the real asset; unreadable ⇒ null ⇒ "<n> units" (honest).
+      goalToken ? deps.chain.getErc20Meta(goalToken).catch(() => null) : Promise.resolve(null),
       deps.chain.getBalance(ctx.accountAddr),
       deps.chain.getPolicyView(ctx.accountAddr, [beneficiary], goalToken ? [goalToken] : []),
       senseCapabilities(mode),
@@ -637,8 +642,10 @@ export function buildTreasuryGraph(
     const base: Partial<State> = {
       beneficiaryBalanceWei: beneficiaryBalance.toString(),
       beneficiaryTokenBalanceWei: beneficiaryTokenBalance.toString(),
+      accountTokenBalanceWei: accountTokenBalance.toString(),
       accountBalanceWei: account.toString(),
       effectiveBeneficiary: beneficiary,
+      ...(goalToken && goalTokenMeta ? { tokenMeta: { hold: goalTokenMeta } } : {}),
       capabilities,
       holdings: null,
       bandPrice18: null,
@@ -678,6 +685,17 @@ export function buildTreasuryGraph(
       // FR3 (F-8): the trader's sensed token holdings (absent for other roles).
       ...(state.holdings ? { holdings: state.holdings } : {}),
       ...(state.tokenMeta ? { tokenMeta: state.tokenMeta } : {}),
+      // C9: a token-denominated treasury goal reasons over TOKEN balances, not the native ones.
+      ...(treasuryGoalToken(autonomousGoalOf(mode)) !== null
+        ? {
+            tokenTreasury: {
+              symbol: state.tokenMeta?.hold?.symbol ?? null,
+              decimals: state.tokenMeta?.hold?.decimals ?? null,
+              beneficiaryBalanceWei: state.beneficiaryTokenBalanceWei ?? '0',
+              accountBalanceWei: state.accountTokenBalanceWei ?? '0',
+            },
+          }
+        : {}),
       // Stage D (D-10): the governed-call envelope the model may act on this cycle.
       ...(state.capabilities && state.capabilities.length > 0 ? { capabilities: state.capabilities } : {}),
       // Inbound delegation rides the observation as LABELED UNTRUSTED input
@@ -833,7 +851,8 @@ export function buildTreasuryGraph(
         mode.mode === 'inbound_transfer' ||
         (autoGoal !== null &&
           'targetBalanceWei' in autoGoal && // trader never wants a native transfer
-          BigInt(state.beneficiaryBalanceWei) < BigInt(autoGoal.targetBalanceWei));
+          BigInt(treasuryGoalToken(autoGoal) !== null ? state.beneficiaryTokenBalanceWei : state.beneficiaryBalanceWei) <
+            BigInt(autoGoal.targetBalanceWei));
       if (
         wantsTransfer &&
         BigInt(state.policy.windowCapWei) > 0n &&

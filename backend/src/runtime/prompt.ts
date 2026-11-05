@@ -145,6 +145,20 @@ export interface ReasonContext {
    * "<n> units", which is honest rather than wrong.
    */
   tokenMeta?: { hold?: { symbol: string; decimals: number }; spend?: { symbol: string; decimals: number } };
+  /**
+   * C9: present ONLY for a token-denominated treasury goal (`goal.token`). The two balances here are
+   * ERC-20 base units of that token (the beneficiary's and the account's), server-read in the sense
+   * node. When set, the observation's `beneficiaryBalanceWei` / `accountBalanceWei` carry THESE (not
+   * the native balances) so the mechanical rules compare like with like, and `display` renders every
+   * amount in the token's own symbol. `symbol`/`decimals` null (unreadable) renders "<n> units".
+   * Absent for every native agent ⇒ prompt and observation are byte-identical to before.
+   */
+  tokenTreasury?: {
+    symbol: string | null;
+    decimals: number | null;
+    beneficiaryBalanceWei: string;
+    accountBalanceWei: string;
+  };
   /** Untrusted free-text context (e.g. a payment memo) — the injection channel evals exercise. */
   memo?: string;
   /** Executor input: the delegation this cycle is processing (untrusted, spec §3b). */
@@ -185,6 +199,16 @@ const AMOUNT_RULES = [
  * re-introduced truncation on sentinel and executor. Pre-formatting removes the need to convert, so
  * the rule collapses to one unconditional line and the shared contract stays short.
  */
+const TOKEN_TREASURY_AMOUNT_RULES = [
+  'Amounts:',
+  '- This goal is denominated in an ERC-20 token, not the native coin. goal.targetBalanceWei,',
+  '  goal.topUpWei, beneficiaryBalanceWei and accountBalanceWei are all in that token\'s base units.',
+  '  observation.display gives each one in the token\'s own symbol (e.g. "0.01 USDC") — use those',
+  '  exact words, and never call a token amount 0G, ETH or ether.',
+  '- policy.* is the native-coin spending policy and does not apply to a token amount.',
+  '- Apply every rule above to the raw *Wei integers, never to the display strings.',
+];
+
 const TOKEN_AMOUNT_RULES = [
   '- goal.targetHoldWei, goal.clipWei, holdings.*, and capabilities[].perCallCap are token amounts',
   '  in base units, not native 0G. observation.display gives each one in its own token (e.g.',
@@ -442,7 +466,9 @@ function transferPromptFor(role: AgentRole): string {
  * which is exactly what the G-1 no-regression arm and every first cycle must see.
  */
 function systemPromptFor(ctx: ReasonContext): string {
-  const base = transferPromptFor(goalRole(ctx.goal));
+  const role = transferPromptFor(goalRole(ctx.goal));
+  // C9: a token-denominated treasury goal swaps the native amount rules for the token ones.
+  const base = ctx.tokenTreasury ? role.replace(AMOUNT_RULES.join('\n'), TOKEN_TREASURY_AMOUNT_RULES.join('\n')) : role;
   if (ctx.cycleFlags) return `${base}\n${CYCLE_FLAGS_TEXT}`; // round-2 flag carry (minimal)
   if (ctx.cycleMemory) return `${base}\n${CYCLE_MEMORY_TEXT}`; // round-1 prose carry (gated off)
   return base; // memoryless baseline — byte-identical to production
@@ -480,6 +506,17 @@ export function buildReasonRequest(model: string, ctx: ReasonContext): Json {
  */
 function nativeDisplay(ctx: ReasonContext): Record<string, string> {
   const goal = ctx.goal;
+  const tt = ctx.tokenTreasury;
+  if (tt && (goal.type === undefined || goal.type === 'treasury')) {
+    const as = (v: string) => formatAsset(v, tt.decimals, tt.symbol);
+    return {
+      ...(tt.symbol ? { token: tt.symbol } : {}),
+      accountBalance: as(tt.accountBalanceWei),
+      beneficiaryBalance: as(tt.beneficiaryBalanceWei),
+      targetBalance: as(goal.targetBalanceWei),
+      topUp: as(goal.topUpWei),
+    };
+  }
   const hasTopUpShape = goal.type === undefined || goal.type === 'treasury' || goal.type === 'sentinel';
   const native = {
     nativeToken: '0G',
@@ -598,8 +635,8 @@ function buildObservation(ctx: ReasonContext) {
   return {
     ...goalCtx,
     ...(ctx.holdings !== undefined ? { holdings: ctx.holdings } : {}),
-    beneficiaryBalanceWei: ctx.beneficiaryBalanceWei,
-    accountBalanceWei: ctx.accountBalanceWei,
+    beneficiaryBalanceWei: ctx.tokenTreasury ? ctx.tokenTreasury.beneficiaryBalanceWei : ctx.beneficiaryBalanceWei,
+    accountBalanceWei: ctx.tokenTreasury ? ctx.tokenTreasury.accountBalanceWei : ctx.accountBalanceWei,
     policy: policyView,
     nowUnixSeconds: ctx.nowSec,
     display,
