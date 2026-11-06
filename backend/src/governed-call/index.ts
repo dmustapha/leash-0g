@@ -26,3 +26,9 @@ export {
   type GasSwapCall,
   type GasSwapParams,
 } from './gas-swap.js';
+export {
+  buildCctpBurnCalls,
+  CCTP_STANDARD_FINALITY,
+  type BridgeCall,
+  type CctpBurnParams,
+} from './gas-bridge.js';
