@@ -26,6 +26,8 @@ const AGENT = 'agent-rail-1';
 const ACCOUNT = '0x' + 'c2'.repeat(20);
 const USDC = '0x' + 'a1'.repeat(20);
 
+// Windows below use -60_000 ("already elapsed") rather than 0: the DB clock (docker VM) can run tens of ms
+// ahead of the test process, so an age of `JS now - DB now()` is slightly NEGATIVE and a 0 window never fires.
 const gasPlan = (destChainId: number): DestGasPlan => ({ destChainId, fundedWei: '1000000000000000', source: 'prefunded' });
 
 /** A fully programmable RailDriver: each method reads a script keyed by railId. */
@@ -145,11 +147,11 @@ describe('rail recovery state machine (AQ-FND M-4)', () => {
 
     // the fill never confirms within the window → no_fill, then claim+recover (forward mint)
     d.receipts[`0xdest-${t.railId}`] = 'reverted';
-    await sweepRailRecovery({ pool: db.pool, driver: d, retryBackoffMs: 0 }); // filling → no_fill
+    await sweepRailRecovery({ pool: db.pool, driver: d, retryBackoffMs: -60_000 }); // filling → no_fill
     expect((await getRailTransfer(db.pool, t.railId))!.status).toBe('no_fill');
 
     d.fillHashes[t.railId] = '0xremint';
-    await sweepRailRecovery({ pool: db.pool, driver: d, retryBackoffMs: 0 }); // no_fill → recovering → filling (re-mint)
+    await sweepRailRecovery({ pool: db.pool, driver: d, retryBackoffMs: -60_000 }); // no_fill → recovering → filling (re-mint)
     const afterRecover = (await getRailTransfer(db.pool, t.railId))!;
     expect(afterRecover.status).toBe('filling');
     expect(afterRecover.attemptCount).toBe(1);
@@ -172,10 +174,10 @@ describe('rail recovery state machine (AQ-FND M-4)', () => {
     d.receipts['0xsend'] = 'success';
     await sweepRailRecovery({ pool: db.pool, driver: d }); // → source_confirmed
     // proof never comes; window elapses → no_fill (use a 0 timeout to force it, no backoff)
-    await sweepRailRecovery({ pool: db.pool, driver: d, fillTimeoutMs: 0, retryBackoffMs: 0 });
+    await sweepRailRecovery({ pool: db.pool, driver: d, fillTimeoutMs: -60_000, retryBackoffMs: -60_000 });
     expect((await getRailTransfer(db.pool, t.railId))!.status).toBe('no_fill');
 
-    const r = await sweepRailRecovery({ pool: db.pool, driver: d, retryBackoffMs: 0 });
+    const r = await sweepRailRecovery({ pool: db.pool, driver: d, retryBackoffMs: -60_000 });
     const refunded = (await getRailTransfer(db.pool, t.railId))!;
     expect(refunded.status).toBe('refunded');
     expect(refunded.refundTx).toBe(`0xrefund-${t.railId}`);
@@ -196,13 +198,13 @@ describe('rail recovery state machine (AQ-FND M-4)', () => {
     await sweepRailRecovery({ pool: db.pool, driver: d }); // → filling (first mint)
     // the mint reverts → no_fill, and from here every forward re-mint attempt throws
     d.receipts[`0xdest-${t.railId}`] = 'reverted';
-    await sweepRailRecovery({ pool: db.pool, driver: d, retryBackoffMs: 0 }); // filling → no_fill (attempt 0)
+    await sweepRailRecovery({ pool: db.pool, driver: d, retryBackoffMs: -60_000 }); // filling → no_fill (attempt 0)
     d.fillShouldThrow.add(t.railId);
-    await sweepRailRecovery({ pool: db.pool, driver: d, retryBackoffMs: 0 }); // attempt 1: throws → requeue no_fill
+    await sweepRailRecovery({ pool: db.pool, driver: d, retryBackoffMs: -60_000 }); // attempt 1: throws → requeue no_fill
     expect((await getRailTransfer(db.pool, t.railId))!.attemptCount).toBe(1);
-    await sweepRailRecovery({ pool: db.pool, driver: d, retryBackoffMs: 0 }); // attempt 2 (=max): throws → requeue
+    await sweepRailRecovery({ pool: db.pool, driver: d, retryBackoffMs: -60_000 }); // attempt 2 (=max): throws → requeue
     expect((await getRailTransfer(db.pool, t.railId))!.attemptCount).toBe(2);
-    const r = await sweepRailRecovery({ pool: db.pool, driver: d, retryBackoffMs: 0 }); // exhausted → failed
+    const r = await sweepRailRecovery({ pool: db.pool, driver: d, retryBackoffMs: -60_000 }); // exhausted → failed
     expect((await getRailTransfer(db.pool, t.railId))!.status).toBe('failed');
     expect(r.failed).toBe(1);
   });
