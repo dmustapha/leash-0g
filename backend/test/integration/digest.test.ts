@@ -62,6 +62,8 @@ async function seedActivity(owner: string, accountAddr: string): Promise<string>
   return agentId;
 }
 
+// Windows below are -60_000 ("already elapsed") rather than 0: the DB clock can run tens of ms ahead of the test
+// process, so an age of `JS now - DB created_at` is slightly NEGATIVE and a 0 window never fires.
 describe('D4 — aggregation correctness', () => {
   it('sums spend from action traces, counts activity per agent, computes per-link terminal buckets', async () => {
     const owner = uniqueOwner();
@@ -252,7 +254,7 @@ describe('D5 — owner-stream batcher (defer → drain)', () => {
     const uploader = new MemoryUploader();
     const batcher = new StreamBatcher({ pool: db.pool, uploader }, ownerStreamSource, {
       maxRecords: 1,
-      maxAgeMs: 0,
+      maxAgeMs: -60_000,
     });
     // Records append from seq 0 BEFORE any key exists (S10).
     await appendOwnerRecord(db.pool, owner, 'alert', { n: 0 });
@@ -291,7 +293,7 @@ describe('D5 — owner-stream batcher (defer → drain)', () => {
     const uploader = new MemoryUploader();
     const batcher = new StreamBatcher({ pool: db.pool, uploader }, ownerStreamSource, {
       maxRecords: 1,
-      maxAgeMs: 0,
+      maxAgeMs: -60_000,
     });
     await rotateOwnerStreamKey(db.pool, owner, key.publicKey.toHex());
     await appendOwnerRecord(db.pool, owner, 'alert', { n: 0 });

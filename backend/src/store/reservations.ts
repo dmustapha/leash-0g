@@ -70,7 +70,9 @@ export async function reserveCreate(
       await client.query('ROLLBACK');
       const oldest = recent.rows[0];
       const agesOutMs = oldest ? oldest.created_at.getTime() + 3_600_000 - Date.now() : 3_600_000;
-      return { ok: false, reason: 'rate_limited', retryAfter: Math.max(1, Math.ceil(agesOutMs / 1000)) };
+      // Capped at the window: the oldest in-window row can never take longer than the window to age out;
+      // a larger figure is only app-vs-DB clock skew rounding up.
+      return { ok: false, reason: 'rate_limited', retryAfter: Math.min(3600, Math.max(1, Math.ceil(agesOutMs / 1000))) };
     }
     const inserted = await client.query<{ id: string }>(
       `INSERT INTO create_reservations (owner_addr) VALUES ($1) RETURNING id`,

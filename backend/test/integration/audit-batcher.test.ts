@@ -38,6 +38,8 @@ async function seedAgentWithKey(): Promise<{ agentId: string; key: PrivateKey }>
   return { agentId, key };
 }
 
+// Windows below are -60_000 ("already elapsed") rather than 0: the DB clock can run tens of ms ahead of the test
+// process, so an age of `JS now - DB created_at` is slightly NEGATIVE and a 0 window never fires.
 describe('audit batcher', () => {
   it('flushes at N records: hash-chained JSONL, ECIES-encrypted, batch row + cursor advance', async () => {
     const { agentId, key } = await seedAgentWithKey();
@@ -76,7 +78,7 @@ describe('audit batcher', () => {
   it('flushes by age even below N', async () => {
     const { agentId } = await seedAgentWithKey();
     const uploader = new FakeUploader();
-    const batcher = new AuditBatcher({ pool: db.pool, uploader }, { maxRecords: 50, maxAgeMs: 0 });
+    const batcher = new AuditBatcher({ pool: db.pool, uploader }, { maxRecords: 50, maxAgeMs: -60_000 });
     await appendTrace(db.pool, { agentId, kind: 'inference' });
     await batcher.flushOnce();
     expect(uploader.uploads).toHaveLength(1);
@@ -88,7 +90,7 @@ describe('audit batcher', () => {
     uploader.failNext = 1;
     const batcher = new AuditBatcher(
       { pool: db.pool, uploader },
-      { maxRecords: 1, maxAgeMs: 60_000, retryBackoffMs: 0 },
+      { maxRecords: 1, maxAgeMs: 60_000, retryBackoffMs: -60_000 },
     );
     await appendTrace(db.pool, { agentId, kind: 'inference' });
     await batcher.flushOnce(); // fails (injected)

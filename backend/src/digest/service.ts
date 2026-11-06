@@ -309,7 +309,10 @@ export class DigestService {
       }));
     }
 
-    const generatedAt = new Date().toISOString();
+    // The cursor is compared against DB `created_at` columns (lifecycle rows above), so it must be
+    // stamped by the SAME clock — an app-clock cursor that runs behind the DB clock re-reports rows
+    // created just before the mark (and one ahead would hide rows created just after it).
+    const generatedAt = (await this.deps.pool.query<{ t: Date }>('SELECT now() AS t')).rows[0]?.t.toISOString() ?? new Date().toISOString();
     const totalsFeeLabel = buildFeeLabel(totalJobFeeByToken, feeTokenMeta);
     const links = [...linkMap.values()];
     const hasActivity =

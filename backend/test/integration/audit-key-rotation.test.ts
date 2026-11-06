@@ -73,6 +73,8 @@ async function seedOwnerRecords(owner: string, from: number, to: number): Promis
   }
 }
 
+// Windows below are -60_000 ("already elapsed") rather than 0: the DB clock can run tens of ms ahead of the test
+// process, so an age of `JS now - DB created_at` is slightly NEGATIVE and a 0 window never fires.
 describe('SCOPE-RH2-2 owner stream-key rotation (seq boundary)', () => {
   it('rotation splits flush into per-key batches that never cross the boundary', async () => {
     const owner = ('0x' + 'a1'.repeat(20)).toLowerCase();
@@ -81,7 +83,7 @@ describe('SCOPE-RH2-2 owner stream-key rotation (seq boundary)', () => {
     const uploader = new FakeUploader();
     const batcher = new StreamBatcher({ pool: db.pool, uploader }, ownerStreamSource, {
       maxRecords: 1,
-      maxAgeMs: 0,
+      maxAgeMs: -60_000,
     });
 
     await rotateOwnerStreamKey(db.pool, owner, keyA.publicKey.toHex()); // first set → eff 0 (no records yet)
@@ -301,7 +303,7 @@ describe('SCOPE-RH2-2 rotation clears quarantine', () => {
       name: 'owner-quarantine-test',
       pubkeyFor: () => Promise.resolve(current.pubkey),
     };
-    const batcher = new StreamBatcher({ pool: db.pool, uploader }, source, { maxRecords: 1, maxAgeMs: 0 });
+    const batcher = new StreamBatcher({ pool: db.pool, uploader }, source, { maxRecords: 1, maxAgeMs: -60_000 });
     await seedOwnerRecords(owner, 0, 0);
 
     const errSpy = { restore: () => undefined };
