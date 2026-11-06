@@ -121,7 +121,23 @@ async function advanceOne(deps: RailRecoveryDeps, row: RailTransferRow, t: Tick)
 
   switch (row.status) {
     case 'initiated': {
-      if (!row.srcTx) return false; // broadcast not yet recorded; the originator write-aheads it
+      if (!row.srcTx) {
+        // The originator write-aheads the burn hash right after broadcasting. A row that is still hash-less
+        // past the window means the process died between opening the row and (maybe) broadcasting. It must
+        // not stay open forever (it blocks that agent from ever bridging again), but it may have burned:
+        // fail it LOUDLY so a human checks the chain before the agent retries.
+        if (ageMs >= t.fillTimeout) {
+          await markFailed(
+            deps.pool,
+            row.railId,
+            'no source transaction was recorded within the window — verify on-chain whether the burn landed before retrying',
+          );
+          console.warn(`[rail-recovery] ${row.railId} (${row.rail}) has no recorded source tx after the window — failed, needs a look`);
+          result_bump(t, 'failed');
+          return true;
+        }
+        return false;
+      }
       const st = await deps.driver.getReceiptStatus(row.srcChainId, row.srcTx);
       if (st === 'pending') return false;
       if (st === 'reverted') {

@@ -117,6 +117,22 @@ describe('rail recovery state machine (AQ-FND M-4)', () => {
     expect(r.filled).toBe(1);
   });
 
+  it('an initiated row that never recorded a source tx is failed loudly after the window (it must not block the agent forever)', async () => {
+    const t = await initiateRailTransfer(db.pool, {
+      agentId: AGENT, accountAddr: ACCOUNT, rail: 'cctp', srcChainId: 421614, destChainId: 84532, asset: USDC, amountWei: '5', destGasPlan: gasPlan(84532),
+    });
+    const d = new FakeDriver();
+    // inside the window: left alone (the originator may still be about to write-ahead the hash)
+    await sweepRailRecovery({ pool: db.pool, driver: d });
+    expect((await getRailTransfer(db.pool, t.railId))!.status).toBe('initiated');
+    // past the window: failed, with a message that tells a human to check the chain
+    const r = await sweepRailRecovery({ pool: db.pool, driver: d, fillTimeoutMs: -60_000 });
+    expect(r.failed).toBe(1);
+    const row = (await getRailTransfer(db.pool, t.railId))!;
+    expect(row.status).toBe('failed');
+    expect(row.lastError).toMatch(/verify on-chain/);
+  });
+
   it('source leg reverts → failed (TERMINAL)', async () => {
     const t = await initiateRailTransfer(db.pool, {
       agentId: AGENT, accountAddr: ACCOUNT, rail: 'ccip', srcChainId: 16602, destChainId: 421614,
