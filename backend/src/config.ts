@@ -70,6 +70,8 @@ const envSchema = z.object({
   SESSION_GAS_DUST_WEI: z.string().regex(/^\d{1,30}$/).default('2000000000000000'), // 0.002 0G
   DEFAULT_TIMELOCK_DELAY: z.coerce.number().int().nonnegative().default(900),
   RUNTIME_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),
+  // E1 loop-breaker: consecutive failed cycles before an agent pauses itself (0 disables).
+  AGENT_FAILURE_BUDGET: z.coerce.number().int().nonnegative().default(5),
   // 0G's own model as the Phase-1 default (Dami 2026-09-20): 0G agents reason on
   // 0G's in-house model. It is a REASONING model (emits reasoning_content before
   // content, PHASE-0 §2) — prompt.ts keeps max_tokens ≥256 and falls back to

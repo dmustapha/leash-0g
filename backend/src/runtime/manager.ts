@@ -31,6 +31,7 @@ import type { RuntimeChain } from './session-chain.js';
 import { loadGasRouteInputs } from './gas.js';
 import type { ChainRegistry } from '../chain/registry.js';
 import { assertBridgeRoutable } from './bridge-gate.js';
+import { budgetExhausted, nextCycleDelayMs, DEFAULT_FAILURE_BUDGET, DEFAULT_MAX_BACKOFF_MS } from './failure-budget.js';
 import { buildTreasuryGraph, type TreasuryGraph } from './treasury-graph.js';
 import { consumeOneShot } from './one-shot-consume.js';
 import type { CapabilityDeps } from '../capabilities/service.js';
@@ -61,6 +62,10 @@ export interface RuntimeSettings {
   chainConfig?: ChainConfig | undefined;
   /** Stage D (D-8): how long a JIT capability card stays actionable (ms; default 10 min). */
   jitTtlMs?: number | undefined;
+  /** E1 loop-breaker: consecutive failed cycles before the agent pauses itself (default 5; 0 disables). */
+  failureBudget?: number | undefined;
+  /** E1: cap on the exponential delay between cycles while an agent is failing (default 15 min). */
+  maxBackoffMs?: number | undefined;
   /** AQ-FND M-3: global session-key gas dust default (wei) — used by the gas ladder when a
    *  chain does not override `sessionGasDustWei`. Unset ⇒ 0.002 0G (the config default). */
   globalDustWei?: bigint | undefined;
@@ -119,6 +124,8 @@ interface Loop {
   current: Promise<void>;
   /** True while a cycle is executing — nudge() must not double-schedule then. */
   busy: boolean;
+  /** E1: consecutive cycles that threw; reset by any cycle that returns. */
+  consecutiveFailures: number;
   pendingApprovalId: string | null;
   /** Either the treasury/transfer graph or the Phase-4 ACP job graph — both
    * share the manager contract: invoke({inboundDelegation}), a pending
@@ -377,7 +384,7 @@ export class LeashRuntimeManager implements RuntimeManager {
           ctx,
           this.deps.checkpointer,
         );
-    const loop: Loop = { stopped: false, timer: null, current: Promise.resolve(), busy: false, pendingApprovalId: null, graph, agent, gatewayToken: ctx.gatewayToken };
+    const loop: Loop = { stopped: false, timer: null, current: Promise.resolve(), busy: false, consecutiveFailures: 0, pendingApprovalId: null, graph, agent, gatewayToken: ctx.gatewayToken };
     this.loops.set(agentId, loop);
     this.schedule(loop, 0);
   }
@@ -566,10 +573,19 @@ export class LeashRuntimeManager implements RuntimeManager {
     loop.timer = setTimeout(() => {
       loop.busy = true;
       loop.current = this.runCycle(loop)
-        .catch(async (err: unknown) => this.recordFailure(loop.agent.id, err))
+        .then(() => {
+          loop.consecutiveFailures = 0;
+        })
+        .catch(async (err: unknown) => {
+          // A cycle that died because the loop was stopped under it is not the agent's fault.
+          if (!loop.stopped) loop.consecutiveFailures += 1;
+          await this.recordFailure(loop.agent.id, err);
+          await this.tripBreakerIfExhausted(loop, err);
+        })
         .finally(() => {
           loop.busy = false;
-          this.schedule(loop, this.deps.settings.intervalMs);
+          const { intervalMs, maxBackoffMs } = this.deps.settings;
+          this.schedule(loop, nextCycleDelayMs(intervalMs, loop.consecutiveFailures, maxBackoffMs ?? DEFAULT_MAX_BACKOFF_MS));
         });
     }, delayMs);
     loop.timer.unref();
@@ -727,6 +743,43 @@ export class LeashRuntimeManager implements RuntimeManager {
       approvalId,
       this.deps.settings.approvalTimeoutMs,
     );
+  }
+
+  /**
+   * E1 loop-breaker. After the failure budget of consecutive failed cycles the agent PAUSES ITSELF
+   * (same effect as the cockpit's Pause: the runtime loop stops, the DB row stays `active`), leaves
+   * one trace row and one owner alert, and a later Resume starts it with a fresh budget. Runs inside
+   * the loop's own `current` promise, so it must NOT await it (halt() would deadlock) — it just marks
+   * the loop stopped and drops it, and schedule() then no-ops.
+   */
+  private async tripBreakerIfExhausted(loop: Loop, err: unknown): Promise<void> {
+    const budget = this.deps.settings.failureBudget ?? DEFAULT_FAILURE_BUDGET;
+    if (loop.stopped || !budgetExhausted(loop.consecutiveFailures, budget)) return;
+    const agentId = loop.agent.id;
+    loop.stopped = true;
+    if (loop.timer) clearTimeout(loop.timer);
+    loop.timer = null;
+    this.loops.delete(agentId);
+    const message = err instanceof Error ? err.message : String(err);
+    const brief = message.length > 160 ? `${message.slice(0, 157)}...` : message;
+    const summary = `paused after ${loop.consecutiveFailures} consecutive failed cycles — last error: ${brief}`;
+    console.error(`[loop-breaker] agent ${agentId} ${summary}`);
+    try {
+      const rec = await appendTrace(this.deps.pool, { agentId, kind: 'decision', detail: { summary } });
+      this.deps.hub.emit(agentId, 'trace', traceEvent(rec));
+      if (this.deps.alerts) {
+        await this.deps.alerts.emit(loop.agent.ownerAddr, {
+          agentId,
+          class: 'info',
+          kind: 'runtime_error',
+          summary: `${loop.agent.name} paused itself: ${summary}. Fix the cause, then press Resume.`,
+          refs: { traceSeq: rec.seq },
+          dedupKey: `breaker:${agentId}`,
+        });
+      }
+    } catch (traceErr) {
+      console.error(`failed to record loop-breaker pause for agent ${agentId}`, traceErr);
+    }
   }
 
   private async recordFailure(agentId: string, err: unknown): Promise<void> {

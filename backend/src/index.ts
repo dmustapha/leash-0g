@@ -209,6 +209,7 @@ async function main(): Promise<void> {
       approvalTimeoutMs: cfg.APPROVAL_TIMEOUT_MS,
       gatewayUrl: `http://127.0.0.1:${cfg.GATEWAY_PORT}`, // the runtime is the gateway's only client
       intervalMs: cfg.RUNTIME_INTERVAL_MS,
+      failureBudget: cfg.AGENT_FAILURE_BUDGET,
       defaultModel: cfg.RUNTIME_DEFAULT_MODEL,
       jobProviderModel: cfg.JOB_PROVIDER_MODEL,
       jobEvaluatorModel: cfg.JOB_EVALUATOR_MODEL,
