@@ -112,6 +112,11 @@ export interface ChainConfig {
    */
   bridgeDestinations?: Readonly<Record<string, number>> | undefined;
   /**
+   * AQ-FND M-3 inc-3b: this chain's Circle CCTP v2 TokenMessenger (lowercased). Set only where CCTP
+   * is live; a chain without it is never a bridge SOURCE for the gas route.
+   */
+  cctpTokenMessenger?: string | undefined;
+  /**
    * RH2 (SE-9 two-factory): named, operator-configured SECONDARY factories that
    * carry a wall CAPABILITY distinct from the chain's default (same-address) wall.
    * Keyed by capability name (e.g. `oracleBand` → the audit-fixed price-band wall

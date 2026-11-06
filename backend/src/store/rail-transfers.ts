@@ -55,7 +55,8 @@ export const OPEN_RAIL_STATUSES: readonly RailTransferStatus[] = [
 export interface DestGasPlan {
   destChainId: number;
   fundedWei: string;
-  source: 'prefunded' | 'refuel' | 'paymaster';
+  /** 'ops_fill': the ops key submits the permissionless destination fill (CCTP receiveMessage) and pays its gas. */
+  source: 'prefunded' | 'refuel' | 'paymaster' | 'ops_fill';
   [k: string]: Json;
 }
 

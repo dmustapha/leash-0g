@@ -616,6 +616,7 @@ export function buildChainConfigs(cfg: Config): ChainConfig[] {
       // AQ-FND M-4: OP-stack bridge entries (addr:dest) + the real rails (CCTP
       // TokenMessenger for the USDC legs, Base's CCIP Router for the 0G legs).
       ...bridgeConfig(cfg.BASE_BRIDGE_ALLOWLIST, [cfg.BASE_CCIP_ROUTER_ADDR, cfg.CCTP_TOKEN_MESSENGER_ADDR]),
+      ...(cfg.CCTP_TOKEN_MESSENGER_ADDR ? { cctpTokenMessenger: cfg.CCTP_TOKEN_MESSENGER_ADDR.toLowerCase() } : {}),
       ...gasSwapConfig('BASE', cfg.BASE_GAS_SWAP_WETH_ADDR, cfg.BASE_GAS_SWAP_FEE_TIER, cfg.BASE_GAS_SWAP_TOKEN_AMOUNT),
     });
   }
@@ -651,6 +652,7 @@ export function buildChainConfigs(cfg: Config): ChainConfig[] {
         : {}),
       // AQ-FND M-4: the real rails on Eth Sepolia (CCTP USDC legs + CCIP 0G legs).
       ...bridgeConfig(undefined, [cfg.SEPOLIA_CCIP_ROUTER_ADDR, cfg.CCTP_TOKEN_MESSENGER_ADDR]),
+      ...(cfg.CCTP_TOKEN_MESSENGER_ADDR ? { cctpTokenMessenger: cfg.CCTP_TOKEN_MESSENGER_ADDR.toLowerCase() } : {}),
       ...gasSwapConfig('SEPOLIA', cfg.SEPOLIA_GAS_SWAP_WETH_ADDR, cfg.SEPOLIA_GAS_SWAP_FEE_TIER, cfg.SEPOLIA_GAS_SWAP_TOKEN_AMOUNT),
     });
   }
@@ -684,6 +686,7 @@ export function buildChainConfigs(cfg: Config): ChainConfig[] {
         : {}),
       // AQ-FND M-4: Arbitrum bridge entries (addr:dest) + the real rails.
       ...bridgeConfig(cfg.ARB_BRIDGE_ALLOWLIST, [cfg.ARB_CCIP_ROUTER_ADDR, cfg.CCTP_TOKEN_MESSENGER_ADDR]),
+      ...(cfg.CCTP_TOKEN_MESSENGER_ADDR ? { cctpTokenMessenger: cfg.CCTP_TOKEN_MESSENGER_ADDR.toLowerCase() } : {}),
       ...gasSwapConfig('ARB', cfg.ARB_GAS_SWAP_WETH_ADDR, cfg.ARB_GAS_SWAP_FEE_TIER, cfg.ARB_GAS_SWAP_TOKEN_AMOUNT),
     });
   }
