@@ -24,6 +24,8 @@ import { backfillLegacyGuardian } from './store/agents.js';
 import { sweepStaleReservations } from './store/reservations.js';
 import { pruneAllStaleDraftDirections } from './store/directions.js';
 import { sweepPendingSettlements } from './jobs/settlement-sweep.js';
+import { sweepRailRecovery } from './runtime/rail-recovery.js';
+import { createCctpRailDriver, createHttpIris } from './runtime/cctp-driver.js';
 import { pgRevokeCursorStore } from './store/revoke-cursor.js';
 import { runtimeRoleCanBypassAudit } from './db/audit-role.js';
 import { sweepOrphanedApprovals } from './approvals/sweep.js';
@@ -248,6 +250,26 @@ async function main(): Promise<void> {
     }).catch((err: unknown) => console.error('settlement sweep tick failed', err));
   }, 60_000);
   settlementSweepTimer.unref();
+
+  // AQ-FND inc-3b: CCTP rail recovery. Advances open rail_transfers (confirm burn -> Circle
+  // attestation -> ops-key receiveMessage on the destination -> filled). Lease-held; only armed
+  // when a MessageTransmitter is configured. Idle until a bridge executor opens rows.
+  const cctpTransmitter = cfg.CCTP_MESSAGE_TRANSMITTER_ADDR as `0x${string}` | undefined;
+  const railSweepTimer = cctpTransmitter
+    ? setInterval(() => {
+        if (!lease.held()) return;
+        const driver = createCctpRailDriver({
+          iris: createHttpIris(cfg.CCTP_IRIS_URL),
+          chains: {
+            getTxStatus: (chainId, tx) => chainRegistry.getChainOps(chainId).getTxStatus(tx),
+            sendOpsCall: (chainId, to, data) => chainRegistry.getChainOps(chainId).sendOpsCall(to, data),
+          },
+          messageTransmitter: () => cctpTransmitter,
+        });
+        void sweepRailRecovery({ pool, driver }).catch((err: unknown) => console.error('rail sweep tick failed', err));
+      }, 30_000)
+    : null;
+  railSweepTimer?.unref();
 
   // Coordination layer (spec §3b): links/delegations lifecycle + channel
   // throttles + expiry sweeper. The nudge is delivery-latency only.
@@ -479,6 +501,7 @@ async function main(): Promise<void> {
     clearInterval(directionsSweepTimer); // was previously left running on shutdown
     clearInterval(oneShotSweepTimer);
     clearInterval(settlementSweepTimer);
+    if (railSweepTimer) clearInterval(railSweepTimer);
     coordinator.stopSweeper();
     lease.release();
     broker.cancelAll();

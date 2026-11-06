@@ -44,3 +44,9 @@ export function resolveRailDestination(dest: { kind: 'cctp_domain' | 'ccip_selec
   if (!/^\d{1,20}$/.test(dest.value)) return null;
   return CCIP_SELECTOR_TO_CHAIN.get(dest.value) ?? null;
 }
+
+/** Inverse of CCTP_DOMAIN_TO_CHAIN: the Circle domain id of an EVM chain, or null. */
+export function cctpDomainOfChain(chainId: number): number | null {
+  for (const [domain, chain] of CCTP_DOMAIN_TO_CHAIN) if (chain === chainId) return domain;
+  return null;
+}

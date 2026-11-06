@@ -4,6 +4,7 @@ import {
   defineChain,
   http,
   parseEventLogs,
+  TransactionReceiptNotFoundError,
   keccak256,
   type Chain,
   type PublicClient,
@@ -846,6 +847,28 @@ export class LeashChainOps implements ChainOps {
       await waitReceipt(this.publicClient, hash);
       return { txHash: hash };
     });
+  }
+
+  /** Receipt status of any tx hash on this chain ('pending' when not yet mined / not found). */
+  async getTxStatus(txHash: string): Promise<'success' | 'reverted' | 'pending'> {
+    try {
+      const r = await this.publicClient.getTransactionReceipt({ hash: txHash as Hex });
+      return r.status === 'success' ? 'success' : 'reverted';
+    } catch (err) {
+      if (err instanceof TransactionReceiptNotFoundError) return 'pending';
+      throw err;
+    }
+  }
+
+  /**
+   * Broadcast an arbitrary call from the ops key and return the hash WITHOUT waiting (the rail
+   * recovery sweep reconciles the receipt). Used only for permissionless far-leg fills (CCTP
+   * receiveMessage); gas estimation reverts loudly if the call would fail.
+   */
+  async sendOpsCall(to: string, data: Hex): Promise<string> {
+    return this.serializeOps(() =>
+      this.opsWallet.sendTransaction({ chain: this.opsWallet.chain, account: this.opsAccount, to: to as Hex, data }),
+    );
   }
 
   async getBalance(addr: string): Promise<bigint> {

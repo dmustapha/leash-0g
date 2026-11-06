@@ -163,6 +163,10 @@ const envSchema = z.object({
   SEPOLIA_CCIP_ROUTER_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
   ARB_CCIP_ROUTER_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
   CCTP_TOKEN_MESSENGER_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  // inc-3b: MessageTransmitterV2 (same address on every CCTP v2 chain) the ops key mints through,
+  // and Circle's Iris attestation API. The rail sweep tick only starts when the transmitter is set.
+  CCTP_MESSAGE_TRANSMITTER_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  CCTP_IRIS_URL: z.string().url().default('https://iris-api-sandbox.circle.com'),
   // How long a JIT (L2) capability card stays actionable before it auto-expires
   // (the sweep resolves it). Reuses the approval-timeout posture as the default.
   JIT_TTL_MS: z.coerce.number().int().positive().default(600_000),
