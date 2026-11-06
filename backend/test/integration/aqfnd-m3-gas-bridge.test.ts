@@ -169,7 +169,7 @@ describe('gas bridge executor (inc-3b S3)', () => {
   it('the fake enforces the real refusal: a burn bigger than the approved allowance reverts', async () => {
     chain.allowance = 1n;
     const { buildCctpBurnCalls } = await import('../../src/governed-call/index.js');
-    const { burn } = buildCctpBurnCalls({ self: ACCOUNT as `0x${string}`, tokenMessenger: MESSENGER as `0x${string}`, burnToken: USDC as `0x${string}`, destinationDomain: 6, amount: CAP });
+    const { burn } = buildCctpBurnCalls({ self: ACCOUNT as `0x${string}`, tokenMessenger: MESSENGER, burnToken: USDC as `0x${string}`, destinationDomain: 6, amount: CAP });
     await expect(chain.executeCall({ target: MESSENGER, data: burn.data })).rejects.toThrow(/insufficient allowance/);
   });
 });
