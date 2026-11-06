@@ -28,6 +28,7 @@ import { SELECTOR_APPROVE } from '../governed-call/selectors.js';
 import type { TradeFill } from '../governed-call/call-builder.js';
 import { classifyIntendedCall } from '../gateway/call-gate.js';
 import { executeGasSwap, GasSwapLegError, precheckGasSwap, gasSwapSetup, type GasSwapEnv } from './gas-swap.js';
+import { executeGasBridge, precheckGasBridge, hasOpenBridgeInto, GasBridgeLegError, type GasBridgeEnv } from './gas-bridge.js';
 import { raiseCapabilityRequest, type CapabilityDeps } from '../capabilities/service.js';
 import { listGrants } from '../store/capabilities.js';
 import { gateToolCall } from '../gateway/mcp/tool-gate.js';
@@ -97,7 +98,7 @@ export type CycleOutcome =
   | { type: 'signed'; digest: string; descriptorId: number }
   | { type: 'signing_requested'; descriptorId: number };
 
-type Route = 'act' | 'token_act' | 'gas_swap' | 'approval' | 'delegate' | 'call' | 'tool_call' | 'sign' | 'stand_down';
+type Route = 'act' | 'token_act' | 'gas_swap' | 'gas_bridge' | 'approval' | 'delegate' | 'call' | 'tool_call' | 'sign' | 'stand_down';
 
 /**
  * FP-3 — the runtime signing rail (OPTIONAL, mirror of `toolRail`). When wired, the decide node
@@ -201,6 +202,10 @@ const TreasuryState = Annotation.Root({
   /** AQ-FND M-3 inc-3a: the `gas_swap` route's resolved sale (decide -> gasSwapAct). */
   gasSwapToken: Annotation<string>,
   gasSwapAmountIn: Annotation<string>,
+  /** AQ-FND M-3 inc-3b: the `gas_bridge` route's resolved burn (decide -> gasBridgeAct). */
+  gasBridgeToken: Annotation<string>,
+  gasBridgeAmount: Annotation<string>,
+  gasBridgeSrcChain: Annotation<number>,
   /** SF-3: the resolved L1 tool call for the `tool_call` route (egress leg). */
   toolName: Annotation<string>,
   toolEndpoint: Annotation<string>,
@@ -258,6 +263,8 @@ export interface TreasuryGraphDeps {
           // AQ-FND M-4: multi-domain rails (CCTP/CCIP) resolve their far chain
           // from the DECODED call — threaded through to the bridge-gate.
           decoded?: import('../governed-call/types.js').DecodedCall,
+          /** inc-3b: the chain the bridge call is made on (default: the agent's home chain) */
+          srcChainId?: number,
         ) => Promise<{ destinationChainId: number; verifiedAddr: string }>;
       }
     | undefined;
@@ -280,6 +287,8 @@ export interface TreasuryGraphDeps {
         resolveChain: (chainId: number) => RuntimeChain;
         /** human label for a chain id (config name) used in owner-facing ask text */
         chainName: (chainId: number) => string;
+        /** a surveyed chain's config (the bridge leg reads its CCTP messenger / allowlist) */
+        chainConfigOf?: (chainId: number) => ChainConfig;
         load: (homeGoalToken: string | null) => Promise<GasRouteInputs>;
       }
     | undefined;
@@ -1068,9 +1077,7 @@ export function buildTreasuryGraph(
       case 'swap-to-gas':
         return decideGasSwap(decision, route, gasConfig, sessionKeyAddr, gasAsk);
       case 'bridge-then-swap':
-        // Honest ask: bridge-then-swap's bridge executor is Increment 3b - state the route
-        // + grants, never execute.
-        return gasAsk(`${route.mode} route found but not executable yet — raised one gas ask with the required grants`);
+        return decideGasBridge(decision, route, gasConfig, gasAsk);
       case 'ask-owner':
       default:
         return gasAsk(`no self-funding gas path (${route.reason}) — raised one gas ask, never a silent stall`);
@@ -1127,6 +1134,95 @@ export function buildTreasuryGraph(
     };
   }
 
+  function gasBridgeEnv(gasConfig: NonNullable<TreasuryGraphDeps['gasConfig']>, srcChainId: number, destChainId: number): GasBridgeEnv | null {
+    const resolve = deps.gasRoute?.resolveChain;
+    const configOf = deps.gasRoute?.chainConfigOf;
+    const gate = deps.bridge?.assertRoutable;
+    if (!resolve || !configOf || !gate) return null;
+    const homeCfg = buildRouteChainCfg(gasConfig.chainConfig, gasConfig.globalDustWei);
+    return {
+      pool: deps.pool,
+      srcChain: resolve(srcChainId),
+      srcChainConfig: configOf(srcChainId),
+      agentId: ctx.agentId,
+      accountAddr: ctx.accountAddr,
+      destChainId,
+      amountCap: gasConfig.chainConfig.gasSwap?.tokenAmount ?? 0n,
+      fillGasWei: homeCfg.refuelLegGasWei,
+      assertRoutable: (target, decoded) => gate(target, decoded, srcChainId),
+    };
+  }
+
+  /**
+   * AQ-FND M-3 inc-3b: resolve a `bridge-then-swap` route (the SOURCE half; the mint and the swap
+   * follow on later cycles). While a bridge into this chain is open the agent just waits. Every call
+   * is built server-side and classified against the owner's live grants ON THE SOURCE CHAIN, then the
+   * bridge-gate runs. Anything not runnable is ONE `gas_request` ask naming the blocker - never a
+   * capability card, because the cockpit grants rules on the agent's home chain only.
+   */
+  async function decideGasBridge(
+    decision: AgentDecision,
+    route: GasRoute,
+    gasConfig: NonNullable<TreasuryGraphDeps['gasConfig']>,
+    gasAsk: (reason: string) => Promise<Partial<State>>,
+  ): Promise<Partial<State>> {
+    const leg = route.legs.find((l) => l.kind === 'bridge');
+    const env = leg ? gasBridgeEnv(gasConfig, leg.chainId, route.targetChainId) : null;
+    if (!leg || !env || !leg.token) {
+      return gasAsk('bridge-then-swap route found but the bridge rail is not configured on this runtime — raised one gas ask with the required grants');
+    }
+    if (await hasOpenBridgeInto(deps.pool, ctx.agentId, route.targetChainId)) {
+      return standDownToken('a bridge into this chain is already in flight — waiting for it to land before acting again');
+    }
+    const pre = await precheckGasBridge(env, leg.token);
+    if (pre.ok) {
+      return { decision, route: 'gas_bridge', gasBridgeToken: leg.token, gasBridgeAmount: pre.amount.toString(), gasBridgeSrcChain: leg.chainId };
+    }
+    if (pre.kind === 'unavailable') return gasAsk(`bridge-then-swap not executable (${pre.reason}) — raised one gas ask with the required grants`);
+    const why = pre.kind === 'l2' ? 'is not covered by the owner\'s grants on the source chain' : `is blocked (${pre.reason})`;
+    return askOwnerAndStandDown(
+      'gas_request',
+      `${gasAskSummary(gasConfig, route)} The ${pre.leg} step ${why}.`,
+      `gas_request:${ctx.agentId}:${route.targetChainId}:bridge-then-swap:${pre.leg}:${pre.kind}`,
+      `bridge-then-swap ${pre.leg} leg ${why} — raised one gas ask`,
+    );
+  }
+
+  /**
+   * AQ-FND M-3 inc-3b: run the bridge SOURCE leg (approve -> burn) with the SESSION key on the source
+   * chain. ONE outcome per cycle; a failed leg stops the sequence (the rail row is already marked
+   * failed). A success stands the cycle down on the burn itself: the sweep mints, and a later cycle
+   * finds the USDC on this chain and runs the swap-to-gas rung.
+   */
+  async function gasBridgeAct(state: State): Promise<Partial<State>> {
+    const gasConfig = deps.gasConfig;
+    const env = gasConfig ? gasBridgeEnv(gasConfig, state.gasBridgeSrcChain, gasConfig.chainConfig.chainId) : null;
+    if (!gasConfig || !env) return { outcome: { type: 'failed', reason: 'gas-bridge config vanished before submit' } };
+    const token = state.gasBridgeToken as Address;
+    const amount = BigInt(state.gasBridgeAmount);
+    try {
+      const { txHashes } = await executeGasBridge(env, { sessionPrivateKey: ctx.sessionPrivateKey, token, amount });
+      return {
+        outcome: {
+          type: 'acted',
+          txHash: txHashes[txHashes.length - 1] ?? '',
+          valueWei: amount.toString(),
+          token,
+          gasRung: 'bridge-then-swap',
+          gasBought: `bridging for gas: sent ${amount.toString()} units of ${shortAddr(token)} from ${env.srcChainConfig.name} toward ${gasConfig.chainConfig.name}; it lands in a few minutes, then the agent swaps part of it for gas`,
+        },
+      };
+    } catch (err) {
+      const leg = err instanceof GasBridgeLegError ? err.leg : 'bridge';
+      const cause = err instanceof GasBridgeLegError ? err.cause : err;
+      const decoded = decodeLeashError(cause);
+      const reason = decoded
+        ? `bridge-then-swap ${leg} leg refused: ${decoded.plain}`
+        : `bridge-then-swap ${leg} leg failed: ${cause instanceof Error ? cause.message.split('\n')[0] : String(cause)}`;
+      return { outcome: { type: 'failed', reason, ...(decoded ? { decoded } : {}) } };
+    }
+  }
+
   /**
    * AQ-FND M-3 inc-3a: run the swap-to-gas legs (approve -> swap -> unwrap -> refuel) with the
    * SESSION key, each awaited to a successful receipt. ONE outcome per cycle; a failed leg stops
@@ -1181,6 +1277,7 @@ export function buildTreasuryGraph(
           chainIds: [chainConfig.chainId],
           cfgByChain: { [chainConfig.chainId]: buildRouteChainCfg(chainConfig, globalDustWei) },
           tokensByChain: { [chainConfig.chainId]: [token] },
+          lanes: [],
         };
     const { route } = await planAgentGasRoute({
       inputs,
@@ -1882,6 +1979,7 @@ export function buildTreasuryGraph(
     .addNode('act', act)
     .addNode('tokenAct', tokenAct)
     .addNode('gasSwapAct', gasSwapAct)
+    .addNode('gasBridgeAct', gasBridgeAct)
     .addNode('callAct', callAct)
     .addNode('toolAct', toolAct)
     .addNode('signAct', signAct)
@@ -1897,6 +1995,7 @@ export function buildTreasuryGraph(
       act: 'act',
       token_act: 'tokenAct',
       gas_swap: 'gasSwapAct',
+      gas_bridge: 'gasBridgeAct',
       call: 'callAct',
       tool_call: 'toolAct',
       sign: 'signAct',
@@ -1907,6 +2006,7 @@ export function buildTreasuryGraph(
     .addEdge('act', 'record')
     .addEdge('tokenAct', 'record')
     .addEdge('gasSwapAct', 'record')
+    .addEdge('gasBridgeAct', 'record')
     .addEdge('callAct', 'record')
     .addEdge('toolAct', 'record')
     .addEdge('signAct', 'record')

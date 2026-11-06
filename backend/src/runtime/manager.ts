@@ -67,6 +67,8 @@ export interface RuntimeSettings {
   failureBudget?: number | undefined;
   /** E1: cap on the exponential delay between cycles while an agent is failing (default 15 min). */
   maxBackoffMs?: number | undefined;
+  /** inc-3b: a CCTP MessageTransmitter is configured, so the ops key can complete a fill. Without it the gas route never starts a burn. */
+  cctpFillEnabled?: boolean | undefined;
   /** AQ-FND M-3: global session-key gas dust default (wei) — used by the gas ladder when a
    *  chain does not override `sessionGasDustWei`. Unset ⇒ 0.002 0G (the config default). */
   globalDustWei?: bigint | undefined;
@@ -109,6 +111,8 @@ export interface RuntimeManagerDeps {
    */
   lease?: { held(): boolean } | undefined;
   settings: RuntimeSettings;
+  /** Test seam: replaces the hard bridge-gate (its own suite proves it). Production leaves this unset. */
+  bridgeGate?: typeof assertBridgeRoutable | undefined;
 }
 
 /** F-6: thrown by start() when this instance does not hold the runtime lease. */
@@ -264,7 +268,7 @@ export class LeashRuntimeManager implements RuntimeManager {
     return {
       bridge: {
         targets: new Set(allow.map((a) => a.toLowerCase())),
-        assertRoutable: (bridgeTarget, decoded) => assertBridgeRoutable(registry, agent, bridgeTarget, decoded),
+        assertRoutable: (bridgeTarget, decoded, srcChainId) => (this.deps.bridgeGate ?? assertBridgeRoutable)(registry, agent, bridgeTarget, decoded, srcChainId),
       },
     };
   }
@@ -288,6 +292,7 @@ export class LeashRuntimeManager implements RuntimeManager {
     const gasRoute: NonNullable<import('./treasury-graph.js').TreasuryGraphDeps['gasRoute']> = {
       resolveChain: (chainId) => registry.getSessionChain(chainId),
       chainName: (chainId) => (registry.has(chainId) ? registry.getChainConfig(chainId).name : `chain ${chainId}`),
+      chainConfigOf: (chainId) => registry.getChainConfig(chainId),
       load: (homeGoalToken) =>
         loadGasRouteInputs({
           pool: this.deps.pool,
@@ -296,6 +301,7 @@ export class LeashRuntimeManager implements RuntimeManager {
           homeChainId: agent.chainId,
           goalToken: homeGoalToken,
           globalDustWei,
+          cctpFillEnabled: this.deps.settings.cctpFillEnabled === true,
         }),
     };
     return {

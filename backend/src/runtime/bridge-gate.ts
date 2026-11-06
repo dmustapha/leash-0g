@@ -58,16 +58,24 @@ export async function assertBridgeRoutable(
    * elsewhere by calldata).
    */
   decoded?: DecodedCall,
+  /**
+   * AQ-FND inc-3b: the chain the bridge call is made ON. Defaults to the agent's home chain; the gas
+   * route's bridge-then-swap burns on a NON-home chain (where the USDC sits) bound for home, so the
+   * allowlist/destination checks read THAT chain's config. The same-address proof still pairs the two
+   * chains and still requires the account deployed on home.
+   */
+  srcChainId?: number,
 ): Promise<{ destinationChainId: number; verifiedAddr: string }> {
   // SF-2: bridge routing is native-only (requires the agent's on-chain account).
   assertNativeAgent(agent);
   const target = bridgeTarget.toLowerCase();
-  const cfg = registry.getChainConfig(agent.chainId); // default-deny home chain
+  const srcChain = srcChainId ?? agent.chainId;
+  const cfg = registry.getChainConfig(srcChain); // default-deny source chain
   const allow = (cfg.bridgeAllowlist ?? []).map((a) => a.toLowerCase());
   if (!allow.includes(target)) {
     throw new BridgeRoutingRefusedError(
       'bridge_not_allowlisted',
-      `bridge ${target} is not in chain ${agent.chainId}'s bridge allowlist`,
+      `bridge ${target} is not in chain ${srcChain}'s bridge allowlist`,
     );
   }
   const configuredDest = cfg.bridgeDestinations?.[target];
@@ -160,7 +168,7 @@ export async function assertBridgeRoutable(
           windowCapToken: BigInt(tuple.tokenPolicy.windowCapToken),
         },
       },
-      chainIds: [agent.chainId, destinationChainId],
+      chainIds: [srcChain, destinationChainId],
       expectedAccountAddr: agent.accountAddr,
       homeChainId: agent.chainId,
       // FP-4 + AQ-FND: V5/V6 verify the pinned singletons + off-chain predict (else V4 factory).

@@ -26,6 +26,7 @@ import {
   type RouteChainCfg,
 } from '../chain/gas-planner.js';
 import { listChainDeployments } from '../store/chain-deployments.js';
+import { cctpDomainOfChain } from '../governed-call/rail-domains.js';
 import type { AgentGoal } from '../types.js';
 import type { RuntimeChain } from './session-chain.js';
 
@@ -268,6 +269,8 @@ export interface GasRouteInputs {
   chainIds: number[];
   cfgByChain: Record<number, RouteChainCfg>;
   tokensByChain: Record<number, string[]>;
+  /** CCTP bridge lanes (source chain -> the home chain, the source's settlement token). Empty unless the ops fill is enabled. */
+  lanes: Array<{ from: number; to: number; token: Address }>;
 }
 
 /** The ERC-20 an owner-typed treasury goal is denominated in (lowercased), else null. */
@@ -288,6 +291,8 @@ export async function loadGasRouteInputs(opts: {
   homeChainId: number;
   goalToken: string | null;
   globalDustWei: bigint;
+  /** the ops key can complete a CCTP fill (a MessageTransmitter is configured): without it no burn may start */
+  cctpFillEnabled?: boolean;
 }): Promise<GasRouteInputs> {
   const { pool, registry, agentId, homeChainId, goalToken, globalDustWei } = opts;
   const deployments = await listChainDeployments(pool, agentId);
@@ -300,7 +305,28 @@ export async function loadGasRouteInputs(opts: {
     const settlement = cfg.canonical?.settlementToken;
     tokensByChain[id] = id === homeChainId ? (goalToken ? [goalToken] : []) : settlement ? [settlement] : [];
   }
-  return { homeChainId, chainIds, cfgByChain, tokensByChain };
+  return { homeChainId, chainIds, cfgByChain, tokensByChain, lanes: opts.cctpFillEnabled ? cctpGasLanes(registry, chainIds, homeChainId) : [] };
+}
+
+/**
+ * CCTP lanes the gas route may bridge over: every surveyed non-home chain with a CCTP messenger, a
+ * Circle domain and a settlement token (USDC), INTO the home chain (which must have a Circle domain too;
+ * whether it has a DEX is the planner's call). Pure config - no chain reads.
+ */
+export function cctpGasLanes(
+  registry: GasRouteRegistry,
+  chainIds: number[],
+  homeChainId: number,
+): Array<{ from: number; to: number; token: Address }> {
+  if (cctpDomainOfChain(homeChainId) === null) return [];
+  const lanes: Array<{ from: number; to: number; token: Address }> = [];
+  for (const id of chainIds) {
+    if (id === homeChainId || cctpDomainOfChain(id) === null) continue;
+    const cfg = registry.getChainConfig(id);
+    const token = cfg.canonical?.settlementToken;
+    if (cfg.cctpTokenMessenger && token) lanes.push({ from: id, to: homeChainId, token: token.toLowerCase() as Address });
+  }
+  return lanes;
 }
 
 /** Survey + plan in one read-only step (shared by the act loop and GET /gas-survey). */
@@ -318,7 +344,7 @@ export async function planAgentGasRoute(opts: {
     sessionKeyAddr: opts.sessionKeyAddr,
     tokensByChain: inputs.tokensByChain,
   });
-  const route = planGasRoute(inputs.cfgByChain, survey, inputs.homeChainId, {});
+  const route = planGasRoute(inputs.cfgByChain, survey, inputs.homeChainId, { lanes: inputs.lanes });
   return { survey, route };
 }
 
