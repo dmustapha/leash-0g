@@ -69,6 +69,17 @@ export interface OnboardChainOps extends ChainOps {
     accountSalt: string;
   }): Promise<string>;
   /** Stage F′ (FP-4 P1): the V5 analogue — pure off-chain CREATE2 (guardian required). */
+  predictAccountV6?(input: {
+    ownerAddr: string;
+    guardianAddr: string;
+    sessionKeyAddr: string;
+    policy: { perTransferCap: bigint; windowCap: bigint; windowSeconds: number; expiresAt: number };
+    allowlist: string[];
+    timelockDelay: number;
+    settlementToken?: string;
+    tokenPolicy?: { perTransferCapToken: bigint; windowCapToken: bigint };
+    accountSalt: string;
+  }): string;
   predictAccountV5(input: {
     ownerAddr: string;
     guardianAddr: string;
@@ -111,6 +122,17 @@ export function parsePersistedTuple(agent: AgentRow): PersistedCreateTuple {
 /** The zero address means "native-only account" in the constructor wire. */
 const ZERO_ADDR = '0x0000000000000000000000000000000000000000';
 
+type PredictInput = Parameters<OnboardChainOps['predictAccountV5']>[0];
+
+/** The target chain's CREATE2 prediction for the persisted tuple, by account version. */
+async function predictFor(ops: OnboardChainOps, version: number, input: PredictInput): Promise<string> {
+  if (version === 6) {
+    if (!ops.predictAccountV6) throw new OnboardRefusedError('not_v4', 'target chain ops cannot predict a V6 account');
+    return ops.predictAccountV6(input);
+  }
+  return version === 5 ? ops.predictAccountV5(input) : ops.predictAccountV4(input);
+}
+
 export async function onboardAgentToChain(
   deps: { pool: Pool; getChainOps: (chainId: number) => OnboardChainOps },
   agent: AgentRow,
@@ -122,9 +144,9 @@ export async function onboardAgentToChain(
   // Stage F′ (FP-4 P1): V4 (governed-calldata) AND V5 (governed-signing) are both
   // deterministic CREATE2 accounts that can replay onto another chain; legacy v2
   // cannot. Either requires a persisted salt (+ tuple, checked below).
-  const deterministic = agent.accountVersion === 4 || agent.accountVersion === 5;
+  const deterministic = agent.accountVersion === 4 || agent.accountVersion === 5 || agent.accountVersion === 6;
   if (!deterministic || !agent.accountSalt) {
-    throw new OnboardRefusedError('not_v4', 'only deterministic V4/V5 accounts (with a persisted salt) can onboard to another chain');
+    throw new OnboardRefusedError('not_v4', 'only deterministic V4/V5/V6 accounts (with a persisted salt) can onboard to another chain');
   }
   if (targetChainId === agent.chainId) {
     throw new OnboardRefusedError('home_chain', `chain ${targetChainId} is the agent's home chain`);
@@ -168,9 +190,7 @@ export async function onboardAgentToChain(
   // REFUSAL-FIRST: the target chain's prediction for the persisted tuple must
   // equal the persisted account address. Any drift = mutated/reconstructed
   // tuple = refuse BEFORE minting anything.
-  const predicted = (
-    agent.accountVersion === 5 ? ops.predictAccountV5(predictInput) : await ops.predictAccountV4(predictInput)
-  ).toLowerCase();
+  const predicted = (await predictFor(ops, agent.accountVersion, predictInput)).toLowerCase();
   if (predicted !== agent.accountAddr.toLowerCase()) {
     throw new OnboardRefusedError(
       'tuple_prediction_mismatch',
@@ -182,7 +202,7 @@ export async function onboardAgentToChain(
     sessionKeyAddr: tuple.sessionKeyAddr,
     auditPubKey: agent.auditPubkey,
     name: agent.name,
-    accountVersion: agent.accountVersion === 5 ? 5 : 4,
+    accountVersion: agent.accountVersion === 6 ? 6 : agent.accountVersion === 5 ? 5 : 4,
     policy: predictInput.policy,
     allowlist: tuple.allowlist,
     timelockDelay: tuple.timelockDelay,

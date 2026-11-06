@@ -48,6 +48,9 @@ class FakeOnboardOps {
   async predictAccountV4(input: Record<string, unknown>): Promise<string> {
     return fakePredict({ ...input, guardianAddr: input['guardianAddr'] ?? this.guardianAddress });
   }
+  predictAccountV6(input: Record<string, unknown>): string {
+    return fakePredict({ ...input, guardianAddr: input['guardianAddr'] ?? this.guardianAddress });
+  }
   public funded: Array<{ addr: string; amountWei: bigint }> = [];
   async fundSessionKey(addr: string, amountWei: bigint): Promise<{ txHash: string }> {
     this.funded.push({ addr, amountWei });
@@ -192,6 +195,19 @@ describe('SE-7 second-chain onboarding (persisted-tuple replay)', () => {
     const row = await getChainDeployment(db.pool, agentId, BASE_CHAIN);
     expect(row?.accountAddr).toBe(expectedAccount());
     expect(row?.adopted).toBe(false);
+  });
+
+  it('V6: a governed-asset (v6) agent onboards by the same byte-exact replay, minted as accountVersion 6', async () => {
+    const { id, owner } = await seedV4Agent({ version: 6 });
+    const res = await request(app.ownerApp)
+      .post(`/api/agents/${id}/networks`)
+      .set('Authorization', ownerAuth(owner))
+      .send({ chainId: BASE_CHAIN });
+    expect(res.status).toBe(201);
+    expect(res.body.accountAddr).toBe(expectedAccount());
+    expect(baseOps.mints).toHaveLength(1);
+    expect((baseOps.mints[0] as Record<string, unknown>)['accountVersion']).toBe(6);
+    expect((await getChainDeployment(db.pool, id, BASE_CHAIN))?.accountAddr).toBe(expectedAccount());
   });
 
   it('idempotent: a second onboard returns the existing row and mints NOTHING', async () => {
