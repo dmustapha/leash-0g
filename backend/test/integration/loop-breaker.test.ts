@@ -7,6 +7,7 @@ import { ApprovalBroker } from '../../src/approvals/broker.js';
 import { LeashRuntimeManager } from '../../src/runtime/manager.js';
 import { generateGatewayToken, hashTokenSecret } from '../../src/crypto/token.js';
 import { encryptSecret } from '../../src/crypto/keycrypt.js';
+import { HttpRequestError } from 'viem';
 import type { RuntimeChain } from '../../src/runtime/session-chain.js';
 import type { AlertService } from '../../src/alerts/service.js';
 import type { PolicyView } from '../../src/types.js';
@@ -25,6 +26,8 @@ const READS_PER_FAILED_CYCLE = 2;
 
 class FlakyChain implements RuntimeChain {
   failing = true;
+  /** what getBalance throws while failing */
+  failure: Error = new Error('rpc exploded');
   /** when set, throw for exactly this many reads then recover (a failed cycle makes READS_PER_FAILED_CYCLE reads). */
   throwsLeft: number | null = null;
   balanceReads = 0;
@@ -38,9 +41,9 @@ class FlakyChain implements RuntimeChain {
     if (this.throwsLeft !== null) {
       if (this.throwsLeft > 0) {
         this.throwsLeft -= 1;
-        throw new Error('rpc exploded');
+        throw this.failure;
       }
-    } else if (this.failing) throw new Error('rpc exploded');
+    } else if (this.failing) throw this.failure;
     return 10n ** 18n;
   }
   async getPolicyView(): Promise<PolicyView> { return this.policyView; }
@@ -160,5 +163,28 @@ describe('E1 loop-breaker', () => {
     await until(() => chain.balanceReads >= reads + 3);
     expect(manager.isRunning(id)).toBe(true);
     await manager.stop(id);
+  });
+
+  it('step 3: a raw viem dump reaches the owner as ONE plain line; the full text is kept in rawError', async () => {
+    const chain = new FlakyChain();
+    chain.failure = new HttpRequestError({ url: 'https://evmrpc-testnet.0g.ai/', body: { method: 'eth_getBalance' }, details: 'fetch failed' });
+    const { manager, alerts } = rig(chain, 2);
+    const id = await seed();
+    await manager.start(id);
+    await until(() => !manager.isRunning(id));
+    const rows = (await db.pool.query(
+      `SELECT record->'detail'->>'summary' s, record->'detail'->>'rawError' raw FROM trace_records WHERE agent_id=$1 AND (record->'detail'->>'summary' LIKE '%failed:%' OR record->'detail'->>'summary' LIKE 'paused after%') ORDER BY seq`,
+      [id],
+    )).rows as Array<{ s: string; raw: string | null }>;
+    expect(rows.length).toBeGreaterThanOrEqual(3);
+    for (const r of rows) {
+      expect(r.s).not.toMatch(/\n|https?:\/\/|Request body/);
+      expect(r.raw).toMatch(/Request body/); // nothing lost
+    }
+    expect(rows[0]?.s).toBe("cycle failed: The network node (evmrpc-testnet.0g.ai) didn't respond. It will try again.");
+    // the final failure (which trips the breaker) must NOT promise a retry
+    expect(rows.find((r) => r.s.startsWith('paused after'))?.s).toMatch(/last error: The network node \(evmrpc-testnet.0g.ai\) didn't respond\.$/);
+    for (const a of alerts) expect(a.summary).not.toMatch(/\n|https?:\/\//);
+    expect(alerts.find((a) => a.dedupKey === `breaker:${id}`)?.summary).not.toMatch(/will try again/);
   });
 });

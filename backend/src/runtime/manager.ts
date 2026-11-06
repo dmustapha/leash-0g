@@ -31,6 +31,7 @@ import type { RuntimeChain } from './session-chain.js';
 import { loadGasRouteInputs } from './gas.js';
 import type { ChainRegistry } from '../chain/registry.js';
 import { assertBridgeRoutable } from './bridge-gate.js';
+import { describeCycleFailure, rawErrorText } from './cycle-failure.js';
 import { budgetExhausted, nextCycleDelayMs, DEFAULT_FAILURE_BUDGET, DEFAULT_MAX_BACKOFF_MS } from './failure-budget.js';
 import { buildTreasuryGraph, type TreasuryGraph } from './treasury-graph.js';
 import { consumeOneShot } from './one-shot-consume.js';
@@ -579,7 +580,8 @@ export class LeashRuntimeManager implements RuntimeManager {
         .catch(async (err: unknown) => {
           // A cycle that died because the loop was stopped under it is not the agent's fault.
           if (!loop.stopped) loop.consecutiveFailures += 1;
-          await this.recordFailure(loop.agent.id, err);
+          const budget = this.deps.settings.failureBudget ?? DEFAULT_FAILURE_BUDGET;
+          await this.recordFailure(loop.agent.id, err, !budgetExhausted(loop.consecutiveFailures, budget));
           await this.tripBreakerIfExhausted(loop, err);
         })
         .finally(() => {
@@ -760,12 +762,10 @@ export class LeashRuntimeManager implements RuntimeManager {
     if (loop.timer) clearTimeout(loop.timer);
     loop.timer = null;
     this.loops.delete(agentId);
-    const message = err instanceof Error ? err.message : String(err);
-    const brief = message.length > 160 ? `${message.slice(0, 157)}...` : message;
-    const summary = `paused after ${loop.consecutiveFailures} consecutive failed cycles — last error: ${brief}`;
+    const summary = `paused after ${loop.consecutiveFailures} consecutive failed cycles — last error: ${describeCycleFailure(err, { retrying: false })}`;
     console.error(`[loop-breaker] agent ${agentId} ${summary}`);
     try {
-      const rec = await appendTrace(this.deps.pool, { agentId, kind: 'decision', detail: { summary } });
+      const rec = await appendTrace(this.deps.pool, { agentId, kind: 'decision', detail: { summary, rawError: rawErrorText(err) } });
       this.deps.hub.emit(agentId, 'trace', traceEvent(rec));
       if (this.deps.alerts) {
         await this.deps.alerts.emit(loop.agent.ownerAddr, {
@@ -782,14 +782,14 @@ export class LeashRuntimeManager implements RuntimeManager {
     }
   }
 
-  private async recordFailure(agentId: string, err: unknown): Promise<void> {
-    const message = err instanceof Error ? err.message : String(err);
+  private async recordFailure(agentId: string, err: unknown, retrying = true): Promise<void> {
+    const plain = describeCycleFailure(err, { retrying });
     console.error(`runtime cycle failed for agent ${agentId}`, err);
     try {
       const rec = await appendTrace(this.deps.pool, {
         agentId,
         kind: 'decision',
-        detail: { summary: `cycle failed: ${message}` },
+        detail: { summary: `cycle failed: ${plain}`, rawError: rawErrorText(err) },
       });
       this.deps.hub.emit(agentId, 'trace', traceEvent(rec));
       // Daily loop: repeated cycle errors coalesce into ONE alert per
@@ -797,15 +797,13 @@ export class LeashRuntimeManager implements RuntimeManager {
       const agent = this.loops.get(agentId)?.agent ?? (await getAgentById(this.deps.pool, agentId));
       if (agent && this.deps.alerts) {
         const hourBucket = new Date().toISOString().slice(0, 13);
-        // L-02 (security gate): third-party error text is unbounded and
-        // runtime-influenced — truncate before it reaches any notification
-        // surface (the full message stays on the trace record).
-        const brief = message.length > 200 ? `${message.slice(0, 197)}...` : message;
+        // L-02 (security gate): the alert carries only the plain one-liner; the full runtime-influenced
+        // error text stays on the trace record (`rawError`).
         await this.deps.alerts.emit(agent.ownerAddr, {
           agentId,
           class: 'info',
           kind: 'runtime_error',
-          summary: `${agent.name} hit a runtime error: ${brief}`,
+          summary: `${agent.name} hit a runtime error: ${plain}`,
           refs: { traceSeq: rec.seq },
           dedupKey: `runtime_error:${agentId}:${hourBucket}`,
         });
