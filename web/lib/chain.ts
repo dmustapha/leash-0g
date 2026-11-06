@@ -455,6 +455,47 @@ export function proposeSpendBudgetOnchain(
   return writeAccountVersioned(provider, owner, account, 'proposeSpendBudget', [token, BigInt(windowCap)], chainId, version);
 }
 
+// AQ-FND (Beat-5 fix D5-1): a token is only spendable by the agent when its V6 asset policy is
+// enabled AND the recipient is an allowed payee FOR THAT ASSET. The payee add is governed kind 4 —
+// proposeGoverned(4, abi.encode(asset, payee)) → applyGoverned with the SAME payload. Timelocked
+// like any loosen. V6 only (older accounts keep one global allowlist).
+const V6_GOVERNED_KIND_PAYEE = 4;
+export function v6AssetPayeePayload(token: Address, payee: Address): Hex {
+  return encodeAbiParameters([{ type: 'address' }, { type: 'address' }], [token, payee]);
+}
+
+export function proposeAssetPayeeOnchain(
+  provider: EIP1193Provider,
+  owner: Address,
+  account: Address,
+  token: Address,
+  payee: Address,
+  chainId?: number,
+  version?: AccountVersion,
+) {
+  if (version !== 6) throw new Error('Per-token recipients exist only on multi-asset (v6) accounts.');
+  return writeAccountVersioned(
+    provider, owner, account, 'proposeGoverned',
+    [V6_GOVERNED_KIND_PAYEE, v6AssetPayeePayload(token, payee)], chainId, version,
+  );
+}
+
+export function applyAssetPayeeOnchain(
+  provider: EIP1193Provider,
+  owner: Address,
+  account: Address,
+  token: Address,
+  payee: Address,
+  chainId?: number,
+  version?: AccountVersion,
+) {
+  if (version !== 6) throw new Error('Per-token recipients exist only on multi-asset (v6) accounts.');
+  return writeAccountVersioned(
+    provider, owner, account, 'applyGoverned',
+    [V6_GOVERNED_KIND_PAYEE, v6AssetPayeePayload(token, payee)], chainId, version,
+  );
+}
+
 /** FR4 (F-9): the band wall only ever governs the router's swap selector.
  *  Verify: `cast sig "swap(address,address,uint256,uint256,address,uint256)"` → 0x9908fc8b. */
 export const BAND_SWAP_SELECTOR = '0x9908fc8b' as Hex;

@@ -64,6 +64,7 @@ import { GasRoutePlan } from '@/components/cockpit/GasRoutePlan';
 import { nativeSymbol } from '@/lib/networks';
 import {
   applyCallRuleOnchain,
+  applyAssetPayeeOnchain,
   applySpendBudgetOnchain,
   enableRequireBandForSwapOnchain,
   readPriceBandSet,
@@ -72,6 +73,7 @@ import {
   readPendingCallRule,
   authorizeOnceOnchain,
   proposeCallRuleOnchain,
+  proposeAssetPayeeOnchain,
   proposeSpendBudgetOnchain,
   removeCallSelectorOnchain,
   tightenCallRuleOnchain,
@@ -466,6 +468,23 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
     async (token: string, windowCap: string) => {
       const { provider, owner, account, chainId, version } = await requireProvider();
       await applySpendBudgetOnchain(provider, owner, account, token as Address, windowCap, chainId, version);
+    },
+    [requireProvider],
+  );
+
+  // Beat-5 fix (D5-1): owner-signed per-token recipient — propose (timelocked) + apply.
+  const proposeAssetPayee = useCallback(
+    async (token: string, payee: string) => {
+      const { provider, owner, account, chainId, version } = await requireProvider();
+      await proposeAssetPayeeOnchain(provider, owner, account, token as Address, payee as Address, chainId, version);
+    },
+    [requireProvider],
+  );
+
+  const applyAssetPayee = useCallback(
+    async (token: string, payee: string) => {
+      const { provider, owner, account, chainId, version } = await requireProvider();
+      await applyAssetPayeeOnchain(provider, owner, account, token as Address, payee as Address, chainId, version);
     },
     [requireProvider],
   );
@@ -927,6 +946,7 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
                 onCustomRule={customRule}
                 onProposeBudget={proposeBudget}
                 onApplyBudget={applyBudget}
+                {...(accountVersionFor(detail) === 6 ? { onProposeAssetPayee: proposeAssetPayee, onApplyAssetPayee: applyAssetPayee, defaultPayee: ((g) => (g && 'beneficiary' in g && typeof g.beneficiary === 'string' ? g.beneficiary : ''))(detail.agent?.goal) } : {})}
               />
             </div>
           ) : null}

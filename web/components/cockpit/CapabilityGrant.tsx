@@ -29,12 +29,20 @@ export function CapabilityGrant({
   onCustomRule,
   onProposeBudget,
   onApplyBudget,
+  onProposeAssetPayee,
+  onApplyAssetPayee,
+  defaultPayee,
 }: {
   /** FR3 (F-8b): owner signs the budget propose (version-aware in chain.ts) — timelocked. */
   onProposeBudget?: (token: string, windowCap: string) => Promise<void>;
   /** FR3 (F-8b): owner signs the budget apply once the pending eta passed. V6 re-submits the
    *  same (token, windowCap) payload for the on-chain commit check, so the form passes them. */
   onApplyBudget?: (token: string, windowCap: string) => Promise<void>;
+  /** Beat-5 fix (D5-1, v6 only): approve a recipient for ONE token (governed kind 4) — propose then apply. */
+  onProposeAssetPayee?: (token: string, payee: string) => Promise<void>;
+  onApplyAssetPayee?: (token: string, payee: string) => Promise<void>;
+  /** Prefill for the recipient — the agent's goal beneficiary. */
+  defaultPayee?: string;
 } & {
   /** Preview a preset's resolved rules (no signing). */
   onResolvePreset: (key: PresetKey) => Promise<ResolvedPreset>;
@@ -64,6 +72,9 @@ export function CapabilityGrant({
       <CustomRuleForm onCustomRule={onCustomRule} />
       {onProposeBudget && onApplyBudget ? (
         <SpendBudgetForm onProposeBudget={onProposeBudget} onApplyBudget={onApplyBudget} />
+      ) : null}
+      {onProposeAssetPayee && onApplyAssetPayee ? (
+        <AssetPayeeForm onPropose={onProposeAssetPayee} onApply={onApplyAssetPayee} defaultPayee={defaultPayee ?? ''} />
       ) : null}
     </section>
   );
@@ -144,6 +155,83 @@ function SpendBudgetForm({
           <div>
             <button type="button" className="btn btn-primary btn-sm" data-testid="budget-apply" disabled={busy} onClick={() => void apply()}>
               {busy ? 'Waiting for wallet…' : 'Apply budget'}
+            </button>
+          </div>
+        </div>
+      )}
+    </form>
+  );
+}
+
+// ─── Per-token recipient (Beat-5 fix D5-1) ────────────────────────────────────
+// A token is spendable by the agent only when it has a budget AND the recipient is approved FOR THAT
+// TOKEN. This is the second half of "allow a new token"; timelocked like the budget (~15 min).
+
+function AssetPayeeForm({
+  onPropose,
+  onApply,
+  defaultPayee,
+}: {
+  onPropose: (token: string, payee: string) => Promise<void>;
+  onApply: (token: string, payee: string) => Promise<void>;
+  defaultPayee: string;
+}) {
+  const [token, setToken] = useState('');
+  const [payee, setPayee] = useState(defaultPayee);
+  const [phase, setPhase] = useState<Phase>('propose');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function run(step: Phase, e?: React.FormEvent) {
+    e?.preventDefault();
+    if (!ADDR_RE.test(token.trim())) return setError('Enter a valid token address (0x…, 40 hex).');
+    if (!ADDR_RE.test(payee.trim())) return setError('Enter a valid recipient address (0x…, 40 hex).');
+    setBusy(true);
+    setError(null);
+    try {
+      if (step === 'propose') {
+        await onPropose(token.trim(), payee.trim());
+        setPhase('apply');
+      } else {
+        await onApply(token.trim(), payee.trim());
+        setToken('');
+        setPayee(defaultPayee);
+        setPhase('propose');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'The wallet transaction failed.');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form onSubmit={(e) => void run('propose', e)} data-testid="asset-payee-form" style={{ display: 'grid', gap: '0.6rem' }}>
+      <h3 className="label" style={{ margin: 0 }}>Approve a recipient for a token</h3>
+      <p style={{ margin: 0, fontSize: '0.84rem', color: 'var(--ink-dim)' }}>
+        Allowing a token takes two things: a budget (above) and an approved recipient. Until this wallet
+        is approved to receive that token, the agent still stands down. Do the budget first — one change
+        waits its safety delay at a time.
+      </p>
+      <label className="label" htmlFor="payee-token">Token</label>
+      <input id="payee-token" className="field" data-testid="payee-token" value={token} onChange={(e) => setToken(e.target.value)} placeholder="0x…" disabled={busy || phase === 'apply'} />
+      <label className="label" htmlFor="payee-addr">Recipient</label>
+      <input id="payee-addr" className="field" data-testid="payee-addr" value={payee} onChange={(e) => setPayee(e.target.value)} placeholder="0x…" disabled={busy || phase === 'apply'} />
+      {error ? <p role="alert" style={{ color: 'var(--deny)', fontSize: '0.84rem', margin: 0 }}>{error}</p> : null}
+      {phase === 'propose' ? (
+        <div>
+          <button type="submit" className="btn btn-primary btn-sm" data-testid="payee-propose" disabled={busy}>
+            {busy ? 'Waiting for wallet…' : 'Propose recipient'}
+          </button>
+        </div>
+      ) : (
+        <div style={{ display: 'grid', gap: '0.4rem' }}>
+          <p style={{ margin: 0, fontSize: '0.82rem', color: 'var(--accent)' }}>
+            Signed — this takes effect in ~15 min. Come back and apply it.
+          </p>
+          <div>
+            <button type="button" className="btn btn-primary btn-sm" data-testid="payee-apply" disabled={busy} onClick={() => void run('apply')}>
+              {busy ? 'Waiting for wallet…' : 'Apply recipient'}
             </button>
           </div>
         </div>

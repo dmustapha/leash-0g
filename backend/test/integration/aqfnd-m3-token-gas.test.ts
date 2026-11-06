@@ -217,4 +217,20 @@ describe('AQ-FND M-3 — token top-up act routing', () => {
     expect(alerts).toHaveLength(1);
     expect(alerts[0]!.summary).toMatch(/has no budget — set one/i);
   });
+
+  it('budget set but the beneficiary is NOT an approved recipient → ONE recipient ask (distinct from the budget ask), no token tx', async () => {
+    const id = await seedTokenAgent();
+    fakeChain.tokenEnabled = true; // the owner applied the budget ...
+    fakeChain.tokenPayees = []; // ... but never approved the recipient FOR THIS TOKEN
+    mockSend();
+    await manager.start(id);
+    startedAgents.push(id);
+    await waitFor(async () => (await listTraces(db.pool, id)).some((r) => r.kind === 'decision'));
+    await manager.settle(id);
+    expect(fakeChain.tokenTransfers).toHaveLength(0);
+    const { alerts } = await listAlerts(db.pool, OWNER, { kind: 'capability_request', agentId: id });
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]!.summary).toMatch(/not an approved recipient/i);
+    expect(alerts[0]!.summary).not.toMatch(/has no budget/i);
+  });
 });

@@ -1012,12 +1012,25 @@ export function buildTreasuryGraph(
     const assetPolicy = await deps.chain.getAssetPolicy(ctx.accountAddr, token, [beneficiary]);
     const beneficiaryIsPayee = assetPolicy.allowedPayees.includes(beneficiary.toLowerCase());
     if (!assetPolicy.enabled || !beneficiaryIsPayee) {
-      // spend-novel = ONE ask, never a silent stall (deduped per token).
+      // spend-novel = ONE ask per MISSING PIECE, never a silent stall. Allowing a token takes two owner
+      // acts (a budget, then an approved recipient FOR THAT TOKEN), each behind its own safety delay, so
+      // the ask names what is missing and the dedup key changes when the missing piece does — the owner
+      // gets one ask for the budget, then (once it lands) one for the recipient, never a repeat of either.
+      const missing = !assetPolicy.enabled ? (beneficiaryIsPayee ? 'budget' : 'budget+payee') : 'payee';
+      const who = shortAddr(beneficiary);
+      const summary =
+        missing === 'budget'
+          ? `${ctx.agentRow.name} wants to spend ${shortAddr(token)} but it has no budget — set one to allow it.`
+          : missing === 'budget+payee'
+            ? `${ctx.agentRow.name} wants to spend ${shortAddr(token)} but it has no budget — set one to allow it, and approve ${who} as a recipient for it.`
+            : `${ctx.agentRow.name} wants to send ${shortAddr(token)} to ${who}, but that wallet is not an approved recipient for it yet — approve it to allow this.`;
       return askOwnerAndStandDown(
         'capability_request',
-        `${ctx.agentRow.name} wants to spend ${shortAddr(token)} but it has no budget — set one to allow it.`,
-        `token_novel:${ctx.agentId}:${token}`,
-        'token not spendable (no enabled policy / beneficiary not a payee) — raised one owner ask',
+        summary,
+        `token_novel:${ctx.agentId}:${token}:${missing}`,
+        missing === 'payee'
+          ? 'token has a budget but the beneficiary is not an approved recipient for it — raised one owner ask'
+          : 'token not spendable (no enabled budget) — raised one owner ask',
       );
     }
 
