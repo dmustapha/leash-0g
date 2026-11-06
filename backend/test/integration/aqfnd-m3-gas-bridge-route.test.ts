@@ -73,6 +73,7 @@ const ARB_CONFIG = cfg(ARB, 'Arbitrum Sepolia', {
   canonical: { settlementToken: ARB_USDC },
   bridgeAllowlist: [MESSENGER],
   cctpTokenMessenger: MESSENGER,
+  cctpUsdc: ARB_USDC,
 });
 
 function rule(target: string, selector: string, over: Partial<CallRule> = {}): CallRule {

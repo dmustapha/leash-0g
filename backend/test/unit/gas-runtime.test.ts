@@ -4,7 +4,7 @@
  * native): a token with no DEX route → ask-owner (there is no relayer rung).
  */
 import { describe, it, expect } from 'vitest';
-import { buildGasRouteConfig, buildGasSnapshot, buildRouteChainCfg, buildGasSurvey, describeGasAsk, homeSurveyTokens, loadGasRouteInputs, type GasRouteRegistry } from '../../src/runtime/gas.js';
+import { buildGasRouteConfig, buildGasSnapshot, buildRouteChainCfg, buildGasSurvey, cctpGasLanes, describeGasAsk, homeSurveyTokens, loadGasRouteInputs, type GasRouteRegistry } from '../../src/runtime/gas.js';
 import { planGas, planGasRoute } from '../../src/chain/gas-planner.js';
 import type { ChainConfig } from '../../src/chain/registry.js';
 import type { RuntimeChain } from '../../src/runtime/session-chain.js';
@@ -365,6 +365,16 @@ describe('home survey tokens — a goal token that is not the swap token must no
     const { gasSwap: _g, ...noSwap } = BASE;
     expect((await load(noSwap as ChainConfig, NOVL)).tokensByChain[84532]).toEqual([NOVL]);
   });
+  it("D3b-4: a lane burns the chain's cctpUsdc; a chain with only a legacy settlement token is NOT a bridge source", () => {
+    const MSG = '0x8fe6b999dc680ccfdd5bf7eb0974218be2542daa';
+    const cfgs: Record<number, ChainConfig> = {
+      84532: { ...GALILEO, chainId: 84532, name: 'Base Sepolia', cctpTokenMessenger: MSG },
+      421614: { ...GALILEO, chainId: 421614, name: 'Arb', cctpTokenMessenger: MSG, canonical: { settlementToken: '0x' + 'ab'.repeat(20) } },
+      11155111: { ...GALILEO, chainId: 11155111, name: 'Eth', cctpTokenMessenger: MSG, cctpUsdc: USDC },
+    };
+    const reg = { getChainConfig: (id: number) => cfgs[id]! } as unknown as GasRouteRegistry;
+    expect(cctpGasLanes(reg, [84532, 421614, 11155111], 84532)).toEqual([{ from: 11155111, to: 84532, token: USDC }]);
+  });
   it('homeSurveyTokens: no goal + swap token -> just the swap token', () => {
     expect(homeSurveyTokens(null, USDC)).toEqual([USDC]);
   });
@@ -389,7 +399,7 @@ describe('home survey tokens — a goal token that is not the swap token must no
   /** Two-chain world: Arb holds USDC + gas (a real bridge source), Base's key is nearly out of gas. */
   async function twoChainRoute(usdcOnBase: bigint) {
     const inputs = await load(BASE, NOVL);
-    const ARB: ChainConfig = { ...GALILEO, chainId: 421614, name: 'Arbitrum Sepolia', gasFloorWei: 0n, canonical: { settlementToken: USDC } };
+    const ARB: ChainConfig = { ...GALILEO, chainId: 421614, name: 'Arbitrum Sepolia', gasFloorWei: 0n, canonical: { settlementToken: USDC }, cctpUsdc: USDC };
     const cfgByChain = { ...inputs.cfgByChain, 421614: buildRouteChainCfg(ARB, GLOBAL_DUST) };
     const fake = (native: bigint, usdc: bigint) => ({
       async getBalance(addr: string) { return addr.toLowerCase() === SESSION.toLowerCase() ? native : 0n; },

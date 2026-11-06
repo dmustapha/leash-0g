@@ -303,7 +303,8 @@ export async function loadGasRouteInputs(opts: {
     const cfg = registry.getChainConfig(id);
     cfgByChain[id] = buildRouteChainCfg(cfg, globalDustWei);
     const settlement = cfg.canonical?.settlementToken;
-    tokensByChain[id] = id === homeChainId ? homeSurveyTokens(goalToken, cfg.gasSwap ? settlement : undefined) : settlement ? [settlement] : [];
+    const sourceToken = cfg.cctpUsdc ?? settlement; // a bridge source is surveyed on the token CCTP burns
+    tokensByChain[id] = id === homeChainId ? homeSurveyTokens(goalToken, cfg.gasSwap ? settlement : undefined) : sourceToken ? [sourceToken] : [];
   }
   return { homeChainId, chainIds, cfgByChain, tokensByChain, lanes: opts.cctpFillEnabled ? cctpGasLanes(registry, chainIds, homeChainId) : [] };
 }
@@ -322,7 +323,7 @@ export function homeSurveyTokens(goalToken: string | null, swapInputToken: strin
 
 /**
  * CCTP lanes the gas route may bridge over: every surveyed non-home chain with a CCTP messenger, a
- * Circle domain and a settlement token (USDC), INTO the home chain (which must have a Circle domain too;
+ * Circle domain and its CCTP USDC (`cctpUsdc`), INTO the home chain (which must have a Circle domain too;
  * whether it has a DEX is the planner's call). Pure config - no chain reads.
  */
 export function cctpGasLanes(
@@ -335,7 +336,7 @@ export function cctpGasLanes(
   for (const id of chainIds) {
     if (id === homeChainId || cctpDomainOfChain(id) === null) continue;
     const cfg = registry.getChainConfig(id);
-    const token = cfg.canonical?.settlementToken;
+    const token = cfg.cctpUsdc;
     if (cfg.cctpTokenMessenger && token) lanes.push({ from: id, to: homeChainId, token: token.toLowerCase() as Address });
   }
   return lanes;

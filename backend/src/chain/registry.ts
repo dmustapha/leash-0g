@@ -117,6 +117,12 @@ export interface ChainConfig {
    */
   cctpTokenMessenger?: string | undefined;
   /**
+   * AQ-FND M-3 inc-3b (D3b-4): this chain's Circle-native USDC (lowercased), the token CCTP burns. It is
+   * NOT `canonical.settlementToken` (a different concept: the DEX/vault token, and on Arb a legacy cap-bridge
+   * token). A chain without it is never a bridge source: a lane on the wrong token would burn nothing real.
+   */
+  cctpUsdc?: string | undefined;
+  /**
    * RH2 (SE-9 two-factory): named, operator-configured SECONDARY factories that
    * carry a wall CAPABILITY distinct from the chain's default (same-address) wall.
    * Keyed by capability name (e.g. `oracleBand` → the audit-fixed price-band wall

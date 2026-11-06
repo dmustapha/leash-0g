@@ -167,6 +167,10 @@ const envSchema = z.object({
   CCTP_TOKEN_MESSENGER_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
   // inc-3b: MessageTransmitterV2 (same address on every CCTP v2 chain) the ops key mints through,
   // and Circle's Iris attestation API. The rail sweep tick only starts when the transmitter is set.
+  // D3b-4: Circle-native USDC per chain (the token CCTP burns); a chain without one is never a bridge source.
+  BASE_CCTP_USDC_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  SEPOLIA_CCTP_USDC_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
+  ARB_CCTP_USDC_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
   CCTP_MESSAGE_TRANSMITTER_ADDR: z.string().regex(/^0x[0-9a-fA-F]{40}$/).optional(),
   CCTP_IRIS_URL: z.string().url().default('https://iris-api-sandbox.circle.com'),
   // How long a JIT (L2) capability card stays actionable before it auto-expires
@@ -617,6 +621,7 @@ export function buildChainConfigs(cfg: Config): ChainConfig[] {
       // TokenMessenger for the USDC legs, Base's CCIP Router for the 0G legs).
       ...bridgeConfig(cfg.BASE_BRIDGE_ALLOWLIST, [cfg.BASE_CCIP_ROUTER_ADDR, cfg.CCTP_TOKEN_MESSENGER_ADDR]),
       ...(cfg.CCTP_TOKEN_MESSENGER_ADDR ? { cctpTokenMessenger: cfg.CCTP_TOKEN_MESSENGER_ADDR.toLowerCase() } : {}),
+      ...(cfg.BASE_CCTP_USDC_ADDR ? { cctpUsdc: cfg.BASE_CCTP_USDC_ADDR.toLowerCase() } : {}),
       ...gasSwapConfig('BASE', cfg.BASE_GAS_SWAP_WETH_ADDR, cfg.BASE_GAS_SWAP_FEE_TIER, cfg.BASE_GAS_SWAP_TOKEN_AMOUNT),
     });
   }
@@ -653,6 +658,7 @@ export function buildChainConfigs(cfg: Config): ChainConfig[] {
       // AQ-FND M-4: the real rails on Eth Sepolia (CCTP USDC legs + CCIP 0G legs).
       ...bridgeConfig(undefined, [cfg.SEPOLIA_CCIP_ROUTER_ADDR, cfg.CCTP_TOKEN_MESSENGER_ADDR]),
       ...(cfg.CCTP_TOKEN_MESSENGER_ADDR ? { cctpTokenMessenger: cfg.CCTP_TOKEN_MESSENGER_ADDR.toLowerCase() } : {}),
+      ...(cfg.SEPOLIA_CCTP_USDC_ADDR ? { cctpUsdc: cfg.SEPOLIA_CCTP_USDC_ADDR.toLowerCase() } : {}),
       ...gasSwapConfig('SEPOLIA', cfg.SEPOLIA_GAS_SWAP_WETH_ADDR, cfg.SEPOLIA_GAS_SWAP_FEE_TIER, cfg.SEPOLIA_GAS_SWAP_TOKEN_AMOUNT),
     });
   }
@@ -687,6 +693,7 @@ export function buildChainConfigs(cfg: Config): ChainConfig[] {
       // AQ-FND M-4: Arbitrum bridge entries (addr:dest) + the real rails.
       ...bridgeConfig(cfg.ARB_BRIDGE_ALLOWLIST, [cfg.ARB_CCIP_ROUTER_ADDR, cfg.CCTP_TOKEN_MESSENGER_ADDR]),
       ...(cfg.CCTP_TOKEN_MESSENGER_ADDR ? { cctpTokenMessenger: cfg.CCTP_TOKEN_MESSENGER_ADDR.toLowerCase() } : {}),
+      ...(cfg.ARB_CCTP_USDC_ADDR ? { cctpUsdc: cfg.ARB_CCTP_USDC_ADDR.toLowerCase() } : {}),
       ...gasSwapConfig('ARB', cfg.ARB_GAS_SWAP_WETH_ADDR, cfg.ARB_GAS_SWAP_FEE_TIER, cfg.ARB_GAS_SWAP_TOKEN_AMOUNT),
     });
   }
