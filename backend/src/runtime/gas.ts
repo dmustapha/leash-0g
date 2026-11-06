@@ -303,9 +303,21 @@ export async function loadGasRouteInputs(opts: {
     const cfg = registry.getChainConfig(id);
     cfgByChain[id] = buildRouteChainCfg(cfg, globalDustWei);
     const settlement = cfg.canonical?.settlementToken;
-    tokensByChain[id] = id === homeChainId ? (goalToken ? [goalToken] : []) : settlement ? [settlement] : [];
+    tokensByChain[id] = id === homeChainId ? homeSurveyTokens(goalToken, cfg.gasSwap ? settlement : undefined) : settlement ? [settlement] : [];
   }
   return { homeChainId, chainIds, cfgByChain, tokensByChain, lanes: opts.cctpFillEnabled ? cctpGasLanes(registry, chainIds, homeChainId) : [] };
+}
+
+/**
+ * The tokens read on the HOME chain: the goal token, PLUS the chain's gas-swap input token when the chain
+ * has `gasSwap` config. Without the second, an agent whose goal token is not the swap token (a NOVL goal on
+ * Base, USDC swapped for gas) could never see the USDC it just bridged in, so swap-to-gas was never chosen
+ * and the planner bridged AGAIN every cycle (live S4 run: a second burn 9 s after the first mint landed).
+ */
+export function homeSurveyTokens(goalToken: string | null, swapInputToken: string | undefined): string[] {
+  const out: string[] = goalToken ? [goalToken] : [];
+  if (swapInputToken && !out.some((t) => t.toLowerCase() === swapInputToken.toLowerCase())) out.push(swapInputToken);
+  return out;
 }
 
 /**

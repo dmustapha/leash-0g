@@ -4,7 +4,7 @@
  * native): a token with no DEX route → ask-owner (there is no relayer rung).
  */
 import { describe, it, expect } from 'vitest';
-import { buildGasRouteConfig, buildGasSnapshot, buildRouteChainCfg, buildGasSurvey, describeGasAsk } from '../../src/runtime/gas.js';
+import { buildGasRouteConfig, buildGasSnapshot, buildRouteChainCfg, buildGasSurvey, describeGasAsk, homeSurveyTokens, loadGasRouteInputs, type GasRouteRegistry } from '../../src/runtime/gas.js';
 import { planGas, planGasRoute } from '../../src/chain/gas-planner.js';
 import type { ChainConfig } from '../../src/chain/registry.js';
 import type { RuntimeChain } from '../../src/runtime/session-chain.js';
@@ -337,5 +337,78 @@ describe('describeGasAsk — plain wording, no raw wei', () => {
     });
     expect(text).toContain('swap some of its tokens for gas on Base Sepolia');
     expect(text).toContain('swap rule on router, exact-amount approve');
+  });
+});
+
+describe('home survey tokens — a goal token that is not the swap token must not hide the swap token', () => {
+  const ROUTER = '0x' + 'ab'.repeat(20);
+  const USDC = '0x' + 'cd'.repeat(20);
+  const WETH = '0x' + 'ef'.repeat(20);
+  const NOVL = '0x' + '58'.repeat(20);
+  const BASE: ChainConfig = {
+    ...GALILEO, chainId: 84532, name: 'Base Sepolia', gasFloorWei: 0n,
+    canonical: { router: ROUTER, settlementToken: USDC },
+    gasSwap: { wrappedNative: WETH, dexFeeTier: 3000, tokenAmount: 1_000_000n },
+  };
+  const pool = { query: async () => ({ rows: [] }) } as never;
+  const registry = (cfg: ChainConfig): GasRouteRegistry => ({ has: () => true, getChainConfig: () => cfg, getSessionChain: () => fakeChain({}) });
+  const load = (cfg: ChainConfig, goalToken: string | null) =>
+    loadGasRouteInputs({ pool, registry: registry(cfg), agentId: 'a', homeChainId: 84532, goalToken, globalDustWei: GLOBAL_DUST });
+
+  it('NOVL goal on a gas-swap chain: the swap input token (USDC) is surveyed too', async () => {
+    expect((await load(BASE, NOVL)).tokensByChain[84532]).toEqual([NOVL, USDC]);
+  });
+  it('goal token IS the swap token: no duplicate', async () => {
+    expect((await load(BASE, USDC.toUpperCase().replace('0X', '0x'))).tokensByChain[84532]).toHaveLength(1);
+  });
+  it('a chain without gasSwap keeps only the goal token (existing behaviour)', async () => {
+    const { gasSwap: _g, ...noSwap } = BASE;
+    expect((await load(noSwap as ChainConfig, NOVL)).tokensByChain[84532]).toEqual([NOVL]);
+  });
+  it('homeSurveyTokens: no goal + swap token -> just the swap token', () => {
+    expect(homeSurveyTokens(null, USDC)).toEqual([USDC]);
+  });
+  /** Base survey: USDC (policy enabled) already in the account, the session key holding `sessionNative`. */
+  async function routeWithUsdcOnBase(sessionNative: (legsGas: bigint) => bigint) {
+    const inputs = await load(BASE, NOVL);
+    const cfg = inputs.cfgByChain[84532]!;
+    const native = sessionNative(cfg.swapLegGasWei + cfg.refuelLegGasWei);
+    const survey = await buildGasSurvey({
+      resolveChain: () => ({
+        async getBalance(addr: string) { return addr.toLowerCase() === SESSION.toLowerCase() ? native : 0n; },
+        async getErc20Balance(token: string) { return token.toLowerCase() === USDC ? 1_000_000n : 0n; },
+        async getAssetPolicy(_a: string, token: string) { return { enabled: token.toLowerCase() === USDC, allowedPayees: [] }; },
+      }) as unknown as RuntimeChain,
+      chainIds: inputs.chainIds, accountAddr: ACCOUNT, sessionKeyAddr: SESSION, tokensByChain: inputs.tokensByChain,
+    });
+    return planGasRoute(inputs.cfgByChain, survey, 84532, { lanes: [{ from: 421614, to: 84532, token: USDC as `0x${string}` }] });
+  }
+  it('REGRESSION (live S4): USDC already on Base + NOVL goal + the key can pay the legs -> swap-to-gas', async () => {
+    expect((await routeWithUsdcOnBase((legs) => legs)).mode).toBe('swap-to-gas');
+  });
+  /** Two-chain world: Arb holds USDC + gas (a real bridge source), Base's key is nearly out of gas. */
+  async function twoChainRoute(usdcOnBase: bigint) {
+    const inputs = await load(BASE, NOVL);
+    const ARB: ChainConfig = { ...GALILEO, chainId: 421614, name: 'Arbitrum Sepolia', gasFloorWei: 0n, canonical: { settlementToken: USDC } };
+    const cfgByChain = { ...inputs.cfgByChain, 421614: buildRouteChainCfg(ARB, GLOBAL_DUST) };
+    const fake = (native: bigint, usdc: bigint) => ({
+      async getBalance(addr: string) { return addr.toLowerCase() === SESSION.toLowerCase() ? native : 0n; },
+      async getErc20Balance(token: string) { return token.toLowerCase() === USDC ? usdc : 0n; },
+      async getAssetPolicy(_a: string, token: string) { return { enabled: token.toLowerCase() === USDC, allowedPayees: [] }; },
+    }) as unknown as RuntimeChain;
+    const survey = await buildGasSurvey({
+      resolveChain: (id) => (id === 421614 ? fake(10n ** 16n, 5_000_000n) : fake(30_000_000_000_000n, usdcOnBase)),
+      chainIds: [84532, 421614], accountAddr: ACCOUNT, sessionKeyAddr: SESSION,
+      tokensByChain: { 84532: [NOVL, USDC], 421614: [USDC] },
+    });
+    return planGasRoute(cfgByChain, survey, 84532, { lanes: [{ from: 421614, to: 84532, token: USDC as `0x${string}` }] });
+  }
+  it('sanity: nothing on Base, USDC + gas on Arb -> bridge-then-swap (the setup CAN bridge)', async () => {
+    expect((await twoChainRoute(0n)).mode).toBe('bridge-then-swap');
+  });
+  it('REGRESSION (live S4): USDC already on Base, key too low to swap, Arb still holds USDC -> ask-owner, NEVER another bridge', async () => {
+    const route = await twoChainRoute(1_000_000n);
+    expect(route.mode).toBe('ask-owner');
+    expect(route.ask?.missing.join(' ')).toContain('gas on chain 84532 for the swap+refuel legs');
   });
 });

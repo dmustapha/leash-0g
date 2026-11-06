@@ -150,6 +150,9 @@ function planBridgeThenSwap(
   if (!targetCfg.dexRouteAvailable) return null;
   for (const lane of lanes) {
     if (lane.to !== target.chainId || lane.from === target.chainId) continue;
+    // The token is ALREADY on the target chain (a prior bridge landed): bridging more cannot help - what is missing
+    // there is gas to run the swap. Never burn again (live S4: a second burn 9 s after the first mint).
+    if (target.spendableTokens.some((t) => t.token.toLowerCase() === lane.token.toLowerCase() && t.balance > 0n)) continue;
     const src = okViews.find((v) => v.chainId === lane.from);
     const srcCfg = cfgByChain[lane.from];
     if (!src || !srcCfg) continue;
