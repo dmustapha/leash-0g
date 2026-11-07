@@ -2,6 +2,7 @@
 // Cockpit: live SSE stream, approvals, policy, status, and the always-visible revoke.
 'use client';
 
+import { formatAssetAmount } from '@/lib/asset';
 import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
@@ -801,8 +802,15 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
     if (el) el.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }, [focusJitId, pendingJit]);
 
+  // Beta step 3b: a token agent runs low on ITS token (vs its token budget window), never on native.
+  const goalAsset = detail?.goalAsset ?? null;
   const lowBalance =
-    detail !== null && BigInt(detail.accountBalance) < BigInt(detail.policy.windowCapWei);
+    detail !== null &&
+    (goalAsset
+      ? goalAsset.enabled && BigInt(goalAsset.windowCapWei) > 0n
+        ? BigInt(goalAsset.balanceWei) < BigInt(goalAsset.windowCapWei)
+        : BigInt(goalAsset.balanceWei) === 0n
+      : BigInt(detail.accountBalance) < BigInt(detail.policy.windowCapWei));
 
   // SE-7: amounts are denominated in the HOME chain's gas token (RH/Base/Eth/Arb = ETH).
   const currency = nativeSymbol(agentNetworks?.homeChainId);
@@ -868,12 +876,23 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
               data-testid="low-balance-warning"
               style={{ padding: '0.9rem 1rem', display: 'grid', gap: '0.7rem', borderColor: 'rgba(255,184,76,0.4)' }}
             >
+              {goalAsset ? (
+                <p style={{ margin: 0, fontSize: '0.9rem' }} data-testid="token-low-balance">
+                  <strong>Running low on {goalAsset.symbol ?? 'its token'}.</strong> The agent holds{' '}
+                  {formatAssetAmount(goalAsset.balanceWei, goalAsset.decimals, goalAsset.symbol)}
+                  {BigInt(goalAsset.windowCapWei) > 0n
+                    ? ` — less than one full budget window (${formatAssetAmount(goalAsset.windowCapWei, goalAsset.decimals, goalAsset.symbol)})`
+                    : ''}
+                  . Send more {goalAsset.symbol ?? 'of that token'} to <code>{detail.addresses.account}</code> so payments do not start failing.
+                </p>
+              ) : (
               <p style={{ margin: 0, fontSize: '0.9rem' }}>
                 <strong>Running low.</strong> The agent holds {weiToOg(detail.accountBalance)} {currency} —
                 less than one full budget window ({weiToOg(detail.policy.windowCapWei)} {currency}). Top it
                 up so payments do not start failing.
               </p>
-              <FundPanel
+              )}
+              {goalAsset ? null : <FundPanel
                 chainId={agentNetworks?.homeChainId}
                 accountAddr={detail.addresses.account}
                 defaultAmountOg={weiToOg(2n * BigInt(detail.policy.windowCapWei))}
@@ -885,7 +904,7 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
                 onFunded={() => void refresh()}
                 idPrefix="cockpit-fund"
                 currency={currency}
-              />
+              />}
             </section>
           ) : null}
         </>

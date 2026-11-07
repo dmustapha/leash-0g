@@ -231,6 +231,28 @@ describe('raiseCapabilityRequest (D-8)', () => {
     expect(alerts.some((a) => a.kind === 'capability_request')).toBe(true);
   });
 
+  it('beta 3b: the ask names the token + amount + contract (describeCall), not "1000000 base-units"', async () => {
+    const agent = await seedOwnedAgent();
+    if (!agent) throw new Error('agent');
+    const deps = { ...makeDeps(), describeCall: async () => 'approve 1 USDC for the DEX router' };
+    const gate = classifyIntendedCall(TOKEN, 0n, enc('approve', [ROUTER, 1234567n]), emptyGrant(), SELF);
+    const { request } = await raiseCapabilityRequest(deps, agent, gate);
+    expect((request.decoded as { humanReadable: string }).humanReadable).toBe('approve 1 USDC for the DEX router');
+    const { alerts } = await listAlerts(db.pool, agent.ownerAddr, {});
+    const alert = alerts.find((a) => a.kind === 'capability_request' && a.refs && (a.refs as { capabilityRequestId?: string }).capabilityRequestId === request.id);
+    expect(alert?.summary).toContain('approve 1 USDC for the DEX router');
+    expect(alert?.summary).not.toContain('base-units');
+  });
+
+  it('beta 3b: a failing describeCall degrades to the decoder text (never blocks the ask)', async () => {
+    const agent = await seedOwnedAgent();
+    if (!agent) throw new Error('agent');
+    const deps = { ...makeDeps(), describeCall: async () => { throw new Error('rpc down'); } };
+    const gate = classifyIntendedCall(TOKEN, 0n, enc('approve', [ROUTER, 777n]), emptyGrant(), SELF);
+    const { request } = await raiseCapabilityRequest(deps, agent, gate);
+    expect((request.decoded as { humanReadable: string }).humanReadable).toContain('base-units');
+  });
+
   it('is idempotent on the exact call bytes — a repeat reuses the pending request (no 2nd card)', async () => {
     const agent = await seedOwnedAgent();
     if (!agent) throw new Error('agent');

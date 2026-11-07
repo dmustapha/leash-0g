@@ -1,3 +1,4 @@
+import { formatBuckets, type AssetBucket } from '../asset/format.js';
 import type { Pool } from 'pg';
 import type { Json } from '../crypto/canonical.js';
 import { appendOwnerRecordInTx } from '../store/owner-records.js';
@@ -30,7 +31,13 @@ export interface AgentDigest {
   agentId: string;
   name: string;
   status: string;
+  /** NATIVE-coin spend only (token spend is in `spendByAsset`; the two units must never be summed). */
   spendWei: string;
+  /** Beta step 3b: spend per asset (native + each ERC-20), never one mixed sum. */
+  spendByAsset: AssetBucket[];
+  /** Beta step 3b: the goal token's balance for a token agent (null for native agents / unreadable). */
+  goalAsset: { token: string; symbol: string | null; decimals: number | null; balanceWei: string } | null;
+  chainId: number;
   /**
    * §8 calibration: job-fee settlements are governed ERC-20 transfers, kept
    * SEPARATE from native `spendWei` (18dp 0G) — a 6dp token fee must never be
@@ -73,7 +80,7 @@ export interface Digest {
   agents: AgentDigest[];
   links: LinkDigest[];
   lifecycle: LifecycleDigest;
-  totals: { spendWei: string; actions: number; decisions: number; jobFees: { count: number; byToken: Record<string, string>; feeLabel?: string } };
+  totals: { spendWei: string; spendByAsset: AssetBucket[]; actions: number; decisions: number; jobFees: { count: number; byToken: Record<string, string>; feeLabel?: string } };
   empty: boolean;
 }
 
@@ -95,11 +102,17 @@ function buildFeeLabel(
     .join(' + ');
 }
 
+export interface DigestChainReader {
+  getBalance(addr: string): Promise<bigint>;
+  getErc20Balance?(token: string, owner: string): Promise<bigint>;
+  getErc20Meta?(token: string): Promise<{ symbol: string; decimals: number }>;
+}
+
 export interface DigestServiceDeps {
   pool: Pool;
-  chain: { getBalance(addr: string): Promise<bigint> };
+  chain: DigestChainReader;
   /** SE-7: per-chain balance reads (ChainRegistry.getChainOps in production). */
-  resolveChain?: ((chainId: number) => { getBalance(addr: string): Promise<bigint> }) | undefined;
+  resolveChain?: ((chainId: number) => DigestChainReader) | undefined;
   settings: { digestDefaultHourUtc: number };
 }
 
@@ -109,6 +122,7 @@ interface AgentRowLite {
   status: string;
   account_addr: string;
   chain_id: string | number;
+  goal: { token?: unknown; beneficiary?: unknown } | null;
 }
 
 export class DigestService {
@@ -129,12 +143,13 @@ export class DigestService {
     const owner = ownerAddr.toLowerCase();
     const cursor = await this.loadCursor(owner);
     const agents = await this.deps.pool.query<AgentRowLite>(
-      `SELECT id, name, status, account_addr, chain_id FROM agents WHERE owner_addr = $1 ORDER BY created_at ASC`,
+      `SELECT id, name, status, account_addr, chain_id, goal FROM agents WHERE owner_addr = $1 ORDER BY created_at ASC`,
       [owner],
     );
     const perAgent: AgentDigest[] = [];
     const nextAgents: DigestCursor['agents'] = {};
     let totalSpend = 0n;
+    const totalBuckets = new Map<string, AssetBucket>();
     let totalActions = 0;
     let totalDecisions = 0;
     const totalJobFeeByToken = new Map<string, bigint>();
@@ -151,6 +166,10 @@ export class DigestService {
         [a.id, afterSeq],
       );
       let spend = 0n;
+      const buckets = new Map<string, AssetBucket>();
+      const chainId = Number(a.chain_id);
+      const goalToken = typeof a.goal?.token === 'string' ? a.goal.token.toLowerCase() : null;
+      const goalBeneficiary = typeof a.goal?.beneficiary === 'string' ? a.goal.beneficiary.toLowerCase() : null;
       const jobFeeByToken = new Map<string, bigint>();
       let jobFeeCount = 0;
       let actions = 0;
@@ -191,7 +210,23 @@ export class DigestService {
             }
             actions += 1;
             const v = detail['valueWei'];
-            if (typeof v === 'string' && /^\d+$/.test(v)) spend += BigInt(v);
+            if (typeof v === 'string' && /^\d+$/.test(v)) {
+              // Asset of this action: the recorded token; or, for rows written before the trace carried
+              // one, a transfer to the beneficiary of a token-goal agent IS the goal token (a native agent
+              // or a governed call has no such attribution and stays native).
+              const recorded = typeof detail['token'] === 'string' ? detail['token'].toLowerCase() : null;
+              const legacyGoal = recorded === null && goalToken !== null && typeof detail['to'] === 'string' && detail['to'].toLowerCase() === goalBeneficiary;
+              const token = recorded ?? (legacyGoal ? goalToken : null);
+              const key = token ?? 'native';
+              const sym = detail['tokenSymbol'];
+              const dec = detail['tokenDecimals'];
+              const b = buckets.get(key) ?? { chainId, token, symbol: typeof sym === 'string' ? sym : null, decimals: typeof dec === 'number' ? dec : null, amountWei: '0' };
+              if (typeof sym === 'string') b.symbol = sym;
+              if (typeof dec === 'number') b.decimals = dec;
+              b.amountWei = (BigInt(b.amountWei) + BigInt(v)).toString();
+              buckets.set(key, b);
+              if (token === null) spend += BigInt(v);
+            }
             break;
           }
           case 'block':
@@ -226,11 +261,22 @@ export class DigestService {
       const balance = await (this.deps.resolveChain?.(Number(a.chain_id)) ?? this.deps.chain).getBalance(a.account_addr);
       const priorBalance = prior?.balanceWei;
       const agentFeeLabel = buildFeeLabel(jobFeeByToken, feeTokenMeta);
+      const reader = this.deps.resolveChain?.(chainId) ?? this.deps.chain;
+      const goalAsset = goalToken ? await this.readGoalAsset(reader, goalToken, a.account_addr, buckets.get(goalToken)) : null;
+      // a legacy goal-token bucket gets its meta from the live read when the trace had none
+      if (goalAsset && buckets.has(goalToken as string)) {
+        const gb = buckets.get(goalToken as string) as AssetBucket;
+        gb.symbol ??= goalAsset.symbol;
+        gb.decimals ??= goalAsset.decimals;
+      }
       perAgent.push({
         agentId: a.id,
         name: a.name,
         status: a.status,
         spendWei: spend.toString(),
+        spendByAsset: [...buckets.values()],
+        goalAsset,
+        chainId,
         jobFees: {
           count: jobFeeCount,
           byToken: Object.fromEntries([...jobFeeByToken].map(([t, v]) => [t, v.toString()])),
@@ -246,6 +292,12 @@ export class DigestService {
       });
       nextAgents[a.id] = { seq: headSeq, balanceWei: balance.toString() };
       totalSpend += spend;
+      for (const b of buckets.values()) {
+        const k = `${b.chainId}:${b.token ?? 'native'}`;
+        const t = totalBuckets.get(k);
+        if (t) t.amountWei = (BigInt(t.amountWei) + BigInt(b.amountWei)).toString();
+        else totalBuckets.set(k, { ...b });
+      }
       totalActions += actions;
       totalDecisions += approvals.approved + approvals.denied + approvals.expired;
       totalJobFeeCount += jobFeeCount;
@@ -327,7 +379,7 @@ export class DigestService {
           a.blocks > 0 ||
           a.modifies > 0 ||
           Object.keys(a.delegationsTerminal).length > 0 ||
-          a.spendWei !== '0' ||
+          a.spendByAsset.length > 0 ||
           a.jobFees.count > 0,
       );
     return {
@@ -339,6 +391,7 @@ export class DigestService {
         lifecycle,
         totals: {
           spendWei: totalSpend.toString(),
+          spendByAsset: [...totalBuckets.values()],
           actions: totalActions,
           decisions: totalDecisions,
           jobFees: {
@@ -412,6 +465,25 @@ export class DigestService {
    * one lead sentence, per-agent lines only where something happened, and an
    * attention line only when something deserves a look.
    */
+  /** The goal token's balance + meta for a token agent. A failed read is non-fatal (null balance => omitted). */
+  private async readGoalAsset(
+    reader: DigestChainReader,
+    token: string,
+    account: string,
+    known: AssetBucket | undefined,
+  ): Promise<AgentDigest['goalAsset']> {
+    if (!reader.getErc20Balance) return null;
+    try {
+      const [bal, meta] = await Promise.all([
+        reader.getErc20Balance(token, account),
+        reader.getErc20Meta ? reader.getErc20Meta(token).catch(() => null) : Promise.resolve(null),
+      ]);
+      return { token, symbol: meta?.symbol ?? known?.symbol ?? null, decimals: meta?.decimals ?? known?.decimals ?? null, balanceWei: bal.toString() };
+    } catch {
+      return null;
+    }
+  }
+
   renderText(digest: Digest): string {
     if (digest.empty) return 'Nothing new since you last looked — your agents are quiet.';
 
@@ -424,7 +496,7 @@ export class DigestService {
     // flagship job path is actions=0, decisions≥1, jobFees≥1.
     const clauses: string[] = [];
     if (digest.totals.actions > 0) {
-      clauses.push(`${plural(digest.totals.actions, 'transfer')} went out, ${formatG(digest.totals.spendWei)} total`);
+      clauses.push(`${plural(digest.totals.actions, 'transfer')} went out, ${formatBuckets(digest.totals.spendByAsset)} total`);
     }
     if (jobFeeCount > 0) {
       // P5C-4: surface the AMOUNT, not just the count (the data is computed).
@@ -440,7 +512,7 @@ export class DigestService {
     const lines: string[] = [lead, ''];
     for (const a of digest.agents) {
       const bits: string[] = [];
-      if (a.actions > 0) bits.push(`sent ${formatG(a.spendWei)} in ${plural(a.actions, 'transfer')}`);
+      if (a.actions > 0) bits.push(`sent ${formatBuckets(a.spendByAsset)} in ${plural(a.actions, 'transfer')}`);
       if (a.jobFees.count > 0) bits.push(`settled ${plural(a.jobFees.count, 'job fee')}${a.jobFees.feeLabel ? ` (${a.jobFees.feeLabel})` : ''}`);
       if (a.balanceChangeWei !== null && a.balanceChangeWei !== '0') {
         bits.push(`balance ${formatG(a.balanceWei)} (${formatG(a.balanceChangeWei, true)})`);

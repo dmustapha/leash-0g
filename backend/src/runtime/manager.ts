@@ -1,3 +1,4 @@
+import { describeDecodedCall } from '../asset/describe-call.js';
 import { randomUUID } from 'node:crypto';
 import { Command, type BaseCheckpointSaver } from '@langchain/langgraph';
 import type { Pool } from 'pg';
@@ -180,7 +181,23 @@ export class LeashRuntimeManager implements RuntimeManager {
       broker: this.deps.broker,
       alerts: this.deps.alerts,
       jitTtlMs: this.deps.settings.jitTtlMs ?? 600_000,
+      describeCall: (chainId, d) => this.describeCall(chainId, d),
     };
+  }
+
+  /** Beta step 3b: label a decoded call with the token's symbol/decimals and well-known contract names. */
+  private async describeCall(chainId: number, d: Parameters<typeof describeDecodedCall>[0]): Promise<string> {
+    const registry = this.deps.chainRegistry;
+    if (!registry?.has(chainId)) return d.humanReadable;
+    const ops = registry.getChainOps(chainId);
+    const cfg = registry.getChainConfig(chainId);
+    const names = new Map<string, string>();
+    if (cfg.canonical?.router) names.set(cfg.canonical.router.toLowerCase(), 'the DEX router');
+    if (cfg.cctpTokenMessenger) names.set(cfg.cctpTokenMessenger.toLowerCase(), 'the Circle bridge');
+    return describeDecodedCall(d, chainId, {
+      tokenMeta: async (t) => (ops.getErc20Meta ? ops.getErc20Meta(t).catch(() => null) : null),
+      nameOf: (a) => names.get(a.toLowerCase()) ?? null,
+    });
   }
 
   /**

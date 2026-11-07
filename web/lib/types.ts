@@ -190,6 +190,8 @@ export type AgentDetail = {
   status: AgentStatus;
   policy: PolicyInput & { allowlist: Address[] };
   accountBalance: string; // wei
+  /** Beta step 3b: a token-goal agent's own asset (balance, meta, on-chain limits). Absent for native agents. */
+  goalAsset?: { token: string; symbol: string | null; decimals: number | null; balanceWei: string; enabled: boolean; perTransferCapWei: string; windowCapWei: string; windowSeconds: number };
   sessionExpiry: number; // unix seconds
   addresses: { account: Address; sessionKey: Address; owner: Address };
   /** The guardian LEASH revokes with (M-03): when the live on-chain guardian differs,
@@ -430,11 +432,18 @@ export type OwnerStreamEvent =
 /** Decoded LeashAccount custom error (P3C-6 ii). */
 export type DecodedLeashError = { errorName: string; args: Json; plain: string };
 
+/** Beta step 3b: one spend bucket; `token === null` is the chain's native coin. */
+export type AssetBucket = { chainId: number; token: string | null; symbol: string | null; decimals: number | null; amountWei: string };
+
 export type AgentDigest = {
   agentId: string;
   name: string;
   status: string;
+  /** NATIVE-coin spend only; per-asset spend is `spendByAsset`. */
   spendWei: string;
+  spendByAsset?: AssetBucket[];
+  goalAsset?: { token: string; symbol: string | null; decimals: number | null; balanceWei: string } | null;
+  chainId?: number;
   balanceWei: string;
   /** null until a snapshot exists (first digest has no baseline — honest). */
   balanceChangeWei: string | null;
@@ -465,7 +474,7 @@ export type Digest = {
     onboarded: Array<{ agentId: string; name: string; chainId: number }>;
     linksCreated: Array<{ linkId: string; fromAgentId: string; toAgentId: string }>;
   };
-  totals: { spendWei: string; actions: number; decisions: number; jobFees?: { count: number; byToken: Record<string, string>; feeLabel?: string } };
+  totals: { spendWei: string; spendByAsset?: AssetBucket[]; actions: number; decisions: number; jobFees?: { count: number; byToken: Record<string, string>; feeLabel?: string } };
   empty: boolean;
 };
 

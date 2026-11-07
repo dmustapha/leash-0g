@@ -13,8 +13,8 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { makeApi } from '@/lib/api';
 import { useOwnerWallet } from '@/lib/owner-wallet';
-import type { AgentSummary, AgentDigest } from '@/lib/types';
-import { weiToOg } from '@/lib/format';
+import type { AgentSummary, AgentDigest, AssetBucket } from '@/lib/types';
+import { formatBuckets } from '@/lib/asset';
 import { FleetList } from '@/components/fleet/FleetList';
 
 // Deep-link entry (Stage D): the Telegram JIT card links to /app?agent=<id>&jit=<requestId>.
@@ -32,7 +32,15 @@ function DeepLinkRedirect(): null {
 
 type SummaryTile = { k: string; v: React.ReactNode; cls?: string; live?: boolean };
 
-function FleetSummary({ agents, digest }: { agents: AgentSummary[]; digest: { totals?: { spendWei: string; actions: number }; agents?: AgentDigest[] } | null }) {
+/** Beta step 3b: per-asset, never one summed number across assets ("1.02 NOVL · <0.000001 0G"). */
+function spentTodayLabel(digest: { totals?: { spendByAsset?: AssetBucket[] } } | null | undefined): string {
+  const buckets = digest?.totals?.spendByAsset;
+  if (!buckets) return '0';
+  const label = formatBuckets(buckets);
+  return label === 'nothing' ? '0' : label;
+}
+
+function FleetSummary({ agents, digest }: { agents: AgentSummary[]; digest: { totals?: { spendWei: string; spendByAsset?: AssetBucket[]; actions: number }; agents?: AgentDigest[] } | null }) {
   const active = agents.filter((a) => a.status !== 'revoked').length;
   const blocked = (digest?.agents ?? []).reduce((s, d) => s + (d.blocks ?? 0), 0);
   // The artifact's four tiles, reconciled to real digest aggregates. "Daily headroom" needs
@@ -40,7 +48,7 @@ function FleetSummary({ agents, digest }: { agents: AgentSummary[]; digest: { to
   // real fleet-activity figure the digest does carry.
   const tiles: SummaryTile[] = [
     { k: 'Agents on a leash', v: <>{active}<small> / {agents.length}</small></> },
-    { k: 'Spent today', v: `${digest?.totals ? weiToOg(digest.totals.spendWei) : '0'} 0G`, cls: 'allow', live: true },
+    { k: 'Spent today', v: spentTodayLabel(digest), cls: 'allow', live: true },
     { k: 'Blocked today', v: blocked, cls: blocked > 0 ? 'deny' : undefined },
     { k: 'Actions today', v: digest?.totals?.actions ?? 0, cls: 'accent' },
   ];

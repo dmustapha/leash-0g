@@ -328,6 +328,35 @@ const tokenConfigSchema = z.object({
  * called around OPS-WALLET sends (deploy/register/dust) — never around calls
  * whose revert strings user input could shape (e.g. token transfers).
  */
+/** The goal token's balance, meta and on-chain limits for the cockpit. A failed read degrades to null (the page falls back to native copy). */
+async function readGoalAssetView(
+  chain: ChainOps,
+  token: string,
+  account: string,
+  policy: { assets?: ReadonlyArray<{ token: string; enabled: boolean; perTransferCap: bigint; windowCap: bigint; windowSeconds: number }> },
+): Promise<{ token: string; symbol: string | null; decimals: number | null; balanceWei: string; enabled: boolean; perTransferCapWei: string; windowCapWei: string; windowSeconds: number } | null> {
+  if (!chain.getErc20Balance) return null;
+  try {
+    const [bal, meta] = await Promise.all([
+      chain.getErc20Balance(token, account),
+      chain.getErc20Meta ? chain.getErc20Meta(token).catch(() => null) : Promise.resolve(null),
+    ]);
+    const limits = policy.assets?.find((a) => a.token.toLowerCase() === token);
+    return {
+      token,
+      symbol: meta?.symbol ?? null,
+      decimals: meta?.decimals ?? null,
+      balanceWei: bal.toString(),
+      enabled: limits?.enabled ?? false,
+      perTransferCapWei: (limits?.perTransferCap ?? 0n).toString(),
+      windowCapWei: (limits?.windowCap ?? 0n).toString(),
+      windowSeconds: limits?.windowSeconds ?? 0,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function isInsufficientFunds(err: unknown): boolean {
   let cur: unknown = err;
   for (let depth = 0; depth < 8 && cur instanceof Error; depth++) {
@@ -1277,6 +1306,11 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       return;
     }
     assertNativeAgent(agent); // narrows for the native on-chain reads below
+    // Beta step 3b: a token-goal agent's owner views speak ITS asset (balance + limits in the token).
+    const goalToken = ((): string | null => {
+      const t = (agent.goal as { token?: unknown }).token;
+      return typeof t === 'string' && /^0x[0-9a-fA-F]{40}$/.test(t) ? t.toLowerCase() : null;
+    })();
     const [policy, accountBalance] = await Promise.all([
       // Role-aware allowlist candidate (spec §3b): treasury/sentinel =
       // beneficiary, requester = fee recipient, executor/provider/evaluator =
@@ -1289,11 +1323,13 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
         // owner-proposed and can be added here when a tracked set lands).
         ((): string[] => {
           const t = (agent.accountCreateTuple as { settlementToken?: unknown } | null | undefined)?.settlementToken;
-          return typeof t === 'string' && /^0x[0-9a-fA-F]{40}$/.test(t) && !/^0x0+$/i.test(t) ? [t] : [];
+          const settlement = typeof t === 'string' && /^0x[0-9a-fA-F]{40}$/.test(t) && !/^0x0+$/i.test(t) ? [t] : [];
+          return goalToken ? [...new Set([...settlement.map((x) => x.toLowerCase()), goalToken])] : settlement;
         })(),
       ),
       chainForAgent(agent).getBalance(agent.accountAddr),
     ]);
+    const goalAsset = goalToken ? await readGoalAssetView(chainForAgent(agent), goalToken, agent.accountAddr, policy) : null;
     // Shape = FE AgentDetail (web/lib/types.ts): running|paused|revoked, wei-string
     // policy fields, live balances, addresses, and the blind audit-key blob.
     const status =
@@ -1312,6 +1348,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
         allowlist: policy.allowlist,
       },
       accountBalance: accountBalance.toString(),
+      ...(goalAsset ? { goalAsset } : {}),
       sessionExpiry: policy.expiresAt,
       addresses: { account: agent.accountAddr, sessionKey: agent.sessionKeyAddr, owner: agent.ownerAddr },
       // M-03: the guardian LEASH revokes with — the FE warns when the live

@@ -9,6 +9,7 @@ import { useEffect, useMemo, useState } from 'react';
 import type { AgentDetail } from '@/lib/types';
 import type { PendingEtas } from '@/lib/chain';
 import { countdown, isValidOgAmount, ogToWei, weiToOg, shortAddr } from '@/lib/format';
+import { formatAssetAmount } from '@/lib/asset';
 import { Field } from '@/components/ui/Field';
 import { Disclosure } from '@/components/ui/Disclosure';
 
@@ -165,6 +166,7 @@ export function PolicyPanel({
   const _perWei = BigInt(detail.policy.perTransferCapWei || '0');
   const _balWei = BigInt(detail.accountBalance || '0');
   const _ratio = (num: bigint, den: bigint) => (den > 0n ? Math.max(0, Math.min(1, Number((num * 10000n) / den) / 10000)) : 0);
+  const goal = detail.goalAsset && detail.goalAsset.enabled ? detail.goalAsset : null; // token agent with a live token budget
   const slackPer = _winWei > 0n ? Math.max(0, 1 - Number((_perWei * 10000n) / _winWei) / 10000) : 1; // one payment vs the window budget
   const slackBudget = _ratio(_balWei, _winWei); // balance's headroom against the window budget (taut when under-funded)
   const slackExpiry = Math.max(0, Math.min(1, (detail.policy.expiresAt - Math.floor(Date.now() / 1000)) / (30 * 86400))); // access time left (vs ~30d)
@@ -188,14 +190,30 @@ export function PolicyPanel({
               balance's headroom against that budget, and the access-time remaining — more slack =
               more sag (looser leash); < 20% slack = taut. No fabricated spend figures. */}
           <div className="caps">
+            {/* Beta step 3b: a token agent's limits are its TOKEN budget (on-chain assetPolicy); the
+                native caps below it are its gas budget. Native agents are unchanged. */}
             <div className="cap-row">
-              <div className="cap-k"><span>Per payment</span><b>{weiToOg(detail.policy.perTransferCapWei)} {currency}</b></div>
+              <div className="cap-k">
+                <span>Per payment</span>
+                <b>{goal ? formatAssetAmount(goal.perTransferCapWei, goal.decimals, goal.symbol) : `${weiToOg(detail.policy.perTransferCapWei)} ${currency}`}</b>
+              </div>
               <TensionBar slack={slackPer} />
             </div>
             <div className="cap-row">
-              <div className="cap-k"><span>Budget · {Math.round(detail.policy.windowSeconds / 3600)}h</span><b>{weiToOg(detail.policy.windowCapWei)} {currency}</b></div>
+              <div className="cap-k">
+                <span>Budget · {Math.round((goal ? goal.windowSeconds || detail.policy.windowSeconds : detail.policy.windowSeconds) / 3600)}h</span>
+                <b>{goal ? formatAssetAmount(goal.windowCapWei, goal.decimals, goal.symbol) : `${weiToOg(detail.policy.windowCapWei)} ${currency}`}</b>
+              </div>
               <TensionBar slack={slackBudget} />
             </div>
+            {goal ? (
+              <div className="cap-row">
+                <div className="cap-k">
+                  <span>Gas budget · {Math.round(detail.policy.windowSeconds / 3600)}h</span>
+                  <b>{weiToOg(detail.policy.windowCapWei)} {currency}</b>
+                </div>
+              </div>
+            ) : null}
             <div className="cap-row">
               <div className="cap-k"><span>Access expires</span><b>{new Date(detail.policy.expiresAt * 1000).toLocaleDateString()}</b></div>
               <TensionBar slack={slackExpiry} />
@@ -222,7 +240,7 @@ export function PolicyPanel({
         <form onSubmit={(e) => void submit(e)} style={{ display: 'grid', gap: '0.8rem' }}>
           <Field
             id="edit-per-transfer"
-            label="Per payment max"
+            label={goal ? 'Gas per payment max' : 'Per payment max'}
             value={perTransfer}
             onChange={(e) => setPerTransfer(e.target.value)}
             inputMode="decimal"
@@ -230,7 +248,7 @@ export function PolicyPanel({
           />
           <Field
             id="edit-window-cap"
-            label="Budget per window"
+            label={goal ? 'Gas budget per window' : 'Budget per window'}
             value={windowCap}
             onChange={(e) => setWindowCap(e.target.value)}
             inputMode="decimal"

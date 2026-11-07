@@ -37,6 +37,9 @@ export interface AccountCreateTuple {
 }
 
 export interface ChainOps {
+  /** Beta step 3b: optional ERC-20 reads for the owner-facing asset display (fakes may omit them). */
+  getErc20Meta?(token: string): Promise<{ symbol: string; decimals: number }>;
+  getErc20Balance?(token: string, owner: string): Promise<bigint>;
   deployAndRegister(input: {
     ownerAddr: string;
     sessionKeyAddr: string;

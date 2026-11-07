@@ -62,6 +62,57 @@ async function seedActivity(owner: string, accountAddr: string): Promise<string>
   return agentId;
 }
 
+describe('beta 3b — spend is bucketed per ASSET, never one mixed sum (live D1: "1.02000000000283 0G")', () => {
+  const TOKEN = '0x' + 'ec'.repeat(20);
+  const BENEFICIARY = '0x' + '9c'.repeat(20);
+  const tokenChain = (account: string): FakeChainOps => {
+    const c = new FakeChainOps() as FakeChainOps & { getErc20Balance: (t: string, o: string) => Promise<bigint>; getErc20Meta: (t: string) => Promise<{ symbol: string; decimals: number }> };
+    c.balances.set(account.toLowerCase(), 0n);
+    c.getErc20Balance = async () => 3_980_000_000_000_000_000n;
+    c.getErc20Meta = async () => ({ symbol: 'NOVL', decimals: 18 });
+    return c;
+  };
+
+  it('a token agent: token actions + native gas dust land in SEPARATE buckets; spendWei stays native-only', async () => {
+    const owner = uniqueOwner();
+    const account = '0x' + 'e1'.repeat(20);
+    const agentId = await seedAgent(db.pool, { ownerAddr: owner, name: 'tok', accountAddr: account, goal: { token: TOKEN, beneficiary: BENEFICIARY } });
+    // new-style rows carry the token + its meta
+    await appendTrace(db.pool, { agentId, kind: 'action', detail: { txHash: '0x' + '01'.repeat(32), valueWei: '1000000000000000000', to: BENEFICIARY, token: TOKEN, tokenSymbol: 'NOVL', tokenDecimals: 18 } });
+    // legacy row (written before the trace carried a token): a transfer to the beneficiary IS the goal token
+    await appendTrace(db.pool, { agentId, kind: 'action', detail: { txHash: '0x' + '02'.repeat(32), valueWei: '10000000000000000', to: BENEFICIARY } });
+    // native gas dust (a refuel leg to the session key) must NOT join the token sum
+    await appendTrace(db.pool, { agentId, kind: 'action', detail: { txHash: '0x' + '03'.repeat(32), valueWei: '283000', to: '0x' + 'c3'.repeat(20) } });
+    const { digest } = await digestService(tokenChain(account)).compute(owner);
+    const a = digest.agents[0]!;
+    expect(a.spendWei).toBe('283000'); // native only
+    const tok = a.spendByAsset.find((b) => b.token === TOKEN)!;
+    const nat = a.spendByAsset.find((b) => b.token === null)!;
+    expect(tok.amountWei).toBe('1010000000000000000'); // 1 + 0.01, NOT + the dust
+    expect(tok.symbol).toBe('NOVL');
+    expect(nat.amountWei).toBe('283000');
+    expect(a.goalAsset).toEqual({ token: TOKEN, symbol: 'NOVL', decimals: 18, balanceWei: '3980000000000000000' });
+    expect(digest.totals.spendByAsset).toHaveLength(2);
+    const text = digestService(tokenChain(account)).renderText(digest);
+    expect(text).toContain('1.01 NOVL');
+    expect(text).not.toMatch(/\d\.\d{7,}/); // no long decimals anywhere
+  });
+
+  it('a native agent is unchanged: one native bucket equal to spendWei, goalAsset null', async () => {
+    const owner = uniqueOwner();
+    const account = '0x' + 'e2'.repeat(20);
+    const agentId = await seedAgent(db.pool, { ownerAddr: owner, name: 'nat', accountAddr: account, goal: { beneficiary: BENEFICIARY } });
+    await appendTrace(db.pool, { agentId, kind: 'action', detail: { txHash: '0x' + '04'.repeat(32), valueWei: '2000000000000000000', to: BENEFICIARY } });
+    const chain = new FakeChainOps();
+    chain.balances.set(account.toLowerCase(), 1n);
+    const { digest } = await digestService(chain).compute(owner);
+    const a = digest.agents[0]!;
+    expect(a.spendWei).toBe('2000000000000000000');
+    expect(a.spendByAsset).toEqual([{ chainId: 16602, token: null, symbol: null, decimals: null, amountWei: '2000000000000000000' }]);
+    expect(a.goalAsset).toBeNull();
+  });
+});
+
 // Windows below are -60_000 ("already elapsed") rather than 0: the DB clock can run tens of ms ahead of the test
 // process, so an age of `JS now - DB created_at` is slightly NEGATIVE and a 0 window never fires.
 describe('D4 — aggregation correctness', () => {

@@ -21,7 +21,7 @@ import {
   registryAbi,
   leashAccountAbi,
   create2DeployerAbi,
-  leashAccountV5ReadAbi, leashAccountV6ReadAbi, leashAccountV6PolicyAbi,
+  leashAccountV5ReadAbi, leashAccountV6ReadAbi, leashAccountV6PolicyAbi, erc20MetaAbi,
 } from './abis.js';
 import { buildV5Initcode, ownerScopedSalt, predictCreate2Address } from './v5-initcode.js';
 import { buildV6Initcode, type V6CtorArgs } from './v6-initcode.js';
@@ -873,6 +873,24 @@ export class LeashChainOps implements ChainOps {
 
   async getBalance(addr: string): Promise<bigint> {
     return this.publicClient.getBalance({ address: addr as Hex });
+  }
+
+  private readonly erc20MetaCache = new Map<string, { symbol: string; decimals: number }>();
+  async getErc20Meta(token: string): Promise<{ symbol: string; decimals: number }> {
+    const key = token.toLowerCase();
+    const hit = this.erc20MetaCache.get(key);
+    if (hit) return hit;
+    const [decimals, symbol] = await Promise.all([
+      this.publicClient.readContract({ address: token as Hex, abi: erc20MetaAbi, functionName: 'decimals' }),
+      this.publicClient.readContract({ address: token as Hex, abi: erc20MetaAbi, functionName: 'symbol' }),
+    ]);
+    const meta = { symbol: String(symbol), decimals: Number(decimals) };
+    this.erc20MetaCache.set(key, meta);
+    return meta;
+  }
+
+  async getErc20Balance(token: string, owner: string): Promise<bigint> {
+    return this.publicClient.readContract({ address: token as Hex, abi: erc20MetaAbi, functionName: 'balanceOf', args: [owner as Hex] });
   }
 
   /** Live on-chain guardian of an account (M-03: resync after owner setGuardian). */

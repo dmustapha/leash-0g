@@ -24,7 +24,8 @@
 import { useMemo, useState } from 'react';
 import Link from 'next/link';
 import type { AgentSummary, AgentDigest } from '@/lib/types';
-import { shortAddr, weiToOg } from '@/lib/format';
+import { shortAddr } from '@/lib/format';
+import { agentMoney } from '@/lib/asset';
 
 /** slack 0..1 → catenary path for the card meter (viewBox 0 0 520 56, midY 28, maxSag 18). */
 function catenary(slack: number): string {
@@ -34,15 +35,13 @@ function catenary(slack: number): string {
 
 function AgentCard({ agent, digest }: { agent: AgentSummary; digest?: AgentDigest }) {
   const revoked = agent.status === 'revoked';
-  const spentWei = digest?.spendWei ?? '0';
-  const balanceWei = digest?.balanceWei ?? agent.accountBalanceWei;
+  // Beta step 3b: the agent's OWN asset (token goal -> its token; else the chain's native coin), exact bigint.
+  const money = agentMoney(digest, agent.accountBalanceWei, digest?.chainId);
   // headroom = balance proportion of (balance + spent-today). Full balance, nothing spent → 100%.
   // Computed in BigInt (wei), not Number(weiToOg()), so it stays exact at any balance — the
   // string→Number path would round away the 18 fractional digits above ~1e8 0G (Gate-②).
-  const spentBig = BigInt(spentWei);
-  const balBig = BigInt(balanceWei);
-  const denomBig = spentBig + balBig;
-  const headroom = revoked ? 0 : denomBig > 0n ? Number((balBig * 10000n) / denomBig) / 10000 : 1;
+  const denomBig = money.spentWei + money.balanceWei;
+  const headroom = revoked ? 0 : denomBig > 0n ? Number((money.balanceWei * 10000n) / denomBig) / 10000 : 1;
   const taut = !revoked && headroom < 0.18;
   const pct = Math.round(headroom * 100);
   const blocked = digest?.blocks ?? 0;
@@ -115,7 +114,7 @@ function AgentCard({ agent, digest }: { agent: AgentSummary; digest?: AgentDiges
                 headroom <b className={taut ? 'v-accent' : ''}>{pct}%</b>
               </span>
               <span>
-                <b>{weiToOg(spentWei)}</b> 0G spent today
+                <b>{money.spent}</b> spent today
               </span>
             </>
           )}
@@ -125,7 +124,7 @@ function AgentCard({ agent, digest }: { agent: AgentSummary; digest?: AgentDiges
       <div className="facts">
         <div className="fact">
           <div className="k">Spent today</div>
-          <div className="v">{revoked ? <span className="faint">—</span> : `${weiToOg(spentWei)} 0G`}</div>
+          <div className="v">{revoked ? <span className="faint">—</span> : money.spent}</div>
         </div>
         <div className="fact">
           <div className="k">Blocked</div>
@@ -133,7 +132,7 @@ function AgentCard({ agent, digest }: { agent: AgentSummary; digest?: AgentDiges
         </div>
         <div className="fact">
           <div className="k">Balance</div>
-          <div className="v">{weiToOg(balanceWei)} 0G</div>
+          <div className="v">{money.balance}</div>
         </div>
       </div>
     </Link>

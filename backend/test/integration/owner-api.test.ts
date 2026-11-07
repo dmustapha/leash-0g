@@ -608,3 +608,28 @@ describe('C-2 revoke receipt guard', () => {
     expect(detail?.summary).toContain('guardian revoke failed');
   });
 });
+
+describe('beta 3b — GET /api/agents/:id carries the goal asset for a token agent', () => {
+  const TOKEN = '0x' + 'ec'.repeat(20);
+  it('token goal: goalAsset has balance, meta and on-chain token limits; a native agent has none', async () => {
+    const native = await createAgent();
+    const nativeRes = await request(t.app).get(`/api/agents/${native.id}`).set('authorization', ownerAuth(OWNER));
+    expect(nativeRes.body.goalAsset).toBeUndefined();
+
+    const a = await createAgent();
+    await db.pool.query(`UPDATE agents SET goal = $2 WHERE id = $1`, [a.id, JSON.stringify({ token: TOKEN, beneficiary: '0x' + '9c'.repeat(20), targetBalanceWei: '10', topUpWei: '1' })]);
+    const chain = t.chain as unknown as { getErc20Balance: () => Promise<bigint>; getErc20Meta: () => Promise<{ symbol: string; decimals: number }> };
+    chain.getErc20Balance = async () => 3_980_000_000_000_000_000n;
+    chain.getErc20Meta = async () => ({ symbol: 'NOVL', decimals: 18 });
+    t.chain.policyView = {
+      ...t.chain.policyView,
+      assets: [{ token: TOKEN, enabled: true, perTransferCap: 10_000_000_000_000_000n, windowCap: 50_000_000_000_000_000n, windowSeconds: 86400, spentInWindow: 0n, windowStart: 0 }],
+    };
+    const res = await request(t.app).get(`/api/agents/${a.id}`).set('authorization', ownerAuth(OWNER));
+    expect(res.status).toBe(200);
+    expect(res.body.goalAsset).toEqual({
+      token: TOKEN, symbol: 'NOVL', decimals: 18, balanceWei: '3980000000000000000',
+      enabled: true, perTransferCapWei: '10000000000000000', windowCapWei: '50000000000000000', windowSeconds: 86400,
+    });
+  });
+});

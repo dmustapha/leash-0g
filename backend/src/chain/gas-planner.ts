@@ -63,7 +63,7 @@ export function planGas(cfg: GasRouteConfig, snap: GasSnapshot): GasPlan {
   if (token && cfg.dexRouteAvailable) {
     return { mode: 'swap-to-gas', reason: `governed DEX leg can convert ${token.token} to native` };
   }
-  return { mode: 'ask-owner', reason: 'no self-funding path on this chain — surface ONE ask, never stall silently' };
+  return { mode: 'ask-owner', reason: 'no way to pay for gas on this chain without the owner' };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -238,7 +238,7 @@ export function planGasRoute(
   if (bridged) return bridged;
   return {
     mode: 'ask-owner', targetChainId, legs: [],
-    reason: 'no gas-feasible self-funding route - surface ONE ask, never stall silently',
+    reason: 'no route the agent can afford to pay for gas itself',
     ask: buildAsk(cfg, view, survey),
   };
 }

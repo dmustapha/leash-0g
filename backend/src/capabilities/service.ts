@@ -49,6 +49,8 @@ export interface CapabilityDeps {
   alerts: AlertService;
   /** how long a JIT card stays actionable before it auto-expires (ms). */
   jitTtlMs: number;
+  /** Beta step 3b: owner-facing sentence for the decoded call (token symbol/amount + contract names); absent/failed => the decoder text. */
+  describeCall?: ((chainId: number, d: GateResult['decoded']) => Promise<string>) | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -125,6 +127,8 @@ export async function raiseCapabilityRequest(
   const d = gate.decoded;
   const callHash = computeCallHash(agent.chainId, d.target, d.value, d.data);
 
+  const readable = await (deps.describeCall?.(agent.chainId, d) ?? Promise.resolve(d.humanReadable)).catch(() => d.humanReadable);
+
   // Quarantined, sanitized, inert intent — the on-chain wall never trusts this.
   const decoded: Json = {
     label: 'UNVERIFIED',
@@ -132,7 +136,7 @@ export async function raiseCapabilityRequest(
     selector: d.selector.toLowerCase(),
     signature: d.signature,
     value: d.value.toString(),
-    humanReadable: sanitizeStatusAnswer(d.humanReadable),
+    humanReadable: sanitizeStatusAnswer(readable),
     novelty,
   };
 
@@ -168,7 +172,7 @@ export async function raiseCapabilityRequest(
   await setRequestApproval(deps.pool, row.id, approval.id);
 
   const summary = sanitizeStatusAnswer(
-    `${agent.name} wants to make a new on-chain call it isn't yet allowed to: ${d.humanReadable}. ` +
+    `${agent.name} wants to make a new on-chain call it isn't yet allowed to: ${readable}. ` +
       `Review and grant it (once or always) in the app — it stays put until you decide.`,
   );
   deps.hub.emit(agent.id, 'approval', approvalEvent({ approvalId: approval.id, summary }));

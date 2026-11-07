@@ -1,3 +1,4 @@
+import { formatAssetAmount } from '../asset/format.js';
 import { Annotation, END, START, StateGraph, interrupt, type BaseCheckpointSaver } from '@langchain/langgraph';
 import type { Address } from 'viem';
 import { z } from 'zod';
@@ -1080,7 +1081,7 @@ export function buildTreasuryGraph(
         return decideGasBridge(decision, route, gasConfig, gasAsk);
       case 'ask-owner':
       default:
-        return gasAsk(`no self-funding gas path (${route.reason}) — raised one gas ask, never a silent stall`);
+        return gasAsk('waiting for gas: it has no way to pay for gas on its own here, so it asked you once (see your inbox)');
     }
   }
 
@@ -1202,6 +1203,8 @@ export function buildTreasuryGraph(
     const amount = BigInt(state.gasBridgeAmount);
     try {
       const { txHashes } = await executeGasBridge(env, { sessionPrivateKey: ctx.sessionPrivateKey, token, amount });
+      const meta = await env.srcChain.getErc20Meta?.(token).catch(() => null);
+      const sentLabel = formatAssetAmount(amount, meta?.decimals ?? null, meta?.symbol ?? shortAddr(token));
       return {
         outcome: {
           type: 'acted',
@@ -1209,7 +1212,7 @@ export function buildTreasuryGraph(
           valueWei: amount.toString(),
           token,
           gasRung: 'bridge-then-swap',
-          gasBought: `bridging for gas: sent ${amount.toString()} units of ${shortAddr(token)} from ${env.srcChainConfig.name} toward ${gasConfig.chainConfig.name}; it lands in a few minutes, then the agent swaps part of it for gas`,
+          gasBought: `bridging for gas: sent ${sentLabel} from ${env.srcChainConfig.name} toward ${gasConfig.chainConfig.name}; it lands in a few minutes, then the agent swaps part of it for gas`,
         },
       };
     } catch (err) {
@@ -1750,6 +1753,10 @@ export function buildTreasuryGraph(
         };
         auditDetail['cycle'] = cycle as unknown as Json;
       }
+      // Beta step 3b: record WHICH asset an action moved (digest buckets by it) and label the amount
+      // from the token's own decimals/symbol (null meta => honest "<n> units", never a guessed scale).
+      const actedToken = o.type === 'acted' && o.token ? o.token : null;
+      const actedMeta = actedToken ? await deps.chain.getErc20Meta(actedToken).catch(() => null) : null;
       const rec =
         o.type === 'acted'
           ? await appendTrace(deps.pool, {
@@ -1760,13 +1767,19 @@ export function buildTreasuryGraph(
                 to: o.callTarget ?? state.effectiveBeneficiary,
                 valueWei: o.valueWei,
                 txHash: o.txHash,
+                ...(actedToken
+                  ? {
+                      token: actedToken.toLowerCase(),
+                      ...(actedMeta ? { tokenSymbol: actedMeta.symbol, tokenDecimals: actedMeta.decimals } : {}),
+                    }
+                  : {}),
                 // Q5 (presentation): human-legible amount (0G) + short address, not raw wei.
                 summary: o.gasBought
                   ? o.gasBought
                   : o.callTarget
                   ? `governed call to ${shortAddr(o.callTarget)}${o.valueWei !== '0' ? ` (${formatG(o.valueWei)})` : ''}`
                   : o.token
-                    ? `topped up ${shortAddr(state.effectiveBeneficiary)} with ${o.valueWei} units of ${shortAddr(o.token)}`
+                    ? `topped up ${shortAddr(state.effectiveBeneficiary)} with ${formatAssetAmount(o.valueWei, actedMeta?.decimals ?? null, actedMeta?.symbol ?? shortAddr(o.token))}`
                     : `sent ${formatG(o.valueWei)} to ${shortAddr(state.effectiveBeneficiary)}${o.approved ? ' (owner-approved)' : ''}`,
                 // Q5: carry the model's own plain-language WHY so the cockpit shows why it acted.
                 ...(state.decision?.reason ? { reason: state.decision.reason } : {}),

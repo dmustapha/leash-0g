@@ -132,7 +132,7 @@ export function safeFallback(req: DirectRequest): DirectionDraft {
   return {
     agentId: req.agentId,
     currentRole: goalRole(req.currentGoal),
-    understanding: 'We could not auto-interpret this instruction. Nothing has changed. Please rephrase or edit the fields directly.',
+    understanding: "We could not auto-interpret this instruction. Nothing has changed. Chat can steer what the agent does, but never its money: amounts, targets and who it can pay are set with Change limits. Please rephrase, or edit the fields directly.",
     goalPatch: {},
     moneyPower: moneyPowerOf(goalRole(req.currentGoal)),
     unsureFields: ['intent'],

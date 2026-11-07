@@ -10,6 +10,8 @@ const svc = new DigestService({
   settings: { digestDefaultHourUtc: 8 },
 });
 
+const native = (wei: string): Digest['totals']['spendByAsset'] => (wei === '0' ? [] : [{ chainId: 16602, token: null, symbol: null, decimals: null, amountWei: wei }]);
+
 function digest(over: Partial<Digest>): Digest {
   return {
     generatedAt: new Date().toISOString(),
@@ -17,7 +19,7 @@ function digest(over: Partial<Digest>): Digest {
     agents: [],
     links: [],
     lifecycle: { created: [], onboarded: [], linksCreated: [] },
-    totals: { spendWei: '0', actions: 0, decisions: 0, jobFees: { count: 0, byToken: {} } },
+    totals: { spendWei: '0', spendByAsset: [], actions: 0, decisions: 0, jobFees: { count: 0, byToken: {} } },
     empty: false,
     ...over,
   };
@@ -28,6 +30,9 @@ const agent = (over: Partial<Digest['agents'][number]>): Digest['agents'][number
   name: 'Agent',
   status: 'active',
   spendWei: '0',
+  spendByAsset: [],
+  goalAsset: null,
+  chainId: 16602,
   jobFees: { count: 0, byToken: {} },
   balanceWei: '0',
   balanceChangeWei: null,
@@ -69,7 +74,7 @@ describe('DigestService.renderText', () => {
     const out = svc.renderText(
       digest({
         agents: [agent({ agentId: 'r1', name: 'Requester', jobFees: { count: 2, byToken: { '0xbeea': '3000000' } } })],
-        totals: { spendWei: '0', actions: 0, decisions: 0, jobFees: { count: 2, byToken: { '0xbeea': '3000000' } } },
+        totals: { spendWei: '0', spendByAsset: native('0'), actions: 0, decisions: 0, jobFees: { count: 2, byToken: { '0xbeea': '3000000' } } },
       }),
     );
     // job fees are named as job fees, never rolled into a native "0G total"
@@ -82,7 +87,7 @@ describe('DigestService.renderText', () => {
     const out = svc.renderText(
       digest({
         agents: [agent({ agentId: 'r1', name: 'Requester', jobFees: { count: 1, byToken: { '0xbeea': '2000000' }, feeLabel: '2 TestUSD' } })],
-        totals: { spendWei: '0', actions: 0, decisions: 0, jobFees: { count: 1, byToken: { '0xbeea': '2000000' }, feeLabel: '2 TestUSD' } },
+        totals: { spendWei: '0', spendByAsset: native('0'), actions: 0, decisions: 0, jobFees: { count: 1, byToken: { '0xbeea': '2000000' }, feeLabel: '2 TestUSD' } },
       }),
     );
     // The amount reaches the owner's briefing, not just a bare count (P5C-4).
@@ -103,7 +108,7 @@ describe('DigestService.renderText', () => {
             jobFees: { count: 1, byToken: { '0xbeea': '2000000' } },
           }),
         ],
-        totals: { spendWei: '0', actions: 0, decisions: 1, jobFees: { count: 1, byToken: { '0xbeea': '2000000' } } },
+        totals: { spendWei: '0', spendByAsset: native('0'), actions: 0, decisions: 1, jobFees: { count: 1, byToken: { '0xbeea': '2000000' } } },
       }),
     );
     expect(out).toContain('1 job fee settled');
@@ -115,7 +120,7 @@ describe('DigestService.renderText', () => {
     const out = svc.renderText(
       digest({
         agents: [agent({ name: 'Treasury', blocks: 3, approvals: { approved: 0, denied: 0, expired: 1 } })],
-        totals: { spendWei: '0', actions: 0, decisions: 1, jobFees: { count: 0, byToken: {} } },
+        totals: { spendWei: '0', spendByAsset: native('0'), actions: 0, decisions: 1, jobFees: { count: 0, byToken: {} } },
       }),
     );
     expect(out).toMatch(/Worth a look:/);

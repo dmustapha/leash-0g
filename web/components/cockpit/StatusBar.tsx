@@ -5,6 +5,7 @@
 import { useEffect, useState } from 'react';
 import type { AgentDetail } from '@/lib/types';
 import { countdown, weiToOg, shortAddr } from '@/lib/format';
+import { formatAssetAmount } from '@/lib/asset';
 
 // G-2.5: console.html cockpit-head status spill (running/paused/revoked).
 const STATUS_SPILL: Record<AgentDetail['status'], string> = {
@@ -45,7 +46,18 @@ export function StatusBar({
         <span className="badge-pill" data-testid="session-countdown">
           session {countdown(detail.sessionExpiry, now)}
         </span>
-        <span className="badge-pill">{weiToOg(detail.accountBalance)} {currency} in account</span>
+        {detail.goalAsset ? (
+          <>
+            <span className="badge-pill" data-testid="asset-balance">
+              {formatAssetAmount(detail.goalAsset.balanceWei, detail.goalAsset.decimals, detail.goalAsset.symbol)} in account
+            </span>
+            <span className="badge-pill" data-testid="gas-balance" title="Native coin the account holds for gas">
+              gas {weiToOg(detail.accountBalance)} {currency}
+            </span>
+          </>
+        ) : (
+          <span className="badge-pill">{weiToOg(detail.accountBalance)} {currency} in account</span>
+        )}
         {/* D-B9: inert freeform capability label — display only, no taxonomy/filter/discovery. */}
         {detail.agent?.capabilityLabel ? (
           <span className="badge-pill" data-testid="capability-label" title="What this agent is for">
