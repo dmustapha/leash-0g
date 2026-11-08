@@ -72,7 +72,7 @@ const PRESETS: readonly PresetDef[] = [
   {
     key: 'yield_manager',
     label: 'Yield Manager',
-    description: 'Supply and withdraw to a designated vault list. No borrowing. Asks you before borrow, a new protocol, an external withdrawal, or a bridge.',
+    description: 'Deposit into a designated vault list, within a daily budget. Lending, borrowing and withdrawals are not supported yet. Asks you before a new vault, a new protocol, or a bridge.',
     capabilities: [
       { target: 'settlement_token', signature: 'function approve(address,uint256)', recipientMode: 'self', spenders: ['vault'], perCallCap: '100000000', windowCapCall: '500000000' },
       { target: 'vault', signature: 'function deposit(uint256,address)', recipientMode: 'self', perCallCap: '100000000', windowCapCall: '500000000' },
@@ -110,8 +110,8 @@ const PRESETS: readonly PresetDef[] = [
   },
   {
     key: 'leverage_adv',
-    label: 'Leverage Manager (advanced)',
-    description: 'Risk-lowering actions only — supply and repay. Borrowing is ALWAYS gated and asks you first.',
+    label: 'Vault deposits, tighter limits (advanced)',
+    description: 'Deposits into a designated vault list with smaller limits. Borrowing and repaying are not supported yet; any borrow-style call always asks you first.',
     capabilities: [
       { target: 'settlement_token', signature: 'function approve(address,uint256)', recipientMode: 'self', spenders: ['vault'], perCallCap: '50000000', windowCapCall: '250000000' },
       { target: 'vault', signature: 'function deposit(uint256,address)', recipientMode: 'self', perCallCap: '50000000', windowCapCall: '250000000' },

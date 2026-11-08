@@ -10,11 +10,11 @@ import { shortAddr } from './format';
 // each preset's real rule-kind, never marketing copy.
 export const PRESET_CATALOG: { key: PresetKey; name: string; blurb: string; tag: string }[] = [
   { key: 'defi_trader', name: 'DeFi trader', tag: 'swap · liquidity', blurb: 'Swap and add liquidity on a fixed protocol, within a daily budget.' },
-  { key: 'yield_manager', name: 'Yield manager', tag: 'supply · withdraw', blurb: 'Supply and withdraw to a set list of vaults. No borrowing.' },
+  { key: 'yield_manager', name: 'Yield manager', tag: 'vault deposit', blurb: 'Deposit into a set list of vaults. Lending, borrowing and withdrawals are not supported yet.' },
   { key: 'treasury_topper', name: 'Treasury topper', tag: 'transfer · self-only', blurb: 'Move funds only to your own wallets. Asks before any new recipient.' },
   { key: 'dca', name: 'DCA bot', tag: 'scheduled swap', blurb: 'One fixed swap route on a schedule. Asks before any change.' },
   { key: 'rebalancer', name: 'Portfolio rebalancer', tag: 'basket swaps', blurb: 'Swaps within a fixed basket, with turnover caps.' },
-  { key: 'leverage_adv', name: 'Leverage manager', tag: 'supply · repay', blurb: 'Risk-lowering actions only — supply and repay. Borrowing always asks.' },
+  { key: 'leverage_adv', name: 'Vault deposits (tighter)', tag: 'vault deposit', blurb: 'Deposits into a set list of vaults with smaller limits. Borrowing and repaying are not supported yet.' },
 ];
 
 /** Why the agent had to ask — plain language, one line per novelty reason. */
