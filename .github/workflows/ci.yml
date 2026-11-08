@@ -68,6 +68,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      # tests/abi-v5-parity.test.ts imports the compiled contract artifacts (contracts/out)
+      - uses: foundry-rs/foundry-toolchain@v1
+      - name: forge build (artifacts for the ABI-parity test)
+        run: forge build
+        working-directory: contracts
       - uses: pnpm/action-setup@v4
       - uses: actions/setup-node@v4
         with:

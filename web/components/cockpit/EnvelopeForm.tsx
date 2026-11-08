@@ -99,7 +99,7 @@ export function EnvelopeForm({
 
   return (
     <form onSubmit={(e) => void propose(e)} data-testid="envelope-form" style={{ display: 'grid', gap: '0.6rem' }}>
-      <h3 className="label" style={{ margin: 0 }}>Set the agent's envelope for a token</h3>
+      <h3 className="label" style={{ margin: 0 }}>Set the agent&apos;s envelope for a token</h3>
       <p style={{ margin: 0, fontSize: '0.84rem', color: 'var(--ink-dim)' }}>
         The envelope is the ceiling you commit once. Inside it the agent can enable and move this
         token on its own, up to these limits — no click. A sharp widening is held for your veto.
@@ -211,7 +211,7 @@ export function VetoConfigForm({
         agent makes on its own is held — nothing lands instantly.
       </p>
 
-      <label className="label" htmlFor="veto-sharp">Sharp threshold (% of the envelope's window ceiling)</label>
+      <label className="label" htmlFor="veto-sharp">Sharp threshold (% of the envelope&apos;s window ceiling)</label>
       <input id="veto-sharp" className="field" data-testid="veto-sharp" inputMode="numeric" value={sharpPct} onChange={(e) => setSharpPct(e.target.value)} placeholder="50" disabled={busy || phase === 'apply'} />
 
       <label className="label" htmlFor="veto-delay">Veto delay (minutes)</label>

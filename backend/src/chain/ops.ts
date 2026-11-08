@@ -585,7 +585,7 @@ export class LeashChainOps implements ChainOps {
     guardianAddr: string,
   ): V6CtorArgs {
     return this.v6ArgsFromInput(
-      { ...input, auditPubKey: '', name: '', accountVersion: 6 } as Parameters<ChainOps['deployAndRegister']>[0],
+      { ...input, auditPubKey: '', name: '', accountVersion: 6 },
       guardianAddr,
     );
   }
@@ -1071,8 +1071,8 @@ async function readPolicyViewV6(
   const assetView = async (token: string): Promise<AssetPolicyView> => {
     const t = token.toLowerCase();
     const [p, m] = await Promise.all([read('assetPolicy', [t]), read('assetMeter', [t])]);
-    const [enabled, perTransferCap, windowCap, windowSeconds] = p as readonly [boolean, bigint, bigint, number];
-    const [cur, prev, start] = m as readonly [bigint, bigint, bigint];
+    const [enabled, perTransferCap, windowCap, windowSeconds] = p;
+    const [cur, prev, start] = m;
     const slid = slideEstimate({ cur, prev, start: Number(start) }, windowSeconds, nowSec);
     return {
       token: t,
@@ -1095,7 +1095,7 @@ async function readPolicyViewV6(
     if (allowed) allowlist.push(candidate.toLowerCase());
   }
 
-  const [, expiresAt] = session as readonly [number, bigint];
+  const [, expiresAt] = session;
   const firstToken = tokens.find((t) => t.enabled);
   return {
     perTransferCap: native.perTransferCap,
@@ -1103,7 +1103,7 @@ async function readPolicyViewV6(
     windowSeconds: native.windowSeconds,
     expiresAt: Number(expiresAt),
     allowlist,
-    revoked: revoked as boolean,
+    revoked: revoked,
     spentInWindow: native.spentInWindow,
     windowStart: native.windowStart,
     assets: [native, ...tokens],

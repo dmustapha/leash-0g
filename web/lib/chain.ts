@@ -646,10 +646,10 @@ async function writeEnvelopeModule(
   chainId?: number,
 ): Promise<Hex> {
   await ensureWalletChain(provider, chainId ?? config.chainId);
-  const module = await readEnvelopeModule(account, chainId);
+  const envModule = await readEnvelopeModule(account, chainId);
   const wallet = walletClientFor(provider, owner, chainId);
   const { request } = await publicClientFor(chainId).simulateContract({
-    address: module,
+    address: envModule,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     abi: LEASH_ENVELOPE_MODULE_ABI as any,
     functionName,
@@ -700,9 +700,9 @@ export function tightenEnvelopeOnchain(
 /** The live envelope for an asset — the panel shows THIS, never a cached mirror. */
 export type EnvelopeView = { set: boolean; maxPerTransferCap: bigint; maxWindowCap: bigint; minWindowSeconds: number };
 export async function readEnvelope(account: Address, asset: Address, chainId?: number): Promise<EnvelopeView> {
-  const module = await readEnvelopeModule(account, chainId);
+  const envModule = await readEnvelopeModule(account, chainId);
   const r = (await publicClientFor(chainId).readContract({
-    address: module,
+    address: envModule,
     abi: LEASH_ENVELOPE_MODULE_ABI,
     functionName: 'envelope',
     args: [account, asset],
@@ -712,9 +712,9 @@ export async function readEnvelope(account: Address, asset: Address, chainId?: n
 
 /** Pending envelope-proposal eta on the module (0 = nothing pending). */
 export async function readEnvelopePendingEta(account: Address, chainId?: number): Promise<bigint> {
-  const module = await readEnvelopeModule(account, chainId);
+  const envModule = await readEnvelopeModule(account, chainId);
   return (await publicClientFor(chainId).readContract({
-    address: module,
+    address: envModule,
     abi: LEASH_ENVELOPE_MODULE_ABI,
     functionName: 'pendingEta',
     args: [account],
@@ -769,9 +769,9 @@ export function applyVetoConfigOnchain(
 
 /** The live veto config — the panel shows THIS. */
 export async function readVetoConfig(account: Address, chainId?: number): Promise<VetoConfigView> {
-  const module = await readEnvelopeModule(account, chainId);
+  const envModule = await readEnvelopeModule(account, chainId);
   const r = (await publicClientFor(chainId).readContract({
-    address: module,
+    address: envModule,
     abi: LEASH_ENVELOPE_MODULE_ABI,
     functionName: 'vetoConfig',
     args: [account],

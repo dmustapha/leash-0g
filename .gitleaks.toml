@@ -1,0 +1,9 @@
+# Extend the default ruleset; allowlist only PUBLIC testnet contract addresses that tests use as fixtures.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "public testnet ERC-20 contract addresses used as test fixtures (not secrets)"
+regexes = [
+  '''0x58574d4fbb5656f54b89e43b9181e3372c30d2a9''',
+]
