@@ -740,6 +740,15 @@ export function buildTreasuryGraph(
     }
     // AQ-FND S1: target already met = nothing to do. Decided by CODE from the sensed balances, so the
     // model is not called at all (no 0G Compute spend, no queue slot, nothing for it to get wrong).
+    // AQ-FND S1: a send that is still confirming, or a key blocked for review, means nothing can be sent
+    // this cycle whatever the model says: do not spend a model call to find that out.
+    const lane = await deps.chain.getInFlight?.(ctx.agentId).catch(() => null);
+    if (lane?.needsReview) {
+      return { reasoning: '', deliberation: '', decisionSource: 'empty' as const, finishReason: null, deliberationLoops: 0, promptTokens: null, skippedModel: 'sending is paused until someone reviews a transaction (you were alerted)' };
+    }
+    if (lane && lane.count > 0) {
+      return { reasoning: '', deliberation: '', decisionSource: 'empty' as const, finishReason: null, deliberationLoops: 0, promptTokens: null, skippedModel: 'a previous transaction from this agent is still confirming — waiting for it before sending anything else' };
+    }
     const idle = nothingToDo(state, mode);
     if (idle) {
       return { reasoning: '', deliberation: '', decisionSource: 'empty' as const, finishReason: null, deliberationLoops: 0, promptTokens: null, skippedModel: idle };
@@ -885,7 +894,13 @@ export function buildTreasuryGraph(
     // (a null receipt is "unknown", not "failed"); the next wake re-checks. This is what stops a second
     // top-up while the first is still unconfirmed.
     if (['act', 'token_act', 'call', 'sign', 'gas_swap', 'gas_bridge'].includes(verdict.route)) {
-      const inFlight = await deps.chain.getInFlight?.(ctx.agentId);
+      let inFlight = await deps.chain.getInFlight?.(ctx.agentId);
+      // a bridge burns on the SOURCE chain: an unconfirmed burn there must also stop the next cycle
+      if (verdict.route === 'gas_bridge' && deps.gasConfig && state.gasBridgeSrcChain) {
+        const srcEnv = gasBridgeEnv(deps.gasConfig, state.gasBridgeSrcChain, deps.gasConfig.chainConfig.chainId);
+        const src = await srcEnv?.srcChain.getInFlight?.(ctx.agentId);
+        if (src && src.count > 0) inFlight = src;
+      }
       if (inFlight && inFlight.count > 0) {
         return {
           decision: { action: 'stand_down', amountWei: '0', reason: 'a previous transaction from this agent is still confirming — waiting for it before sending anything else' },
@@ -1300,6 +1315,8 @@ export function buildTreasuryGraph(
         },
       };
     } catch (err) {
+      const unsure = laneOutcome(err);
+      if (unsure) return { outcome: unsure };
       const leg = err instanceof GasBridgeLegError ? err.leg : 'bridge';
       const cause = err instanceof GasBridgeLegError ? err.cause : err;
       const decoded = decodeLeashError(cause);
@@ -2070,7 +2087,7 @@ export function buildTreasuryGraph(
       return { type: 'stood_down', reason: 'the transaction was sent but its confirmation has not been seen yet — it will be checked again; nothing is re-sent' };
     }
     if (err instanceof TxNeedsReviewError) {
-      return { type: 'stood_down', reason: 'sending is paused: this agent\'s transaction counter was used by something LEASH did not send. Review it before the agent sends again' };
+      return { type: 'stood_down', reason: `sending is paused until someone reviews a transaction: ${err.reason}` };
     }
     return null;
   }
@@ -2276,6 +2293,14 @@ function evaluateDecision(
       const heldTok = BigInt(state.accountTokenBalanceWei ?? '0');
       let boundedTok = amount < needTok ? amount : needTok;
       if (boundedTok > heldTok) boundedTok = heldTok;
+      // the token's OWN on-chain budget (only when the agent sees it): never ask the wall for more than it will allow
+      if (state.policy.assetToken) {
+        const capTok = BigInt(state.policy.perTransferCapWei);
+        const remainTok = BigInt(state.policy.remainingWindowWei);
+        if (remainTok <= 0n) return stand('spending window exhausted — standing down until it resets');
+        if (capTok > 0n && boundedTok > capTok) boundedTok = capTok;
+        if (boundedTok > remainTok) boundedTok = remainTok;
+      }
       if (boundedTok <= 0n) return stand('the account holds none of the token to send');
       const clampedTok = boundedTok !== amount;
       return {
@@ -2299,15 +2324,15 @@ function evaluateDecision(
       return stand('target balance already met');
     }
   }
-  if (amount > BigInt(state.accountBalanceWei)) return stand('insufficient account balance');
-
   // AQ-FND S1 deterministic amount: never top up beyond what the goal still needs (the model proposes the
-  // size of a top-up; code bounds it). Over the per-transfer cap is still the owner-approval route.
+  // size of a top-up; code bounds it), THEN check the account can cover the bounded amount. Over the
+  // per-transfer cap is still the owner-approval route.
   let boundedAmount = amount;
   if (autoGoal && 'targetBalanceWei' in autoGoal) {
     const need = BigInt(autoGoal.targetBalanceWei) - BigInt(state.beneficiaryBalanceWei);
     if (need > 0n && boundedAmount > need) boundedAmount = need;
   }
+  if (boundedAmount > BigInt(state.accountBalanceWei)) return stand('insufficient account balance');
   const route: Route = boundedAmount > BigInt(policy.perTransferCapWei) ? 'approval' : 'act';
   const decisionOut = boundedAmount !== amount
     ? { ...parsed, amountWei: boundedAmount.toString(), reason: `${parsed.reason} (amount limited by LEASH to what the goal still needs)` }

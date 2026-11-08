@@ -447,5 +447,18 @@ describe('SendLane — write-ahead, idempotent, single-lane', () => {
       await sc.executeTokenTransfer({ sessionPrivateKey: KEY, accountAddr: ACCOUNT, token: '0x' + 'cd'.repeat(20), to: TO, amountWei: 1234n, send: { agentId: a, idemKey: 'via-1' } });
       expect(chain.sent).toHaveLength(1);
     });
+
+    it('M-7: the settlement write-ahead (onSubmitted) still fires at broadcast time through the lane', async () => {
+      const a = agent();
+      const sc = new SessionChain({ rpcUrl: 'http://127.0.0.1:1', chainId: chain.chainId });
+      sc.attachLane(new SendLane({ pool: db.pool, transport: chain, confirmTimeoutMs: 60, pollMs: 5, rebroadcastAfterMs: 0, receiptGraceMs: 60_000 }));
+      const seen: string[] = [];
+      const out = await sc.executeTokenTransfer({
+        sessionPrivateKey: KEY, accountAddr: ACCOUNT, token: '0x' + 'cd'.repeat(20), to: TO, amountWei: 5n,
+        onSubmitted: async (h) => { seen.push(h); },
+        send: { agentId: a, idemKey: 'job-fee:1', payload: { amount: '5' } },
+      });
+      expect(seen).toEqual([out.txHash]);
+    });
   });
 });

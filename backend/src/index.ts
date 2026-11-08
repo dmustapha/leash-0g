@@ -508,11 +508,15 @@ async function main(): Promise<void> {
       batcher.start();
       ownerBatcher.start();
       watcher.start();
-      // AQ-FND S1: boot reconcile — anything signed/broadcast before the last stop is resolved from
-      // (ledger row, chain) before any agent can send again.
-      void chainRegistry.reconcileAllIntents().then((n) => { if (n > 0) console.error(`reconciled ${n} open transaction intent(s) on boot`); }).catch((err: unknown) => console.error('boot intent reconcile failed', err));
-      // AQ-FND S1 (B-2): resume the agents the owner left running before this (re)start.
-      void runtime.resumeDesired().then((n) => { if (n > 0) console.error(`resumed ${n} agent(s) the owner had running`); }).catch((err: unknown) => console.error('agent resume on boot failed', err));
+      // AQ-FND S1: boot reconcile FIRST (anything signed/broadcast before the last stop is resolved from the
+      // ledger + chain), THEN resume the agents the owner left running (review M-8: never the other way round).
+      void chainRegistry
+        .reconcileAllIntents()
+        .then((n) => { if (n > 0) console.error(`reconciled ${n} open transaction intent(s) on boot`); })
+        .catch((err: unknown) => console.error('boot intent reconcile failed', err))
+        .then(() => runtime.resumeDesired())
+        .then((n) => { if (n > 0) console.error(`resumed ${n} agent(s) the owner had running`); })
+        .catch((err: unknown) => console.error('agent resume on boot failed', err));
       // Expiry point B: 60s periodic sweeper for stale delegations.
       coordinator.startSweeper();
       // L-01: deferred one-shot boot re-drive (off the pre-listen path). The

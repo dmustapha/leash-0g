@@ -64,7 +64,15 @@ describe('typed, persisted failure budget', () => {
     expect(classifyCycleResult({ outcome: { type: 'stood_down', reason: 'x' }, finishReason: 'length', parseMissReason: PARSE_MISS })).toBe('model');
     expect(classifyCycleResult({ outcome: { type: 'stood_down', reason: 'target balance already met — nothing to do' }, parseMissReason: PARSE_MISS })).toBeNull();
     expect(classifyCycleResult({ outcome: { type: 'acted' }, parseMissReason: PARSE_MISS })).toBeNull();
-    expect(classifyThrown(new Error('gateway refused inference: status 502'))).toBe('model');
+    // a router outage is infrastructure, not the agent's reasoning failing (review M-2)
+    expect(classifyThrown(new Error('gateway refused inference: status 502'))).toBe('transient');
+    expect(classifyThrown(new Error('gateway refused inference: status 429'))).toBe('transient');
+    expect(classifyThrown(new Error('model output unparsable'))).toBe('model');
+    // the rolling window resetting is an expected boundary and never counts (review M-3)
+    expect(classifyCycleResult({ outcome: { type: 'failed', reason: 'x', decoded: { errorName: 'OverWindowCap' } }, parseMissReason: PARSE_MISS })).toBeNull();
+    expect(classifyCycleResult({ outcome: { type: 'failed', reason: 'x', decoded: { errorName: 'NotAllowlisted' } }, parseMissReason: PARSE_MISS })).toBe('permanent');
+    // a blocked key does not re-trip the breaker every cycle (review M-1)
+    expect(classifyCycleResult({ outcome: { type: 'stood_down', reason: 'sending is paused until someone reviews a transaction: x' }, parseMissReason: PARSE_MISS })).toBeNull();
     expect(classifyThrown(new Error('rpc exploded'))).toBe('transient');
   });
 });

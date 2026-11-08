@@ -1,3 +1,4 @@
+import { safeSymbol } from '../asset/sanitize.js';
 import {
   createPublicClient,
   createWalletClient,
@@ -884,7 +885,8 @@ export class LeashChainOps implements ChainOps {
       this.publicClient.readContract({ address: token as Hex, abi: erc20MetaAbi, functionName: 'decimals' }),
       this.publicClient.readContract({ address: token as Hex, abi: erc20MetaAbi, functionName: 'symbol' }),
     ]);
-    const meta = { symbol: String(symbol), decimals: Number(decimals) };
+    // a token's symbol is written by its deployer: only a short plain ticker is ever shown/used as words (review m-6)
+    const meta = { symbol: safeSymbol(String(symbol)) ?? 'TOKEN', decimals: Number(decimals) };
     this.erc20MetaCache.set(key, meta);
     return meta;
   }

@@ -310,7 +310,7 @@ export class SendLane {
       case 'finalized':
         return { intentId: row.intent_id, txHash: row.tx_hash as Hex, status: row.status };
       case 'needs_review':
-        throw new TxNeedsReviewError(row.intent_id);
+        throw new TxNeedsReviewError(row.intent_id, row.error_text);
       case 'reverted':
         throw new Error(`execute transfer reverted on-chain: ${row.tx_hash}`);
       case 'failed':
@@ -322,7 +322,7 @@ export class SendLane {
         await this.reconcileOne(row);
         const fresh = (await this.findByIdem(row.agent_id, row.idem_key)) ?? row;
         if (fresh.status === 'mined' || fresh.status === 'finalized') return { intentId: fresh.intent_id, txHash: fresh.tx_hash as Hex, status: fresh.status };
-        if (fresh.status === 'needs_review') throw new TxNeedsReviewError(fresh.intent_id);
+        if (fresh.status === 'needs_review') throw new TxNeedsReviewError(fresh.intent_id, fresh.error_text);
         throw new ReceiptUnconfirmedError({ hash: (fresh.tx_hash ?? '0x') as Hex, attempts: 0, quirk: false, cause: new Error('still unconfirmed') });
       }
     }
@@ -335,15 +335,15 @@ export class SendLane {
       [keyAddr, this.t.chainId],
     );
     for (const r of rows) {
-      if (r.status === 'needs_review') throw new TxNeedsReviewError(r.intent_id);
+      if (r.status === 'needs_review') throw new TxNeedsReviewError(r.intent_id, r.error_text);
       await this.reconcileOne(r); // it may have mined meanwhile
     }
-    const left = await this.pool.query<{ intent_id: string; status: string }>(
-      `SELECT intent_id, status FROM tx_intents WHERE key_addr=$1 AND chain_id=$2 AND status IN ('signed','broadcast','needs_review') LIMIT 1`,
+    const left = await this.pool.query<{ intent_id: string; status: string; error_text: string | null }>(
+      `SELECT intent_id, status, error_text FROM tx_intents WHERE key_addr=$1 AND chain_id=$2 AND status IN ('signed','broadcast','needs_review') LIMIT 1`,
       [keyAddr, this.t.chainId],
     );
     const l = left.rows[0];
-    if (l?.status === 'needs_review') throw new TxNeedsReviewError(l.intent_id);
+    if (l?.status === 'needs_review') throw new TxNeedsReviewError(l.intent_id, l.error_text);
     if (l) throw new TxInFlightError(l.intent_id);
   }
 

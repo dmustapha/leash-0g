@@ -16,8 +16,11 @@ export class TxInFlightError extends Error {
 
 export class TxNeedsReviewError extends Error {
   readonly intentId: string;
-  constructor(intentId: string) {
-    super('this key\'s nonce was consumed by an unknown transaction; sending is blocked until a human reviews it');
+  readonly reason: string;
+  constructor(intentId: string, reason?: string | null) {
+    const why = reason && reason.length > 0 ? reason : 'a transaction could not be resolved automatically';
+    super(`sending is blocked until a human reviews it: ${why}`);
+    this.reason = why;
     this.name = 'TxNeedsReviewError';
     this.intentId = intentId;
   }

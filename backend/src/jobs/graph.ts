@@ -623,6 +623,9 @@ export function buildJobGraph(deps: JobGraphDeps, ctx: JobAgentContext, checkpoi
         // real, paid transfer exists only inside a call frame that is about to
         // unwind — which is how a settlement went missing.
         onSubmitted: (h) => recordSettlementSubmitted(deps.pool, job.jobId, h),
+        // AQ-FND S1 (review M-7): the fee settlement shares the session key with every other sender, so it goes
+        // through the same intent ledger / one send lane (the write-ahead above is honoured via onBroadcast).
+        send: { agentId: ctx.agentId, idemKey: `${ctx.agentId}:job-fee:${job.jobId}`, payload: { token: job.feeToken, to: job.feeRecipient, amount: job.feeAmountWei, jobId: job.jobId } },
       });
       const poa = poaFromJobRow(job, txHash);
       await recordSettlement(deps.pool, job.jobId, { settlementTx: txHash, poa });

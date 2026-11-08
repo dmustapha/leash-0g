@@ -333,6 +333,7 @@ export class LeashRuntimeManager implements RuntimeManager {
 
   async start(agentId: string, opts: { resume?: boolean } = {}): Promise<void> {
     if (this.deps.lease && !this.deps.lease.held()) throw new RuntimeLeaseNotHeldError();
+    if (this.draining) throw new Error('the runtime is shutting down; not starting new agent loops');
     if (this.loops.has(agentId)) return;
     const agent = await getAgentById(this.deps.pool, agentId);
     if (!agent || agent.status !== 'active') throw new Error('agent not startable');

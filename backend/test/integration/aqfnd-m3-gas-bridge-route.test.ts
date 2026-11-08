@@ -88,6 +88,8 @@ class FakeChain implements RuntimeChain {
   balances = new Map<string, bigint>();
   accountAddr = '';
   accountToken = 0n;
+  /** S1 test hook: throw this from the burn call (e.g. an unconfirmed receipt) AFTER the burn executed */
+  burnError: Error | null = null;
   grants: GrantState = arbGrants();
   allowance = 0n;
   calls: Array<{ target: string; value: bigint; data: string }> = [];
@@ -124,6 +126,7 @@ class FakeChain implements RuntimeChain {
       if (this.accountToken < amount) throw new Error('ERC20: burn amount exceeds balance');
       this.accountToken -= amount;
       this.allowance -= amount;
+      if (this.burnError) throw this.burnError;
       return { txHash: '0x' + 'b2'.repeat(32) };
     }
     throw new Error(`unexpected target ${target}`);
@@ -233,6 +236,23 @@ async function runOneCycle(id: string): Promise<void> {
 }
 
 describe('AQ-FND M-3 inc-3b S3b — bridge-then-swap source leg through the manager + graph', () => {
+
+  it('(f) Gate-2 M-5: an UNCONFIRMED burn receipt keeps the hash on the rail, does not fail it, and the next cycle does not burn again', async () => {
+    buildManager({ cctpFillEnabled: true });
+    const id = await seedAgentWithArb();
+    const { ReceiptUnconfirmedError } = await import('../../src/chain/wait-receipt.js');
+    arbChain.burnError = new ReceiptUnconfirmedError({ hash: ('0x' + 'b2'.repeat(32)) as `0x${string}`, attempts: 4, quirk: true, cause: new Error('no receipt') });
+    await runOneCycle(id);
+    const rows = await listRailTransfersForAgent(db.pool, id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.status).toBe('initiated'); // NOT failed: the burn may well have mined
+    expect(rows[0]?.srcTx).toBe('0x' + 'b2'.repeat(32)); // the handle is kept
+    const burnsBefore = arbChain.calls.filter((c) => c.target === MESSENGER).length;
+    expect(burnsBefore).toBe(1);
+    await manager.settle(id);
+    expect(arbChain.calls.filter((c) => c.target === MESSENGER)).toHaveLength(1); // no second burn
+    arbChain.burnError = null;
+  });
   it('(a) all grants + gate pass: [approve, burn] on the ARB chain only, one open cctp row, one action trace, nothing on Base', async () => {
     buildManager({ cctpFillEnabled: true });
     const id = await seedAgentWithArb();

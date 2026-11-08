@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { ReceiptUnconfirmedError } from '../chain/wait-receipt.js';
 /**
  * AQ-FND M-3 inc-3b S3 — the bridge-then-swap SOURCE leg (CCTP v2 USDC burn), through the governed wall.
  *
@@ -178,6 +179,13 @@ export async function executeGasBridge(env: GasBridgeEnv, input: GasBridgeExecIn
       txHashes.push(txHash);
       if (call.leg === 'burn') await recordSourceSubmitted(env.pool, row.railId, txHash);
     } catch (err) {
+      // A null/slow receipt is UNKNOWN, not failed (review M-5): the burn may well have mined. Keep the handle
+      // (the hash) on the rail row, leave the rail open for the sweep, and surface it as "unconfirmed" so the
+      // agent stands down instead of bridging again.
+      if (err instanceof ReceiptUnconfirmedError) {
+        if (call.leg === 'burn') await recordSourceSubmitted(env.pool, row.railId, err.hash);
+        throw err;
+      }
       await markFailed(env.pool, row.railId, `${call.leg} leg failed: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`);
       throw new GasBridgeLegError(call.leg, err, row.railId);
     }

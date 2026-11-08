@@ -31,11 +31,17 @@ export function classifyCycleResult(input: {
 }): FailureClass | null {
   const o = input.outcome;
   if (!o) return null;
-  if (o.type === 'failed') return o.decoded ? 'permanent' : 'transient';
+  if (o.type === 'failed') {
+    const name = (o.decoded as { errorName?: string } | undefined)?.errorName;
+    // The rolling window resetting is an EXPECTED boundary, not a loop: it self-heals, so it never counts.
+    if (name === 'OverWindowCap') return null;
+    return o.decoded ? 'permanent' : 'transient';
+  }
   if (o.type === 'stood_down') {
     if (o.reason === input.parseMissReason) return 'model';
     if (input.finishReason === 'length') return 'model';
-    if (o.reason && /transaction counter was used by something LEASH did not send/i.test(o.reason)) return 'ambiguous';
+    // A blocked key (needs review) is NOT re-counted every cycle: the owner was alerted once at escalation,
+    // the lane refuses sends, and the model is not even called while it is blocked.
   }
   return null;
 }
@@ -43,7 +49,10 @@ export function classifyCycleResult(input: {
 /** Class of a THROWN cycle (the graph itself blew up). */
 export function classifyThrown(err: unknown): FailureClass {
   const msg = err instanceof Error ? err.message : String(err);
-  if (/gateway refused inference|unparsable|invalid decision|finish_reason/i.test(msg)) return 'model';
+  // The model's OUTPUT being bad is a model failure. The model ROUTER being down/rate-limited (5xx/429) is
+  // infrastructure: it must not be recorded as the agent's reasoning failing (a router blip would otherwise
+  // pause the whole fleet and clear everyone's run_desired).
+  if (/unparsable|invalid decision|finish_reason/i.test(msg)) return 'model';
   return 'transient';
 }
 

@@ -1,3 +1,4 @@
+import { safeSymbol } from '../asset/sanitize.js';
 import { createPublicClient, createWalletClient, encodeFunctionData, encodePacked, http, keccak256, type Hex, type PublicClient } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { aggregatorV3Abi, leashAccountAbi, leashAccountV4Abi, leashAccountV5SigningAbi, leashAccountV6PolicyAbi, erc20MetaAbi } from '../chain/abis.js';
@@ -184,7 +185,7 @@ export interface RuntimeChain {
    * The decide path stands down while a same-asset send is in flight and subtracts it from the deficit.
    * Optional: fakes without an intent ledger report nothing in flight.
    */
-  getInFlight?(agentId: string, token?: string): Promise<{ count: number; amountWei: bigint }>;
+  getInFlight?(agentId: string, token?: string): Promise<{ count: number; amountWei: bigint; needsReview?: boolean }>;
   /** Boot + periodic reconcile of open intents (resends the SAME bytes; never rebuilds). Optional. */
   reconcileIntents?(): Promise<{ examined: number }>;
 }
@@ -210,8 +211,8 @@ export class SessionChain implements RuntimeChain {
     this.lane = lane;
   }
 
-  async getInFlight(agentId: string, token?: string): Promise<{ count: number; amountWei: bigint }> {
-    return this.lane ? this.lane.getInFlight(agentId, token) : { count: 0, amountWei: 0n };
+  async getInFlight(agentId: string, token?: string): Promise<{ count: number; amountWei: bigint; needsReview?: boolean }> {
+    return this.lane ? this.lane.getInFlight(agentId, token) : { count: 0, amountWei: 0n, needsReview: false };
   }
 
   async reconcileIntents(): Promise<{ examined: number }> {
@@ -247,7 +248,8 @@ export class SessionChain implements RuntimeChain {
       this.publicClient.readContract({ address: token as Hex, abi: erc20MetaAbi, functionName: 'decimals' }),
       this.publicClient.readContract({ address: token as Hex, abi: erc20MetaAbi, functionName: 'symbol' }),
     ]);
-    const meta = { symbol: String(symbol), decimals: Number(decimals) };
+    // a token's symbol is written by its deployer: only a short plain ticker is ever shown/used as words (review m-6)
+    const meta = { symbol: safeSymbol(String(symbol)) ?? 'TOKEN', decimals: Number(decimals) };
     this.metaCache.set(key, meta);
     return meta;
   }
@@ -334,6 +336,7 @@ export class SessionChain implements RuntimeChain {
     kind: 'transfer' | 'token_transfer' | 'call' | 'sign_arm',
     input: { sessionPrivateKey: string; accountAddr: string; send: SendCtx },
     encoded: { abi: unknown; functionName: string; args: unknown[] },
+    onBroadcast?: (txHash: string) => Promise<void>,
   ): Promise<{ txHash: string }> {
     if (!this.lane) throw new Error('send lane not attached');
     const data = encodeFunctionData({ abi: encoded.abi, functionName: encoded.functionName, args: encoded.args } as unknown as Parameters<typeof encodeFunctionData>[0]);
@@ -348,6 +351,7 @@ export class SessionChain implements RuntimeChain {
       value: 0n,
       payload: input.send.payload ?? {},
       sim: { abi: encoded.abi, functionName: encoded.functionName, args: encoded.args },
+      onBroadcast,
     });
     return { txHash: r.txHash };
   }
@@ -392,7 +396,7 @@ export class SessionChain implements RuntimeChain {
     send?: SendCtx;
   }): Promise<{ txHash: string }> {
     if (this.lane && input.send) {
-      return this.viaLane('token_transfer', { ...input, send: input.send }, { abi: leashAccountAbi, functionName: 'executeTokenTransfer', args: [input.token, input.to, input.amountWei] });
+      return this.viaLane('token_transfer', { ...input, send: input.send }, { abi: leashAccountAbi, functionName: 'executeTokenTransfer', args: [input.token, input.to, input.amountWei] }, input.onSubmitted);
     }
     const account = privateKeyToAccount(input.sessionPrivateKey as Hex);
     const wallet = createWalletClient({

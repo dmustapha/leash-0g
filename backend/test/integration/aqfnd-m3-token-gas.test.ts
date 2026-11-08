@@ -371,6 +371,45 @@ describe('S1 — deterministic amount: code bounds how much, the model only deci
   });
 });
 
+describe('S1 — Gate-2: blocked key and token budget', () => {
+  it('M-1: a key that needs review skips the model entirely and does not re-trip the breaker', async () => {
+    const id = await seedTokenAgent();
+    (fakeChain as unknown as { getInFlight: () => Promise<{ count: number; amountWei: bigint; needsReview: boolean }> }).getInFlight = async () => ({ count: 0, amountWei: 0n, needsReview: true });
+    // no model mock: a model call would fail the cycle
+    await manager.start(id);
+    startedAgents.push(id);
+    await waitFor(async () => (await db.pool.query(`SELECT 1 FROM trace_records WHERE agent_id=$1 AND record::text ILIKE '%reviews a transaction%'`, [id])).rowCount! > 0);
+    await manager.settle(id);
+    expect(fakeChain.tokenTransfers).toHaveLength(0);
+    const all = (await db.pool.query(`SELECT record::text AS t FROM trace_records WHERE agent_id=$1`, [id])).rows.map((r) => r.t as string).join('\n');
+    expect(all).not.toMatch(/cycle failed|gateway refused/);
+    expect((await db.pool.query(`SELECT count(*)::int c FROM agent_breakers WHERE agent_id=$1 AND tripped_at IS NOT NULL`, [id])).rows[0].c).toBe(0);
+  });
+
+  it('M-3: the token send is bounded by the token budget the agent can see (per-transfer cap and remaining window)', async () => {
+    const id = await seedTokenAgent();
+    const now = Math.floor(Date.now() / 1000);
+    fakeChain.policyView = {
+      ...fakeChain.policyView,
+      assets: [
+        { token: '0x0000000000000000000000000000000000000000', enabled: true, perTransferCap: CAP, windowCap: 3n * CAP, windowSeconds: 3600, spentInWindow: 0n, windowStart: now },
+        { token: TOKEN.toLowerCase(), enabled: true, perTransferCap: 1000n, windowCap: 5000n, windowSeconds: 86_400, spentInWindow: 4500n, windowStart: now },
+      ],
+    };
+    fakeChain.tokenEnabled = true;
+    fakeChain.tokenPayees = [BENEFICIARY.toLowerCase()];
+    nock(UPSTREAM).post('/v1/chat/completions').reply(200, {
+      id: 'c',
+      choices: [{ message: { role: 'assistant', content: JSON.stringify({ action: 'send', amountWei: (CAP / 2n).toString(), reason: 'top-up' }) } }],
+      x_0g_trace: { provider: 'p', request_id: 'r', billing: {} },
+    });
+    await manager.start(id);
+    startedAgents.push(id);
+    await waitFor(() => fakeChain.tokenTransfers.length > 0);
+    expect(fakeChain.tokenTransfers[0]!.amountWei).toBe(500n); // min(cap 1000, remaining 500)
+  });
+});
+
 describe('S1 — nothing to do means NO model call', () => {
   it('target already met: stands down deterministically without calling the model', async () => {
     const id = await seedTokenAgent();
