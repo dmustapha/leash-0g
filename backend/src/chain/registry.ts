@@ -1,4 +1,6 @@
 import type { PublicClient, WalletClient } from 'viem';
+import type { Pool } from 'pg';
+import { SendLane } from '../runtime/tx-intents/lane.js';
 import { LeashChainOps } from './ops.js';
 import { SessionChain, type RuntimeChain } from '../runtime/session-chain.js';
 import type { ChainOps } from '../server.js';
@@ -234,6 +236,8 @@ export class ChainRegistry {
   /** RH2 (two-factory): capability-factory lanes, keyed `${chainId}:${factory}`. */
   private readonly opsForFactoryCache = new Map<string, LeashChainOps>();
   private readonly sessionCache = new Map<number, RuntimeChain>();
+  /** AQ-FND S1: when set, every session chain gets the intent ledger + send lane. */
+  private intentPool: Pool | null = null;
 
   constructor(
     configs: readonly ChainConfig[],
@@ -636,12 +640,40 @@ export class ChainRegistry {
     });
   }
 
+  /**
+   * AQ-FND S1: turn on the transaction intent ledger. Must be called before any session chain is
+   * resolved (index.ts does it right after construction); chains resolved earlier are upgraded in place.
+   */
+  useIntentLedger(pool: Pool): void {
+    this.intentPool = pool;
+    for (const [id, sc] of this.sessionCache) {
+      if (sc instanceof SessionChain) sc.attachLane(new SendLane({ pool, transport: sc.laneTransport() }));
+      void id;
+    }
+  }
+
+  /** Boot + periodic: reconcile open intents on EVERY configured chain (not just those already dialed). */
+  async reconcileAllIntents(): Promise<number> {
+    let n = 0;
+    for (const id of this.byId.keys()) {
+      try {
+        const sc = this.getSessionChain(id);
+        const r = await sc.reconcileIntents?.();
+        n += r?.examined ?? 0;
+      } catch (err) {
+        console.warn(`[tx-intents] reconcile failed on chain ${id}:`, err instanceof Error ? err.message : err);
+      }
+    }
+    return n;
+  }
+
   /** Resolve (and cache) the runtime session-key chain for a chain, or default-deny. */
   getSessionChain(chainId: number): RuntimeChain {
     const cached = this.sessionCache.get(chainId);
     if (cached) return cached;
     const c = this.getChainConfig(chainId);
-    const sc = new SessionChain({ rpcUrl: c.rpcUrl, chainId: c.chainId });
+    const sc = new SessionChain({ rpcUrl: c.rpcUrl, chainId: c.chainId, minFeePerGas: c.gasFloorWei });
+    if (this.intentPool) sc.attachLane(new SendLane({ pool: this.intentPool, transport: sc.laneTransport() }));
     this.sessionCache.set(chainId, sc);
     return sc;
   }

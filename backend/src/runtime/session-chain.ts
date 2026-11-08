@@ -1,10 +1,13 @@
-import { createPublicClient, createWalletClient, encodePacked, http, keccak256, type Hex, type PublicClient } from 'viem';
+import { createPublicClient, createWalletClient, encodeFunctionData, encodePacked, http, keccak256, type Hex, type PublicClient } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import { aggregatorV3Abi, leashAccountAbi, leashAccountV4Abi, leashAccountV5SigningAbi, leashAccountV6PolicyAbi, erc20MetaAbi } from '../chain/abis.js';
 import { readPolicyView, zeroGChain } from '../chain/ops.js';
 import type { PolicyView } from '../types.js';
 import { waitReceipt } from '../chain/wait-receipt.js';
 import type { CallRule, GrantState } from '../governed-call/index.js';
+import type { SendLane } from './tx-intents/lane.js';
+import { viemLaneTransport } from './tx-intents/viem-transport.js';
+import type { LaneTransport } from './tx-intents/lane.js';
 
 /**
  * Stage D (D-10): the candidate set the runtime enumerates from the read-model to
@@ -28,6 +31,19 @@ export interface GrantStateCandidates {
  * ops key, never owner authority). Injectable so runtime tests run without a
  * chain.
  */
+/**
+ * AQ-FND S1: identifies WHICH logical action a send is, so the intent ledger can make it idempotent
+ * (same agent + same idemKey => never a second tx) and account for it while in flight. Every
+ * treasury/trader/gas/one-shot/sign-arm caller passes it; job-fee settlement keeps its own write-ahead
+ * (`onSubmitted` + settlement sweep) and omits it.
+ */
+export interface SendCtx {
+  agentId: string;
+  idemKey: string;
+  /** Human + raw facts (token, to, amount as strings) for in-flight accounting. */
+  payload?: Record<string, unknown>;
+}
+
 export interface RuntimeChain {
   getBalance(addr: string): Promise<bigint>;
   getPolicyView(accountAddr: string, allowlistCandidates: string[], assetCandidates?: string[]): Promise<PolicyView>;
@@ -36,6 +52,7 @@ export interface RuntimeChain {
     accountAddr: string;
     to: string;
     valueWei: bigint;
+    send?: SendCtx;
   }): Promise<{ txHash: string }>;
   /**
    * Phase-4 governed ERC-20 settlement (F9): the contract builds the transfer
@@ -55,6 +72,7 @@ export interface RuntimeChain {
     to: string;
     amountWei: bigint;
     onSubmitted?: (txHash: string) => Promise<void>;
+    send?: SendCtx;
   }): Promise<{ txHash: string }>;
   /**
    * Stage D (D-10): the generic governed-call path. The agent's scoped session
@@ -69,6 +87,7 @@ export interface RuntimeChain {
     target: string;
     valueWei: bigint;
     data: string;
+    send?: SendCtx;
   }): Promise<{ txHash: string }>;
   /**
    * Read an ERC-20's symbol + decimals so the settlement surfaces can DETECT
@@ -134,6 +153,7 @@ export interface RuntimeChain {
     descriptorId: number;
     fields: string[];
     digest: string;
+    send?: SendCtx;
     /**
      * FP-4 Slice-2 (`07 #15`): the co-signer's second-factor approval bytes, when the account has an
      * active co-signer. Defaults to empty (`0x`) — the INERT path (`coSigner == address(0)`), which is
@@ -159,16 +179,43 @@ export interface RuntimeChain {
    * implement it; prod SessionChain does.
    */
   getReceiptStatus?(txHash: string): Promise<'success' | 'reverted' | 'pending'>;
+  /**
+   * AQ-FND S1: un-mined (in-flight) value this agent has already sent but the chain has not confirmed.
+   * The decide path stands down while a same-asset send is in flight and subtracts it from the deficit.
+   * Optional: fakes without an intent ledger report nothing in flight.
+   */
+  getInFlight?(agentId: string, token?: string): Promise<{ count: number; amountWei: bigint }>;
+  /** Boot + periodic reconcile of open intents (resends the SAME bytes; never rebuilds). Optional. */
+  reconcileIntents?(): Promise<{ examined: number }>;
 }
 
 export class SessionChain implements RuntimeChain {
   private readonly publicClient: PublicClient;
+  private lane: SendLane | null = null;
 
-  constructor(private readonly opts: { rpcUrl: string; chainId: number }) {
+  constructor(private readonly opts: { rpcUrl: string; chainId: number; minFeePerGas?: bigint }) {
     this.publicClient = createPublicClient({
       chain: zeroGChain(opts.rpcUrl, opts.chainId),
       transport: http(opts.rpcUrl),
     });
+  }
+
+  /** The viem transport the send lane runs on (exposed so the registry can build the lane). */
+  laneTransport(): LaneTransport {
+    return viemLaneTransport(this.publicClient, this.opts.chainId, this.opts.minFeePerGas ?? 0n);
+  }
+
+  /** Attach the intent ledger: from here every send that carries a `send` ctx is write-ahead + idempotent. */
+  attachLane(lane: SendLane): void {
+    this.lane = lane;
+  }
+
+  async getInFlight(agentId: string, token?: string): Promise<{ count: number; amountWei: bigint }> {
+    return this.lane ? this.lane.getInFlight(agentId, token) : { count: 0, amountWei: 0n };
+  }
+
+  async reconcileIntents(): Promise<{ examined: number }> {
+    return this.lane ? this.lane.reconcile() : { examined: 0 };
   }
 
   async getBalance(addr: string): Promise<bigint> {
@@ -282,12 +329,38 @@ export class SessionChain implements RuntimeChain {
     return { enabled, allowedPayees };
   }
 
+  /** AQ-FND S1: route a write through the intent ledger (write-ahead, idempotent, one lane per key). */
+  private async viaLane(
+    kind: 'transfer' | 'token_transfer' | 'call' | 'sign_arm',
+    input: { sessionPrivateKey: string; accountAddr: string; send: SendCtx },
+    encoded: { abi: unknown; functionName: string; args: unknown[] },
+  ): Promise<{ txHash: string }> {
+    if (!this.lane) throw new Error('send lane not attached');
+    const data = encodeFunctionData({ abi: encoded.abi, functionName: encoded.functionName, args: encoded.args } as unknown as Parameters<typeof encodeFunctionData>[0]);
+    const r = await this.lane.send({
+      agentId: input.send.agentId,
+      sessionPrivateKey: input.sessionPrivateKey,
+      accountAddr: input.accountAddr,
+      kind,
+      idemKey: input.send.idemKey,
+      to: input.accountAddr as Hex,
+      data,
+      value: 0n,
+      payload: input.send.payload ?? {},
+    });
+    return { txHash: r.txHash };
+  }
+
   async executeTransfer(input: {
     sessionPrivateKey: string;
     accountAddr: string;
     to: string;
     valueWei: bigint;
+    send?: SendCtx;
   }): Promise<{ txHash: string }> {
+    if (this.lane && input.send) {
+      return this.viaLane('transfer', { ...input, send: input.send }, { abi: leashAccountAbi, functionName: 'execute', args: [input.to, input.valueWei, '0x'] });
+    }
     const account = privateKeyToAccount(input.sessionPrivateKey as Hex);
     const wallet = createWalletClient({
       chain: zeroGChain(this.opts.rpcUrl, this.opts.chainId),
@@ -315,7 +388,11 @@ export class SessionChain implements RuntimeChain {
     to: string;
     amountWei: bigint;
     onSubmitted?: (txHash: string) => Promise<void>;
+    send?: SendCtx;
   }): Promise<{ txHash: string }> {
+    if (this.lane && input.send) {
+      return this.viaLane('token_transfer', { ...input, send: input.send }, { abi: leashAccountAbi, functionName: 'executeTokenTransfer', args: [input.token, input.to, input.amountWei] });
+    }
     const account = privateKeyToAccount(input.sessionPrivateKey as Hex);
     const wallet = createWalletClient({
       chain: zeroGChain(this.opts.rpcUrl, this.opts.chainId),
@@ -436,7 +513,11 @@ export class SessionChain implements RuntimeChain {
     target: string;
     valueWei: bigint;
     data: string;
+    send?: SendCtx;
   }): Promise<{ txHash: string }> {
+    if (this.lane && input.send) {
+      return this.viaLane('call', { ...input, send: input.send }, { abi: leashAccountV4Abi, functionName: 'executeCall', args: [input.target, input.valueWei, (input.data || '0x')] });
+    }
     const account = privateKeyToAccount(input.sessionPrivateKey as Hex);
     const wallet = createWalletClient({
       chain: zeroGChain(this.opts.rpcUrl, this.opts.chainId),
@@ -466,11 +547,21 @@ export class SessionChain implements RuntimeChain {
     digest: string;
     coSignerSig?: string;
     caps?: { token: string; cap: string }[];
+    send?: SendCtx;
   }): Promise<{ txHash: string; digest: string; epoch: number }> {
     const account = privateKeyToAccount(input.sessionPrivateKey as Hex);
     // RAW ECDSA over the EIP-712 digest (the contract does `ECDSA.recover(digest, sig)` — no
     // eth-prefix). viem `account.sign({ hash })` is exactly that raw signature.
     const sessionSig = await account.sign({ hash: input.digest as Hex });
+    if (this.lane && input.send) {
+      const sent = await this.viaLane('sign_arm', { ...input, send: input.send }, {
+        abi: leashAccountV5SigningAbi,
+        functionName: 'authorizeSigningIntent',
+        args: [BigInt(input.descriptorId), input.fields, (input.caps ?? []).map((c) => ({ token: c.token as Hex, cap: BigInt(c.cap) })), sessionSig, (input.coSignerSig ?? '0x')],
+      });
+      const epoch = await this.publicClient.readContract({ address: input.accountAddr as Hex, abi: leashAccountV5SigningAbi, functionName: 'signingEpoch' });
+      return { txHash: sent.txHash, digest: input.digest, epoch: Number(epoch) };
+    }
     const wallet = createWalletClient({
       chain: zeroGChain(this.opts.rpcUrl, this.opts.chainId),
       transport: http(this.opts.rpcUrl),

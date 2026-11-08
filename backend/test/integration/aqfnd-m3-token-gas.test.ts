@@ -69,7 +69,17 @@ class FakeRuntimeChain implements RuntimeChain {
   async executeTransfer(): Promise<{ txHash: string }> {
     return { txHash: '0x' + 'ee'.repeat(32) };
   }
-  async executeTokenTransfer(input: { token: string; to: string; amountWei: bigint }): Promise<{ txHash: string }> {
+  /** AQ-FND S1: un-mined sends the (fake) intent ledger reports for the agent. */
+  public inFlightCount = 0;
+  /** AQ-FND S1: when set, executeTokenTransfer throws this (e.g. a null receipt). */
+  public tokenTransferError: Error | null = null;
+  public sendCtxs: Array<{ agentId: string; idemKey: string; payload?: Record<string, unknown> } | undefined> = [];
+  async getInFlight(): Promise<{ count: number; amountWei: bigint }> {
+    return { count: this.inFlightCount, amountWei: 0n };
+  }
+  async executeTokenTransfer(input: { token: string; to: string; amountWei: bigint; send?: { agentId: string; idemKey: string; payload?: Record<string, unknown> } }): Promise<{ txHash: string }> {
+    this.sendCtxs.push(input.send);
+    if (this.tokenTransferError) throw this.tokenTransferError;
     this.tokenTransfers.push({ token: input.token, to: input.to, amountWei: input.amountWei });
     return { txHash: '0x' + 'dd'.repeat(32) };
   }
@@ -218,6 +228,52 @@ describe('D5-2 — the token agent reads its TOKEN budget, not the native caps',
     expect(sent).toContain(`\\"remainingWindowWei\\":\\"${5n * 10n ** 18n}\\"`);
     expect(sent).toContain(`\\"assetToken\\":\\"${TOKEN.toLowerCase()}\\"`);
     expect(sent).not.toContain(`\\"perTransferCapWei\\":\\"${CAP}\\"`);
+  });
+});
+
+describe('S1 — send safety at the agent level', () => {
+  const traceText = async (id: string) => (await db.pool.query(`SELECT record::text AS t FROM trace_records WHERE agent_id=$1`, [id])).rows.map((r) => r.t as string).join('\n');
+
+  it('stands down (no second send) while a previous send is still in flight', async () => {
+    const id = await seedTokenAgent();
+    fakeChain.inFlightCount = 1;
+    mockSend();
+    await manager.start(id);
+    startedAgents.push(id);
+    await waitFor(async () => (await traceText(id)).includes('still confirming'));
+    await manager.settle(id);
+    expect(fakeChain.tokenTransfers).toHaveLength(0);
+  });
+
+  it('an unconfirmed (null) receipt is "unknown", never a failure: stood down, nothing re-sent, breaker untouched', async () => {
+    const id = await seedTokenAgent();
+    const { ReceiptUnconfirmedError } = await import('../../src/chain/wait-receipt.js');
+    fakeChain.tokenTransferError = new ReceiptUnconfirmedError({ hash: ('0x' + 'ab'.repeat(32)) as `0x${string}`, attempts: 4, quirk: true, cause: new Error('no receipt') });
+    mockSend();
+    await manager.start(id);
+    startedAgents.push(id);
+    await waitFor(async () => (await traceText(id)).includes('confirmation has not been seen yet'));
+    await manager.settle(id);
+    expect(fakeChain.sendCtxs.length).toBeGreaterThan(0);
+    expect(fakeChain.tokenTransfers).toHaveLength(0);
+    expect(await traceText(id)).not.toMatch(/token top-up failed/);
+  });
+
+  it('every send carries an idempotency key scoped to agent + action + cycle', async () => {
+    const id = await seedTokenAgent();
+    fakeChain.tokenEnabled = true;
+    fakeChain.tokenPayees = [BENEFICIARY.toLowerCase()];
+    mockSend();
+    await manager.start(id);
+    startedAgents.push(id);
+    await waitFor(() => fakeChain.tokenTransfers.length > 0);
+    await manager.settle(id);
+    const ctx = fakeChain.sendCtxs[0];
+    expect(ctx?.agentId).toBe(id);
+    expect(ctx?.idemKey).toContain(`${id}:token_transfer:`);
+    expect(ctx?.idemKey).toContain(TOKEN.toLowerCase());
+    expect(ctx?.payload?.['amount']).toBe((CAP / 2n).toString());
+    expect(ctx?.idemKey).not.toContain('nocycle-'); // the manager supplies the cycle id
   });
 });
 

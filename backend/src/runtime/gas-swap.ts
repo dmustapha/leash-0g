@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 /**
  * AQ-FND M-3 inc-3a — the swap-to-gas EXECUTOR (token -> native on a Uniswap V3 chain).
  *
@@ -138,6 +139,8 @@ export interface GasSwapExecInput {
   amountIn: bigint;
   /** chain-priced session-key dust for the final refuel leg (config) */
   refuelWei: bigint;
+  /** AQ-FND S1: the cycle that runs this swap — scopes the idempotency key of every leg. */
+  cycleId?: string | undefined;
 }
 
 /**
@@ -159,6 +162,7 @@ export async function executeGasSwap(env: GasSwapEnv, input: GasSwapExecInput): 
         target,
         valueWei: value,
         data,
+        send: { agentId: env.agentId, idemKey: `${env.agentId}:gasswap:${leg}:${input.cycleId ?? randomUUID()}`, payload: { leg, target, value: value.toString() } },
       });
       hashes.push(txHash);
     } catch (err) {
@@ -201,6 +205,7 @@ export async function executeGasSwap(env: GasSwapEnv, input: GasSwapExecInput): 
       accountAddr: env.accountAddr,
       to: input.sessionKeyAddr,
       valueWei: refuelWei,
+      send: { agentId: env.agentId, idemKey: `${env.agentId}:gasswap:refuel:${input.cycleId ?? randomUUID()}`, payload: { leg: 'refuel', to: input.sessionKeyAddr, amount: refuelWei.toString(), native: true } },
     });
     hashes.push(txHash);
   } catch (err) {

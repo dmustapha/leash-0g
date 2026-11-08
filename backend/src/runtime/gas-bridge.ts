@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 /**
  * AQ-FND M-3 inc-3b S3 — the bridge-then-swap SOURCE leg (CCTP v2 USDC burn), through the governed wall.
  *
@@ -132,6 +133,8 @@ export interface GasBridgeExecInput {
   sessionPrivateKey: string;
   token: Address;
   amount: bigint;
+  /** AQ-FND S1: the cycle that runs this bridge — scopes the idempotency key of each leg. */
+  cycleId?: string | undefined;
 }
 
 /**
@@ -170,6 +173,7 @@ export async function executeGasBridge(env: GasBridgeEnv, input: GasBridgeExecIn
         target: call.target,
         valueWei: call.value,
         data: call.data,
+        send: { agentId: env.agentId, idemKey: `${env.agentId}:gasbridge:${call.leg}:${input.cycleId ?? randomUUID()}`, payload: { leg: call.leg, target: call.target, value: call.value.toString(), token: input.token, amount: input.amount.toString() } },
       });
       txHashes.push(txHash);
       if (call.leg === 'burn') await recordSourceSubmitted(env.pool, row.railId, txHash);

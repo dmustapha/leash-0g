@@ -154,6 +154,7 @@ export async function consumeOneShot(
       target,
       valueWei: value,
       data,
+      send: { agentId: ctx.agentId, idemKey: `${ctx.agentId}:oneshot:${requestId}`, payload: { target, value: value.toString(), requestId } },
     });
     await finalizeOneShotConsumption(deps.pool, requestId, 'consumed', txHash);
     await trace(deps, ctx.agentId, 'action', {

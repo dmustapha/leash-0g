@@ -1,4 +1,8 @@
+import { randomUUID } from 'node:crypto';
 import { formatAssetAmount } from '../asset/format.js';
+import { TxInFlightError, TxNeedsReviewError } from './tx-intents/errors.js';
+import { ReceiptUnconfirmedError } from '../chain/wait-receipt.js';
+import type { SendCtx } from './session-chain.js';
 import { Annotation, END, START, StateGraph, interrupt, type BaseCheckpointSaver } from '@langchain/langgraph';
 import type { Address } from 'viem';
 import { z } from 'zod';
@@ -141,6 +145,8 @@ export interface ToolRail {
 }
 
 const TreasuryState = Annotation.Root({
+  /** AQ-FND S1: this cycle's id (set by the manager). It scopes idempotency keys, so a re-executed node never double-sends. */
+  cycleId: Annotation<string>,
   /** Set by the manager when this cycle processes an inbound delegation (spec §3b). */
   inboundDelegation: Annotation<InboundDelegationInput | null>,
   beneficiaryBalanceWei: Annotation<string>,
@@ -845,6 +851,18 @@ export function buildTreasuryGraph(
     // in classify). Resolve it BEFORE the transfer-damping block.
     if (verdict.route === 'call') return decideCall(state, verdict.decision);
     if (verdict.route === 'tool_call') return decideToolCall(state, verdict.decision);
+    // AQ-FND S1: ONE thing in flight per agent. If a previous send is still confirming, never start another
+    // (a null receipt is "unknown", not "failed"); the next wake re-checks. This is what stops a second
+    // top-up while the first is still unconfirmed.
+    if (['act', 'token_act', 'call', 'sign', 'gas_swap', 'gas_bridge'].includes(verdict.route)) {
+      const inFlight = await deps.chain.getInFlight?.(ctx.agentId);
+      if (inFlight && inFlight.count > 0) {
+        return {
+          decision: { action: 'stand_down', amountWei: '0', reason: 'a previous transaction from this agent is still confirming — waiting for it before sending anything else' },
+          route: 'stand_down',
+        };
+      }
+    }
     if (verdict.route === 'sign') return decideSign(state, verdict.decision);
     // AQ-FND M-3: a token top-up — resolve spendability (novel-token one-ask) + the
     // self-funding gas ladder against LIVE on-chain state BEFORE any submit (mirrors
@@ -1102,8 +1120,11 @@ export function buildTreasuryGraph(
             accountAddr: ctx.accountAddr,
             to: sessionKeyAddr,
             valueWei: cfg.refuelWei,
+            send: sendCtx(state, 'refuel', [sessionKeyAddr, cfg.refuelWei.toString()], { to: sessionKeyAddr, amount: cfg.refuelWei.toString(), native: true, refuel: true }),
           });
         } catch (err) {
+          const unsure = laneOutcome(err);
+          if (unsure && unsure.type === 'stood_down') return standDownToken(unsure.reason);
           return standDownToken(`account-native refuel failed: ${err instanceof Error ? err.message : String(err)}`);
         }
         return actWith('account-native');
@@ -1235,7 +1256,7 @@ export function buildTreasuryGraph(
     const token = state.gasBridgeToken as Address;
     const amount = BigInt(state.gasBridgeAmount);
     try {
-      const { txHashes } = await executeGasBridge(env, { sessionPrivateKey: ctx.sessionPrivateKey, token, amount });
+      const { txHashes } = await executeGasBridge(env, { sessionPrivateKey: ctx.sessionPrivateKey, token, amount, cycleId: state.cycleId });
       const meta = await env.srcChain.getErc20Meta?.(token).catch(() => null);
       const sentLabel = formatAssetAmount(amount, meta?.decimals ?? null, meta?.symbol ?? shortAddr(token));
       return {
@@ -1277,6 +1298,7 @@ export function buildTreasuryGraph(
         token,
         amountIn,
         refuelWei: buildGasRouteConfig(gasConfig.chainConfig, gasConfig.globalDustWei).refuelWei,
+        cycleId: state.cycleId,
       });
       return {
         outcome: {
@@ -1354,9 +1376,12 @@ export function buildTreasuryGraph(
         token,
         to,
         amountWei,
+        send: sendCtx(state, 'token_transfer', [token, to, amountWei.toString()], { token, to, amount: amountWei.toString() }),
       });
       return { outcome: { type: 'acted', txHash, valueWei: amountWei.toString(), token, gasRung: rung } };
     } catch (err) {
+      const unsure = laneOutcome(err);
+      if (unsure) return { outcome: unsure };
       const decoded = decodeLeashError(err);
       const reason = decoded
         ? `token top-up refused: ${decoded.plain}`
@@ -1481,9 +1506,12 @@ export function buildTreasuryGraph(
         target: state.callTarget,
         valueWei: BigInt(state.callValue),
         data: state.callData,
+        send: sendCtx(state, 'call', [state.callTarget, state.callData.slice(0, 74), state.callValue], { target: state.callTarget, value: state.callValue }),
       });
       return { outcome: { type: 'acted', txHash, valueWei: state.callValue, callTarget: state.callTarget } };
     } catch (err) {
+      const unsure = laneOutcome(err);
+      if (unsure) return { outcome: unsure };
       // The on-chain wall refused (a boundary hit) — record, never crash; never
       // recorded as a completed action (assertReceiptSuccess throws on revert).
       const decoded = decodeLeashError(err);
@@ -1674,6 +1702,7 @@ export function buildTreasuryGraph(
         descriptorId: state.signDescriptorId,
         fields: state.signFields,
         digest: state.signDigest,
+        send: sendCtx(state, 'sign_arm', [String(state.signDescriptorId), state.signDigest], { descriptorId: state.signDescriptorId, digest: state.signDigest }),
       });
       await recordSigningArm(deps.pool, {
         agentId: ctx.agentId,
@@ -1686,6 +1715,8 @@ export function buildTreasuryGraph(
       });
       return { outcome: { type: 'signed', digest: armed.digest, descriptorId: state.signDescriptorId } };
     } catch (err) {
+      const unsure = laneOutcome(err);
+      if (unsure) return { outcome: unsure };
       const decoded = decodeLeashError(err);
       const reason = decoded
         ? `signing arm refused: ${decoded.plain}`
@@ -1991,6 +2022,29 @@ export function buildTreasuryGraph(
     }
   }
 
+  /** AQ-FND S1: identify WHICH logical action a send is (idempotency + in-flight accounting). */
+  function sendCtx(state: State, kind: string, parts: string[], payload: Record<string, unknown>): SendCtx {
+    const cycle = state.cycleId ?? `nocycle-${randomUUID()}`;
+    return { agentId: ctx.agentId, idemKey: [ctx.agentId, kind, ...parts.map((p) => p.toLowerCase()), cycle].join(':'), payload };
+  }
+
+  /**
+   * AQ-FND S1: a send that is not a failure of the ACTION but of CERTAINTY. A null/slow receipt and a
+   * still-confirming previous tx mean "unknown / in flight" — never "failed", never a reason to pay again.
+   */
+  function laneOutcome(err: unknown): CycleOutcome | null {
+    if (err instanceof TxInFlightError) {
+      return { type: 'stood_down', reason: 'a previous transaction from this agent is still confirming — waiting for it before sending anything else' };
+    }
+    if (err instanceof ReceiptUnconfirmedError) {
+      return { type: 'stood_down', reason: 'the transaction was sent but its confirmation has not been seen yet — it will be checked again; nothing is re-sent' };
+    }
+    if (err instanceof TxNeedsReviewError) {
+      return { type: 'stood_down', reason: 'sending is paused: this agent\'s transaction counter was used by something LEASH did not send. Review it before the agent sends again' };
+    }
+    return null;
+  }
+
   async function transfer(state: State, to: string, amountWei: string): Promise<CycleOutcome> {
     try {
       const { txHash } = await deps.chain.executeTransfer({
@@ -1998,9 +2052,12 @@ export function buildTreasuryGraph(
         accountAddr: ctx.accountAddr,
         to,
         valueWei: BigInt(amountWei),
+        send: sendCtx(state, 'transfer', [to, amountWei], { to, amount: amountWei, native: true }),
       });
       return { type: 'acted', txHash, valueWei: amountWei };
     } catch (err) {
+      const unsure = laneOutcome(err);
+      if (unsure) return unsure;
       // The contract refused (window cap, revoke racing, ...) — record, don't
       // crash. P3C-6(ii): decode the custom error into plain language; (iii):
       // a policy-boundary revert activates damping.

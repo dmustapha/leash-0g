@@ -140,6 +140,8 @@ async function main(): Promise<void> {
     opsPrivateKey: cfg.OPS_PRIVATE_KEY,
     guardianPrivateKey: cfg.GUARDIAN_PRIVATE_KEY,
   });
+  // AQ-FND S1: every session-key write is recorded in the intent ledger BEFORE it is broadcast.
+  chainRegistry.useIntentLedger(pool);
   const defaultChainId = cfg.ZERO_G_CHAIN_ID;
   const chain = chainRegistry.getChainOps(defaultChainId);
   phase(`chain registry built (${chainConfigs.length} chains: ${chainConfigs.map((c) => c.chainId).join(',')})`);
@@ -252,6 +254,12 @@ async function main(): Promise<void> {
     }).catch((err: unknown) => console.error('settlement sweep tick failed', err));
   }, 60_000);
   settlementSweepTimer.unref();
+  // AQ-FND S1: reconcile open transaction intents (resend the SAME bytes, never rebuild) — lease-gated.
+  const intentReconcileTimer = setInterval(() => {
+    if (!lease.held()) return;
+    void chainRegistry.reconcileAllIntents().catch((err: unknown) => console.error('intent reconcile tick failed', err));
+  }, 30_000);
+  intentReconcileTimer.unref();
 
   // AQ-FND inc-3b: CCTP rail recovery. Advances open rail_transfers (confirm burn -> Circle
   // attestation -> ops-key receiveMessage on the destination -> filled). Lease-held; only armed
@@ -482,6 +490,9 @@ async function main(): Promise<void> {
       batcher.start();
       ownerBatcher.start();
       watcher.start();
+      // AQ-FND S1: boot reconcile — anything signed/broadcast before the last stop is resolved from
+      // (ledger row, chain) before any agent can send again.
+      void chainRegistry.reconcileAllIntents().then((n) => { if (n > 0) console.error(`reconciled ${n} open transaction intent(s) on boot`); }).catch((err: unknown) => console.error('boot intent reconcile failed', err));
       // Expiry point B: 60s periodic sweeper for stale delegations.
       coordinator.startSweeper();
       // L-01: deferred one-shot boot re-drive (off the pre-listen path). The
@@ -503,6 +514,7 @@ async function main(): Promise<void> {
     clearInterval(directionsSweepTimer); // was previously left running on shutdown
     clearInterval(oneShotSweepTimer);
     clearInterval(settlementSweepTimer);
+    clearInterval(intentReconcileTimer);
     if (railSweepTimer) clearInterval(railSweepTimer);
     coordinator.stopSweeper();
     lease.release();

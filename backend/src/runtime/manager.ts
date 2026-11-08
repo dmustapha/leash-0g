@@ -509,6 +509,7 @@ export class LeashRuntimeManager implements RuntimeManager {
         descriptorId: intent.descriptorId,
         fields: intent.fields,
         digest: intent.digest,
+        send: { agentId: agent.id, idemKey: `${agent.id}:sign-arm:${requestId}`, payload: { descriptorId: intent.descriptorId, digest: intent.digest, requestId } },
         // batch arms submit the reviewed caps; non-batch intents omit it (the arm defaults to `[]`).
         ...(intent.caps ? { caps: intent.caps } : {}),
       });
@@ -628,8 +629,10 @@ export class LeashRuntimeManager implements RuntimeManager {
     // Inbound-delegation input channel (spec §3b): this cycle consumes at most
     // ONE activated envelope addressed to this agent, as sensed input.
     const inbound = await this.pickUpInbound(loop.agent.id);
-    const config = { configurable: { thread_id: `${loop.agent.id}:${randomUUID()}` } };
-    await loop.graph.invoke(inbound ? { inboundDelegation: inbound } : {}, config);
+    const cycleId = randomUUID();
+    const config = { configurable: { thread_id: `${loop.agent.id}:${cycleId}` } };
+    // AQ-FND S1: the cycle id scopes every send's idempotency key (a re-executed node can never double-send).
+    await loop.graph.invoke(inbound ? { inboundDelegation: inbound, cycleId } : { cycleId }, config);
 
     const snapshot = await loop.graph.getState(config);
     // 0.2.x: pending interrupts live on tasks[].interrupts, NOT result.__interrupt__ (PHASE-0 §1b).
