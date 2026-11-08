@@ -85,14 +85,17 @@ const envSchema = z.object({
   // (perspective diversity). Confirmed available via the 0G router GET /models.
   // goal.model still overrides per agent; the requester never reasons so it
   // needs no strong model.
-  JOB_PROVIDER_MODEL: z.string().min(1).default('deepseek-v3'),
+  // S0 probe 2026-11-08: `deepseek-v3` is GONE from the router catalog (404), which broke every provider
+  // job and the create funnel's auto-draft. Defaults now point at models that passed the tool-loop + JSON
+  // probe (deepseek-v4-pro for provider work, deepseek-v4-flash for the fast create-time call).
+  JOB_PROVIDER_MODEL: z.string().min(1).default('deepseek-v4-pro'),
   JOB_EVALUATOR_MODEL: z.string().min(1).default('glm-5'),
   // Phase-5 (D-B1): the create-funnel spec-elevation model. Runs on LEASH's
   // Compute key (create-time cost deferred, 07 #6), NOT agent-keyed. Defaults to
   // a capable 0G-catalog model already confirmed available via the router GET
   // /models (deepseek-v3, same as the provider). goal.model does not apply —
   // this is an owner create-time call, not a runtime agent.
-  ELEVATION_MODEL: z.string().min(1).default('deepseek-v3'),
+  ELEVATION_MODEL: z.string().min(1).default('deepseek-v4-flash'),
   // C-1 limits (07 S6, config-driven testnet defaults; revisit at first
   // external users / mainnet). Quota counts ALL created rows incl. revoked —
   // ops create-gas is the drained resource; revoking must not refill quota.
