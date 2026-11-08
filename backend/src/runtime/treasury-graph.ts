@@ -712,6 +712,9 @@ export function buildTreasuryGraph(
   /** AQ-FND S1: a deterministic "nothing to do" for autonomous cycles whose goal is already met. */
   function nothingToDo(state: State, mode: CycleMode): string | null {
     if (mode.mode !== 'autonomous') return null;
+    // A treasury that holds governed-call grants can still have something to do (a DeFi/bridge call) even
+    // when its top-up target is met, so only a grant-less agent is skipped.
+    if ((state.capabilities?.length ?? 0) > 0) return null;
     const g = ctx.goal;
     if (g.type === 'trader') {
       return state.holdings && BigInt(state.holdings.holdBalanceWei) >= BigInt(g.targetHoldWei)

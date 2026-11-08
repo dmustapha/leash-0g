@@ -196,6 +196,7 @@ async function seedAgentWithArb(): Promise<string> {
   homeChain.accountAddr = account;
   arbChain.accountAddr = account;
   arbChain.accountToken = 12_000_000n; // 12 USDC on Arb
+  homeChain.accountToken = 1_000_000_000n; // the account holds the GOAL token at home (S1: code only sends what the account holds)
   arbChain.balances.set(SESSION_ADDR.toLowerCase(), ARB_NATIVE);
   homeChain.balances.set(SESSION_ADDR.toLowerCase(), 0n); // ZERO native on the home chain
   const id = await seedAgent(db.pool, {
