@@ -2,7 +2,7 @@
 // Cockpit: live SSE stream, approvals, policy, status, and the always-visible revoke.
 'use client';
 
-import { formatAssetAmount } from '@/lib/asset';
+import { formatAssetAmount, type AssetUnit } from '@/lib/asset';
 import { use, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
@@ -804,6 +804,19 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
 
   // Beta step 3b: a token agent runs low on ITS token (vs its token budget window), never on native.
   const goalAsset = detail?.goalAsset ?? null;
+  // Beta step 3b: amounts the owner types for the agent's own token are in that token (not raw base units).
+  // Tokens we cannot name return null, which the form shows as an honest smallest-unit input.
+  const unitFor = useCallback(
+    (token: string): AssetUnit | null => {
+      const t = token.trim().toLowerCase();
+      if (goalAsset && goalAsset.decimals !== null && t === goalAsset.token.toLowerCase()) {
+        return { symbol: goalAsset.symbol, decimals: goalAsset.decimals };
+      }
+      const l = capabilities?.labels?.[t];
+      return l && l.decimals !== null ? { symbol: l.symbol, decimals: l.decimals } : null;
+    },
+    [goalAsset, capabilities],
+  );
   const lowBalance =
     detail !== null &&
     (goalAsset
@@ -930,6 +943,7 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
         >
           <CapabilityDecisionCard
             request={r}
+            unitFor={unitFor}
             accountAddr={detail?.addresses.account}
             onApproveOnce={(callHash) => jitApproveOnce(r.approvalId as string, callHash)}
             onAlwaysAllow={(rule) => jitAlwaysAllow(r.approvalId as string, rule)}
@@ -958,6 +972,7 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
           {detail && detail.status !== 'revoked' ? (
             <div id="capability-grant">
               <CapabilityGrant
+                unitFor={unitFor}
                 onResolvePreset={resolvePreset}
                 onGrantPresetRule={grantPresetRule}
                 onApplyCallRule={applyCallRule}
@@ -972,7 +987,7 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
           {detail && detail.status !== 'revoked' && accountVersionFor(detail) === 6 ? (
             <section aria-label="Owner envelope" className="card" id="owner-envelope" data-testid="owner-envelope" style={{ padding: '1rem 1.1rem', display: 'grid', gap: '0.8rem' }}>
               <h2 style={{ fontSize: '1rem', margin: 0 }}>Set what the agent may do on its own</h2>
-              <EnvelopeForm onProposeEnvelope={proposeEnvelope} onApplyEnvelope={applyEnvelope} onReadEnvelope={readEnvelopeForAsset} />
+              <EnvelopeForm unitFor={unitFor} onProposeEnvelope={proposeEnvelope} onApplyEnvelope={applyEnvelope} onReadEnvelope={readEnvelopeForAsset} />
               <VetoConfigForm onProposeVeto={proposeVeto} onApplyVeto={applyVeto} onReadVeto={readVetoCfg} />
             </section>
           ) : null}

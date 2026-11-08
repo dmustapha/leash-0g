@@ -14,6 +14,8 @@ import type { CallRule, CapabilityRequestRow, Hex } from '@/lib/types';
 import { shortAddr } from '@/lib/format';
 import { describeBridgeRequest, noveltyReason } from '@/lib/capabilities';
 import { Disclosure } from '@/components/ui/Disclosure';
+import { AmountField } from '@/components/ui/AmountField';
+import type { AssetUnit } from '@/lib/asset';
 
 type Busy = 'once' | 'always' | 'deny' | null;
 
@@ -23,8 +25,12 @@ export function CapabilityDecisionCard({
   onApproveOnce,
   onAlwaysAllow,
   onDeny,
+  unitFor,
 }: {
   request: CapabilityRequestRow;
+  /** decimals/symbol of the token the call moves (looked up by the call's target), so the standing
+   *  limits are typed in that token, not raw base units. Unknown ⇒ base-units fallback. */
+  unitFor?: (token: string) => AssetUnit | null;
   /** The agent's own account address (same CREATE2 address on every chain) —
    *  lets bridge copy say "to your same-address account" when the recipient matches. */
   accountAddr?: string;
@@ -157,28 +163,8 @@ export function CapabilityDecisionCard({
             limits it can spend per call and per window, then confirm. Because it loosens the leash,
             it waits a short safety delay on-chain before taking effect.
           </p>
-          <label className="label" htmlFor={`cap-${request.id}`}>Per-call limit (base units)</label>
-          <input
-            id={`cap-${request.id}`}
-            className="field"
-            data-testid="jit-per-call"
-            inputMode="numeric"
-            value={perCallCap}
-            onChange={(e) => setPerCallCap(e.target.value)}
-            placeholder="e.g. 100000000"
-            disabled={busy !== null}
-          />
-          <label className="label" htmlFor={`win-${request.id}`}>Window limit (base units)</label>
-          <input
-            id={`win-${request.id}`}
-            className="field"
-            data-testid="jit-window-cap"
-            inputMode="numeric"
-            value={windowCapCall}
-            onChange={(e) => setWindowCapCall(e.target.value)}
-            placeholder="e.g. 500000000"
-            disabled={busy !== null}
-          />
+          <AmountField id={`cap-${request.id}`} testId="jit-per-call" label="Per-call limit" unit={unitFor?.(d.target) ?? null} value={perCallCap} onChange={setPerCallCap} placeholder="e.g. 100000000" disabled={busy !== null} />
+          <AmountField id={`win-${request.id}`} testId="jit-window-cap" label="Window limit" unit={unitFor?.(d.target) ?? null} value={windowCapCall} onChange={setWindowCapCall} placeholder="e.g. 500000000" disabled={busy !== null} />
           <div style={{ display: 'flex', gap: '0.6rem' }}>
             <button
               type="button"

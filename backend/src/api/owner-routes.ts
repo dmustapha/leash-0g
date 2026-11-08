@@ -57,7 +57,9 @@ import {
   setGrantStatus,
   getCapabilityRequest,
 } from '../store/capabilities.js';
-import { presetKeys, type CallRule, type PresetKey, type TargetCatalog } from '../governed-call/index.js';
+import { decodeCall, presetKeys, type CallRule, type PresetKey, type TargetCatalog } from '../governed-call/index.js';
+import { describeDecodedCall, type CallLabeler } from '../asset/describe-call.js';
+import { makeCallLabeler } from '../asset/labeler.js';
 import {
   decideToolRequest,
   recordToolPresetGrants,
@@ -159,6 +161,8 @@ export interface OwnerChainRegistry {
     gasSwap?: { wrappedNative: string } | undefined;
     /** AQ-FND Lane-B: the chain's default mint version (6 where the V6 set is wired). */
     accountVersion?: number;
+    /** The Circle TokenMessenger on this chain (named "the Circle bridge" in owner copy). */
+    cctpTokenMessenger?: string | undefined;
   };
 }
 
@@ -328,6 +332,22 @@ const tokenConfigSchema = z.object({
  * called around OPS-WALLET sends (deploy/register/dust) — never around calls
  * whose revert strings user input could shape (e.g. token transfers).
  */
+/** Re-say a stored capability ask from its exact bytes in the asset's own words; keep the stored text on any miss. */
+async function reDescribeRequest<R extends { chainId?: number; decoded: unknown; callTarget: string | null; callValue: string | null; callData: string | null }>(
+  r: R,
+  chainId: number,
+  labeler: CallLabeler,
+): Promise<R> {
+  if (!r.callTarget || !r.callData) return r;
+  try {
+    const fresh = await describeDecodedCall(decodeCall(r.callTarget, BigInt(r.callValue ?? '0'), r.callData), chainId, labeler);
+    const d = (r.decoded ?? {}) as Record<string, unknown>;
+    return { ...r, decoded: { ...d, humanReadable: fresh } };
+  } catch {
+    return r;
+  }
+}
+
 /** The goal token's balance, meta and on-chain limits for the cockpit. A failed read degrades to null (the page falls back to native copy). */
 async function readGoalAssetView(
   chain: ChainOps,
@@ -1137,6 +1157,13 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
    * existing single-client wire; any other chain resolves through the registry
    * (default-deny beyond it) and FAILS LOUDLY when the registry is absent.
    */
+  /** chainForAgent, but null instead of throwing (labels are best-effort). */
+  function chainForAgentSafe(a: { chainId: number }): ChainOps | null {
+    try { return chainForAgent(a); } catch { return null; }
+  }
+  function chainConfigFor(chainId: number): { canonical?: { router?: string | undefined } | undefined; cctpTokenMessenger?: string | undefined } | null {
+    try { return deps.chainRegistry?.has(chainId) ? deps.chainRegistry.getChainConfig(chainId) : null; } catch { return null; }
+  }
   function chainForAgent(a: { chainId: number }): ChainOps {
     if (a.chainId === deps.settings.defaultChainId) return deps.chain;
     if (!deps.chainRegistry) {
@@ -2853,7 +2880,20 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       listAppliedPresets(deps.pool, agent.id),
       listRecentRequests(deps.pool, agent.id, 20),
     ]);
-    res.json({ grants, presets, recentRequests });
+    // Beta step 3b: name the addresses and re-say each ask in the token's own words AT READ TIME, so a
+    // request stored before the sentence existed (or by an older build) still reads "approve 1 USDC for
+    // the DEX router", never "approve 1000000 base-units on 0x036c…". Best-effort: any failure keeps the
+    // stored text (never blocks the page).
+    const labeler = makeCallLabeler(chainForAgentSafe(agent), chainConfigFor(agent.chainId));
+    const readable = await Promise.all(recentRequests.map((r) => reDescribeRequest(r, agent.chainId, labeler)));
+    const addrs = new Set<string>();
+    for (const g of grants) {
+      addrs.add(g.target.toLowerCase());
+      for (const sp of g.spenderSet) addrs.add(sp.toLowerCase());
+    }
+    const labels: Record<string, { name: string | null; symbol: string | null; decimals: number | null }> = {};
+    await Promise.all([...addrs].map(async (a) => { labels[a] = await labeler.nameFor(a).catch(() => ({ name: null, symbol: null, decimals: null })); }));
+    res.json({ grants, presets, recentRequests: readable, labels });
   }));
 
   // ── SF-3: governed tool-use grant surfaces (STAGE-F §4) ────────────────────

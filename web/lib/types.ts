@@ -708,6 +708,8 @@ export type CapabilityEnvelopeView = {
   grants: CapabilityGrantRow[];
   presets: AppliedPresetRow[];
   recentRequests: CapabilityRequestRow[];
+  /** Beta step 3b: owner words for the addresses in the grants (lowercased address → name/symbol/decimals). Absent on older backends. */
+  labels?: Record<string, { name: string | null; symbol: string | null; decimals: number | null }>;
 };
 
 export type CapabilityRuleAction = 'propose' | 'tighten' | 'remove' | 'apply';

@@ -32,6 +32,8 @@
   width: 100%; text-align: left; font-family: var(--font-sans);
 }
 .console-shell .navitem:hover { background: var(--hover-fill); color: var(--ink); }
+.console-shell .navitem[aria-disabled="true"] { opacity: .45; cursor: default; }
+.console-shell .navitem[aria-disabled="true"]:hover { background: transparent; color: inherit; }
 /* `aria-current="page"` (not the artifact's `"true"`): `page` is the correct token for a
    link that IS the current page — an a11y correctness fix over the static artifact. */
 .console-shell .navitem[aria-current="page"] {

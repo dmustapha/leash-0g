@@ -82,3 +82,122 @@ describe('StatusBar — token agent', () => {
     expect(screen.getByText(/0 ETH in account/)).toBeInTheDocument();
   });
 });
+
+import { parseAssetAmount } from '@/lib/asset';
+describe('parseAssetAmount', () => {
+  it('parses decimals exactly', () => {
+    expect(parseAssetAmount('1', 6)).toBe(1_000_000n);
+    expect(parseAssetAmount('1.5', 6)).toBe(1_500_000n);
+    expect(parseAssetAmount('0.000001', 6)).toBe(1n);
+    expect(parseAssetAmount('5', 18)).toBe(5n * 10n ** 18n);
+  });
+  it('rejects junk and over-precision rather than rounding', () => {
+    expect(parseAssetAmount('0.0000001', 6)).toBeNull();
+    expect(parseAssetAmount('-1', 6)).toBeNull();
+    expect(parseAssetAmount('1e3', 6)).toBeNull();
+    expect(parseAssetAmount('', 6)).toBeNull();
+    expect(parseAssetAmount('1.', 6)).toBeNull();
+  });
+});
+
+// ── Beta step 3b (display gaps): forms speak the token, permission rows are named ──────────────
+import userEvent from '@testing-library/user-event';
+import { CapabilityGrant } from '@/components/cockpit/CapabilityGrant';
+import { CapabilityEnvelope } from '@/components/cockpit/CapabilityEnvelope';
+import type { CapabilityEnvelopeView } from '@/lib/types';
+
+const NOVL = { symbol: 'NOVL', decimals: 18 };
+const noopGrant = {
+  onResolvePreset: vi.fn(),
+  onGrantPresetRule: vi.fn(),
+  onApplyCallRule: vi.fn(),
+  onRecordPreset: vi.fn(),
+  onCustomRule: vi.fn(),
+};
+
+describe('amount fields speak the token', () => {
+  it('a known token takes "5" and sends exact base units', async () => {
+    const propose = vi.fn().mockResolvedValue(undefined);
+    render(
+      <CapabilityGrant {...noopGrant} onProposeBudget={propose} onApplyBudget={vi.fn()} unitFor={(t) => (t.toLowerCase() === TOKEN ? NOVL : null)} />,
+    );
+    const u = userEvent.setup();
+    await u.type(screen.getByTestId('budget-token'), TOKEN);
+    expect(screen.getByText('Budget (NOVL)')).toBeInTheDocument();
+    await u.type(screen.getByTestId('budget-cap'), '5');
+    await u.click(screen.getByTestId('budget-propose'));
+    expect(propose).toHaveBeenCalledWith(TOKEN, (5n * 10n ** 18n).toString());
+    expect(screen.queryByText(/base units/i)).toBeNull();
+  });
+
+  it('a token we cannot name falls back to an honest smallest-unit input', async () => {
+    render(<CapabilityGrant {...noopGrant} onProposeBudget={vi.fn()} onApplyBudget={vi.fn()} unitFor={() => null} />);
+    expect(screen.getByText('Budget (smallest unit of the token)')).toBeInTheDocument();
+    expect(screen.getAllByText(/could not read this token/i).length).toBeGreaterThan(0);
+  });
+
+  it('over-precise input is flagged, not rounded', async () => {
+    render(<CapabilityGrant {...noopGrant} onProposeBudget={vi.fn()} onApplyBudget={vi.fn()} unitFor={() => ({ symbol: 'USDC', decimals: 6 })} />);
+    await userEvent.setup().type(screen.getByTestId('budget-cap'), '0.0000001');
+    expect(screen.getByRole('alert')).toHaveTextContent(/at most 6 decimals/);
+    expect(screen.getByTestId('budget-cap')).toHaveValue('0.0000001'); // typing "0." never wiped the text
+  });
+});
+
+describe('standing permissions are named', () => {
+  const env: CapabilityEnvelopeView = {
+    grants: [
+      {
+        id: 'g-9', agentId: 'a', ownerAddr: '0x3333333333333333333333333333333333333333',
+        target: TOKEN, selector: '0x095ea7b3', recipientMode: 'self',
+        spenderSet: ['0x94cc0000000000000000000000000000000c2bc4'],
+        perCallCap: '1000000000000000000', windowCapCall: '5000000000000000000',
+        codehash: null, source: 'preset', status: 'active', txHash: null,
+        createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+      },
+    ],
+    presets: [],
+    recentRequests: [],
+    labels: {
+      [TOKEN]: { name: 'NOVL token', symbol: 'NOVL', decimals: 18 },
+      '0x94cc0000000000000000000000000000000c2bc4': { name: 'the DEX router', symbol: null, decimals: null },
+    },
+  };
+  it('shows the contract by name and its cap in the token unit, never a bare address or raw wei', () => {
+    render(<CapabilityEnvelope envelope={env} />);
+    const row = screen.getByTestId('grant-g-9');
+    expect(row).toHaveTextContent('NOVL token');
+    expect(row).toHaveTextContent('up to 1 NOVL per call');
+    expect(row).toHaveTextContent('the DEX router');
+    expect(row.textContent).not.toMatch(/1000000000000000000/);
+  });
+  it('without labels (older backend) it still renders the short address', () => {
+    const { labels: _l, ...bare } = env;
+    void _l;
+    render(<CapabilityEnvelope envelope={bare} />);
+    expect(screen.getByTestId('grant-g-9')).toHaveTextContent('0x5857');
+  });
+});
+
+// ── S-4 / S-6 ───────────────────────────────────────────────────────────────────────────────────
+import { GasRoutePlan } from '@/components/cockpit/GasRoutePlan';
+import type { GasSurveyView } from '@/lib/types';
+
+describe('S-4: the gas panel does not contradict itself', () => {
+  const survey = (mode: string, sessionNativeWei: string) =>
+    ({
+      homeChainId: 84532,
+      chains: [{ chainId: 84532, name: 'Base Sepolia', status: 'ok', sessionNativeWei, accountNativeWei: '0', spendableTokens: [{ token: '0x1', balance: '1' }, { token: '0x2', balance: '1' }] }],
+      route: { mode, legs: [], ask: null },
+    }) as unknown as GasSurveyView;
+  it('a non-zero balance the plan calls insufficient reads "running low", not "has gas"', () => {
+    render(<GasRoutePlan survey={survey('ask-owner', '1000')} />);
+    const row = screen.getByTestId('gas-chain-84532');
+    expect(row).toHaveTextContent('gas is running low');
+    expect(row).not.toHaveTextContent('has gas');
+  });
+  it('when the plan says it can act now, "has gas" stands', () => {
+    render(<GasRoutePlan survey={survey('has-native', '1000')} />);
+    expect(screen.getByTestId('gas-chain-84532')).toHaveTextContent('has gas');
+  });
+});

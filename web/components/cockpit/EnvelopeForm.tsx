@@ -11,6 +11,8 @@ import { useState } from 'react';
 import type { Address } from 'viem';
 import { Disclosure } from '@/components/ui/Disclosure';
 import { shortAddr } from '@/lib/format';
+import { AmountField } from '@/components/ui/AmountField';
+import { formatAssetAmount, type AssetUnit } from '@/lib/asset';
 
 type Phase = 'propose' | 'apply';
 const ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
@@ -24,13 +26,18 @@ export function EnvelopeForm({
   onProposeEnvelope,
   onApplyEnvelope,
   onReadEnvelope,
+  unitFor,
 }: {
+  /** decimals/symbol of the token the owner names, so the ceilings are typed and shown in that token. */
+  unitFor?: (token: string) => AssetUnit | null;
   onProposeEnvelope: (f: EnvelopeFields) => Promise<void>;
   onApplyEnvelope: (f: EnvelopeFields) => Promise<void>;
   /** Live on-chain read for the entered asset (null when unset / not yet read). */
   onReadEnvelope: (asset: string) => Promise<EnvelopeCurrent | null>;
 }) {
   const [asset, setAsset] = useState('');
+  const envUnit = (): AssetUnit | null => unitFor?.(asset.trim()) ?? null;
+  const envShow = (v: bigint): string => { const u = envUnit(); return u ? formatAssetAmount(v, u.decimals, u.symbol) : `${v.toString()} (smallest units)`; };
   const [maxPer, setMaxPer] = useState('');
   const [maxWindow, setMaxWindow] = useState('');
   const [minWindowSeconds, setMinWindowSeconds] = useState('86400');
@@ -101,19 +108,17 @@ export function EnvelopeForm({
       <label className="label" htmlFor="env-asset">Token</label>
       <input id="env-asset" className="field" data-testid="env-asset" value={asset} onChange={(e) => setAsset(e.target.value)} onBlur={() => void refresh()} placeholder="0x…" disabled={busy || phase === 'apply'} />
 
-      <label className="label" htmlFor="env-max-per">Max per transfer (base units)</label>
-      <input id="env-max-per" className="field" data-testid="env-max-per" inputMode="numeric" value={maxPer} onChange={(e) => setMaxPer(e.target.value)} placeholder="10000000000000000000" disabled={busy || phase === 'apply'} />
+      <AmountField id="env-max-per" testId="env-max-per" label="Max per transfer" unit={unitFor?.(asset.trim()) ?? null} value={maxPer} onChange={setMaxPer} placeholder="10000000000000000000" disabled={busy || phase === 'apply'} />
 
-      <label className="label" htmlFor="env-max-window">Max per window (base units)</label>
-      <input id="env-max-window" className="field" data-testid="env-max-window" inputMode="numeric" value={maxWindow} onChange={(e) => setMaxWindow(e.target.value)} placeholder="50000000000000000000" disabled={busy || phase === 'apply'} />
+      <AmountField id="env-max-window" testId="env-max-window" label="Max per window" unit={unitFor?.(asset.trim()) ?? null} value={maxWindow} onChange={setMaxWindow} placeholder="50000000000000000000" disabled={busy || phase === 'apply'} />
 
       <label className="label" htmlFor="env-min-window">Shortest window the agent may set (seconds)</label>
       <input id="env-min-window" className="field" data-testid="env-min-window" inputMode="numeric" value={minWindowSeconds} onChange={(e) => setMinWindowSeconds(e.target.value)} placeholder="86400" disabled={busy || phase === 'apply'} />
 
       {current?.set ? (
         <p style={{ margin: 0, fontSize: '0.82rem', color: 'var(--ink-dim)' }} data-testid="env-current">
-          Live envelope for {shortAddr(asset.trim() as Address)}: ≤ {current.maxPerTransferCap.toString()} per transfer,
-          ≤ {current.maxWindowCap.toString()} per window, window ≥ {current.minWindowSeconds}s.
+          Live envelope for {shortAddr(asset.trim() as Address)}: ≤ {envShow(current.maxPerTransferCap)} per transfer,
+          ≤ {envShow(current.maxWindowCap)} per window, window ≥ {current.minWindowSeconds}s.
         </p>
       ) : null}
 

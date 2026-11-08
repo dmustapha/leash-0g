@@ -10,6 +10,7 @@ import type { CapabilityEnvelopeView, CapabilityGrantRow, CapabilityRequestRow }
 import { shortAddr } from '@/lib/format';
 import { noveltyReason, PRESET_CATALOG, recipientModeLabel } from '@/lib/capabilities';
 import { Disclosure } from '@/components/ui/Disclosure';
+import { formatAssetAmount } from '@/lib/asset';
 
 const STATUS_COPY: Record<string, string> = {
   proposed: 'waiting for the safety delay',
@@ -60,6 +61,7 @@ export function CapabilityEnvelope({
   onApplyGrant?: (grant: CapabilityGrantRow) => Promise<void>;
 }) {
   const { grants, presets, recentRequests } = envelope;
+  const labels = envelope.labels ?? {};
   const activeGrants = grants.filter((g) => g.status !== 'removed');
   const isEmpty = activeGrants.length === 0 && presets.length === 0;
 
@@ -97,7 +99,7 @@ export function CapabilityEnvelope({
               <h3 className="label" style={{ margin: 0 }}>Standing permissions</h3>
               {/* tools.html .tool-list of .tool rows — one per real grant, lane-chip = its lane. */}
               <div className="tool-list">
-                {activeGrants.map((g) => <GrantRow key={g.id} grant={g} {...(onApplyGrant ? { onApply: onApplyGrant } : {})} />)}
+                {activeGrants.map((g) => <GrantRow key={g.id} grant={g} labels={labels} {...(onApplyGrant ? { onApply: onApplyGrant } : {})} />)}
               </div>
             </div>
           ) : null}
@@ -130,7 +132,13 @@ export function CapabilityEnvelope({
   );
 }
 
-function GrantRow({ grant, onApply }: { grant: CapabilityGrantRow; onApply?: (g: CapabilityGrantRow) => Promise<void> }) {
+type Labels = NonNullable<CapabilityEnvelopeView['labels']>;
+
+function GrantRow({ grant, onApply, labels }: { grant: CapabilityGrantRow; onApply?: (g: CapabilityGrantRow) => Promise<void>; labels: Labels }) {
+  const nameOf = (a: string): string => labels[a.toLowerCase()]?.name ?? shortAddr(a);
+  // A rule on an ERC-20 limits amounts of THAT token: say them in its unit. Anything else stays raw.
+  const tok = labels[grant.target.toLowerCase()];
+  const cap = (v: string): string => (tok?.decimals != null ? formatAssetAmount(v, tok.decimals, tok.symbol) : v);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -150,20 +158,22 @@ function GrantRow({ grant, onApply }: { grant: CapabilityGrantRow; onApply?: (g:
   return (
     <div className="tool" data-testid={`grant-${grant.id}`}>
       <div className="trow1">
-        <span className="tid">{shortAddr(grant.target)}</span>
+        <span className="tid" title={grant.target}>{nameOf(grant.target)}</span>
         <LaneChip status={grant.status} />
         <span className="tgrow" />
         <span className="badge">{STATUS_COPY[grant.status] ?? grant.status}</span>
       </div>
-      <div className="tdesc">Can call this contract — paying {recipientModeLabel(grant.recipientMode)}.</div>
+      <div className="tdesc">
+        Can call {tok?.name ?? 'this contract'} — paying {recipientModeLabel(grant.recipientMode)}, up to {cap(grant.perCallCap)} per call.
+      </div>
       <Disclosure label="Show the exact rule">
         <dl style={{ margin: 0, display: 'grid', gap: '0.2rem' }}>
           <div>target: <span className="code">{grant.target}</span></div>
           <div>selector: <span className="code">{grant.selector}</span></div>
-          <div>per-call cap: <span className="code">{grant.perCallCap}</span></div>
-          <div>window cap: <span className="code">{grant.windowCapCall}</span></div>
+          <div>per-call cap: <span className="code">{cap(grant.perCallCap)}</span></div>
+          <div>window cap: <span className="code">{cap(grant.windowCapCall)}</span></div>
           {grant.spenderSet.length > 0 ? (
-            <div>spenders: <span className="code">{grant.spenderSet.map(shortAddr).join(', ')}</span></div>
+            <div>spenders: <span className="code">{grant.spenderSet.map(nameOf).join(', ')}</span></div>
           ) : null}
           <div>source: {grant.source}</div>
         </dl>

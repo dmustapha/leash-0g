@@ -7,9 +7,14 @@
 import type { GasSurveyChain, GasSurveyRoute, GasSurveyView } from '@/lib/types';
 import { Disclosure } from '@/components/ui/Disclosure';
 
-function holdings(chain: GasSurveyChain): string {
+function holdings(chain: GasSurveyChain, planNeedsGas: boolean): string {
   if (chain.status === 'unknown') return "couldn't read this network";
-  const gas = chain.sessionNativeWei !== '0' ? 'has gas' : chain.accountNativeWei !== '0' ? 'gas sits in the account' : 'no gas';
+  // On the network the plan is FOR, a non-zero balance that the plan still calls insufficient is "low",
+  // not "has gas" (S-4: "has gas" beside "no way to pay for gas itself" read as a contradiction).
+  const gas =
+    chain.sessionNativeWei !== '0'
+      ? planNeedsGas ? 'gas is running low' : 'has gas'
+      : chain.accountNativeWei !== '0' ? 'gas sits in the account' : 'no gas';
   const n = chain.spendableTokens.length;
   const tokens = n === 0 ? 'no spendable tokens' : n === 1 ? '1 spendable token' : `${n} spendable tokens`;
   return `${gas} · ${tokens}`;
@@ -46,7 +51,7 @@ export function GasRoutePlan({ survey }: { survey: GasSurveyView | null }) {
         {survey.chains.map((c) => (
           <div key={c.chainId} data-testid={`gas-chain-${c.chainId}`} style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', fontSize: '0.86rem' }}>
             <strong>{c.name}</strong>
-            <span style={{ color: c.status === 'unknown' ? 'var(--color-deny)' : 'var(--color-ink-dim)' }}>{holdings(c)}</span>
+            <span style={{ color: c.status === 'unknown' ? 'var(--color-deny)' : 'var(--color-ink-dim)' }}>{holdings(c, c.chainId === survey.homeChainId && survey.route.mode !== 'has-native')}</span>
           </div>
         ))}
       </div>

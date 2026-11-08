@@ -18,6 +18,8 @@ import type { CallRule, CapabilityRuleAction, PresetKey, RecipientMode, Resolved
 import { PRESET_CATALOG, recipientModeLabel } from '@/lib/capabilities';
 import { shortAddr } from '@/lib/format';
 import { Disclosure } from '@/components/ui/Disclosure';
+import { AmountField } from '@/components/ui/AmountField';
+import type { AssetUnit } from '@/lib/asset';
 
 type Phase = 'propose' | 'apply';
 
@@ -32,7 +34,11 @@ export function CapabilityGrant({
   onProposeAssetPayee,
   onApplyAssetPayee,
   defaultPayee,
+  unitFor,
 }: {
+  /** The decimals/symbol of a token the owner names (the agent's goal token), so amounts are typed in
+   *  the token's own unit instead of raw base units. null/undefined = unknown ⇒ base-units fallback. */
+  unitFor?: (token: string) => AssetUnit | null;
   /** FR3 (F-8b): owner signs the budget propose (version-aware in chain.ts) — timelocked. */
   onProposeBudget?: (token: string, windowCap: string) => Promise<void>;
   /** FR3 (F-8b): owner signs the budget apply once the pending eta passed. V6 re-submits the
@@ -69,9 +75,9 @@ export function CapabilityGrant({
         onApplyCallRule={onApplyCallRule}
         onRecordPreset={onRecordPreset}
       />
-      <CustomRuleForm onCustomRule={onCustomRule} />
+      <CustomRuleForm onCustomRule={onCustomRule} {...(unitFor ? { unitFor } : {})} />
       {onProposeBudget && onApplyBudget ? (
-        <SpendBudgetForm onProposeBudget={onProposeBudget} onApplyBudget={onApplyBudget} />
+        <SpendBudgetForm onProposeBudget={onProposeBudget} onApplyBudget={onApplyBudget} {...(unitFor ? { unitFor } : {})} />
       ) : null}
       {onProposeAssetPayee && onApplyAssetPayee ? (
         <AssetPayeeForm onPropose={onProposeAssetPayee} onApply={onApplyAssetPayee} defaultPayee={defaultPayee ?? ''} />
@@ -88,9 +94,11 @@ export function CapabilityGrant({
 function SpendBudgetForm({
   onProposeBudget,
   onApplyBudget,
+  unitFor,
 }: {
   onProposeBudget: (token: string, windowCap: string) => Promise<void>;
   onApplyBudget: (token: string, windowCap: string) => Promise<void>;
+  unitFor?: (token: string) => AssetUnit | null;
 }) {
   const [token, setToken] = useState('');
   const [windowCap, setWindowCap] = useState('');
@@ -101,7 +109,7 @@ function SpendBudgetForm({
   async function propose(e: React.FormEvent) {
     e.preventDefault();
     if (!ADDR_RE.test(token.trim())) return setError('Enter a valid token address (0x…, 40 hex).');
-    if (!/^\d+$/.test(windowCap.trim())) return setError('Enter the budget as a whole base-unit number.');
+    if (!/^\d+$/.test(windowCap.trim())) return setError('Enter the budget as an amount.');
     setBusy(true);
     setError(null);
     try {
@@ -138,8 +146,7 @@ function SpendBudgetForm({
       </p>
       <label className="label" htmlFor="budget-token">Token</label>
       <input id="budget-token" className="field" data-testid="budget-token" value={token} onChange={(e) => setToken(e.target.value)} placeholder="0x…" disabled={busy || phase === 'apply'} />
-      <label className="label" htmlFor="budget-cap">Budget (base units)</label>
-      <input id="budget-cap" className="field" data-testid="budget-cap" inputMode="numeric" value={windowCap} onChange={(e) => setWindowCap(e.target.value)} placeholder="5000000000000000000000" disabled={busy || phase === 'apply'} />
+      <AmountField id="budget-cap" testId="budget-cap" label="Budget" unit={unitFor?.(token.trim()) ?? null} value={windowCap} onChange={setWindowCap} placeholder="5000000000000000000000" disabled={busy || phase === 'apply'} />
       {error ? <p role="alert" style={{ color: 'var(--deny)', fontSize: '0.84rem', margin: 0 }}>{error}</p> : null}
       {phase === 'propose' ? (
         <div>
@@ -394,7 +401,7 @@ function PresetPicker({
 const SELECTOR_RE = /^0x[0-9a-fA-F]{8}$/;
 const ADDR_RE = /^0x[0-9a-fA-F]{40}$/;
 
-function CustomRuleForm({ onCustomRule }: { onCustomRule: (action: CapabilityRuleAction, rule: CallRule) => Promise<void> }) {
+function CustomRuleForm({ onCustomRule, unitFor }: { onCustomRule: (action: CapabilityRuleAction, rule: CallRule) => Promise<void>; unitFor?: (token: string) => AssetUnit | null }) {
   const [target, setTarget] = useState('');
   const [selector, setSelector] = useState('');
   const [perCall, setPerCall] = useState('');
@@ -465,11 +472,9 @@ function CustomRuleForm({ onCustomRule }: { onCustomRule: (action: CapabilityRul
 
       {action !== 'remove' ? (
         <>
-          <label className="label" htmlFor="custom-per-call">Per-call limit (base units)</label>
-          <input id="custom-per-call" className="field" data-testid="custom-per-call" inputMode="numeric" value={perCall} onChange={(e) => setPerCall(e.target.value)} placeholder="100000000" disabled={busy} />
+          <AmountField id="custom-per-call" testId="custom-per-call" label="Per-call limit" unit={unitFor?.(target.trim()) ?? null} value={perCall} onChange={setPerCall} placeholder="100000000" disabled={busy} />
 
-          <label className="label" htmlFor="custom-window-cap">Window limit (base units)</label>
-          <input id="custom-window-cap" className="field" data-testid="custom-window-cap" inputMode="numeric" value={windowCap} onChange={(e) => setWindowCap(e.target.value)} placeholder="500000000" disabled={busy} />
+          <AmountField id="custom-window-cap" testId="custom-window-cap" label="Window limit" unit={unitFor?.(target.trim()) ?? null} value={windowCap} onChange={setWindowCap} placeholder="500000000" disabled={busy} />
 
           <label className="label" htmlFor="custom-mode">Who can it pay?</label>
           <select id="custom-mode" className="field" data-testid="custom-mode" value={mode} onChange={(e) => setMode(e.target.value as RecipientMode)} disabled={busy}>

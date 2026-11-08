@@ -63,3 +63,18 @@ export function agentMoney(d: AgentDigest | undefined, fallbackBalanceWei: strin
     balanceWei: BigInt(balanceWei),
   };
 }
+
+/** An asset the owner can type an amount in (decimals known). */
+export type AssetUnit = { symbol: string | null; decimals: number };
+
+/**
+ * "1.5" -> 1500000n for 6 decimals. Exact bigint math; null for anything that is not a plain
+ * non-negative decimal or that has more fractional digits than the token can represent (never rounds).
+ */
+export function parseAssetAmount(text: string, decimals: number): bigint | null {
+  const t = text.trim();
+  if (!/^\d+(\.\d+)?$/.test(t)) return null;
+  const [whole = '0', frac = ''] = t.split('.');
+  if (frac.length > decimals) return null;
+  return BigInt(whole) * 10n ** BigInt(decimals) + BigInt(frac.padEnd(decimals, '0') || '0');
+}

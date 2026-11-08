@@ -39,6 +39,8 @@ type Item = {
   href: string;
   icon: React.ReactNode;
   badge?: boolean;
+  /** Needs a chosen agent; with none it is shown but inert (S-6: it used to link back to Fleet, same as another item). */
+  needsAgent?: boolean;
   match: (p: string) => boolean;
 };
 
@@ -115,7 +117,7 @@ function buildGroups(agentId: string | null): { name: string; items: Item[] }[] 
     {
       name: 'Operate',
       items: [
-        { key: 'cockpit', label: 'Cockpit', title: 'Cockpit', sub: 'one agent, live', href: cockpitHref, icon: I.cockpit, match: (p) => onAgents(p) && !p.endsWith('/audit') },
+        { key: 'cockpit', label: 'Cockpit', title: 'Cockpit', sub: 'one agent, live', href: cockpitHref, needsAgent: !agentId, icon: I.cockpit, match: (p) => onAgents(p) && !p.endsWith('/audit') },
         { key: 'jobs', label: 'Jobs', title: 'Jobs', sub: 'delegated work', href: '/jobs', icon: I.jobs, match: (p) => p.startsWith('/jobs') },
         { key: 'links', label: 'Links', title: 'Links', sub: 'agent-to-agent channels', href: '/links', icon: I.links, match: (p) => p.startsWith('/links') },
         { key: 'create', label: 'Create', title: 'Create agent', sub: 'bind a new leash', href: '/create', icon: I.create, match: (p) => p === '/create' },
@@ -124,7 +126,7 @@ function buildGroups(agentId: string | null): { name: string; items: Item[] }[] 
     {
       name: 'Trust',
       items: [
-        { key: 'audit', label: 'Audit', title: 'Audit', sub: 'the hash-chained record', href: auditHref, icon: I.audit, match: (p) => onAgents(p) && p.endsWith('/audit') },
+        { key: 'audit', label: 'Audit', title: 'Audit', sub: 'the hash-chained record', href: auditHref, needsAgent: !agentId, icon: I.audit, match: (p) => onAgents(p) && p.endsWith('/audit') },
         { key: 'alerts', label: 'Alerts', title: 'Alerts', sub: 'delivery preferences', href: '/settings/alerts', icon: I.alerts, match: (p) => p.startsWith('/settings/alerts') },
       ],
     },
@@ -164,6 +166,14 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               <p className="nav-group">{group.name}</p>
               {group.items.map((it) => {
                 const current = it.match(path);
+                if (it.needsAgent) {
+                  return (
+                    <span key={it.key} className="navitem" aria-disabled="true" title="Open an agent from Fleet first">
+                      {it.icon}
+                      <span>{it.label}</span>
+                    </span>
+                  );
+                }
                 return (
                   <Link
                     key={it.key}

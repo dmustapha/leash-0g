@@ -285,3 +285,38 @@ describe('POST /api/approvals/:id — capability (JIT) decision branch', () => {
     expect(res.body.approval.state).toBe('denied');
   });
 });
+
+describe('GET /api/agents/:id/capabilities — owner words (beta step 3b)', () => {
+  it('re-says a request stored in raw terms in the token words, and names the grant addresses', async () => {
+    const a = await seedOwned();
+    // A request raised WITHOUT a describer = what an older build stored: raw base-units text.
+    const gate = classifyIntendedCall(TOKEN, 0n, encApprove(ROUTER, 1_000_000n), emptyGrant(), SELF);
+    const { request: req } = await raiseCapabilityRequest(capDeps(), a, gate);
+    expect((req.decoded as { humanReadable: string }).humanReadable).toContain('base-units');
+    const chain = t.chain as unknown as { getErc20Meta: () => Promise<{ symbol: string; decimals: number }> };
+    chain.getErc20Meta = async () => ({ symbol: 'USDC', decimals: 6 });
+    await request(t.app)
+      .post(`/api/agents/${a.id}/capabilities/rule`)
+      .set('authorization', ownerAuth(OWNER))
+      .send({ action: 'propose', txHash: TX_PROPOSE, rule: customRule });
+
+    const res = await request(t.app).get(`/api/agents/${a.id}/capabilities`).set('authorization', ownerAuth(OWNER));
+    expect(res.status).toBe(200);
+    const row = res.body.recentRequests.find((r: { id: string }) => r.id === req.id);
+    expect(row.decoded.humanReadable).toContain('1 USDC');
+    expect(row.decoded.humanReadable).not.toContain('base-units');
+    expect(res.body.labels[TOKEN]).toEqual({ name: 'USDC token', symbol: 'USDC', decimals: 6 });
+  });
+
+  it('an unreadable token keeps the stored text and null labels (never blocks the page)', async () => {
+    const a = await seedOwned();
+    const gate = classifyIntendedCall(TOKEN, 0n, encApprove(ROUTER, 7n), emptyGrant(), SELF);
+    const { request: req } = await raiseCapabilityRequest(capDeps(), a, gate);
+    const chain = t.chain as unknown as { getErc20Meta: () => Promise<never> };
+    chain.getErc20Meta = async () => { throw new Error('rpc down'); };
+    const res = await request(t.app).get(`/api/agents/${a.id}/capabilities`).set('authorization', ownerAuth(OWNER));
+    expect(res.status).toBe(200);
+    const row = res.body.recentRequests.find((r: { id: string }) => r.id === req.id);
+    expect(row.decoded.humanReadable).toContain('7');
+  });
+});
