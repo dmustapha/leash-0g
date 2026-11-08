@@ -37,6 +37,7 @@ import { TelegramBot } from './telegram/bot.js';
 import { FetchTelegramApi } from './telegram/api.js';
 import { DigestService } from './digest/service.js';
 import { getAgentById } from './store/agents.js';
+import { decryptSecret } from './crypto/keycrypt.js';
 
 /** Composition root: wire every module, migrate, listen, run the loops. */
 async function main(): Promise<void> {
@@ -141,7 +142,24 @@ async function main(): Promise<void> {
     guardianPrivateKey: cfg.GUARDIAN_PRIVATE_KEY,
   });
   // AQ-FND S1: every session-key write is recorded in the intent ledger BEFORE it is broadcast.
-  chainRegistry.useIntentLedger(pool);
+  // (the lane re-signs a stuck tx with the agent's own session key, and asks a human when it must not guess)
+  chainRegistry.useIntentLedger(pool, {
+    getSessionKey: async (agentId) => {
+      const a = await getAgentById(pool, agentId);
+      return a?.sessionKeyEnc ? decryptSecret(a.sessionKeyEnc, keyring) : null;
+    },
+    onNeedsReview: async (info) => {
+      const a = await getAgentById(pool, info.agentId);
+      if (!a) return;
+      await alerts.emit(a.ownerAddr, {
+        agentId: info.agentId,
+        class: 'info',
+        kind: 'runtime_error',
+        summary: `${a.name} stopped sending: one of its transactions could not be resolved automatically (${info.reason}). LEASH will not send again from this agent until it is reviewed, so nothing can be paid twice.`,
+        dedupKey: `intent_review:${info.intentId}`,
+      });
+    },
+  });
   const defaultChainId = cfg.ZERO_G_CHAIN_ID;
   const chain = chainRegistry.getChainOps(defaultChainId);
   phase(`chain registry built (${chainConfigs.length} chains: ${chainConfigs.map((c) => c.chainId).join(',')})`);

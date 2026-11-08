@@ -37,7 +37,8 @@ class FakeChain implements LaneTransport {
     if (this.estimateError) throw this.estimateError;
     return { gas: 100_000n };
   }
-  async feeData() { return { maxFeePerGas: 2_000_000_000n, maxPriorityFeePerGas: 1_000_000_000n }; }
+  feeNow = 2_000_000_000n;
+  async feeData() { return { maxFeePerGas: this.feeNow, maxPriorityFeePerGas: this.feeNow / 2n }; }
   async sendRaw(raw: Hex): Promise<Hex> {
     if (this.sendThrowsBeforeAccept) { this.sendThrowsBeforeAccept = false; throw new Error('connection reset (crash before broadcast)'); }
     const hash = keccak256(raw);
@@ -46,6 +47,15 @@ class FakeChain implements LaneTransport {
     const from = (await recoverTransactionAddress({ serializedTransaction: raw as never })).toLowerCase();
     const nonce = BigInt(parsed.nonce ?? 0);
     if (nonce < this.nonceOf(from)) throw new Error('nonce too low');
+    // same-nonce replacement needs a >= 10% fee bump (real node behaviour)
+    for (const [h, t] of this.mempool) {
+      if (t.from === from && t.nonce === nonce && h !== hash) {
+        const oldFee = BigInt(parseTransaction(t.raw).maxFeePerGas ?? 0n);
+        const newFee = BigInt(parsed.maxFeePerGas ?? 0n);
+        if (newFee * 100n < oldFee * 110n) throw new Error('replacement transaction underpriced');
+        this.mempool.delete(h);
+      }
+    }
     this.mempool.set(hash, { from, nonce, raw });
     this.sent.push(raw);
     if (this.autoMine) this.mine(hash);
@@ -248,5 +258,62 @@ describe('SendLane — write-ahead, idempotent, single-lane', () => {
     chain.mine(hash);
     await lane.reconcile();
     expect((await lane.getInFlight(a)).count).toBe(0);
+  });
+
+  describe('stuck tx: replace at the SAME nonce with a higher fee (never a new nonce)', () => {
+    const bumpLane = () => new SendLane({ pool: db.pool, transport: chain, confirmTimeoutMs: 30, pollMs: 5, rebroadcastAfterMs: 0, receiptGraceMs: 60_000, maxRebroadcasts: 1, bumpAfterMs: 0, getSessionKey: async () => KEY });
+
+    it('after the rebroadcast budget, a fee-bumped replacement goes out at the same nonce and one tx lands', async () => {
+      const a = agent();
+      const bl = bumpLane();
+      chain.autoMine = false;
+      await bl.send(req(a, 'b1')).catch(() => undefined);
+      const first = (await rows(a))[0];
+      await bl.reconcile(); // rebroadcast #1 (same bytes)
+      chain.feeNow = 5_000_000_000n; // the market moved: the old fee is now too cheap
+      await bl.reconcile(); // budget spent -> bump
+      const row = (await rows(a))[0];
+      expect(row.tx_hash).not.toBe(first.tx_hash);
+      expect(BigInt(row.nonce)).toBe(BigInt(first.nonce)); // same nonce
+      expect(row.prev_hashes).toContain(first.tx_hash);
+      expect(chain.mempool.size).toBe(1); // the old one was REPLACED, not duplicated
+      chain.mine(row.tx_hash as Hex);
+      await bl.reconcile();
+      expect((await rows(a))[0].status).toBe('mined');
+      expect(chain.mined.size).toBe(1);
+    });
+
+    it('if the OLD hash mines after a bump, that receipt is still recognised (no false needs_review)', async () => {
+      const a = agent();
+      const bl = bumpLane();
+      chain.autoMine = false;
+      await bl.send(req(a, 'b2')).catch(() => undefined);
+      const first = (await rows(a))[0];
+      await bl.reconcile();
+      chain.feeNow = 5_000_000_000n;
+      await bl.reconcile(); // bumped
+      // the network actually mined the ORIGINAL bytes (race): re-inject it as mined
+      chain.mempool.delete((await rows(a))[0].tx_hash as Hex);
+      chain.mempool.set(first.tx_hash as Hex, { from: KEY_ADDR, nonce: 0n, raw: first.raw_tx as Hex });
+      chain.mine(first.tx_hash as Hex);
+      await new SendLane({ pool: db.pool, transport: chain, confirmTimeoutMs: 30, pollMs: 5, rebroadcastAfterMs: 0, receiptGraceMs: 0, maxRebroadcasts: 1, bumpAfterMs: 0, getSessionKey: async () => KEY }).reconcile();
+      const row = (await rows(a))[0];
+      expect(row.status).toBe('mined');
+      expect(row.tx_hash).toBe(first.tx_hash);
+    });
+
+    it('after the bump budget is spent it asks a human (needs_review) and notifies', async () => {
+      const a = agent();
+      const seen: string[] = [];
+      const bl = new SendLane({ pool: db.pool, transport: chain, confirmTimeoutMs: 30, pollMs: 5, rebroadcastAfterMs: 0, receiptGraceMs: 60_000, maxRebroadcasts: 1, bumpAfterMs: 0, maxBumps: 1, getSessionKey: async () => KEY, onNeedsReview: (r) => { seen.push(r.intentId); } });
+      chain.autoMine = false;
+      await bl.send(req(a, 'b3')).catch(() => undefined);
+      await bl.reconcile(); // rebroadcast
+      chain.feeNow = 5_000_000_000n; await bl.reconcile(); // bump #1
+      chain.feeNow = 10_000_000_000n; await bl.reconcile(); // rebroadcast of the bumped tx
+      chain.feeNow = 20_000_000_000n; await bl.reconcile(); // budget spent
+      expect((await rows(a))[0].status).toBe('needs_review');
+      expect(seen).toHaveLength(1);
+    });
   });
 });

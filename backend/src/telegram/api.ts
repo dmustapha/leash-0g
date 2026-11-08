@@ -13,6 +13,9 @@ export type InlineKeyboardButton =
   | { text: string; callback_data: string }
   | { text: string; url: string };
 
+/** Telegram's servers must never fetch a URL that appeared in an agent-authored message (leak channel). */
+const NO_LINK_PREVIEW = { is_disabled: true } as const;
+
 export interface SendMessageInput {
   chat_id: string;
   // PLAIN TEXT ONLY — deliberately no `parse_mode`. Cards carry UNTRUSTED
@@ -92,11 +95,11 @@ export class FetchTelegramApi implements TelegramApi {
   }
 
   async sendMessage(input: SendMessageInput): Promise<{ message_id: number }> {
-    return this.call<{ message_id: number }>('sendMessage', { ...input });
+    return this.call<{ message_id: number }>('sendMessage', { ...input, link_preview_options: NO_LINK_PREVIEW });
   }
 
   async editMessageText(input: EditMessageInput): Promise<void> {
-    await this.call('editMessageText', { ...input });
+    await this.call('editMessageText', { ...input, link_preview_options: NO_LINK_PREVIEW });
   }
 
   async answerCallbackQuery(callbackQueryId: string, text?: string): Promise<void> {

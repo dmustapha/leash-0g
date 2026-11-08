@@ -31,4 +31,14 @@ describe('Telegram never sets parse_mode (I-01)', () => {
     await api.editMessageText({ chat_id: '1', message_id: 2, text: 'edited <untrusted>' });
     expect(bodies[0]).not.toMatch(/parse_mode/);
   });
+
+  // AQ-FND S1: report text can carry URLs the model/pages produced. A link preview makes TELEGRAM'S servers
+  // fetch that URL (a data-leak channel if the URL embeds anything) — previews are off for every message.
+  it('sendMessage and editMessageText disable link previews', async () => {
+    const bodies: string[] = [];
+    const api = new FetchTelegramApi({ botToken: 'x', fetchFn: captureFetch(bodies) });
+    await api.sendMessage({ chat_id: '1', text: 'see https://evil.example/?q=secret' });
+    await api.editMessageText({ chat_id: '1', message_id: 2, text: 'https://evil.example/x' });
+    for (const b of bodies) expect(JSON.parse(b)).toMatchObject({ link_preview_options: { is_disabled: true } });
+  });
 });

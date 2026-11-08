@@ -238,6 +238,7 @@ export class ChainRegistry {
   private readonly sessionCache = new Map<number, RuntimeChain>();
   /** AQ-FND S1: when set, every session chain gets the intent ledger + send lane. */
   private intentPool: Pool | null = null;
+  private intentExtras: Pick<import('../runtime/tx-intents/lane.js').SendLaneOpts, 'getSessionKey' | 'onNeedsReview'> = {};
 
   constructor(
     configs: readonly ChainConfig[],
@@ -644,11 +645,11 @@ export class ChainRegistry {
    * AQ-FND S1: turn on the transaction intent ledger. Must be called before any session chain is
    * resolved (index.ts does it right after construction); chains resolved earlier are upgraded in place.
    */
-  useIntentLedger(pool: Pool): void {
+  useIntentLedger(pool: Pool, extras: Pick<import('../runtime/tx-intents/lane.js').SendLaneOpts, 'getSessionKey' | 'onNeedsReview'> = {}): void {
     this.intentPool = pool;
-    for (const [id, sc] of this.sessionCache) {
-      if (sc instanceof SessionChain) sc.attachLane(new SendLane({ pool, transport: sc.laneTransport() }));
-      void id;
+    this.intentExtras = extras;
+    for (const sc of this.sessionCache.values()) {
+      if (sc instanceof SessionChain) sc.attachLane(new SendLane({ pool, transport: sc.laneTransport(), ...extras }));
     }
   }
 
@@ -673,7 +674,7 @@ export class ChainRegistry {
     if (cached) return cached;
     const c = this.getChainConfig(chainId);
     const sc = new SessionChain({ rpcUrl: c.rpcUrl, chainId: c.chainId, minFeePerGas: c.gasFloorWei });
-    if (this.intentPool) sc.attachLane(new SendLane({ pool: this.intentPool, transport: sc.laneTransport() }));
+    if (this.intentPool) sc.attachLane(new SendLane({ pool: this.intentPool, transport: sc.laneTransport(), ...this.intentExtras }));
     this.sessionCache.set(chainId, sc);
     return sc;
   }

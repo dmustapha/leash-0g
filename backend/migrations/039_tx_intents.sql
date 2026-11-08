@@ -33,6 +33,8 @@ CREATE TABLE tx_intents (
   max_fee_per_gas  numeric,
   max_priority_fee_per_gas numeric,
   rebroadcasts     integer NOT NULL DEFAULT 0,
+  bumps            integer NOT NULL DEFAULT 0,
+  prev_hashes      text[] NOT NULL DEFAULT '{}',
   replaced_by      uuid,
   error_class      text,
   error_text       text,

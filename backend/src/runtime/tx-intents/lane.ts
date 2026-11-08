@@ -1,4 +1,4 @@
-import { keccak256, type Hex } from 'viem';
+import { keccak256, parseTransaction, type Hex } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 import type { Pool } from 'pg';
 import { randomUUID } from 'node:crypto';
@@ -66,6 +66,16 @@ export interface SendLaneOpts {
   receiptGraceMs?: number;
   /** Blocks after which a mined tx is recorded as finalized (chains without reliable tags). */
   finalityDepth?: number;
+  /** Re-sends of the SAME bytes before a fee-bumped replacement is signed (default 3). */
+  maxRebroadcasts?: number;
+  /** Minimum age of an unmined tx before it may be replaced with a higher fee (default 120 s). */
+  bumpAfterMs?: number;
+  /** Fee-bumped replacements before a human is asked (default 3). */
+  maxBumps?: number;
+  /** Resolve an agent's session key to re-sign a replacement. Absent => no bump, straight to review. */
+  getSessionKey?: (agentId: string) => Promise<string | null>;
+  /** Called once when an intent needs a human (nonce consumed by something else / bump budget spent). */
+  onNeedsReview?: (info: { intentId: string; agentId: string; chainId: number; keyAddr: string; reason: string }) => void | Promise<void>;
 }
 
 interface IntentRow {
@@ -82,6 +92,11 @@ interface IntentRow {
   tx_hash: string | null;
   raw_tx: string | null;
   rebroadcasts: number;
+  bumps: number;
+  prev_hashes: string[];
+  gas_limit: string | null;
+  max_fee_per_gas: string | null;
+  max_priority_fee_per_gas: string | null;
   error_class: string | null;
   error_text: string | null;
   mined_block: string | null;
@@ -100,6 +115,9 @@ export class SendLane {
   private readonly rebroadcastAfterMs: number;
   private readonly receiptGraceMs: number;
   private readonly finalityDepth: number;
+  private readonly maxRebroadcasts: number;
+  private readonly bumpAfterMs: number;
+  private readonly maxBumps: number;
 
   constructor(private readonly opts: SendLaneOpts) {
     this.confirmTimeoutMs = opts.confirmTimeoutMs ?? 90_000;
@@ -107,6 +125,9 @@ export class SendLane {
     this.rebroadcastAfterMs = opts.rebroadcastAfterMs ?? 120_000;
     this.receiptGraceMs = opts.receiptGraceMs ?? 600_000;
     this.finalityDepth = opts.finalityDepth ?? 12;
+    this.maxRebroadcasts = opts.maxRebroadcasts ?? 3;
+    this.bumpAfterMs = opts.bumpAfterMs ?? 120_000;
+    this.maxBumps = opts.maxBumps ?? 3;
   }
 
   private get pool(): Pool { return this.opts.pool; }
@@ -241,12 +262,12 @@ export class SendLane {
   private async recordReceipt(intentId: string, txHash: Hex, rc: { status: 'success' | 'reverted'; blockNumber: bigint }): Promise<SendResult> {
     if (rc.status === 'reverted') {
       await this.pool.query(
-        `UPDATE tx_intents SET status='reverted', mined_block=$2, error_class='permanent', error_text='reverted on-chain', updated_at=now() WHERE intent_id=$1`,
-        [intentId, rc.blockNumber.toString()],
+        `UPDATE tx_intents SET status='reverted', mined_block=$2, tx_hash=$3, error_class='permanent', error_text='reverted on-chain', updated_at=now() WHERE intent_id=$1`,
+        [intentId, rc.blockNumber.toString(), txHash],
       );
       throw new Error(`execute transfer reverted on-chain: ${txHash}`);
     }
-    await this.pool.query(`UPDATE tx_intents SET status='mined', mined_block=$2, updated_at=now() WHERE intent_id=$1 AND status IN ('signed','broadcast')`, [intentId, rc.blockNumber.toString()]);
+    await this.pool.query(`UPDATE tx_intents SET status='mined', mined_block=$2, tx_hash=$3, updated_at=now() WHERE intent_id=$1 AND status IN ('signed','broadcast')`, [intentId, rc.blockNumber.toString(), txHash]);
     return { intentId, txHash, status: 'mined' };
   }
 
@@ -317,18 +338,18 @@ export class SendLane {
     const nonce = row.nonce != null ? BigInt(row.nonce) : null;
     if (!hash || nonce === null || !row.raw_tx) return;
 
-    const rc = await this.t.getReceipt(hash).catch(() => null);
-    if (rc) { await this.recordReceipt(row.intent_id, hash, rc).catch(() => undefined); return; }
+    // a replacement race: ANY hash we ever signed for this nonce may be the one that mines
+    for (const h of [hash, ...(row.prev_hashes ?? []) as Hex[]]) {
+      const found = await this.t.getReceipt(h).catch(() => null);
+      if (found) { await this.recordReceipt(row.intent_id, h, found).catch(() => undefined); return; }
+    }
 
     const latest = await this.t.getLatestNonce(row.key_addr);
     if (latest > nonce) {
       // the nonce is used but we hold no receipt for our hash: lagging index OR an outsider took it.
       const age = row.age_ms;
       if (age >= this.receiptGraceMs) {
-        await this.pool.query(
-          `UPDATE tx_intents SET status='needs_review', error_class='ambiguous', error_text='nonce consumed without a receipt for our tx', updated_at=now() WHERE intent_id=$1 AND status IN ('signed','broadcast')`,
-          [row.intent_id],
-        );
+        await this.toReview(row, 'nonce consumed without a receipt for our tx');
       }
       return;
     }
@@ -336,6 +357,11 @@ export class SendLane {
     // nonce not consumed: our tx is not mined. Re-send the SAME bytes (never a rebuilt tx).
     const age = row.age_ms;
     if (row.status === 'signed' || age >= this.rebroadcastAfterMs) {
+      // rebroadcast budget spent and still not mined: replace at the SAME nonce with a higher fee (or ask a human)
+      if (row.status === 'broadcast' && row.rebroadcasts >= this.maxRebroadcasts && age >= this.bumpAfterMs) {
+        await this.bumpOrReview(row);
+        return;
+      }
       try {
         await this.t.sendRaw(row.raw_tx as Hex);
       } catch (err) {
@@ -348,6 +374,62 @@ export class SendLane {
       // give a just-re-sent tx one chance to show a receipt
       const rc2 = await this.t.getReceipt(hash).catch(() => null);
       if (rc2) await this.recordReceipt(row.intent_id, hash, rc2).catch(() => undefined);
+    }
+  }
+
+  /** Hand an intent to a human: persist the state, then notify once. */
+  private async toReview(row: IntentRow, reason: string): Promise<void> {
+    const res = await this.pool.query(
+      `UPDATE tx_intents SET status='needs_review', error_class='ambiguous', error_text=$2, updated_at=now() WHERE intent_id=$1 AND status IN ('signed','broadcast')`,
+      [row.intent_id, reason],
+    );
+    if ((res.rowCount ?? 0) > 0 && this.opts.onNeedsReview) {
+      try { await this.opts.onNeedsReview({ intentId: row.intent_id, agentId: row.agent_id, chainId: row.chain_id, keyAddr: row.key_addr, reason }); } catch { /* notification is best-effort */ }
+    }
+  }
+
+  /**
+   * An un-mined tx that has been re-sent enough: replace it at the SAME nonce with a >= 12.5% higher fee
+   * (a node refuses less). Keeps every previous hash so a late mining of ANY of them is still recognised.
+   * Never a new nonce; never a different payload. Beyond `maxBumps`, or without a key, a human decides.
+   */
+  private async bumpOrReview(row: IntentRow): Promise<void> {
+    if (row.bumps >= this.maxBumps) return this.toReview(row, `stuck after ${row.bumps} fee bump(s); not auto-retried`);
+    const key = this.opts.getSessionKey ? await this.opts.getSessionKey(row.agent_id).catch(() => null) : null;
+    if (!key || !row.raw_tx || !row.max_fee_per_gas || !row.max_priority_fee_per_gas || !row.gas_limit) {
+      return this.toReview(row, 'unmined and cannot be replaced automatically');
+    }
+    const parsed = parseTransaction(row.raw_tx as Hex);
+    const nowFees = await this.t.feeData();
+    const bump = (v: bigint): bigint => (v * 1125n) / 1000n + 1n;
+    let maxFee = bump(BigInt(row.max_fee_per_gas));
+    let tip = bump(BigInt(row.max_priority_fee_per_gas));
+    if (nowFees.maxFeePerGas > maxFee) maxFee = nowFees.maxFeePerGas;
+    if (nowFees.maxPriorityFeePerGas > tip) tip = nowFees.maxPriorityFeePerGas;
+    if (tip > maxFee) tip = maxFee;
+    const account = privateKeyToAccount(key as Hex);
+    const raw = await account.signTransaction({
+      chainId: this.t.chainId,
+      type: 'eip1559',
+      to: parsed.to as Hex,
+      data: (parsed.data ?? '0x'),
+      value: parsed.value ?? 0n,
+      nonce: Number(row.nonce),
+      gas: BigInt(row.gas_limit),
+      maxFeePerGas: maxFee,
+      maxPriorityFeePerGas: tip,
+    });
+    const newHash = keccak256(raw);
+    // write-ahead again: persist the replacement (and remember the old hash) BEFORE broadcasting it
+    await this.pool.query(
+      `UPDATE tx_intents SET raw_tx=$2, tx_hash=$3, prev_hashes = array_append(prev_hashes, $4), bumps = bumps + 1, rebroadcasts = 0,
+              max_fee_per_gas=$5, max_priority_fee_per_gas=$6, status='broadcast', updated_at=now() WHERE intent_id=$1 AND status IN ('signed','broadcast')`,
+      [row.intent_id, raw, newHash, row.tx_hash, maxFee.toString(), tip.toString()],
+    );
+    try {
+      await this.t.sendRaw(raw);
+    } catch (err) {
+      if (!isAlreadyKnown(err) && !isNonceTooLow(err)) console.warn('[tx-intents] bump broadcast failed (will retry from the stored bytes):', err instanceof Error ? err.message : err);
     }
   }
 
