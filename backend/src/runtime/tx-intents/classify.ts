@@ -22,3 +22,13 @@ export function isNonceTooLow(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : String(err);
   return /nonce too low|nonce is too low|NonceTooLow|nonce has already been used/i.test(msg);
 }
+
+/**
+ * The node refused the signed bytes for a LASTING reason: the key cannot afford gas*fee+value, or the fee is
+ * below the node's minimum. They never entered a mempool, so the row can be abandoned safely and must not
+ * be resent hours later against balances that have since changed.
+ */
+export function isLastingRejection(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /insufficient funds|exceeds the balance|intrinsic gas too low|gas price below|max fee per gas less than|fee cap.*(less|below)|transaction underpriced|below minimum|minimum gas price|gas tip cap/i.test(msg);
+}

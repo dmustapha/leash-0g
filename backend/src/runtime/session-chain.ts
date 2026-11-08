@@ -347,6 +347,7 @@ export class SessionChain implements RuntimeChain {
       data,
       value: 0n,
       payload: input.send.payload ?? {},
+      sim: { abi: encoded.abi, functionName: encoded.functionName, args: encoded.args },
     });
     return { txHash: r.txHash };
   }

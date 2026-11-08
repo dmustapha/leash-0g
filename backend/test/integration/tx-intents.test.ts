@@ -5,6 +5,7 @@ import { createTestDb, type TestDb } from '../helpers/db.js';
 import { SendLane, type LaneTransport } from '../../src/runtime/tx-intents/lane.js';
 import { TxInFlightError, TxNeedsReviewError } from '../../src/runtime/tx-intents/errors.js';
 import { ReceiptUnconfirmedError } from '../../src/chain/wait-receipt.js';
+import { SessionChain } from '../../src/runtime/session-chain.js';
 
 /**
  * AQ-FND S1 (WP-F) — the intent ledger + send lane, proven against a FAULT-INJECTING fake chain.
@@ -33,7 +34,7 @@ class FakeChain implements LaneTransport {
     return this.nonceOf(addr) + BigInt(inPool);
   }
   async getLatestNonce(addr: string): Promise<bigint> { return this.nonceOf(addr); }
-  async estimate(): Promise<{ gas: bigint }> {
+  async estimate(_req?: unknown): Promise<{ gas: bigint }> {
     if (this.estimateError) throw this.estimateError;
     return { gas: 100_000n };
   }
@@ -314,6 +315,137 @@ describe('SendLane — write-ahead, idempotent, single-lane', () => {
       chain.feeNow = 20_000_000_000n; await bl.reconcile(); // budget spent
       expect((await rows(a))[0].status).toBe('needs_review');
       expect(seen).toHaveLength(1);
+    });
+  });
+
+  describe('Gate-2 fixes: the ledger can never wedge an agent', () => {
+    it('B-1: a throw between INSERT and the signed UPDATE marks the row failed (never a phantom in-flight)', async () => {
+      const a = agent();
+      const orig = chain.getPendingNonce.bind(chain);
+      chain.getPendingNonce = async () => { throw new Error('HTTP request failed: 503'); };
+      await expect(lane.send(req(a, 'w1'))).rejects.toThrow(/503/);
+      chain.getPendingNonce = orig;
+      const [row] = await rows(a);
+      expect(row.status).toBe('failed');
+      expect(row.error_class).toBe('transient');
+      expect((await lane.getInFlight(a)).count).toBe(0);
+      // and the same logical action can be retried: a transient failure is re-claimable
+      const r = await lane.send(req(a, 'w1'));
+      expect(r.txHash).toMatch(/^0x/);
+      expect(chain.sent).toHaveLength(1);
+    });
+
+    it('B-1: an orphan intent row (process died after INSERT) is swept to failed by reconcile and stops counting as in flight', async () => {
+      const a = agent();
+      await db.pool.query(
+        `INSERT INTO tx_intents (intent_id, agent_id, chain_id, key_addr, account_addr, kind, idem_key, payload, status, updated_at)
+         VALUES (gen_random_uuid(), $1, $2, $3, $4, 'token_transfer', 'orphan', '{"amount":"5"}'::jsonb, 'intent', now() - interval '10 minutes')`,
+        [a, chain.chainId, KEY_ADDR, ACCOUNT],
+      );
+      expect((await lane.getInFlight(a)).count).toBe(0); // an old orphan is not "in flight"
+      await lane.reconcile();
+      expect((await rows(a))[0].status).toBe('failed');
+    });
+
+    it('M-4: a send the node rejects for a lasting reason (cannot afford gas) is failed at once, not left signed forever', async () => {
+      const a = agent();
+      const orig = chain.sendRaw.bind(chain);
+      chain.sendRaw = async () => { throw new Error('insufficient funds for gas * price + value'); };
+      await expect(lane.send(req(a, 'ins1'))).rejects.toThrow(/insufficient funds/);
+      chain.sendRaw = orig;
+      expect((await rows(a))[0].status).toBe('failed');
+      expect((await lane.getInFlight(a)).count).toBe(0);
+    });
+
+    it('M-4: a tx that stays signed-but-never-accepted past the stale limit is escalated to a human, never resent on old balances', async () => {
+      const a = agent();
+      chain.sendThrowsBeforeAccept = true;
+      await lane.send(req(a, 'st1')).catch(() => undefined);
+      await db.pool.query(`UPDATE tx_intents SET updated_at = now() - interval '30 minutes' WHERE agent_id=$1`, [a]);
+      const seen: string[] = [];
+      const l2 = new SendLane({ pool: db.pool, transport: chain, confirmTimeoutMs: 60, pollMs: 5, rebroadcastAfterMs: 0, receiptGraceMs: 60_000, onNeedsReview: (r) => { seen.push(r.reason); } });
+      await l2.reconcile();
+      expect((await rows(a))[0].status).toBe('needs_review');
+      expect(chain.sent).toHaveLength(0);
+      expect(seen).toHaveLength(1);
+    });
+
+    it('M-6: a reverted tx still holds its nonce: the next send never reuses it, even if the RPC lags', async () => {
+      const a = agent();
+      chain.autoMine = false;
+      await lane.send(req(a, 'rv1')).catch(() => undefined);
+      const h = (await rows(a))[0].tx_hash as Hex;
+      chain.mine(h, 'reverted');
+      await lane.reconcile();
+      expect((await rows(a))[0].status).toBe('reverted');
+      chain.autoMine = true;
+      // a lagging RPC claims the nonce is still 0
+      const lagging = Object.create(chain) as FakeChain;
+      lagging.getPendingNonce = async () => 0n;
+      const lag = new SendLane({ pool: db.pool, transport: lagging, confirmTimeoutMs: 60, pollMs: 5, rebroadcastAfterMs: 0, receiptGraceMs: 60_000 });
+      await lag.send(req(a, 'rv2')).catch(() => undefined);
+      const second = (await rows(a)).find((r) => r.idem_key === 'rv2');
+      expect(BigInt(second.nonce)).toBe(1n); // not 0
+    });
+
+    it('M-9: two reconcilers racing to bump one stuck tx cannot lose a replacement hash', async () => {
+      const a = agent();
+      const mk2 = () => new SendLane({ pool: db.pool, transport: chain, confirmTimeoutMs: 30, pollMs: 5, rebroadcastAfterMs: 0, receiptGraceMs: 60_000, maxRebroadcasts: 0, bumpAfterMs: 0, getSessionKey: async () => KEY });
+      chain.autoMine = false;
+      await mk2().send(req(a, 'race')).catch(() => undefined);
+      chain.feeNow = 6_000_000_000n;
+      await Promise.all([mk2().reconcile(), mk2().reconcile()]);
+      const row = (await rows(a))[0];
+      // every hash that ever existed for this nonce is recorded, and the live one is in the mempool
+      const known = new Set([row.tx_hash, ...row.prev_hashes]);
+      for (const h of chain.mempool.keys()) expect(known.has(h)).toBe(true);
+      expect(row.status).not.toBe('needs_review');
+    });
+
+    it('two lane INSTANCES (as if two processes) racing on one key: the DATABASE lets only one un-mined tx exist', async () => {
+      const a = agent();
+      chain.autoMine = false;
+      const l1 = new SendLane({ pool: db.pool, transport: chain, confirmTimeoutMs: 30, pollMs: 5, rebroadcastAfterMs: 60_000, receiptGraceMs: 60_000 });
+      const l2 = new SendLane({ pool: db.pool, transport: chain, confirmTimeoutMs: 30, pollMs: 5, rebroadcastAfterMs: 60_000, receiptGraceMs: 60_000 });
+      const settled = await Promise.allSettled([l1.send(req(a, 'x-a')), l2.send(req(a, 'x-b'))]);
+      const unmined = (await db.pool.query(`SELECT count(*)::int c FROM tx_intents WHERE key_addr=$1 AND status IN ('signed','broadcast')`, [KEY_ADDR])).rows[0].c;
+      expect(unmined).toBeLessThanOrEqual(1);
+      expect(chain.sent.length).toBeLessThanOrEqual(1);
+      void settled;
+    });
+
+    it('B-2: the lane asks the transport to simulate WITH the contract call (so a revert can be decoded)', async () => {
+      const a = agent();
+      let seenSim: unknown;
+      const spy = Object.create(chain) as FakeChain;
+      spy.estimate = async (r: { sim?: unknown }) => { seenSim = r.sim; return { gas: 100_000n }; };
+      const l = new SendLane({ pool: db.pool, transport: spy, confirmTimeoutMs: 60, pollMs: 5, rebroadcastAfterMs: 0, receiptGraceMs: 60_000 });
+      await l.send(req(a, 'sim1', { sim: { abi: [], functionName: 'executeTokenTransfer', args: [1] } }));
+      expect(seenSim).toEqual({ abi: [], functionName: 'executeTokenTransfer', args: [1] });
+    });
+  });
+
+  describe('SessionChain.viaLane (the real production path, not a fake)', () => {
+    it('a token transfer with a send ctx goes through the ledger with the encoded call and a simulation hint', async () => {
+      const a = agent();
+      const sc = new SessionChain({ rpcUrl: 'http://127.0.0.1:1', chainId: chain.chainId });
+      let sim: { functionName?: string } | undefined;
+      const spy = Object.create(chain) as FakeChain;
+      spy.estimate = async (r?: unknown) => { sim = (r as { sim?: { functionName?: string } }).sim; return { gas: 100_000n }; };
+      sc.attachLane(new SendLane({ pool: db.pool, transport: spy, confirmTimeoutMs: 60, pollMs: 5, rebroadcastAfterMs: 0, receiptGraceMs: 60_000 }));
+      const out = await sc.executeTokenTransfer({
+        sessionPrivateKey: KEY, accountAddr: ACCOUNT, token: '0x' + 'cd'.repeat(20), to: TO, amountWei: 1234n,
+        send: { agentId: a, idemKey: 'via-1', payload: { token: '0x' + 'cd'.repeat(20), to: TO, amount: '1234' } },
+      });
+      expect(out.txHash).toMatch(/^0x/);
+      expect(sim?.functionName).toBe('executeTokenTransfer');
+      const [row] = await rows(a);
+      expect(row.kind).toBe('token_transfer');
+      expect(row.status).toBe('mined');
+      expect((await sc.getInFlight(a)).count).toBe(0);
+      // same logical send again is a no-op through the production path too
+      await sc.executeTokenTransfer({ sessionPrivateKey: KEY, accountAddr: ACCOUNT, token: '0x' + 'cd'.repeat(20), to: TO, amountWei: 1234n, send: { agentId: a, idemKey: 'via-1' } });
+      expect(chain.sent).toHaveLength(1);
     });
   });
 });
