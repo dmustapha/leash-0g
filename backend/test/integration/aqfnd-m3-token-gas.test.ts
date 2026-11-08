@@ -52,7 +52,9 @@ class FakeRuntimeChain implements RuntimeChain {
   async getBalance(addr: string): Promise<bigint> {
     return this.balances.get(addr.toLowerCase()) ?? 0n;
   }
+  public getPolicyViewThrows = false;
   async getPolicyView(): Promise<PolicyView> {
+    if (this.getPolicyViewThrows) throw new Error('rpc exploded');
     return this.policyView;
   }
   async getErc20Balance(_token: string, owner: string): Promise<bigint> {
@@ -274,6 +276,57 @@ describe('S1 — send safety at the agent level', () => {
     expect(ctx?.idemKey).toContain(TOKEN.toLowerCase());
     expect(ctx?.payload?.['amount']).toBe((CAP / 2n).toString());
     expect(ctx?.idemKey).not.toContain('nocycle-'); // the manager supplies the cycle id
+  });
+});
+
+describe('S1 — restart safety: owner-desired agents resume, owner-stopped ones do not', () => {
+  const desired = async (id: string) => (await db.pool.query<{ d: boolean }>(`SELECT run_desired AS d FROM agents WHERE id=$1`, [id])).rows[0]!.d;
+  const mkManager = () =>
+    new LeashRuntimeManager({
+      pool: db.pool, hub: t.hub, broker: t.broker, chain: fakeChain, checkpointer, alerts: t.alerts,
+      settings: { keyring: TEST_KEYRING, approvalTimeoutMs: 20_000, gatewayUrl, intervalMs: 3_600_000, defaultModel: 'test-model' },
+    });
+
+  it('start marks the agent desired; owner stop clears it', async () => {
+    const id = await seedTokenAgent();
+    expect(await desired(id)).toBe(false);
+    mockSend();
+    await manager.start(id);
+    startedAgents.push(id);
+    expect(await desired(id)).toBe(true);
+    await manager.stop(id);
+    expect(await desired(id)).toBe(false);
+  });
+
+  it('after a restart, desired agents resume and owner-stopped agents stay stopped', async () => {
+    const running = await seedTokenAgent();
+    const stopped = await seedTokenAgent();
+    mockSend();
+    await manager.start(running);
+    await manager.start(stopped);
+    await manager.stop(stopped);
+    await manager.drain(2_000); // graceful shutdown of the old process: must NOT forget `running`
+    expect(await desired(running)).toBe(true);
+    const next = mkManager(); // the "new process"
+    const n = await next.resumeDesired({ staggerMs: 0 });
+    startedAgents.push(running); // cleaned up via the shared manager below
+    expect(n).toBeGreaterThanOrEqual(1);
+    expect(next.isRunning(running)).toBe(true);
+    expect(next.isRunning(stopped)).toBe(false);
+    await next.drain(2_000);
+  });
+
+  it('a loop-breaker pause clears desire (a crash-looping agent must not auto-restart)', async () => {
+    const id = await seedTokenAgent();
+    const bm = new LeashRuntimeManager({
+      pool: db.pool, hub: t.hub, broker: t.broker, chain: fakeChain, checkpointer, alerts: t.alerts,
+      settings: { keyring: TEST_KEYRING, approvalTimeoutMs: 20_000, gatewayUrl, intervalMs: 50, defaultModel: 'test-model', failureBudget: 1 },
+    });
+    fakeChain.getPolicyViewThrows = true; // every cycle throws
+    await bm.start(id);
+    await waitFor(async () => !(await desired(id)), 15_000);
+    expect(bm.isRunning(id)).toBe(false);
+    fakeChain.getPolicyViewThrows = false;
   });
 });
 

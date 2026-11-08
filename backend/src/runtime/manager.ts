@@ -167,6 +167,8 @@ export class LeashRuntimeManager implements RuntimeManager {
   /** P3C-6(iii): active policy boundaries, shared across cycles (damping). */
   private readonly boundaries = new BoundaryRegistry();
 
+  private draining = false;
+
   constructor(private readonly deps: RuntimeManagerDeps) {}
 
   setCoordinator(coordinator: DelegationCoordinator): void {
@@ -405,6 +407,7 @@ export class LeashRuntimeManager implements RuntimeManager {
         );
     const loop: Loop = { stopped: false, timer: null, current: Promise.resolve(), busy: false, consecutiveFailures: 0, pendingApprovalId: null, graph, agent, gatewayToken: ctx.gatewayToken };
     this.loops.set(agentId, loop);
+    await this.setDesired(agentId, true); // AQ-FND S1: a restart resumes exactly what the owner started
     this.schedule(loop, 0);
   }
 
@@ -414,6 +417,60 @@ export class LeashRuntimeManager implements RuntimeManager {
 
   isRunning(agentId: string): boolean {
     return this.loops.has(agentId);
+  }
+
+  /** AQ-FND S1: persist whether the OWNER wants this agent running (survives restarts). Best-effort, never throws. */
+  private async setDesired(agentId: string, desired: boolean): Promise<void> {
+    try {
+      await this.deps.pool.query(`UPDATE agents SET run_desired = $2 WHERE id = $1 AND run_desired IS DISTINCT FROM $2`, [agentId, desired]);
+    } catch (err) {
+      console.error(`failed to persist run_desired=${desired} for agent ${agentId}`, err);
+    }
+  }
+
+  /**
+   * AQ-FND S1 (review blocker B-2): after a (re)start, resume every agent the owner left running.
+   * Staggered so a fleet does not stampede the RPC/LLM on boot. A failure to resume one agent is
+   * traced and never blocks the others. Owner-stopped / breaker-paused / revoked agents stay stopped.
+   */
+  async resumeDesired(opts: { staggerMs?: number } = {}): Promise<number> {
+    const stagger = opts.staggerMs ?? 250;
+    const { rows } = await this.deps.pool.query<{ id: string }>(
+      `SELECT id FROM agents WHERE status = 'active' AND run_desired AND bind_mode IS DISTINCT FROM 'external' ORDER BY created_at`,
+    );
+    let started = 0;
+    for (const { id } of rows) {
+      if (this.draining) break;
+      try {
+        await this.start(id);
+        started++;
+        const rec = await appendTrace(this.deps.pool, { agentId: id, kind: 'decision', detail: { summary: 'resumed after a LEASH restart (you had it running)' } });
+        this.deps.hub.emit(id, 'trace', traceEvent(rec));
+      } catch (err) {
+        console.error(`could not resume agent ${id} after restart`, err);
+      }
+      if (stagger > 0) await new Promise((r) => setTimeout(r, stagger));
+    }
+    return started;
+  }
+
+  /**
+   * AQ-FND S1: graceful shutdown. Stop scheduling NEW cycles, let in-flight cycles finish (bounded),
+   * and leave `run_desired` untouched so the next boot resumes the same agents. A cycle waiting on a
+   * human approval is not waited for (and is NOT denied): its approval row stays pending.
+   * Anything still mid-send is safe: the intent ledger persisted it before broadcast.
+   */
+  async drain(timeoutMs = 30_000): Promise<void> {
+    this.draining = true;
+    const pending: Promise<unknown>[] = [];
+    for (const loop of this.loops.values()) {
+      loop.stopped = true;
+      if (loop.timer) clearTimeout(loop.timer);
+      loop.timer = null;
+      if (loop.busy && !loop.pendingApprovalId) pending.push(loop.current.catch(() => undefined));
+    }
+    await Promise.race([Promise.allSettled(pending), new Promise((r) => setTimeout(r, timeoutMs).unref())]);
+    this.loops.clear();
   }
 
   async haltForRevoke(agentId: string): Promise<void> {
@@ -576,6 +633,8 @@ export class LeashRuntimeManager implements RuntimeManager {
 
   private async halt(agentId: string, reason: string): Promise<void> {
     const loop = this.loops.get(agentId);
+    // Owner stop / revoke / no-longer-active: the agent must NOT come back on the next boot.
+    await this.setDesired(agentId, false);
     if (!loop) return;
     loop.stopped = true;
     if (loop.timer) clearTimeout(loop.timer);
@@ -783,6 +842,7 @@ export class LeashRuntimeManager implements RuntimeManager {
     if (loop.timer) clearTimeout(loop.timer);
     loop.timer = null;
     this.loops.delete(agentId);
+    await this.setDesired(agentId, false); // a crash-looping agent must not auto-restart
     const summary = `paused after ${loop.consecutiveFailures} consecutive failed cycles — last error: ${describeCycleFailure(err, { retrying: false })}`;
     console.error(`[loop-breaker] agent ${agentId} ${summary}`);
     try {

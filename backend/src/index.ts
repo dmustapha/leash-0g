@@ -493,6 +493,8 @@ async function main(): Promise<void> {
       // AQ-FND S1: boot reconcile — anything signed/broadcast before the last stop is resolved from
       // (ledger row, chain) before any agent can send again.
       void chainRegistry.reconcileAllIntents().then((n) => { if (n > 0) console.error(`reconciled ${n} open transaction intent(s) on boot`); }).catch((err: unknown) => console.error('boot intent reconcile failed', err));
+      // AQ-FND S1 (B-2): resume the agents the owner left running before this (re)start.
+      void runtime.resumeDesired().then((n) => { if (n > 0) console.error(`resumed ${n} agent(s) the owner had running`); }).catch((err: unknown) => console.error('agent resume on boot failed', err));
       // Expiry point B: 60s periodic sweeper for stale delegations.
       coordinator.startSweeper();
       // L-01: deferred one-shot boot re-drive (off the pre-listen path). The
@@ -517,6 +519,9 @@ async function main(): Promise<void> {
     clearInterval(intentReconcileTimer);
     if (railSweepTimer) clearInterval(railSweepTimer);
     coordinator.stopSweeper();
+    // AQ-FND S1 (B-2): drain in-flight cycles BEFORE letting go of the lease or the pool, so a deploy
+    // does not cut a send in half. `run_desired` is left as-is: the next boot resumes the same agents.
+    void runtime.drain(30_000).catch((err: unknown) => console.error('runtime drain failed', err)).finally(() => {
     lease.release();
     broker.cancelAll();
     gatewayServer.close();
@@ -528,7 +533,8 @@ async function main(): Promise<void> {
         .then(() => Promise.allSettled([pool.end(), leasePool.end()]))
         .finally(() => process.exit(0));
     });
-    setTimeout(() => process.exit(1), 10_000).unref();
+    });
+    setTimeout(() => process.exit(1), 45_000).unref(); // was 10 s: must outlast the 30 s drain (systemd TimeoutStopSec >= 60)
   };
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
