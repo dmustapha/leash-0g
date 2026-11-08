@@ -540,16 +540,18 @@ async function main(): Promise<void> {
     // AQ-FND S1 (B-2): drain in-flight cycles BEFORE letting go of the lease or the pool, so a deploy
     // does not cut a send in half. `run_desired` is left as-is: the next boot resumes the same agents.
     void runtime.drain(30_000).catch((err: unknown) => console.error('runtime drain failed', err)).finally(() => {
+    console.error('shutdown: runtime drained');
     lease.release();
     broker.cancelAll();
     gatewayServer.close();
     server.close(() => {
+      console.error('shutdown: http server closed');
       // SCOPE-SHUTDOWN-1: drain any in-flight batch flush BEFORE ending the pool —
       // otherwise the flush's next query throws "Cannot use a pool after calling
       // end" (seen for every owner on each prior deploy's SIGTERM).
       void Promise.allSettled([batcher.drain(), ownerBatcher.drain()])
-        .then(() => Promise.allSettled([pool.end(), leasePool.end()]))
-        .finally(() => process.exit(0));
+        .then(() => { console.error('shutdown: batchers drained'); return Promise.allSettled([pool.end(), leasePool.end()]); })
+        .finally(() => { console.error('shutdown: pools ended — exiting'); process.exit(0); });
     });
     });
     setTimeout(() => process.exit(1), 45_000).unref(); // was 10 s: must outlast the 30 s drain (systemd TimeoutStopSec >= 60)
