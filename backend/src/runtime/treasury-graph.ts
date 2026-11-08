@@ -147,6 +147,8 @@ export interface ToolRail {
 const TreasuryState = Annotation.Root({
   /** AQ-FND S1: this cycle's id (set by the manager). It scopes idempotency keys, so a re-executed node never double-sends. */
   cycleId: Annotation<string>,
+  /** AQ-FND S1: set when the cycle needs no model call (nothing to do); evaluateDecision stands down with this reason. */
+  skippedModel: Annotation<string | null>,
   /** Set by the manager when this cycle processes an inbound delegation (spec §3b). */
   inboundDelegation: Annotation<InboundDelegationInput | null>,
   beneficiaryBalanceWei: Annotation<string>,
@@ -706,6 +708,23 @@ export function buildTreasuryGraph(
     return { ...base, ...(await composeCarry(base, mode.mode === 'inbound_transfer', nowSec, tokenView)) };
   }
 
+  /** AQ-FND S1: a deterministic "nothing to do" for autonomous cycles whose goal is already met. */
+  function nothingToDo(state: State, mode: CycleMode): string | null {
+    if (mode.mode !== 'autonomous') return null;
+    const g = ctx.goal;
+    if (g.type === 'trader') {
+      return state.holdings && BigInt(state.holdings.holdBalanceWei) >= BigInt(g.targetHoldWei)
+        ? 'hold-token target already met — nothing to do'
+        : null;
+    }
+    const auto = autonomousGoalOf(mode);
+    if (auto && 'targetBalanceWei' in auto) {
+      const bal = treasuryGoalToken(auto) !== null ? state.beneficiaryTokenBalanceWei : state.beneficiaryBalanceWei;
+      if (BigInt(bal ?? '0') >= BigInt(auto.targetBalanceWei)) return 'target balance already met — nothing to do';
+    }
+    return null;
+  }
+
   async function reason(state: State): Promise<Partial<State>> {
     const mode = classifyCycle(ctx.goal, state.inboundDelegation);
     // Idle executor / rejected inbound: no model call — the outcome is fully
@@ -713,7 +732,13 @@ export function buildTreasuryGraph(
     // (resp. per spam envelope — the coordinator throttles bound issuance,
     // this bounds the receiver side).
     if (mode.mode === 'executor_idle' || mode.mode === 'inbound_reject') {
-      return { reasoning: '', deliberation: '', decisionSource: 'empty' as const, finishReason: null, deliberationLoops: 0, promptTokens: null };
+      return { reasoning: '', deliberation: '', decisionSource: 'empty' as const, finishReason: null, deliberationLoops: 0, promptTokens: null, skippedModel: null };
+    }
+    // AQ-FND S1: target already met = nothing to do. Decided by CODE from the sensed balances, so the
+    // model is not called at all (no 0G Compute spend, no queue slot, nothing for it to get wrong).
+    const idle = nothingToDo(state, mode);
+    if (idle) {
+      return { reasoning: '', deliberation: '', decisionSource: 'empty' as const, finishReason: null, deliberationLoops: 0, promptTokens: null, skippedModel: idle };
     }
     const model = ctx.goal.model ?? deps.defaultModel;
     const body = buildReasonRequest(model, {
@@ -839,6 +864,7 @@ export function buildTreasuryGraph(
       deliberation: delib.text,
       decisionSource: channels.decisionSource,
       finishReason: channels.finishReason,
+      skippedModel: null,
       deliberationLoops: channels.loopCount,
       promptTokens: channels.promptTokens,
     };
@@ -2155,6 +2181,9 @@ function evaluateDecision(
     // from an executor's own post-reasoning stand-down.
     return { ...stand(mode.reason), inboundReject: mode.reason };
   }
+
+  // AQ-FND S1: the cycle needed no model call (goal already met) — a clean, deterministic stand-down.
+  if (state.skippedModel) return stand(state.skippedModel);
 
   const parsed = parseDecision(state.reasoning);
   if (!parsed) return stand(PARSE_MISS_REASON);

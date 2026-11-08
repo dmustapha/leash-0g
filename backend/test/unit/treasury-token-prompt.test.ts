@@ -112,4 +112,13 @@ describe('token-denominated treasury reasoning (C9)', () => {
       expect((obs['display'] as Record<string, string>)['perTransferCap']).toBeUndefined();
     });
   });
+
+  describe('S1: hard token budget — the model call is never made with a bigger max_tokens', () => {
+    it('max_tokens is a fixed server-side clamp (a length/loop failure is never retried with more tokens)', () => {
+      for (const c of [base({}), base({ goal: TOKEN_GOAL, tokenTreasury: { symbol: 'USDC', decimals: 6, beneficiaryBalanceWei: '4000000', accountBalanceWei: '2000000' } })]) {
+        const body = buildReasonRequest('m', c) as { max_tokens: number };
+        expect(body.max_tokens).toBe(4096);
+      }
+    });
+  });
 });

@@ -1,3 +1,4 @@
+import { classifyCycleResult, classifyThrown, describeTrip, recordCycleResult, resetBreakers, type FailureClass } from './typed-breakers.js';
 import { makeCallLabeler } from '../asset/labeler.js';
 import { describeDecodedCall } from '../asset/describe-call.js';
 import { randomUUID } from 'node:crypto';
@@ -35,7 +36,7 @@ import type { ChainRegistry } from '../chain/registry.js';
 import { assertBridgeRoutable } from './bridge-gate.js';
 import { describeCycleFailure, rawErrorText } from './cycle-failure.js';
 import { budgetExhausted, nextCycleDelayMs, DEFAULT_FAILURE_BUDGET, DEFAULT_MAX_BACKOFF_MS } from './failure-budget.js';
-import { buildTreasuryGraph, type TreasuryGraph } from './treasury-graph.js';
+import { buildTreasuryGraph, PARSE_MISS_REASON, type TreasuryGraph } from './treasury-graph.js';
 import { consumeOneShot } from './one-shot-consume.js';
 import type { CapabilityDeps } from '../capabilities/service.js';
 import { defaultToolRegistry } from '../tool-use/index.js';
@@ -330,7 +331,7 @@ export class LeashRuntimeManager implements RuntimeManager {
     return this.deps.uploader;
   }
 
-  async start(agentId: string): Promise<void> {
+  async start(agentId: string, opts: { resume?: boolean } = {}): Promise<void> {
     if (this.deps.lease && !this.deps.lease.held()) throw new RuntimeLeaseNotHeldError();
     if (this.loops.has(agentId)) return;
     const agent = await getAgentById(this.deps.pool, agentId);
@@ -408,6 +409,9 @@ export class LeashRuntimeManager implements RuntimeManager {
     const loop: Loop = { stopped: false, timer: null, current: Promise.resolve(), busy: false, consecutiveFailures: 0, pendingApprovalId: null, graph, agent, gatewayToken: ctx.gatewayToken };
     this.loops.set(agentId, loop);
     await this.setDesired(agentId, true); // AQ-FND S1: a restart resumes exactly what the owner started
+    // An OWNER start/resume gets a fresh failure budget (the cause was presumably fixed); a boot-time
+    // resume must NOT, or a flapping agent would reset its own counters on every restart.
+    if (!opts.resume) await resetBreakers(this.deps.pool, agentId).catch(() => undefined);
     this.schedule(loop, 0);
   }
 
@@ -442,7 +446,7 @@ export class LeashRuntimeManager implements RuntimeManager {
     for (const { id } of rows) {
       if (this.draining) break;
       try {
-        await this.start(id);
+        await this.start(id, { resume: true });
         started++;
         const rec = await appendTrace(this.deps.pool, { agentId: id, kind: 'decision', detail: { summary: 'resumed after a LEASH restart (you had it running)' } });
         this.deps.hub.emit(id, 'trace', traceEvent(rec));
@@ -661,6 +665,8 @@ export class LeashRuntimeManager implements RuntimeManager {
           const budget = this.deps.settings.failureBudget ?? DEFAULT_FAILURE_BUDGET;
           await this.recordFailure(loop.agent.id, err, !budgetExhausted(loop.consecutiveFailures, budget));
           await this.tripBreakerIfExhausted(loop, err);
+          // AQ-FND S1: also count it in the typed, persisted budget (survives restarts).
+          if (!loop.stopped) await this.recordBudget(loop, classifyThrown(err), describeCycleFailure(err, { retrying: false }));
         })
         .finally(() => {
           loop.busy = false;
@@ -696,6 +702,7 @@ export class LeashRuntimeManager implements RuntimeManager {
     const snapshot = await loop.graph.getState(config);
     // 0.2.x: pending interrupts live on tasks[].interrupts, NOT result.__interrupt__ (PHASE-0 §1b).
     const pending = snapshot.tasks.flatMap((t) => t.interrupts)[0];
+    if (!pending) await this.recordCycleBudget(loop, snapshot.values);
     if (!pending) {
       // Cycle completed without an approval interrupt — the directed origin's
       // output is ready; propose the chain's first hop (Phase 5.6).
@@ -739,6 +746,7 @@ export class LeashRuntimeManager implements RuntimeManager {
     const resolved: ApprovalDecision =
       decision === 'timeout' ? { decision: 'deny', reason: 'approval timed out' } : decision;
     await loop.graph.invoke(new Command({ resume: resolved }), config);
+    await this.recordCycleBudget(loop, (await loop.graph.getState(config)).values);
     await this.maybeAdvanceChains(loop, config);
   }
 
@@ -834,6 +842,52 @@ export class LeashRuntimeManager implements RuntimeManager {
    * the loop's own `current` promise, so it must NOT await it (halt() would deadlock) — it just marks
    * the loop stopped and drops it, and schedule() then no-ops.
    */
+  /** AQ-FND S1: classify the finished cycle and feed the typed, persisted failure budget. */
+  private async recordCycleBudget(loop: Loop, values: unknown): Promise<void> {
+    const v = (values ?? {}) as { outcome?: { type: string; reason?: string; decoded?: unknown }; finishReason?: string | null };
+    const cls = classifyCycleResult({ outcome: v.outcome, finishReason: v.finishReason ?? null, parseMissReason: PARSE_MISS_REASON });
+    await this.recordBudget(loop, cls, v.outcome?.reason ?? '');
+  }
+
+  private async recordBudget(loop: Loop, cls: FailureClass | null, detail: string): Promise<void> {
+    if (loop.stopped) return;
+    // failureBudget 0 is the documented kill switch for loop-breaking (retry forever): honour it here too.
+    if ((this.deps.settings.failureBudget ?? DEFAULT_FAILURE_BUDGET) === 0) return;
+    try {
+      const r = await recordCycleResult(this.deps.pool, loop.agent.id, cls, detail);
+      if (r.tripped) await this.pauseForBreaker(loop, `paused: ${describeTrip(r.tripped, r.count, detail)}`, detail);
+    } catch (err) {
+      console.error(`failed to record the failure budget for agent ${loop.agent.id}`, err);
+    }
+  }
+
+  /** Pause an agent because a breaker tripped: stop the loop, forget the desire to run, trace + alert in plain words. */
+  private async pauseForBreaker(loop: Loop, summary: string, raw: unknown): Promise<void> {
+    const agentId = loop.agent.id;
+    loop.stopped = true;
+    if (loop.timer) clearTimeout(loop.timer);
+    loop.timer = null;
+    this.loops.delete(agentId);
+    await this.setDesired(agentId, false); // a crash-looping agent must not auto-restart
+    console.error(`[loop-breaker] agent ${agentId} ${summary}`);
+    try {
+      const rec = await appendTrace(this.deps.pool, { agentId, kind: 'decision', detail: { summary, rawError: rawErrorText(raw) } });
+      this.deps.hub.emit(agentId, 'trace', traceEvent(rec));
+      if (this.deps.alerts) {
+        await this.deps.alerts.emit(loop.agent.ownerAddr, {
+          agentId,
+          class: 'info',
+          kind: 'runtime_error',
+          summary: `${loop.agent.name} ${summary}. Fix the cause, then press Resume.`,
+          refs: { traceSeq: rec.seq },
+          dedupKey: `breaker:${agentId}`,
+        });
+      }
+    } catch (traceErr) {
+      console.error(`failed to record loop-breaker pause for agent ${agentId}`, traceErr);
+    }
+  }
+
   private async tripBreakerIfExhausted(loop: Loop, err: unknown): Promise<void> {
     const budget = this.deps.settings.failureBudget ?? DEFAULT_FAILURE_BUDGET;
     if (loop.stopped || !budgetExhausted(loop.consecutiveFailures, budget)) return;

@@ -118,7 +118,7 @@ export interface ChainOps {
 }
 
 export interface RuntimeManager {
-  start(agentId: string): Promise<void>;
+  start(agentId: string, opts?: { resume?: boolean }): Promise<void>;
   stop(agentId: string): Promise<void>;
   isRunning(agentId: string): boolean;
   haltForRevoke(agentId: string): Promise<void>;

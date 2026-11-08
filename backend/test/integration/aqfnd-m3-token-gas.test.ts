@@ -279,6 +279,51 @@ describe('S1 — send safety at the agent level', () => {
   });
 });
 
+describe('S1 — typed, persisted breaker pauses an agent whose sends keep failing', () => {
+  it('5 consecutive transient send failures pause the agent, clear its desire, and raise ONE plain-language alert', async () => {
+    const id = await seedTokenAgent();
+    fakeChain.tokenEnabled = true;
+    fakeChain.tokenPayees = [BENEFICIARY.toLowerCase()];
+    fakeChain.tokenTransferError = new Error('rpc exploded');
+    nock(UPSTREAM)
+      .post('/v1/chat/completions')
+      .times(60)
+      .reply(200, {
+        id: 'c',
+        choices: [{ message: { role: 'assistant', content: JSON.stringify({ action: 'send', amountWei: (CAP / 2n).toString(), reason: 'token top-up' }) } }],
+        x_0g_trace: { provider: 'p', request_id: 'r', billing: {} },
+      });
+    const fast = new LeashRuntimeManager({
+      pool: db.pool, hub: t.hub, broker: t.broker, chain: fakeChain, checkpointer, alerts: t.alerts,
+      settings: { keyring: TEST_KEYRING, approvalTimeoutMs: 20_000, gatewayUrl, intervalMs: 40, defaultModel: 'test-model', failureBudget: 100 },
+    });
+    await fast.start(id);
+    await waitFor(async () => !fast.isRunning(id), 30_000);
+    const br = (await db.pool.query(`SELECT count, tripped_at FROM agent_breakers WHERE agent_id=$1 AND class='transient'`, [id])).rows[0];
+    expect(br.count).toBe(5);
+    expect(br.tripped_at).not.toBeNull();
+    expect((await db.pool.query<{ d: boolean }>(`SELECT run_desired AS d FROM agents WHERE id=$1`, [id])).rows[0]!.d).toBe(false);
+    const alerts = await db.pool.query(`SELECT summary FROM alerts WHERE agent_id=$1 AND kind='runtime_error'`, [id]);
+    expect(alerts.rows.some((r) => /paused: 5 cycles in a row failed on infrastructure/.test(r.summary as string))).toBe(true);
+    fakeChain.tokenTransferError = null;
+  });
+});
+
+describe('S1 — nothing to do means NO model call', () => {
+  it('target already met: stands down deterministically without calling the model', async () => {
+    const id = await seedTokenAgent();
+    fakeChain.beneficiaryTokenBalance = 50n * CAP; // == target
+    // NO mockSend(): any model call would be refused by nock and fail the cycle
+    await manager.start(id);
+    startedAgents.push(id);
+    await waitFor(async () => (await db.pool.query(`SELECT 1 FROM trace_records WHERE agent_id=$1 AND record::text ILIKE '%nothing to do%'`, [id])).rowCount! > 0);
+    await manager.settle(id);
+    const all = (await db.pool.query(`SELECT record::text AS t FROM trace_records WHERE agent_id=$1`, [id])).rows.map((r) => r.t as string).join('\n');
+    expect(all).not.toMatch(/cycle failed|gateway refused/);
+    expect(fakeChain.tokenTransfers).toHaveLength(0);
+  });
+});
+
 describe('S1 — restart safety: owner-desired agents resume, owner-stopped ones do not', () => {
   const desired = async (id: string) => (await db.pool.query<{ d: boolean }>(`SELECT run_desired AS d FROM agents WHERE id=$1`, [id])).rows[0]!.d;
   const mkManager = () =>
