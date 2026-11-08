@@ -36,6 +36,8 @@ class FakeRuntimeChain implements RuntimeChain {
   public tokenPayees: string[] = [BENEFICIARY.toLowerCase()];
   /** the beneficiary's balance in TOKEN (0 ⇒ a top-up is warranted). */
   public beneficiaryTokenBalance = 0n;
+  /** the ACCOUNT's balance in TOKEN (what it can actually send). */
+  public accountTokenBalance = 0n;
   public policyView: PolicyView = {
     perTransferCap: CAP,
     windowCap: 3n * CAP,
@@ -54,7 +56,7 @@ class FakeRuntimeChain implements RuntimeChain {
     return this.policyView;
   }
   async getErc20Balance(_token: string, owner: string): Promise<bigint> {
-    return owner.toLowerCase() === BENEFICIARY.toLowerCase() ? this.beneficiaryTokenBalance : 0n;
+    return owner.toLowerCase() === BENEFICIARY.toLowerCase() ? this.beneficiaryTokenBalance : this.accountTokenBalance;
   }
   async getAssetPolicy(_acct: string, token: string, payeeCandidates: string[]) {
     const isNative = token.toLowerCase() === '0x0000000000000000000000000000000000000000';
@@ -185,6 +187,69 @@ async function waitFor(cond: () => Promise<boolean> | boolean, timeoutMs = 30_00
     await new Promise((r) => setTimeout(r, 100));
   }
 }
+
+describe('D5-2 — the token agent reads its TOKEN budget, not the native caps', () => {
+  it('the observation sent to the model carries the token caps (assetToken set), never the native ones', async () => {
+    const id = await seedTokenAgent();
+    const now = Math.floor(Date.now() / 1000);
+    fakeChain.policyView = {
+      ...fakeChain.policyView,
+      assets: [
+        { token: '0x0000000000000000000000000000000000000000', enabled: true, perTransferCap: CAP, windowCap: 3n * CAP, windowSeconds: 3600, spentInWindow: 0n, windowStart: now },
+        { token: TOKEN.toLowerCase(), enabled: true, perTransferCap: 5n * 10n ** 18n, windowCap: 7n * 10n ** 18n, windowSeconds: 86_400, spentInWindow: 2n * 10n ** 18n, windowStart: now },
+      ],
+    };
+    let sent = '';
+    nock(UPSTREAM)
+      .post('/v1/chat/completions')
+      .reply(200, (_uri: string, body: unknown) => {
+        sent = JSON.stringify(body);
+        return {
+          id: 'c',
+          choices: [{ message: { role: 'assistant', content: JSON.stringify({ action: 'stand_down', amountWei: '0', reason: 'probe' }) } }],
+          x_0g_trace: { provider: 'p', request_id: 'r', billing: {} },
+        };
+      });
+    await manager.start(id);
+    startedAgents.push(id);
+    await waitFor(() => sent !== '');
+    await manager.settle(id);
+    expect(sent).toContain(`\\"perTransferCapWei\\":\\"${5n * 10n ** 18n}\\"`);
+    expect(sent).toContain(`\\"remainingWindowWei\\":\\"${5n * 10n ** 18n}\\"`);
+    expect(sent).toContain(`\\"assetToken\\":\\"${TOKEN.toLowerCase()}\\"`);
+    expect(sent).not.toContain(`\\"perTransferCapWei\\":\\"${CAP}\\"`);
+  });
+});
+
+describe('L-3 — the cycle carry of a token agent is over TOKEN balances', () => {
+  it('stored snapshot + actionPossible use the token balances and the token payee, not native', async () => {
+    const id = await seedTokenAgent();
+    fakeChain.beneficiaryTokenBalance = 123n; // below target => an action is warranted
+    fakeChain.accountTokenBalance = 10n ** 18n; // and the account holds the token to send
+    fakeChain.tokenPayees = [BENEFICIARY.toLowerCase()];
+    // The account holds ZERO native coin: the old (native) carry judged action impossible here.
+    fakeChain.balances.clear();
+    fakeChain.balances.set(SESSION_ADDR.toLowerCase(), 10n ** 16n);
+    nock(UPSTREAM)
+      .post('/v1/chat/completions')
+      .reply(200, {
+        id: 'c',
+        choices: [{ message: { role: 'assistant', content: JSON.stringify({ action: 'stand_down', amountWei: '0', reason: 'probe' }) } }],
+        x_0g_trace: { provider: 'p', request_id: 'r', billing: {} },
+      });
+    await manager.start(id);
+    startedAgents.push(id);
+    await waitFor(async () => (await db.pool.query(`SELECT 1 FROM trace_records WHERE agent_id=$1`, [id])).rowCount! > 0);
+    await manager.settle(id);
+    const row = await db.pool.query<{ record: { detail?: { cycle?: { snapshot: { beneficiaryBalanceWei: string }; actionPossible: boolean } } } }>(
+      `SELECT record FROM trace_records WHERE agent_id=$1 AND record->'detail'->'cycle' IS NOT NULL ORDER BY seq DESC LIMIT 1`,
+      [id],
+    );
+    const cycle = row.rows[0]!.record.detail!.cycle!;
+    expect(cycle.snapshot.beneficiaryBalanceWei).toBe('123');
+    expect(cycle.actionPossible).toBe(true);
+  });
+});
 
 describe('AQ-FND M-3 — token top-up act routing', () => {
   it('a spendable token routes to executeTokenTransfer (the self-funding act)', async () => {

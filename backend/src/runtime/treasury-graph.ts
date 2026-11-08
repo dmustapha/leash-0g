@@ -424,6 +424,13 @@ function treasuryGoalToken(goal: TreasuryGoal | SentinelGoal | TraderGoal | null
   return token ? token.toLowerCase() : null;
 }
 
+/** D5-2/L-3: the token-denominated inputs to the cross-cycle carry (absent for a native goal). */
+interface TokenCarryView {
+  beneficiaryWei: string;
+  accountWei: string;
+  payeeOk: boolean;
+}
+
 export function buildTreasuryGraph(
   deps: TreasuryGraphDeps,
   ctx: TreasuryAgentContext,
@@ -457,16 +464,27 @@ export function buildTreasuryGraph(
   }
 
   /** P3C-6(i): snapshot a PolicyView with the contract's own lazy window-rollover math. */
-  function toPolicySnapshot(policy: Awaited<ReturnType<RuntimeChain['getPolicyView']>>): PolicySnapshot {
+  function toPolicySnapshot(
+    policy: Awaited<ReturnType<RuntimeChain['getPolicyView']>>,
+    goalToken: string | null = null,
+  ): PolicySnapshot {
     const nowSec = Math.floor(Date.now() / 1000);
-    const resetsAt = policy.windowStart + policy.windowSeconds;
-    const rolled = policy.windowSeconds > 0 && nowSec >= resetsAt;
-    const spent = rolled ? 0n : policy.spentInWindow;
-    const remaining = policy.windowCap > spent ? policy.windowCap - spent : 0n;
+    // D5-2: a token-goal agent is bound by its TOKEN's budget, not the native one. When that budget is
+    // enabled on-chain, the caps/window the agent reads are the token's (marked via assetToken); an
+    // unbudgeted token keeps the native view (the decide node raises the "set a budget" ask itself).
+    const tokenRow = goalToken
+      ? policy.assets?.find((a) => a.enabled && a.token.toLowerCase() === goalToken.toLowerCase())
+      : undefined;
+    const caps = tokenRow ?? policy;
+    const resetsAt = caps.windowStart + caps.windowSeconds;
+    const rolled = caps.windowSeconds > 0 && nowSec >= resetsAt;
+    const spent = rolled ? 0n : caps.spentInWindow;
+    const remaining = caps.windowCap > spent ? caps.windowCap - spent : 0n;
     return {
-      perTransferCapWei: policy.perTransferCap.toString(),
-      windowCapWei: policy.windowCap.toString(),
-      windowSeconds: policy.windowSeconds,
+      ...(tokenRow ? { assetToken: tokenRow.token.toLowerCase() } : {}),
+      perTransferCapWei: caps.perTransferCap.toString(),
+      windowCapWei: caps.windowCap.toString(),
+      windowSeconds: caps.windowSeconds,
       expiresAt: policy.expiresAt,
       allowlist: policy.allowlist.map((a) => a.toLowerCase()),
       revoked: policy.revoked,
@@ -554,15 +572,19 @@ export function buildTreasuryGraph(
     base: Partial<State>,
     hasInbound: boolean,
     nowSec: number,
+    tokenView: TokenCarryView | null = null,
   ): Promise<Partial<State>> {
     // Invariant: both call sites sense `policy` before composing the carry (idle/reject cycles never
     // reach here — they return their own cold carry inline).
     if (!base.policy) throw new Error('composeCarry requires a sensed policy snapshot');
     const policy = base.policy;
     const caps = base.capabilities ?? [];
+    // D5-2/L-3: a token-goal agent's carry (change detection + actionPossible) is over its TOKEN
+    // balances and its token budget — never the native ones, which made actionPossible false
+    // whenever the account held no native coin.
     const snapshot: SenseSnapshot = {
-      beneficiaryBalanceWei: base.beneficiaryBalanceWei ?? '0',
-      accountBalanceWei: base.accountBalanceWei ?? '0',
+      beneficiaryBalanceWei: tokenView ? tokenView.beneficiaryWei : (base.beneficiaryBalanceWei ?? '0'),
+      accountBalanceWei: tokenView ? tokenView.accountWei : (base.accountBalanceWei ?? '0'),
       remainingWindowWei: policy.remainingWindowWei,
       // The FULL grant set fingerprints here (not the ≤8 prompt-view cap) so `capabilitiesChanged`
       // tracks real grant changes, not a reshuffle of which 8 the model happened to see.
@@ -581,7 +603,8 @@ export function buildTreasuryGraph(
     const observedChange = baselineSnapshot ? snapshotsDiffer(snapshot, baselineSnapshot) : true;
     const actionPossible = computeActionPossible({
       goal: ctx.goal,
-      policy,
+      // The native allowlist says nothing about a token payee: use the per-token payee verdict.
+      policy: tokenView ? { ...policy, allowlist: tokenView.payeeOk ? [(base.effectiveBeneficiary ?? '').toLowerCase()] : [] } : policy,
       beneficiaryBalanceWei: snapshot.beneficiaryBalanceWei,
       accountBalanceWei: snapshot.accountBalanceWei,
       effectiveBeneficiary: base.effectiveBeneficiary ?? '',
@@ -639,7 +662,7 @@ export function buildTreasuryGraph(
     // AQ-FND M-3: a token-denominated treasury goal watches the beneficiary's ERC-20
     // balance (not native). The token is owner-typed on the goal — never model text.
     const goalToken = treasuryGoalToken(autoGoal);
-    const [beneficiaryBalance, beneficiaryTokenBalance, accountTokenBalance, goalTokenMeta, account, policy, capabilities] = await Promise.all([
+    const [beneficiaryBalance, beneficiaryTokenBalance, accountTokenBalance, goalTokenMeta, account, policy, capabilities, tokenAsset] = await Promise.all([
       deps.chain.getBalance(beneficiary),
       goalToken && beneficiary ? deps.chain.getErc20Balance(goalToken, beneficiary) : Promise.resolve(0n),
       goalToken ? deps.chain.getErc20Balance(goalToken, ctx.accountAddr) : Promise.resolve(0n),
@@ -648,6 +671,9 @@ export function buildTreasuryGraph(
       deps.chain.getBalance(ctx.accountAddr),
       deps.chain.getPolicyView(ctx.accountAddr, [beneficiary], goalToken ? [goalToken] : []),
       senseCapabilities(mode),
+      goalToken && beneficiary && deps.chain.getAssetPolicy
+        ? deps.chain.getAssetPolicy(ctx.accountAddr, goalToken, [beneficiary]).catch(() => null)
+        : Promise.resolve(null),
     ]);
     const base: Partial<State> = {
       beneficiaryBalanceWei: beneficiaryBalance.toString(),
@@ -662,9 +688,16 @@ export function buildTreasuryGraph(
       // P3C-6(i): window observability with the contract's OWN lazy-rollover
       // math (LeashAccount.execute) — past the boundary the window has
       // logically reset even though storage updates on the next spend.
-      policy: toPolicySnapshot(policy),
+      policy: toPolicySnapshot(policy, goalToken),
     };
-    return { ...base, ...(await composeCarry(base, mode.mode === 'inbound_transfer', nowSec)) };
+    const tokenView: TokenCarryView | null = goalToken
+      ? {
+          beneficiaryWei: beneficiaryTokenBalance.toString(),
+          accountWei: accountTokenBalance.toString(),
+          payeeOk: !!tokenAsset && tokenAsset.enabled && tokenAsset.allowedPayees.includes(beneficiary.toLowerCase()),
+        }
+      : null;
+    return { ...base, ...(await composeCarry(base, mode.mode === 'inbound_transfer', nowSec, tokenView)) };
   }
 
   async function reason(state: State): Promise<Partial<State>> {

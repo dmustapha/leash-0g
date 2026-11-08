@@ -67,4 +67,49 @@ describe('token-denominated treasury reasoning (C9)', () => {
     expect(sys).toContain('The native token of this chain is 0G');
     expect(sys).not.toContain('denominated in an ERC-20 token');
   });
+
+  describe('D5-2: the policy the agent reads is the TOKEN budget, not the native one', () => {
+    const TOKEN_POLICY: PolicySnapshot = {
+      ...POLICY,
+      perTransferCapWei: '5000000',
+      windowCapWei: '5000000',
+      spentInWindowWei: '1000000',
+      remainingWindowWei: '4000000',
+      assetToken: '0x' + 'ec'.repeat(20),
+    };
+    const ctx = base({
+      goal: TOKEN_GOAL,
+      policy: TOKEN_POLICY,
+      tokenTreasury: { symbol: 'NOVL', decimals: 18, beneficiaryBalanceWei: '4000000', accountBalanceWei: '2000000' },
+    });
+
+    it('the observation policy carries the token caps and says which asset they are in', () => {
+      const { obs } = parts(ctx);
+      const pol = obs['policy'] as Record<string, unknown>;
+      expect(pol['perTransferCapWei']).toBe('5000000');
+      expect(pol['remainingWindowWei']).toBe('4000000');
+      expect(pol['assetToken']).toBe('0x' + 'ec'.repeat(20));
+    });
+
+    it('display words for the caps are in the token symbol, never 0G', () => {
+      const d = parts(base({ ...ctx, tokenTreasury: { symbol: 'USDC', decimals: 6, beneficiaryBalanceWei: '4000000', accountBalanceWei: '2000000' } })).obs['display'] as Record<string, string>;
+      expect(d['perTransferCap']).toBe('5 USDC');
+      expect(d['windowCap']).toBe('5 USDC');
+      expect(d['spentInWindow']).toBe('1 USDC');
+      expect(d['remainingWindow']).toBe('4 USDC');
+      expect(JSON.stringify(d)).not.toMatch(/0G/);
+    });
+
+    it('the rules no longer tell the model to ignore policy when it is the token budget', () => {
+      const { sys } = parts(ctx);
+      expect(sys).not.toContain('policy.* is the native-coin spending policy');
+      expect(sys).toContain("policy.* is this token's on-chain budget");
+    });
+
+    it('without a token budget (not enabled) the old native-policy rule stays', () => {
+      const { sys, obs } = parts(base({ goal: TOKEN_GOAL, tokenTreasury: { symbol: 'USDC', decimals: 6, beneficiaryBalanceWei: '0', accountBalanceWei: '0' } }));
+      expect(sys).toContain('policy.* is the native-coin spending policy');
+      expect((obs['display'] as Record<string, string>)['perTransferCap']).toBeUndefined();
+    });
+  });
 });

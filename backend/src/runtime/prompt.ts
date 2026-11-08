@@ -30,6 +30,12 @@ export interface PolicySnapshot {
   spentInWindowWei: string;
   remainingWindowWei: string;
   windowResetsAtUnix: number;
+  /**
+   * D5-2: set ONLY when the caps/window above are the goal TOKEN's on-chain budget (a token-goal
+   * treasury whose token has an enabled V6 asset policy). Absent = the native-coin policy. It is the
+   * marker the rules and display key off, so a token agent is never shown native caps as if they bound it.
+   */
+  assetToken?: string;
 }
 
 export interface AgentDecision {
@@ -206,6 +212,18 @@ const TOKEN_TREASURY_AMOUNT_RULES = [
   '  observation.display gives each one in the token\'s own symbol (e.g. "0.01 USDC") — use those',
   '  exact words, and never call a token amount 0G, ETH or ether.',
   '- policy.* is the native-coin spending policy and does not apply to a token amount.',
+  '- Apply every rule above to the raw *Wei integers, never to the display strings.',
+];
+
+/** D5-2: same as above, but policy.* IS the token's own on-chain budget (policy.assetToken is set). */
+const TOKEN_TREASURY_BUDGET_AMOUNT_RULES = [
+  'Amounts:',
+  '- This goal is denominated in an ERC-20 token, not the native coin. goal.targetBalanceWei,',
+  '  goal.topUpWei, beneficiaryBalanceWei and accountBalanceWei are all in that token\'s base units.',
+  '  observation.display gives each one in the token\'s own symbol (e.g. "0.01 USDC") — use those',
+  '  exact words, and never call a token amount 0G, ETH or ether.',
+  '- policy.* is this token\'s on-chain budget: perTransferCapWei, windowCapWei, spentInWindowWei and',
+  '  remainingWindowWei are in the same token base units, so compare them to your token amount directly.',
   '- Apply every rule above to the raw *Wei integers, never to the display strings.',
 ];
 
@@ -468,7 +486,8 @@ function transferPromptFor(role: AgentRole): string {
 function systemPromptFor(ctx: ReasonContext): string {
   const role = transferPromptFor(goalRole(ctx.goal));
   // C9: a token-denominated treasury goal swaps the native amount rules for the token ones.
-  const base = ctx.tokenTreasury ? role.replace(AMOUNT_RULES.join('\n'), TOKEN_TREASURY_AMOUNT_RULES.join('\n')) : role;
+  const tokenRules = ctx.policy.assetToken ? TOKEN_TREASURY_BUDGET_AMOUNT_RULES : TOKEN_TREASURY_AMOUNT_RULES;
+  const base = ctx.tokenTreasury ? role.replace(AMOUNT_RULES.join('\n'), tokenRules.join('\n')) : role;
   if (ctx.cycleFlags) return `${base}\n${CYCLE_FLAGS_TEXT}`; // round-2 flag carry (minimal)
   if (ctx.cycleMemory) return `${base}\n${CYCLE_MEMORY_TEXT}`; // round-1 prose carry (gated off)
   return base; // memoryless baseline — byte-identical to production
@@ -515,6 +534,14 @@ function nativeDisplay(ctx: ReasonContext): Record<string, string> {
       beneficiaryBalance: as(tt.beneficiaryBalanceWei),
       targetBalance: as(goal.targetBalanceWei),
       topUp: as(goal.topUpWei),
+      ...(ctx.policy.assetToken
+        ? {
+            perTransferCap: as(ctx.policy.perTransferCapWei),
+            windowCap: as(ctx.policy.windowCapWei),
+            spentInWindow: as(ctx.policy.spentInWindowWei),
+            remainingWindow: as(ctx.policy.remainingWindowWei),
+          }
+        : {}),
     };
   }
   const hasTopUpShape = goal.type === undefined || goal.type === 'treasury' || goal.type === 'sentinel';
