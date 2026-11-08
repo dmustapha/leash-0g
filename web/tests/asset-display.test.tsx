@@ -201,3 +201,16 @@ describe('S-4: the gas panel does not contradict itself', () => {
     expect(screen.getByTestId('gas-chain-84532')).toHaveTextContent('has gas');
   });
 });
+
+// ── AQ-FND S1: blocked-send banner ──────────────────────────────────────────────────────────────
+import { SendBlockedBanner } from '@/components/cockpit/SendBlockedBanner';
+describe('SendBlockedBanner', () => {
+  it('says why sending is paused and offers the one action that clears it', async () => {
+    const onClear = vi.fn().mockResolvedValue(undefined);
+    render(<SendBlockedBanner block={{ intentId: 'i1', reason: 'nonce consumed without a receipt for our tx', txHash: '0xabc', chainId: 84532 }} onClear={onClear} />);
+    expect(screen.getByTestId('send-blocked-banner')).toHaveTextContent('Sending is paused');
+    expect(screen.getByTestId('send-blocked-banner')).toHaveTextContent('nothing can be paid twice');
+    await userEvent.setup().click(screen.getByTestId('send-blocked-clear'));
+    expect(onClear).toHaveBeenCalledTimes(1);
+  });
+});

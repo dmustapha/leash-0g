@@ -1,3 +1,4 @@
+import { DEFAULT_MODEL_CALLS_PER_AGENT_PER_DAY } from './model-budget.js';
 import { classifyCycleResult, classifyThrown, describeTrip, recordCycleResult, resetBreakers, type FailureClass } from './typed-breakers.js';
 import { makeCallLabeler } from '../asset/labeler.js';
 import { describeDecodedCall } from '../asset/describe-call.js';
@@ -68,6 +69,8 @@ export interface RuntimeSettings {
   jitTtlMs?: number | undefined;
   /** E1 loop-breaker: consecutive failed cycles before the agent pauses itself (default 5; 0 disables). */
   failureBudget?: number | undefined;
+  /** AQ-FND S1: hard cap on model calls per agent per UTC day (0 = unlimited; default 2000). */
+  modelCallsPerAgentPerDay?: number | undefined;
   /** E1: cap on the exponential delay between cycles while an agent is failing (default 15 min). */
   maxBackoffMs?: number | undefined;
   /** inc-3b: a CCTP MessageTransmitter is configured, so the ops key can complete a fill. Without it the gas route never starts a burn. */
@@ -386,6 +389,7 @@ export class LeashRuntimeManager implements RuntimeManager {
             alerts: this.deps.alerts,
             boundaries: this.boundaries,
             approvalTimeoutMs: this.deps.settings.approvalTimeoutMs,
+            modelCallCap: this.deps.settings.modelCallsPerAgentPerDay ?? DEFAULT_MODEL_CALLS_PER_AGENT_PER_DAY,
             // Stage D (D-8/D-10): the L2 JIT rail for a novel governed call. Only
             // wired when the alert engine is present (raiseCapabilityRequest needs
             // it); a coordination-free/alert-free test setup then stands down on

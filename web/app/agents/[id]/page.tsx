@@ -57,6 +57,7 @@ import { RulesEditor } from '@/components/cockpit/RulesEditor';
 import { DirectBox } from '@/components/cockpit/DirectBox';
 import { StatusChat } from '@/components/cockpit/StatusChat';
 import { CapabilityGrant } from '@/components/cockpit/CapabilityGrant';
+import { SendBlockedBanner } from '@/components/cockpit/SendBlockedBanner';
 import { PriceBandPanel } from '@/components/cockpit/PriceBandPanel';
 import { CapabilityDecisionCard } from '@/components/cockpit/CapabilityDecisionCard';
 import { CapabilityEnvelope } from '@/components/cockpit/CapabilityEnvelope';
@@ -870,6 +871,9 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
           {/* M-02 carry: same mismatch condition GuardianPanel warns on, surfaced up top. */}
           <MigrateGuardianBanner guardian={guardian} leashGuardian={detail.leashGuardianAddr} />
           <StatusBar detail={detail} chainVerified={chainVerified} currency={currency} />
+          {detail.sendBlock ? (
+            <SendBlockedBanner block={detail.sendBlock} onClear={async () => { await api.clearSending(id); await refresh(); }} />
+          ) : null}
           <AgentControls
             status={detail.status}
             onStart={async () => {

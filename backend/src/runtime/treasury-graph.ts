@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { reserveModelCall } from './model-budget.js';
 import { formatAssetAmount } from '../asset/format.js';
 import { safeMeta } from '../asset/sanitize.js';
 import { TxInFlightError, TxNeedsReviewError } from './tx-intents/errors.js';
@@ -237,6 +238,8 @@ const TreasuryState = Annotation.Root({
 type State = typeof TreasuryState.State;
 
 export interface TreasuryGraphDeps {
+  /** AQ-FND S1 hard budget: model calls per agent per UTC day (0/absent = unlimited). */
+  modelCallCap?: number | undefined;
   pool: Pool;
   hub: SseHub;
   /** Phase-3 alert engine (optional: coordination-free test setups omit it). */
@@ -753,6 +756,24 @@ export function buildTreasuryGraph(
     if (idle) {
       return { reasoning: '', deliberation: '', decisionSource: 'empty' as const, finishReason: null, deliberationLoops: 0, promptTokens: null, skippedModel: idle };
     }
+    // AQ-FND S1 hard budget: refuse the model call once today's cap is spent (an alert is not enforcement).
+    if (deps.modelCallCap && deps.modelCallCap > 0) {
+      const slot = await reserveModelCall(deps.pool, ctx.agentId, deps.modelCallCap);
+      if (!slot.allowed) {
+        if (slot.used === deps.modelCallCap + 1 && deps.alerts) {
+          await deps.alerts
+            .emit(ctx.agentRow.ownerAddr, {
+              agentId: ctx.agentId,
+              class: 'info',
+              kind: 'runtime_error',
+              summary: `${ctx.agentRow.name} reached its daily limit of ${deps.modelCallCap} AI model calls and will think again after 00:00 UTC. Nothing is wrong; this protects against a runaway loop.`,
+              dedupKey: `model_budget:${ctx.agentId}:${new Date().toISOString().slice(0, 10)}`,
+            })
+            .catch(() => undefined);
+        }
+        return { reasoning: '', deliberation: '', decisionSource: 'empty' as const, finishReason: null, deliberationLoops: 0, promptTokens: null, skippedModel: 'daily AI model-call limit reached — will think again after 00:00 UTC' };
+      }
+    }
     const model = ctx.goal.model ?? deps.defaultModel;
     const body = buildReasonRequest(model, {
       goal: ctx.goal,
@@ -894,13 +915,7 @@ export function buildTreasuryGraph(
     // (a null receipt is "unknown", not "failed"); the next wake re-checks. This is what stops a second
     // top-up while the first is still unconfirmed.
     if (['act', 'token_act', 'call', 'sign', 'gas_swap', 'gas_bridge'].includes(verdict.route)) {
-      let inFlight = await deps.chain.getInFlight?.(ctx.agentId);
-      // a bridge burns on the SOURCE chain: an unconfirmed burn there must also stop the next cycle
-      if (verdict.route === 'gas_bridge' && deps.gasConfig && state.gasBridgeSrcChain) {
-        const srcEnv = gasBridgeEnv(deps.gasConfig, state.gasBridgeSrcChain, deps.gasConfig.chainConfig.chainId);
-        const src = await srcEnv?.srcChain.getInFlight?.(ctx.agentId);
-        if (src && src.count > 0) inFlight = src;
-      }
+      const inFlight = await deps.chain.getInFlight?.(ctx.agentId);
       if (inFlight && inFlight.count > 0) {
         return {
           decision: { action: 'stand_down', amountWei: '0', reason: 'a previous transaction from this agent is still confirming — waiting for it before sending anything else' },
@@ -1274,6 +1289,11 @@ export function buildTreasuryGraph(
     if (await hasOpenBridgeInto(deps.pool, ctx.agentId, route.targetChainId)) {
       return standDownToken('a bridge into this chain is already in flight — waiting for it to land before acting again');
     }
+    // a bridge burns on the SOURCE chain: an unconfirmed send there (its own lane) must also stop us from bridging again
+    const srcInFlight = await env.srcChain.getInFlight?.(ctx.agentId);
+    if (srcInFlight && srcInFlight.count > 0) {
+      return standDownToken('a previous transaction on the bridge source chain is still confirming — waiting for it before bridging again');
+    }
     const pre = await precheckGasBridge(env, leg.token);
     if (pre.ok) {
       return { decision, route: 'gas_bridge', gasBridgeToken: leg.token, gasBridgeAmount: pre.amount.toString(), gasBridgeSrcChain: leg.chainId };
@@ -1360,6 +1380,8 @@ export function buildTreasuryGraph(
     } catch (err) {
       const leg = err instanceof GasSwapLegError ? err.leg : 'swap-to-gas';
       const cause = err instanceof GasSwapLegError ? err.cause : err;
+      const unsure = laneOutcome(cause);
+      if (unsure) return { outcome: unsure };
       const decoded = decodeLeashError(cause);
       const reason = decoded
         ? `swap-to-gas ${leg} leg refused: ${decoded.plain}`

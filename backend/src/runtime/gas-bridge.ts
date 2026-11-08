@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { ReceiptUnconfirmedError } from '../chain/wait-receipt.js';
+import { TxInFlightError, TxNeedsReviewError } from './tx-intents/errors.js';
 /**
  * AQ-FND M-3 inc-3b S3 — the bridge-then-swap SOURCE leg (CCTP v2 USDC burn), through the governed wall.
  *
@@ -184,6 +185,11 @@ export async function executeGasBridge(env: GasBridgeEnv, input: GasBridgeExecIn
       // agent stands down instead of bridging again.
       if (err instanceof ReceiptUnconfirmedError) {
         if (call.leg === 'burn') await recordSourceSubmitted(env.pool, row.railId, err.hash);
+        throw err;
+      }
+      if (err instanceof TxInFlightError || err instanceof TxNeedsReviewError) {
+        // nothing was sent (the lane refused): close the rail that was opened for it and let the agent stand down
+        await markFailed(env.pool, row.railId, 'a previous transaction from this key is still confirming; nothing was sent');
         throw err;
       }
       await markFailed(env.pool, row.railId, `${call.leg} leg failed: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`);

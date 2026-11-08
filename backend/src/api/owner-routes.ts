@@ -60,6 +60,7 @@ import {
 import { decodeCall, presetKeys, type CallRule, type PresetKey, type TargetCatalog } from '../governed-call/index.js';
 import { describeDecodedCall, type CallLabeler } from '../asset/describe-call.js';
 import { makeCallLabeler } from '../asset/labeler.js';
+import { clearSendBlock, getSendBlock } from '../runtime/tx-intents/store.js';
 import {
   decideToolRequest,
   recordToolPresetGrants,
@@ -1376,6 +1377,8 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       },
       accountBalance: accountBalance.toString(),
       ...(goalAsset ? { goalAsset } : {}),
+      // AQ-FND S1: when sending is blocked until a human reviews a transaction, say so (and why).
+      ...((await getSendBlock(deps.pool, agent.id)) ? { sendBlock: await getSendBlock(deps.pool, agent.id) } : {}),
       sessionExpiry: policy.expiresAt,
       addresses: { account: agent.accountAddr, sessionKey: agent.sessionKeyAddr, owner: agent.ownerAddr },
       // M-03: the guardian LEASH revokes with — the FE warns when the live
@@ -1994,6 +1997,15 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
     }
     deps.hub.emit(agent.id, 'status', statusEvent('running'));
     res.json({ ok: true, running: true });
+  }));
+
+  // AQ-FND S1: the OWNER clears a blocked send key after reviewing the transaction on the chain. Owner-authed and
+  // owner-scoped (requireOwnedAgent). Clearing retires the blocked row only; the next send takes a fresh nonce.
+  router.post('/api/agents/:id/sending/clear', asyncRoute(async (req: OwnerRequest, res) => {
+    const agent = await requireOwnedAgent(req, res);
+    if (!agent) return;
+    const cleared = await clearSendBlock(deps.pool, agent.id);
+    res.json({ ok: true, cleared });
   }));
 
   router.post('/api/agents/:id/stop', asyncRoute(async (req: OwnerRequest, res) => {

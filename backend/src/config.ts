@@ -72,6 +72,8 @@ const envSchema = z.object({
   RUNTIME_INTERVAL_MS: z.coerce.number().int().positive().default(30_000),
   // E1 loop-breaker: consecutive failed cycles before an agent pauses itself (0 disables).
   AGENT_FAILURE_BUDGET: z.coerce.number().int().nonnegative().default(5),
+  // AQ-FND S1 hard budget: model calls per agent per UTC day (0 = unlimited). 30 s cycles are 2,880/day at most.
+  RUNTIME_MODEL_CALLS_PER_AGENT_PER_DAY: z.coerce.number().int().nonnegative().default(2000),
   // 0G's own model as the Phase-1 default (Dami 2026-09-20): 0G agents reason on
   // 0G's in-house model. It is a REASONING model (emits reasoning_content before
   // content, PHASE-0 §2) — prompt.ts keeps max_tokens ≥256 and falls back to

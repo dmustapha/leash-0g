@@ -244,26 +244,33 @@ export class SendLane {
         throw err;
       }
 
-      await this.broadcast(intentId, raw, txHash);
+      const b = await this.broadcast(intentId, raw, txHash);
+      // the handle is persisted/handed over BEFORE any throw, whatever happened on the wire
       if (req.onBroadcast) await req.onBroadcast(txHash);
+      if (b.unsure) throw new ReceiptUnconfirmedError({ hash: txHash, attempts: 0, quirk: false, cause: b.unsure });
       return this.awaitReceipt(intentId, txHash);
     });
   }
 
-  /** Broadcast the signed bytes. Ambiguity (lost response / already known) is reconciled, never rebuilt. */
-  private async broadcast(intentId: string, raw: Hex, txHash: Hex): Promise<void> {
+  /**
+   * Broadcast the signed bytes. Ambiguity (lost response / already known) is reconciled, never rebuilt.
+   * Returns `unsure` when transport trouble means we do not know whether the chain saw it: the caller still
+   * hands over the hash (the write-ahead handle) and then reports "unconfirmed", never "failed" (review N-1).
+   */
+  private async broadcast(intentId: string, raw: Hex, txHash: Hex): Promise<{ unsure: unknown }> {
     try {
       await this.t.sendRaw(raw);
       await this.setStatus(intentId, 'broadcast');
+      return { unsure: null };
     } catch (err) {
       if (isAlreadyKnown(err)) {
         await this.setStatus(intentId, 'broadcast');
-        return;
+        return { unsure: null };
       }
       if (isNonceTooLow(err)) {
         // the nonce is consumed: either our tx (lagging receipt) or an outsider. reconcile decides; never rebuild.
         await this.setStatus(intentId, 'broadcast');
-        return;
+        return { unsure: null };
       }
       if (isLastingRejection(err)) {
         // the node REFUSED these bytes for a lasting reason (cannot afford gas*fee, fee below the node minimum):
@@ -273,7 +280,7 @@ export class SendLane {
       }
       // transport trouble: unknown whether the chain saw it. The row stays `signed`; reconcile re-sends the SAME bytes.
       void txHash;
-      throw err;
+      return { unsure: err };
     }
   }
 
@@ -295,12 +302,12 @@ export class SendLane {
   private async recordReceipt(intentId: string, txHash: Hex, rc: { status: 'success' | 'reverted'; blockNumber: bigint }): Promise<SendResult> {
     if (rc.status === 'reverted') {
       await this.pool.query(
-        `UPDATE tx_intents SET status='reverted', mined_block=$2, tx_hash=$3, error_class='permanent', error_text='reverted on-chain', updated_at=now() WHERE intent_id=$1 AND status IN ('signed','broadcast')`,
+        `UPDATE tx_intents SET status='reverted', mined_block=$2, tx_hash=$3, error_class='permanent', error_text='reverted on-chain', updated_at=now() WHERE intent_id=$1 AND status IN ('signed','broadcast','needs_review')`,
         [intentId, rc.blockNumber.toString(), txHash],
       );
       throw new Error(`execute transfer reverted on-chain: ${txHash}`);
     }
-    await this.pool.query(`UPDATE tx_intents SET status='mined', mined_block=$2, tx_hash=$3, updated_at=now() WHERE intent_id=$1 AND status IN ('signed','broadcast')`, [intentId, rc.blockNumber.toString(), txHash]);
+    await this.pool.query(`UPDATE tx_intents SET status='mined', mined_block=$2, tx_hash=$3, error_class=NULL, error_text=NULL, updated_at=now() WHERE intent_id=$1 AND status IN ('signed','broadcast','needs_review')`, [intentId, rc.blockNumber.toString(), txHash]);
     return { intentId, txHash, status: 'mined' };
   }
 
@@ -350,7 +357,7 @@ export class SendLane {
   /** Boot + periodic: resolve every open intent from (row, chain). Never rebuilds a tx. */
   async reconcile(): Promise<{ examined: number }> {
     const { rows } = await this.pool.query<IntentRow>(
-      `SELECT ${SEL} FROM tx_intents WHERE chain_id=$1 AND status IN ('intent','signed','broadcast','mined') ORDER BY created_at`,
+      `SELECT ${SEL} FROM tx_intents WHERE chain_id=$1 AND status IN ('intent','signed','broadcast','mined','needs_review') ORDER BY created_at`,
       [this.t.chainId],
     );
     for (const r of rows) {
@@ -373,6 +380,14 @@ export class SendLane {
     if (row.status === 'mined') {
       if (row.mined_block != null && (await this.t.getBlockNumber()) - BigInt(row.mined_block) >= BigInt(this.finalityDepth)) {
         await this.pool.query(`UPDATE tx_intents SET status='finalized', finalized_at=now(), updated_at=now() WHERE intent_id=$1 AND status='mined'`, [row.intent_id]);
+      }
+      return;
+    }
+    if (row.status === 'needs_review') {
+      // a blocked key heals itself if a receipt for ANY hash we ever signed for that nonce appears (indexer lag)
+      for (const h of [row.tx_hash, ...(row.prev_hashes ?? [])].filter(Boolean) as Hex[]) {
+        const found = await this.t.getReceipt(h).catch(() => null);
+        if (found) { await this.recordReceipt(row.intent_id, h, found).catch(() => undefined); return; }
       }
       return;
     }
@@ -401,7 +416,19 @@ export class SendLane {
     const age = row.age_ms;
     // signed, never accepted by any node, for too long: do NOT resend an action decided on old balances; ask a human.
     if (row.status === 'signed' && row.rebroadcasts === 0 && age >= STALE_SIGNED_MS) {
-      await this.toReview(row, 'signed but never accepted by the network; not resent because it was decided on old balances');
+      // the network may simply have been unreachable (an outage is not a verdict): try the stored bytes ONCE; only if
+      // they are refused for good is it escalated, because the action was decided on balances that may have changed.
+      try {
+        await this.t.sendRaw(row.raw_tx as Hex);
+      } catch (err) {
+        if (!isAlreadyKnown(err)) {
+          if (isLastingRejection(err) || isNonceTooLow(err)) {
+            await this.toReview(row, 'signed long ago and now refused by the network; not resent because it was decided on old balances');
+          }
+          return; // transport still down: leave it for the next tick
+        }
+      }
+      await this.pool.query(`UPDATE tx_intents SET status='broadcast', rebroadcasts = rebroadcasts + 1, updated_at=now() WHERE intent_id=$1 AND status IN ('signed','broadcast')`, [row.intent_id]);
       return;
     }
     if (row.status === 'signed' || age >= this.rebroadcastAfterMs) {
@@ -413,7 +440,18 @@ export class SendLane {
       try {
         await this.t.sendRaw(row.raw_tx as Hex);
       } catch (err) {
-        if (!isAlreadyKnown(err) && !isNonceTooLow(err)) throw err;
+        if (!isAlreadyKnown(err) && !isNonceTooLow(err)) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (/insufficient funds|exceeds the balance/i.test(msg)) {
+            // the key cannot pay for this tx any more: no fee bump helps; a human tops it up / decides
+            await this.toReview(row, `cannot afford the transaction fee: ${msg.split('\n')[0]?.slice(0, 120) ?? ''}`);
+            return;
+          }
+          // a lasting fee refusal (underpriced / below the node minimum) COUNTS toward the bump budget, so the next
+          // step replaces the tx at a market fee instead of retrying dead bytes forever. A plain transport blip does
+          // not burn the budget (an outage must not push a healthy tx to a human).
+          if (!isLastingRejection(err)) return;
+        }
       }
       await this.pool.query(
         `UPDATE tx_intents SET status='broadcast', rebroadcasts = rebroadcasts + 1, updated_at=now() WHERE intent_id=$1 AND status IN ('signed','broadcast')`,

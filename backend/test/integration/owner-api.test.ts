@@ -633,3 +633,25 @@ describe('beta 3b — GET /api/agents/:id carries the goal asset for a token age
     });
   });
 });
+
+describe('AQ-FND S1 — a blocked send key is visible to the owner and clearable only by the owner', () => {
+  it('GET shows sendBlock; POST /sending/clear retires it for the owner, not for anyone else', async () => {
+    const a = await createAgent();
+    await db.pool.query(
+      `INSERT INTO tx_intents (intent_id, agent_id, chain_id, key_addr, account_addr, kind, idem_key, payload, status, nonce, tx_hash, error_text)
+       VALUES (gen_random_uuid(), $1, 16602, $2, $3, 'transfer', 'blk', '{}'::jsonb, 'needs_review', 3, $4, 'nonce consumed without a receipt for our tx')`,
+      [a.id, '0x' + '11'.repeat(20), '0x' + '22'.repeat(20), '0x' + 'ab'.repeat(32)],
+    );
+    const before = await request(t.app).get(`/api/agents/${a.id}`).set('authorization', ownerAuth(OWNER));
+    expect(before.body.sendBlock).toMatchObject({ reason: 'nonce consumed without a receipt for our tx', txHash: '0x' + 'ab'.repeat(32) });
+
+    const stranger = await request(t.app).post(`/api/agents/${a.id}/sending/clear`).set('authorization', ownerAuth('0x' + 'f9'.repeat(20)));
+    expect([403, 404]).toContain(stranger.status);
+    expect((await request(t.app).get(`/api/agents/${a.id}`).set('authorization', ownerAuth(OWNER))).body.sendBlock).toBeTruthy();
+
+    const ok = await request(t.app).post(`/api/agents/${a.id}/sending/clear`).set('authorization', ownerAuth(OWNER));
+    expect(ok.status).toBe(200);
+    expect(ok.body.cleared).toBe(1);
+    expect((await request(t.app).get(`/api/agents/${a.id}`).set('authorization', ownerAuth(OWNER))).body.sendBlock).toBeUndefined();
+  });
+});

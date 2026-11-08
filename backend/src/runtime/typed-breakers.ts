@@ -5,10 +5,10 @@ import type { Pool } from 'pg';
  * as the only guard: an on-chain refusal repeated every 30 s, a model that keeps emitting garbage, or an
  * RPC that is down are DIFFERENT problems with different thresholds, and none may reset on a restart.
  */
-export type FailureClass = 'permanent' | 'transient' | 'model' | 'ambiguous';
+export type FailureClass = 'permanent' | 'transient' | 'model' | 'ambiguous' | 'upstream';
 
 /** Trips when count >= threshold. Value-moving refusals trip fast; infrastructure noise trips slow. */
-export const FAILURE_THRESHOLDS: Record<FailureClass, number> = { permanent: 2, transient: 5, model: 3, ambiguous: 1 };
+export const FAILURE_THRESHOLDS: Record<FailureClass, number> = { permanent: 2, transient: 5, model: 3, ambiguous: 1, upstream: 20 };
 /** permanent counts decay: two refusals more than a day apart are not a loop. */
 const PERMANENT_WINDOW_HOURS = 24;
 
@@ -53,6 +53,7 @@ export function classifyThrown(err: unknown): FailureClass {
   // infrastructure: it must not be recorded as the agent's reasoning failing (a router blip would otherwise
   // pause the whole fleet and clear everyone's run_desired).
   if (/unparsable|invalid decision|finish_reason/i.test(msg)) return 'model';
+  if (/gateway refused inference|compute forward failed|status (429|5\d\d)/i.test(msg)) return 'upstream';
   return 'transient';
 }
 
@@ -65,7 +66,7 @@ export interface BreakerResult {
 /** Record a cycle result: `cls === null` is a healthy cycle (resets consecutive counters). */
 export async function recordCycleResult(pool: Pool, agentId: string, cls: FailureClass | null, detail?: string): Promise<BreakerResult> {
   if (cls === null) {
-    await pool.query(`UPDATE agent_breakers SET count = 0 WHERE agent_id = $1 AND class IN ('transient', 'model') AND count > 0`, [agentId]);
+    await pool.query(`UPDATE agent_breakers SET count = 0 WHERE agent_id = $1 AND class IN ('transient', 'model', 'upstream') AND count > 0`, [agentId]);
     return { tripped: null, count: 0 };
   }
   const { rows } = await pool.query<{ count: number }>(
@@ -101,6 +102,8 @@ export function describeTrip(cls: FailureClass, count: number, detail: string): 
       return `${count} cycles in a row failed on infrastructure (network/RPC/timeouts): ${detail || 'no detail'}`;
     case 'model':
       return `its reasoning model failed ${count} cycles in a row (unreadable, cut off or looping output): ${detail || 'no detail'}`;
+    case 'upstream':
+      return `the AI model service was unavailable for ${count} cycles in a row: ${detail || 'no detail'}`;
     case 'ambiguous':
       return `its transaction counter was used by something LEASH did not send, so it stopped to avoid sending twice`;
   }

@@ -230,6 +230,7 @@ async function main(): Promise<void> {
       gatewayUrl: `http://127.0.0.1:${cfg.GATEWAY_PORT}`, // the runtime is the gateway's only client
       intervalMs: cfg.RUNTIME_INTERVAL_MS,
       failureBudget: cfg.AGENT_FAILURE_BUDGET,
+      modelCallsPerAgentPerDay: cfg.RUNTIME_MODEL_CALLS_PER_AGENT_PER_DAY,
       cctpFillEnabled: Boolean(cfg.CCTP_MESSAGE_TRANSMITTER_ADDR),
       defaultModel: cfg.RUNTIME_DEFAULT_MODEL,
       jobProviderModel: cfg.JOB_PROVIDER_MODEL,

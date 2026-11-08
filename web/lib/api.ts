@@ -142,6 +142,8 @@ export function makeApi(getToken: TokenGetter) {
     revoke: (id: string) => request<{ ok: true; txHash?: string }>(getToken, 'POST', `/api/agents/${id}/revoke`),
     start: (id: string) => request<{ ok: true }>(getToken, 'POST', `/api/agents/${id}/start`),
     stop: (id: string) => request<{ ok: true }>(getToken, 'POST', `/api/agents/${id}/stop`),
+    /** AQ-FND S1: the owner confirms they reviewed a blocked transaction; sending can resume. */
+    clearSending: (id: string) => request<{ ok: true; cleared: number }>(getToken, 'POST', `/api/agents/${id}/sending/clear`),
     rotate: (id: string) =>
       request<{ gatewayToken: string }>(getToken, 'POST', `/api/agents/${id}/rotate`),
     getAudit: (id: string) => request<AuditBatch[]>(getToken, 'GET', `/api/agents/${id}/audit`),

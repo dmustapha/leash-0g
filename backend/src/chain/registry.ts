@@ -654,17 +654,23 @@ export class ChainRegistry {
   }
 
   /** Boot + periodic: reconcile open intents on EVERY configured chain (not just those already dialed). */
-  async reconcileAllIntents(): Promise<number> {
-    let n = 0;
-    for (const id of this.byId.keys()) {
-      try {
+  async reconcileAllIntents(perChainTimeoutMs = 20_000): Promise<number> {
+    // in PARALLEL and bounded per chain: one dead RPC must not delay every agent's boot resume (review N-10)
+    const results = await Promise.allSettled(
+      [...this.byId.keys()].map(async (id) => {
         const sc = this.getSessionChain(id);
-        const r = await sc.reconcileIntents?.();
-        n += r?.examined ?? 0;
-      } catch (err) {
-        console.warn(`[tx-intents] reconcile failed on chain ${id}:`, err instanceof Error ? err.message : err);
-      }
-    }
+        const r = await Promise.race([
+          sc.reconcileIntents?.() ?? Promise.resolve({ examined: 0 }),
+          new Promise<{ examined: number }>((_, rej) => setTimeout(() => rej(new Error('reconcile timed out')), perChainTimeoutMs).unref()),
+        ]);
+        return r.examined;
+      }),
+    );
+    let n = 0;
+    results.forEach((r, i) => {
+      if (r.status === 'fulfilled') n += r.value;
+      else console.warn(`[tx-intents] reconcile failed on chain ${[...this.byId.keys()][i]}:`, r.reason instanceof Error ? r.reason.message : r.reason);
+    });
     return n;
   }
 

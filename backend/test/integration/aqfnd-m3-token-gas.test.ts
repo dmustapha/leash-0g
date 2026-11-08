@@ -410,6 +410,32 @@ describe('S1 — Gate-2: blocked key and token budget', () => {
   });
 });
 
+describe('S1 — hard budget: a daily model-call cap that is ENFORCED before the call', () => {
+  it('once the cap is spent the model is not called again (and the owner is told once)', async () => {
+    const id = await seedTokenAgent();
+    const capped = new LeashRuntimeManager({
+      pool: db.pool, hub: t.hub, broker: t.broker, chain: fakeChain, checkpointer, alerts: t.alerts,
+      settings: { keyring: TEST_KEYRING, approvalTimeoutMs: 20_000, gatewayUrl, intervalMs: 60, defaultModel: 'test-model', modelCallsPerAgentPerDay: 2 },
+    });
+    let modelCalls = 0;
+    nock(UPSTREAM).post('/v1/chat/completions').times(50).reply(200, () => {
+      modelCalls++;
+      return {
+        id: 'c',
+        choices: [{ message: { role: 'assistant', content: JSON.stringify({ action: 'stand_down', amountWei: '0', reason: 'probe' }) } }],
+        x_0g_trace: { provider: 'p', request_id: 'r', billing: {} },
+      };
+    });
+    await capped.start(id);
+    await waitFor(async () => (await db.pool.query(`SELECT 1 FROM trace_records WHERE agent_id=$1 AND record::text ILIKE '%daily AI model-call limit%'`, [id])).rowCount! > 0, 20_000);
+    await new Promise((r) => setTimeout(r, 400)); // let a few more cycles run
+    await capped.drain(2_000);
+    expect(modelCalls).toBe(2); // exactly the cap, never more
+    const alerts = await db.pool.query(`SELECT summary FROM alerts WHERE agent_id=$1 AND kind='runtime_error'`, [id]);
+    expect(alerts.rows.filter((r) => /daily limit/.test(r.summary as string))).toHaveLength(1);
+  });
+});
+
 describe('S1 — nothing to do means NO model call', () => {
   it('target already met: stands down deterministically without calling the model', async () => {
     const id = await seedTokenAgent();

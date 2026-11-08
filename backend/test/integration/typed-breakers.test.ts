@@ -31,6 +31,11 @@ describe('typed, persisted failure budget', () => {
     expect((await rec('ambiguous', 'a2')).tripped).toBe('ambiguous');
   });
 
+  it('upstream (router outage) needs 20 consecutive cycles to pause an agent', async () => {
+    for (let i = 0; i < 19; i++) expect((await rec('upstream')).tripped).toBeNull();
+    expect((await rec('upstream')).tripped).toBe('upstream');
+  });
+
   it('classes are independent: transient noise never trips a permanent budget', async () => {
     for (let i = 0; i < 4; i++) await rec('transient');
     expect((await rec('permanent')).tripped).toBeNull();
@@ -65,8 +70,8 @@ describe('typed, persisted failure budget', () => {
     expect(classifyCycleResult({ outcome: { type: 'stood_down', reason: 'target balance already met — nothing to do' }, parseMissReason: PARSE_MISS })).toBeNull();
     expect(classifyCycleResult({ outcome: { type: 'acted' }, parseMissReason: PARSE_MISS })).toBeNull();
     // a router outage is infrastructure, not the agent's reasoning failing (review M-2)
-    expect(classifyThrown(new Error('gateway refused inference: status 502'))).toBe('transient');
-    expect(classifyThrown(new Error('gateway refused inference: status 429'))).toBe('transient');
+    expect(classifyThrown(new Error('gateway refused inference: status 502'))).toBe('upstream');
+    expect(classifyThrown(new Error('gateway refused inference: status 429'))).toBe('upstream');
     expect(classifyThrown(new Error('model output unparsable'))).toBe('model');
     // the rolling window resetting is an expected boundary and never counts (review M-3)
     expect(classifyCycleResult({ outcome: { type: 'failed', reason: 'x', decoded: { errorName: 'OverWindowCap' } }, parseMissReason: PARSE_MISS })).toBeNull();

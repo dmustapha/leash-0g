@@ -30,7 +30,7 @@ function clientThatReverts() {
 
 describe('lane transport decodes wall refusals (review B-2)', () => {
   it('WITH the contract call it decodes the custom error into a plain refusal', async () => {
-    const t = viemLaneTransport(clientThatReverts() as never, 1);
+    const t = viemLaneTransport(clientThatReverts(), 1);
     let err: unknown;
     await t.estimate({ from: FROM, to: TO, data: '0x', value: 0n, sim: { abi: leashAccountAbi, functionName: 'execute', args: [TO, 0n, '0x'] } }).catch((e: unknown) => { err = e; });
     expect(err).toBeDefined();
@@ -38,7 +38,7 @@ describe('lane transport decodes wall refusals (review B-2)', () => {
   });
 
   it('WITHOUT it the revert is not decodable (the regression the review reproduced) — so the lane must always pass it', async () => {
-    const t = viemLaneTransport(clientThatReverts() as never, 1);
+    const t = viemLaneTransport(clientThatReverts(), 1);
     let err: unknown;
     await t.estimate({ from: FROM, to: TO, data: '0x', value: 0n }).catch((e: unknown) => { err = e; });
     expect(err).toBeDefined();

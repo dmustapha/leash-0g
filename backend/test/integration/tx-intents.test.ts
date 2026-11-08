@@ -364,6 +364,7 @@ describe('SendLane — write-ahead, idempotent, single-lane', () => {
       await db.pool.query(`UPDATE tx_intents SET updated_at = now() - interval '30 minutes' WHERE agent_id=$1`, [a]);
       const seen: string[] = [];
       const l2 = new SendLane({ pool: db.pool, transport: chain, confirmTimeoutMs: 60, pollMs: 5, rebroadcastAfterMs: 0, receiptGraceMs: 60_000, onNeedsReview: (r) => { seen.push(r.reason); } });
+      chain.sendRaw = async () => { throw new Error('transaction underpriced'); }; // refused for good (the old fee is dead)
       await l2.reconcile();
       expect((await rows(a))[0].status).toBe('needs_review');
       expect(chain.sent).toHaveLength(0);
@@ -459,6 +460,134 @@ describe('SendLane — write-ahead, idempotent, single-lane', () => {
         send: { agentId: a, idemKey: 'job-fee:1', payload: { amount: '5' } },
       });
       expect(seen).toEqual([out.txHash]);
+    });
+  });
+
+  describe('Gate-2 round 2', () => {
+    const mk = (over: Record<string, unknown> = {}) =>
+      new SendLane({ pool: db.pool, transport: chain, confirmTimeoutMs: 40, pollMs: 5, rebroadcastAfterMs: 0, receiptGraceMs: 60_000, ...over });
+
+    it('N-1: a transport error right after signing is UNKNOWN, not failed: the hash is handed over and the caller gets ReceiptUnconfirmedError', async () => {
+      const a = agent();
+      chain.sendThrowsBeforeAccept = true;
+      const seen: string[] = [];
+      const err = await lane.send(req(a, 'n1', { onBroadcast: async (h: string) => { seen.push(h); } })).catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(ReceiptUnconfirmedError);
+      const row = (await rows(a))[0];
+      expect(row.status).toBe('signed');
+      expect(seen).toEqual([row.tx_hash]); // the write-ahead handle exists BEFORE any throw
+      await mk().reconcile(); // the same bytes go out and land
+      expect(['mined', 'finalized']).toContain((await rows(a))[0].status);
+      expect(chain.sent).toHaveLength(1);
+    });
+
+    it('N-2: a resend refused for a lasting fee reason is counted and escalates to a fee bump (never stuck forever)', async () => {
+      const a = agent();
+      const bl = mk({ maxRebroadcasts: 1, bumpAfterMs: 0, getSessionKey: async () => KEY });
+      chain.autoMine = false;
+      await bl.send(req(a, 'n2')).catch(() => undefined);
+      const first = (await rows(a))[0];
+      chain.drop(first.tx_hash as Hex); // the node forgot it
+      const realSend = chain.sendRaw.bind(chain);
+      chain.sendRaw = async () => { throw new Error('transaction underpriced'); }; // the market moved: old bytes refused
+      await bl.reconcile(); // counted, not rethrown
+      expect((await rows(a))[0].rebroadcasts).toBe(1);
+      chain.sendRaw = realSend;
+      chain.feeNow = 9_000_000_000n;
+      await bl.reconcile(); // budget spent -> bump at a market fee
+      const row = (await rows(a))[0];
+      expect(row.bumps).toBe(1);
+      expect(row.tx_hash).not.toBe(first.tx_hash);
+      expect(chain.mempool.size).toBe(1);
+    });
+
+    it('N-2: a resend refused because the key cannot afford the fee goes straight to a human', async () => {
+      const a = agent();
+      const seen: string[] = [];
+      const bl = mk({ onNeedsReview: (r: { reason: string }) => { seen.push(r.reason); } });
+      chain.autoMine = false;
+      await bl.send(req(a, 'n2b')).catch(() => undefined);
+      chain.drop((await rows(a))[0].tx_hash as Hex);
+      chain.sendRaw = async () => { throw new Error('insufficient funds for gas * price + value'); };
+      await bl.reconcile();
+      expect((await rows(a))[0].status).toBe('needs_review');
+      expect(seen[0]).toMatch(/cannot afford/);
+    });
+
+    it('N-2: a transport blip during a resend does NOT burn the fee-bump budget', async () => {
+      const a = agent();
+      const bl = mk({ maxRebroadcasts: 1, bumpAfterMs: 0, getSessionKey: async () => KEY });
+      chain.autoMine = false;
+      await bl.send(req(a, 'n2c')).catch(() => undefined);
+      chain.drop((await rows(a))[0].tx_hash as Hex);
+      chain.sendRaw = async () => { throw new Error('HTTP request failed: 504'); };
+      await bl.reconcile(); await bl.reconcile(); await bl.reconcile();
+      const row = (await rows(a))[0];
+      expect(row.rebroadcasts).toBe(0);
+      expect(row.bumps).toBe(0);
+      expect(row.status).not.toBe('needs_review');
+    });
+
+    it('N-3: a needs_review row whose transaction later mines is recognised and UNBLOCKS the key', async () => {
+      const a = agent();
+      chain.autoMine = false;
+      await lane.send(req(a, 'nr1')).catch(() => undefined);
+      const h = (await rows(a))[0].tx_hash as Hex;
+      chain.drop(h);
+      chain.injectExternal(KEY_ADDR, 0n);
+      const strict = mk({ receiptGraceMs: 0 });
+      await strict.reconcile();
+      expect((await rows(a))[0].status).toBe('needs_review');
+      // it turns out OUR tx did mine (indexer lag): the receipt appears
+      chain.mined.set(h, { status: 'success', blockNumber: 500n, raw: (await rows(a))[0].raw_tx as Hex, from: KEY_ADDR, nonce: 0n });
+      await strict.reconcile();
+      expect(['mined', 'finalized']).toContain((await rows(a))[0].status);
+      chain.autoMine = true;
+      await expect(strict.send(req(a, 'nr2'))).resolves.toBeDefined(); // no longer blocked
+    });
+
+    it('N-3: after a long outage a signed-but-unsent tx is RETRIED first, and only escalated if the resend fails for good', async () => {
+      const a = agent();
+      chain.sendThrowsBeforeAccept = true;
+      await lane.send(req(a, 'so1')).catch(() => undefined);
+      await db.pool.query(`UPDATE tx_intents SET updated_at = now() - interval '30 minutes' WHERE agent_id=$1`, [a]);
+      await mk().reconcile(); // the network is back: the bytes are accepted
+      expect(['broadcast', 'mined', 'finalized']).toContain((await rows(a))[0].status);
+      expect(chain.sent).toHaveLength(1);
+    });
+
+    it('M-1/N-3: an owner can clear a blocked key (dismiss), and only then can it send again', async () => {
+      const a = agent();
+      chain.autoMine = false;
+      await lane.send(req(a, 'cl1')).catch(() => undefined);
+      chain.drop((await rows(a))[0].tx_hash as Hex);
+      chain.injectExternal(KEY_ADDR, 0n);
+      const strict = mk({ receiptGraceMs: 0 });
+      await strict.reconcile();
+      const { getSendBlock, clearSendBlock } = await import('../../src/runtime/tx-intents/store.js');
+      const block = await getSendBlock(db.pool, a);
+      expect(block?.reason).toMatch(/nonce consumed/);
+      await expect(strict.send(req(a, 'cl2'))).rejects.toBeInstanceOf(TxNeedsReviewError);
+      expect(await clearSendBlock(db.pool, a)).toBe(1);
+      expect(await getSendBlock(db.pool, a)).toBeNull();
+      chain.autoMine = true;
+      await expect(strict.send(req(a, 'cl2'))).resolves.toBeDefined();
+    });
+
+    it('M-9 (strong): two reconcilers that sign DIFFERENT replacement bytes cannot both win the bump', async () => {
+      const a = agent();
+      const mkFee = (fee: bigint) => {
+        const t = Object.create(chain) as FakeChain;
+        t.feeData = async () => ({ maxFeePerGas: fee, maxPriorityFeePerGas: fee / 2n });
+        return new SendLane({ pool: db.pool, transport: t, confirmTimeoutMs: 30, pollMs: 5, rebroadcastAfterMs: 0, receiptGraceMs: 60_000, maxRebroadcasts: 0, bumpAfterMs: 0, getSessionKey: async () => KEY });
+      };
+      chain.autoMine = false;
+      await mkFee(2_000_000_000n).send(req(a, 'cas')).catch(() => undefined);
+      await Promise.all([mkFee(6_000_000_000n).reconcile(), mkFee(7_000_000_000n).reconcile()]);
+      const row = (await rows(a))[0];
+      expect(row.bumps).toBe(1); // exactly ONE replacement recorded
+      expect(row.prev_hashes).toHaveLength(1);
+      for (const h of chain.mempool.keys()) expect(h).toBe(row.tx_hash); // the live tx IS the recorded one
     });
   });
 });

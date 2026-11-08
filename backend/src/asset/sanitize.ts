@@ -7,7 +7,9 @@
  */
 export function safeSymbol(symbol: string | null | undefined): string | null {
   if (symbol === null || symbol === undefined || symbol === '') return null;
-  return /^[A-Za-z0-9]{1,12}$/.test(symbol) ? symbol : 'TOKEN';
+  // letters/digits (any script) plus . - _ keep real tickers like USDC.e, USD₮0, WETH9 readable; with no spaces and at most 12
+  // characters there is no room for a sentence, so no instruction can ride in it.
+  return /^[\p{L}\p{N}\p{Sc}._-]{1,12}$/u.test(symbol) ? symbol : 'TOKEN';
 }
 
 export function safeMeta(m: { symbol: string; decimals: number } | null): { symbol: string; decimals: number } | null {
