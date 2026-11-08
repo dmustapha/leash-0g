@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { formatAssetAmount } from '../asset/format.js';
+import { safeMeta } from '../asset/sanitize.js';
 import { TxInFlightError, TxNeedsReviewError } from './tx-intents/errors.js';
 import { ReceiptUnconfirmedError } from '../chain/wait-receipt.js';
 import type { SendCtx } from './session-chain.js';
@@ -537,7 +538,7 @@ export function buildTreasuryGraph(
     // read failure is non-fatal: null meta renders as "<n> units" (honest rather than wrong), and
     // the raw `*Wei` integers the rules compare are untouched either way.
     const tokenMetaOf = (token: string): Promise<{ symbol: string; decimals: number } | null> =>
-      deps.chain.getErc20Meta(token).catch(() => null);
+      deps.chain.getErc20Meta(token).then(safeMeta).catch(() => null);
     const [account, policy, holdBalance, spendBalance, allowance, bandPrice, holdMeta, spendMeta] = await Promise.all([
       deps.chain.getBalance(ctx.accountAddr),
       deps.chain.getPolicyView(ctx.accountAddr, []),
@@ -675,7 +676,7 @@ export function buildTreasuryGraph(
       goalToken && beneficiary ? deps.chain.getErc20Balance(goalToken, beneficiary) : Promise.resolve(0n),
       goalToken ? deps.chain.getErc20Balance(goalToken, ctx.accountAddr) : Promise.resolve(0n),
       // symbol/decimals so DISPLAY labels the real asset; unreadable ⇒ null ⇒ "<n> units" (honest).
-      goalToken ? deps.chain.getErc20Meta(goalToken).catch(() => null) : Promise.resolve(null),
+      goalToken ? deps.chain.getErc20Meta(goalToken).then(safeMeta).catch(() => null) : Promise.resolve(null),
       deps.chain.getBalance(ctx.accountAddr),
       deps.chain.getPolicyView(ctx.accountAddr, [beneficiary], goalToken ? [goalToken] : []),
       senseCapabilities(mode),
@@ -2266,7 +2267,18 @@ function evaluateDecision(
       if (BigInt(state.beneficiaryTokenBalanceWei) >= BigInt(autoGoalTok.targetBalanceWei)) {
         return stand('token target balance already met');
       }
-      return { decision: parsed, route: 'token_act' };
+      // AQ-FND S1 deterministic amount: the model chooses WHETHER to send; code bounds HOW MUCH. Never more
+      // than the goal still needs, never more than the account actually holds of the token.
+      const needTok = BigInt(autoGoalTok.targetBalanceWei) - BigInt(state.beneficiaryTokenBalanceWei);
+      const heldTok = BigInt(state.accountTokenBalanceWei ?? '0');
+      let boundedTok = amount < needTok ? amount : needTok;
+      if (boundedTok > heldTok) boundedTok = heldTok;
+      if (boundedTok <= 0n) return stand('the account holds none of the token to send');
+      const clampedTok = boundedTok !== amount;
+      return {
+        decision: { ...parsed, amountWei: boundedTok.toString(), ...(clampedTok ? { reason: `${parsed.reason} (amount limited by LEASH to what the goal needs and the account holds)` } : {}) },
+        route: 'token_act',
+      };
     }
   }
 
@@ -2286,8 +2298,18 @@ function evaluateDecision(
   }
   if (amount > BigInt(state.accountBalanceWei)) return stand('insufficient account balance');
 
-  const route: Route = amount > BigInt(policy.perTransferCapWei) ? 'approval' : 'act';
-  return { decision: parsed, route };
+  // AQ-FND S1 deterministic amount: never top up beyond what the goal still needs (the model proposes the
+  // size of a top-up; code bounds it). Over the per-transfer cap is still the owner-approval route.
+  let boundedAmount = amount;
+  if (autoGoal && 'targetBalanceWei' in autoGoal) {
+    const need = BigInt(autoGoal.targetBalanceWei) - BigInt(state.beneficiaryBalanceWei);
+    if (need > 0n && boundedAmount > need) boundedAmount = need;
+  }
+  const route: Route = boundedAmount > BigInt(policy.perTransferCapWei) ? 'approval' : 'act';
+  const decisionOut = boundedAmount !== amount
+    ? { ...parsed, amountWei: boundedAmount.toString(), reason: `${parsed.reason} (amount limited by LEASH to what the goal still needs)` }
+    : parsed;
+  return { decision: decisionOut, route };
 }
 
 /**
