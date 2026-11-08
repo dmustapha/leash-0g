@@ -47,6 +47,21 @@ jobs:
   backend:
     name: Backend (typecheck + lint + unit/integration)
     runs-on: ubuntu-latest
+    # Hermetic suite: a throwaway local Postgres (the test helper refuses any non-local database),
+    # so CI never touches the real Neon DB.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: leash
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -59,7 +74,7 @@ jobs:
       - run: pnpm --filter backend lint
       - run: pnpm --filter backend test
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL }}
+          TEST_DATABASE_URL: postgres://postgres:postgres@localhost:5432/leash
       - name: pnpm audit (high+)
         run: pnpm audit --audit-level high
 
