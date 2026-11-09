@@ -712,7 +712,7 @@ const decisionSchema = z
     // SF-3: present only for action 'tool_call'. The args are re-guarded +
     // re-classified by the tool-gate (never trusted as authority).
     toolId: z.string().min(1).max(128).optional(),
-    toolArgs: z.record(z.unknown()).optional(),
+    toolArgs: z.record(z.string(), z.unknown()).optional(),
   })
   .superRefine((d, ctx) => {
     // A 'call' with no target/selector is malformed → reject (falls back to a

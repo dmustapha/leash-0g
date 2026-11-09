@@ -400,7 +400,7 @@ const extraChainSchema = z.object({
   sessionGasDustWei: z.string().regex(/^\d{1,30}$/).optional(),
   // RH2 (two-factory): named secondary factories carrying a distinct wall
   // capability (e.g. `oracleBand`). Bounded (L-02) + address-shaped (L-03).
-  capabilityFactories: z.record(z.string().regex(/^0x[0-9a-fA-F]{40}$/)).optional(),
+  capabilityFactories: z.record(z.string(), z.string().regex(/^0x[0-9a-fA-F]{40}$/)).optional(),
 });
 
 /**

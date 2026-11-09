@@ -676,7 +676,7 @@ const directConfirmSchema = z
     // the rest of the DirectionDraft is display-only, so ignore any extra fields.
     edited: z
       .object({
-        goalPatch: z.record(z.unknown()).optional(),
+        goalPatch: z.record(z.string(), z.unknown()).optional(),
         acceptancePatch: z.array(z.unknown()).optional(),
       })
       .strip(),

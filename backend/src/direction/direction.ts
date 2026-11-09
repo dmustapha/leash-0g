@@ -53,7 +53,7 @@ export interface DirectRequest {
  */
 const modelDirectionSchema = z.object({
   understanding: z.string().min(1).max(2000),
-  goalPatch: z.record(z.unknown()).optional(),
+  goalPatch: z.record(z.string(), z.unknown()).optional(),
   // TOLERANT (C-ELEV-1, same class as AB ROOT-2): the model often emits
   // acceptance rules in a non-canonical shape ({field,condition,value}) instead
   // of the structured ruleSchema. Rather than discard the WHOLE requester

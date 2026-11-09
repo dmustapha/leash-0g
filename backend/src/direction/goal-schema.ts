@@ -98,7 +98,7 @@ export const goalSchema: z.ZodType<AgentGoal> = z.union([
   requesterGoalSchema,
   providerGoalSchema,
   evaluatorGoalSchema,
-]) as z.ZodType<AgentGoal>;
+]);
 
 /**
  * Per-role DESCRIPTIVE (chat-patchable) fields. Deliberately excludes:
