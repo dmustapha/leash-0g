@@ -126,6 +126,8 @@ const SEL = '*, (EXTRACT(EPOCH FROM (now() - updated_at)) * 1000)::float8 AS age
 const ORPHAN_INTENT_MS = 120_000;
 /** A `signed` row the network never accepted for this long is not resent on stale balances: a human decides. */
 const STALE_SIGNED_MS = 15 * 60_000;
+/** ...and beyond this age it is never retried at all: the action was decided far too long ago (a human decides). */
+const ABANDON_SIGNED_MS = 24 * 3_600_000;
 
 export class SendLane {
   private readonly locks = new Map<string, Promise<unknown>>();
@@ -416,6 +418,10 @@ export class SendLane {
     const age = row.age_ms;
     // signed, never accepted by any node, for too long: do NOT resend an action decided on old balances; ask a human.
     if (row.status === 'signed' && row.rebroadcasts === 0 && age >= STALE_SIGNED_MS) {
+      if (age >= ABANDON_SIGNED_MS) {
+        await this.toReview(row, 'signed more than a day ago and never accepted; not resent because it was decided on very old balances');
+        return;
+      }
       // the network may simply have been unreachable (an outage is not a verdict): try the stored bytes ONCE; only if
       // they are refused for good is it escalated, because the action was decided on balances that may have changed.
       try {
@@ -516,11 +522,104 @@ export class SendLane {
       [row.intent_id, raw, newHash, row.tx_hash, maxFee.toString(), tip.toString(), row.bumps],
     );
     if ((won.rowCount ?? 0) === 0) return;
+    // Anything that tracked the ORIGINAL hash (a CCTP/CCIP rail's source tx, a job-fee settlement) must follow the
+    // replacement, or it would wait forever for a hash that can no longer mine (review R3-2).
+    await this.pool.query(`UPDATE rail_transfers SET src_tx = $2, updated_at = now() WHERE src_tx = $1`, [row.tx_hash, newHash]);
+    await this.pool.query(`UPDATE jobs SET settlement_tx_pending = $2, updated_at = now() WHERE settlement_tx_pending = $1`, [row.tx_hash, newHash]);
     try {
       await this.t.sendRaw(raw);
     } catch (err) {
       if (!isAlreadyKnown(err) && !isNonceTooLow(err)) console.warn('[tx-intents] bump broadcast failed (will retry from the stored bytes):', err instanceof Error ? err.message : err);
     }
+  }
+
+  // ---- owner-facing resolution of a blocked key (`needs_review`) -----------------------------------------------
+  // The rule that makes this safe: a blocked tx may only be RELEASED when it can no longer mine (its nonce is
+  // spent) or when no node holds it (so the next send reuses that SAME nonce and at most one of the two can land).
+  // While it is still waiting on the network it could mine later, and any later send would take the NEXT nonce:
+  // clearing then would unlock a second payment. In that case the only safe exits are waiting, or CANCELLING it
+  // (replacing it at the same nonce with a harmless no-op) (review R3-1).
+
+  private async reviewRows(agentId: string): Promise<IntentRow[]> {
+    const { rows } = await this.pool.query<IntentRow>(
+      `SELECT ${SEL} FROM tx_intents WHERE agent_id=$1 AND chain_id=$2 AND status='needs_review' ORDER BY created_at`,
+      [agentId, this.t.chainId],
+    );
+    return rows;
+  }
+
+  /** Is this blocked tx still sitting on the network (could mine later)? Resolves a late receipt first. */
+  private async reviewDisposition(row: IntentRow): Promise<'resolved' | 'consumed' | 'pending' | 'free'> {
+    for (const h of [row.tx_hash, ...(row.prev_hashes ?? [])].filter(Boolean) as Hex[]) {
+      const found = await this.t.getReceipt(h).catch(() => null);
+      if (found) { await this.recordReceipt(row.intent_id, h, found).catch(() => undefined); return 'resolved'; }
+    }
+    if (row.nonce === null) return 'free';
+    const nonce = BigInt(row.nonce);
+    const [latest, pending] = await Promise.all([this.t.getLatestNonce(row.key_addr), this.t.getPendingNonce(row.key_addr)]);
+    if (latest > nonce) return 'consumed';
+    if (pending > nonce) return 'pending';
+    return 'free';
+  }
+
+  async getReviewState(agentId: string): Promise<{ intentId: string; reason: string; txHash: string | null; pendingOnNetwork: boolean } | null> {
+    const row = (await this.reviewRows(agentId))[0];
+    if (!row) return null;
+    const d = await this.reviewDisposition(row);
+    if (d === 'resolved') return null;
+    return { intentId: row.intent_id, reason: row.error_text ?? 'a transaction could not be resolved automatically', txHash: row.tx_hash, pendingOnNetwork: d === 'pending' };
+  }
+
+  /** Owner says "I checked it". Releases only what is provably safe to release; reports what is still waiting. */
+  async clearReview(agentId: string): Promise<{ cleared: number; stillPending: number }> {
+    let cleared = 0;
+    let stillPending = 0;
+    for (const row of await this.reviewRows(agentId)) {
+      const d = await this.reviewDisposition(row);
+      if (d === 'resolved') { cleared++; continue; }
+      if (d === 'pending') { stillPending++; continue; }
+      const r = await this.pool.query(
+        `UPDATE tx_intents SET status='superseded', error_text = coalesce(error_text, '') || ' [cleared by the owner after review]', updated_at=now() WHERE intent_id=$1 AND status='needs_review'`,
+        [row.intent_id],
+      );
+      cleared += r.rowCount ?? 0;
+    }
+    return { cleared, stillPending };
+  }
+
+  /** Owner says "cancel it": replace a still-waiting blocked tx, at the SAME nonce, with a harmless 0-value self-transfer. */
+  async cancelBlocked(agentId: string): Promise<{ cancelled: number }> {
+    let cancelled = 0;
+    for (const row of await this.reviewRows(agentId)) {
+      if ((await this.reviewDisposition(row)) !== 'pending') continue;
+      const key = this.opts.getSessionKey ? await this.opts.getSessionKey(row.agent_id).catch(() => null) : null;
+      if (!key || row.nonce === null || !row.max_fee_per_gas || !row.max_priority_fee_per_gas) continue;
+      const account = privateKeyToAccount(key as Hex);
+      if (account.address.toLowerCase() !== row.key_addr) continue;
+      const nowFees = await this.t.feeData();
+      const bump = (v: bigint): bigint => (v * 13n) / 10n + 1n; // a cancel must clearly outbid the original (>= 30%)
+      let maxFee = bump(BigInt(row.max_fee_per_gas));
+      let tip = bump(BigInt(row.max_priority_fee_per_gas));
+      if (nowFees.maxFeePerGas > maxFee) maxFee = nowFees.maxFeePerGas;
+      if (nowFees.maxPriorityFeePerGas > tip) tip = nowFees.maxPriorityFeePerGas;
+      if (tip > maxFee) tip = maxFee;
+      const raw = await account.signTransaction({
+        chainId: this.t.chainId, type: 'eip1559', to: account.address, data: '0x', value: 0n,
+        nonce: Number(row.nonce), gas: 30_000n, maxFeePerGas: maxFee, maxPriorityFeePerGas: tip,
+      });
+      const newHash = keccak256(raw);
+      const won = await this.pool.query(
+        `UPDATE tx_intents SET raw_tx=$2, tx_hash=$3, prev_hashes = array_append(prev_hashes, $4), bumps = bumps + 1, rebroadcasts = 0,
+                max_fee_per_gas=$5, max_priority_fee_per_gas=$6, gas_limit='30000', status='broadcast', error_class=NULL,
+                error_text='cancelled by the owner (replaced by a no-op at the same nonce)', payload = payload || '{"cancelled": true}'::jsonb, updated_at=now()
+          WHERE intent_id=$1 AND status='needs_review' AND tx_hash=$4`,
+        [row.intent_id, raw, newHash, row.tx_hash, maxFee.toString(), tip.toString()],
+      );
+      if ((won.rowCount ?? 0) === 0) continue;
+      try { await this.t.sendRaw(raw); } catch (err) { if (!isAlreadyKnown(err)) console.warn('[tx-intents] cancel broadcast failed (reconcile will resend):', err instanceof Error ? err.message : err); }
+      cancelled++;
+    }
+    return { cancelled };
   }
 
   /**

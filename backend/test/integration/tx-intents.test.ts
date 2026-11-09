@@ -564,11 +564,11 @@ describe('SendLane — write-ahead, idempotent, single-lane', () => {
       chain.injectExternal(KEY_ADDR, 0n);
       const strict = mk({ receiptGraceMs: 0 });
       await strict.reconcile();
-      const { getSendBlock, clearSendBlock } = await import('../../src/runtime/tx-intents/store.js');
+      const { getSendBlock } = await import('../../src/runtime/tx-intents/store.js');
       const block = await getSendBlock(db.pool, a);
       expect(block?.reason).toMatch(/nonce consumed/);
       await expect(strict.send(req(a, 'cl2'))).rejects.toBeInstanceOf(TxNeedsReviewError);
-      expect(await clearSendBlock(db.pool, a)).toBe(1);
+      expect(await strict.clearReview(a)).toEqual({ cleared: 1, stillPending: 0 }); // its nonce is spent: safe
       expect(await getSendBlock(db.pool, a)).toBeNull();
       chain.autoMine = true;
       await expect(strict.send(req(a, 'cl2'))).resolves.toBeDefined();
@@ -576,18 +576,116 @@ describe('SendLane — write-ahead, idempotent, single-lane', () => {
 
     it('M-9 (strong): two reconcilers that sign DIFFERENT replacement bytes cannot both win the bump', async () => {
       const a = agent();
+      // a barrier makes the race DETERMINISTIC: both reconcilers have already read the stuck row before either writes
+      let gateOn = false;
+      let arrived = 0;
+      let release!: () => void;
+      const bothArrived = new Promise<void>((r) => { release = r; });
       const mkFee = (fee: bigint) => {
         const t = Object.create(chain) as FakeChain;
-        t.feeData = async () => ({ maxFeePerGas: fee, maxPriorityFeePerGas: fee / 2n });
+        t.feeData = async () => {
+          if (gateOn) { arrived++; if (arrived >= 2) release(); await bothArrived; }
+          return { maxFeePerGas: fee, maxPriorityFeePerGas: fee / 2n };
+        };
         return new SendLane({ pool: db.pool, transport: t, confirmTimeoutMs: 30, pollMs: 5, rebroadcastAfterMs: 0, receiptGraceMs: 60_000, maxRebroadcasts: 0, bumpAfterMs: 0, getSessionKey: async () => KEY });
       };
       chain.autoMine = false;
       await mkFee(2_000_000_000n).send(req(a, 'cas')).catch(() => undefined);
+      gateOn = true;
       await Promise.all([mkFee(6_000_000_000n).reconcile(), mkFee(7_000_000_000n).reconcile()]);
       const row = (await rows(a))[0];
       expect(row.bumps).toBe(1); // exactly ONE replacement recorded
       expect(row.prev_hashes).toHaveLength(1);
       for (const h of chain.mempool.keys()) expect(h).toBe(row.tx_hash); // the live tx IS the recorded one
+    });
+  });
+
+  describe('Gate-2 round 3: clearing a blocked key can never cause a double payment', () => {
+    const mk = (over: Record<string, unknown> = {}) =>
+      new SendLane({ pool: db.pool, transport: chain, confirmTimeoutMs: 40, pollMs: 5, rebroadcastAfterMs: 0, receiptGraceMs: 60_000, getSessionKey: async () => KEY, ...over });
+    /** a payment whose tx is STILL in the mempool but whose intent was escalated to a human (bump budget spent) */
+    const blockedButPending = async (a: string, idem: string) => {
+      chain.autoMine = false;
+      await mk().send(req(a, idem)).catch(() => undefined);
+      await db.pool.query(`UPDATE tx_intents SET status='needs_review', error_text='stuck after 3 fee bump(s); not auto-retried' WHERE agent_id=$1`, [a]);
+      return (await rows(a))[0];
+    };
+
+    it('R3-1: while the original tx can still mine, clear is REFUSED (the owner cannot unlock a second payment)', async () => {
+      const a = agent();
+      const row = await blockedButPending(a, 'rc1');
+      expect(chain.mempool.has(row.tx_hash as Hex)).toBe(true);
+      const r = await mk().clearReview(a);
+      expect(r).toEqual({ cleared: 0, stillPending: 1 });
+      await expect(mk().send(req(a, 'rc1-redecide'))).rejects.toBeInstanceOf(TxNeedsReviewError); // still blocked
+      chain.mine(row.tx_hash as Hex); // the original eventually lands
+      expect(chain.mined.size).toBe(1); // exactly one payment, ever
+    });
+
+    it('R3-1: once the nonce is consumed (the old tx can no longer mine) clearing is safe', async () => {
+      const a = agent();
+      const row = await blockedButPending(a, 'rc2');
+      chain.drop(row.tx_hash as Hex);
+      chain.injectExternal(KEY_ADDR, 0n);
+      expect((await mk().clearReview(a)).cleared).toBe(1);
+      expect((await rows(a))[0].status).toBe('superseded');
+    });
+
+    it('R3-1: a tx that is NOT in the mempool and whose nonce is free is safe to clear: the next send reuses that nonce, so at most one can land', async () => {
+      const a = agent();
+      const row = await blockedButPending(a, 'rc3');
+      chain.drop(row.tx_hash as Hex);
+      expect((await mk().clearReview(a)).cleared).toBe(1);
+      chain.autoMine = true;
+      await mk().send(req(a, 'rc3-next'));
+      const next = (await rows(a)).find((r) => r.idem_key === 'rc3-next');
+      expect(BigInt(next.nonce)).toBe(BigInt(row.nonce)); // SAME nonce
+      chain.mempool.set(row.tx_hash as Hex, { from: KEY_ADDR, nonce: BigInt(row.nonce), raw: row.raw_tx as Hex });
+      expect(chain.mined.size).toBe(1); // the old one can no longer land: that nonce is spent
+    });
+
+    it('R3-1: the owner can CANCEL a waiting tx: it is replaced at the same nonce by a harmless no-op, then the key is free', async () => {
+      const a = agent();
+      const row = await blockedButPending(a, 'rc4'); // the market fee has NOT moved: the cancel itself must outbid the original
+      const r = await mk().cancelBlocked(a);
+      expect(r.cancelled).toBe(1);
+      expect(chain.mempool.has(row.tx_hash as Hex)).toBe(false); // the original is gone from the mempool
+      expect(chain.mempool.size).toBe(1);
+      const cancelHash = [...chain.mempool.keys()][0] as Hex;
+      chain.mine(cancelHash);
+      await mk().reconcile();
+      expect(['mined', 'finalized']).toContain((await rows(a))[0].status);
+      chain.autoMine = true;
+      await expect(mk().send(req(a, 'rc4-next'))).resolves.toBeDefined(); // unblocked
+      // only the cancel + the new send ever mined; the ORIGINAL payment never did
+      expect(chain.mined.has(row.tx_hash as Hex)).toBe(false);
+    });
+
+    it('R3-1: getReviewState says whether clearing is safe or the tx is still waiting', async () => {
+      const a = agent();
+      await blockedButPending(a, 'rc5');
+      const st = await mk().getReviewState(a);
+      expect(st).toMatchObject({ pendingOnNetwork: true });
+      expect(st?.reason).toMatch(/stuck/);
+    });
+
+    it('R3-2: after a fee bump, anything that tracked the ORIGINAL hash (a CCTP rail, a job settlement) follows the replacement', async () => {
+      const a = agent();
+      const bl = mk({ maxRebroadcasts: 0, bumpAfterMs: 0 });
+      chain.autoMine = false;
+      await bl.send(req(a, 'rp1')).catch(() => undefined);
+      const orig = (await rows(a))[0].tx_hash as string;
+      const railId = '00000000-0000-0000-0000-0000000000aa';
+      await db.pool.query(
+        `INSERT INTO rail_transfers (rail_id, agent_id, account_addr, rail, recovery_mode, src_chain_id, dest_chain_id, asset, amount_wei, status, dest_gas_plan, src_tx)
+         VALUES ($1, $2, $3, 'cctp', 'forward_mint', 1, 2, '0xasset', '1', 'initiated', '{"destChainId":2,"fundedWei":"1","source":"ops_fill"}'::jsonb, $4)`,
+        [railId, a, ACCOUNT, orig],
+      );
+      chain.feeNow = 9_000_000_000n;
+      await bl.reconcile();
+      const bumped = (await rows(a))[0].tx_hash as string;
+      expect(bumped).not.toBe(orig);
+      expect((await db.pool.query(`SELECT src_tx FROM rail_transfers WHERE rail_id=$1`, [railId])).rows[0].src_tx).toBe(bumped);
     });
   });
 });

@@ -666,7 +666,10 @@ export class LeashRuntimeManager implements RuntimeManager {
         })
         .catch(async (err: unknown) => {
           // A cycle that died because the loop was stopped under it is not the agent's fault.
-          if (!loop.stopped) loop.consecutiveFailures += 1;
+          // A model-ROUTER outage (5xx/429) is infrastructure, not the agent failing: it is counted by the typed
+          // 'upstream' budget (20 cycles), NOT by this legacy consecutive-failure breaker, which would pause every
+          // running agent after 5 cycles (~7 minutes) of a router blip and clear everyone's run_desired (review M-2).
+          if (!loop.stopped && classifyThrown(err) !== 'upstream') loop.consecutiveFailures += 1;
           const budget = this.deps.settings.failureBudget ?? DEFAULT_FAILURE_BUDGET;
           await this.recordFailure(loop.agent.id, err, !budgetExhausted(loop.consecutiveFailures, budget));
           await this.tripBreakerIfExhausted(loop, err);

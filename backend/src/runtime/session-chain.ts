@@ -188,6 +188,10 @@ export interface RuntimeChain {
   getInFlight?(agentId: string, token?: string): Promise<{ count: number; amountWei: bigint; needsReview?: boolean }>;
   /** Boot + periodic reconcile of open intents (resends the SAME bytes; never rebuilds). Optional. */
   reconcileIntents?(): Promise<{ examined: number }>;
+  /** AQ-FND S1: owner-facing resolution of a blocked send key. Optional (fakes have no ledger). */
+  getReviewState?(agentId: string): Promise<{ intentId: string; reason: string; txHash: string | null; pendingOnNetwork: boolean } | null>;
+  clearReview?(agentId: string): Promise<{ cleared: number; stillPending: number }>;
+  cancelBlocked?(agentId: string): Promise<{ cancelled: number }>;
 }
 
 export class SessionChain implements RuntimeChain {
@@ -217,6 +221,17 @@ export class SessionChain implements RuntimeChain {
 
   async reconcileIntents(): Promise<{ examined: number }> {
     return this.lane ? this.lane.reconcile() : { examined: 0 };
+  }
+
+  /** Owner-facing resolution of a blocked send key (see SendLane.clearReview for why it is safe). */
+  async getReviewState(agentId: string) {
+    return this.lane ? this.lane.getReviewState(agentId) : null;
+  }
+  async clearReview(agentId: string) {
+    return this.lane ? this.lane.clearReview(agentId) : { cleared: 0, stillPending: 0 };
+  }
+  async cancelBlocked(agentId: string) {
+    return this.lane ? this.lane.cancelBlocked(agentId) : { cancelled: 0 };
   }
 
   async getBalance(addr: string): Promise<bigint> {

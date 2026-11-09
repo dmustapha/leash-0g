@@ -436,6 +436,25 @@ describe('S1 — hard budget: a daily model-call cap that is ENFORCED before the
   });
 });
 
+describe('S1 — Gate-2 round 3: a model-router outage does not pause agents', () => {
+  it('with the router returning 5xx, an agent keeps running past the old 5-failure breaker (only the 20-cycle upstream budget can pause it)', async () => {
+    const id = await seedTokenAgent();
+    nock(UPSTREAM).post('/v1/chat/completions').times(60).reply(503, { error: { message: 'upstream down' } });
+    const mgr = new LeashRuntimeManager({
+      pool: db.pool, hub: t.hub, broker: t.broker, chain: fakeChain, checkpointer, alerts: t.alerts,
+      settings: { keyring: TEST_KEYRING, approvalTimeoutMs: 20_000, gatewayUrl, intervalMs: 30, maxBackoffMs: 30, defaultModel: 'test-model', failureBudget: 3 },
+    });
+    await mgr.start(id);
+    await waitFor(async () => {
+      const r = await db.pool.query(`SELECT count FROM agent_breakers WHERE agent_id=$1 AND class='upstream'`, [id]);
+      return (r.rows[0]?.count ?? 0) >= 7;
+    }, 40_000);
+    expect(mgr.isRunning(id)).toBe(true); // the old E1 budget (3 here) would have paused it long ago
+    expect((await db.pool.query<{ d: boolean }>(`SELECT run_desired AS d FROM agents WHERE id=$1`, [id])).rows[0]!.d).toBe(true);
+    await mgr.drain(2_000);
+  });
+});
+
 describe('S1 — nothing to do means NO model call', () => {
   it('target already met: stands down deterministically without calling the model', async () => {
     const id = await seedTokenAgent();

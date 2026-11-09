@@ -193,7 +193,7 @@ export type AgentDetail = {
   /** Beta step 3b: a token-goal agent's own asset (balance, meta, on-chain limits). Absent for native agents. */
   goalAsset?: { token: string; symbol: string | null; decimals: number | null; balanceWei: string; enabled: boolean; perTransferCapWei: string; windowCapWei: string; windowSeconds: number };
   /** AQ-FND S1: sending is blocked until the owner reviews a transaction the system could not resolve on its own. */
-  sendBlock?: { intentId: string; reason: string; txHash: string | null; chainId: number } | null;
+  sendBlock?: { intentId: string; reason: string; txHash: string | null; chainId: number; /** the stuck tx could still mine: clearing is refused, cancelling is the safe exit */ pendingOnNetwork: boolean } | null;
   sessionExpiry: number; // unix seconds
   addresses: { account: Address; sessionKey: Address; owner: Address };
   /** The guardian LEASH revokes with (M-03): when the live on-chain guardian differs,

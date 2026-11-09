@@ -872,7 +872,7 @@ export default function CockpitPage({ params }: { params: Promise<{ id: string }
           <MigrateGuardianBanner guardian={guardian} leashGuardian={detail.leashGuardianAddr} />
           <StatusBar detail={detail} chainVerified={chainVerified} currency={currency} />
           {detail.sendBlock ? (
-            <SendBlockedBanner block={detail.sendBlock} onClear={async () => { await api.clearSending(id); await refresh(); }} />
+            <SendBlockedBanner block={detail.sendBlock} onClear={async () => { await api.clearSending(id); await refresh(); }} onCancel={async () => { await api.cancelSending(id); await refresh(); }} />
           ) : null}
           <AgentControls
             status={detail.status}

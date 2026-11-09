@@ -53,7 +53,7 @@ export function classifyThrown(err: unknown): FailureClass {
   // infrastructure: it must not be recorded as the agent's reasoning failing (a router blip would otherwise
   // pause the whole fleet and clear everyone's run_desired).
   if (/unparsable|invalid decision|finish_reason/i.test(msg)) return 'model';
-  if (/gateway refused inference|compute forward failed|status (429|5\d\d)/i.test(msg)) return 'upstream';
+  if (/gateway refused inference: status (429|5\d\d)|compute forward failed/i.test(msg)) return 'upstream';
   return 'transient';
 }
 

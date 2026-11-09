@@ -205,12 +205,20 @@ describe('S-4: the gas panel does not contradict itself', () => {
 // ── AQ-FND S1: blocked-send banner ──────────────────────────────────────────────────────────────
 import { SendBlockedBanner } from '@/components/cockpit/SendBlockedBanner';
 describe('SendBlockedBanner', () => {
-  it('says why sending is paused and offers the one action that clears it', async () => {
+  const base = { intentId: 'i1', reason: 'stuck after 3 fee bump(s)', txHash: '0xabc', chainId: 84532 };
+  it('a tx that can no longer go through: offers only "let it send again" (never cancel)', async () => {
     const onClear = vi.fn().mockResolvedValue(undefined);
-    render(<SendBlockedBanner block={{ intentId: 'i1', reason: 'nonce consumed without a receipt for our tx', txHash: '0xabc', chainId: 84532 }} onClear={onClear} />);
-    expect(screen.getByTestId('send-blocked-banner')).toHaveTextContent('Sending is paused');
-    expect(screen.getByTestId('send-blocked-banner')).toHaveTextContent('nothing can be paid twice');
+    render(<SendBlockedBanner block={{ ...base, pendingOnNetwork: false }} onClear={onClear} onCancel={vi.fn()} />);
+    expect(screen.queryByTestId('send-blocked-cancel')).toBeNull();
     await userEvent.setup().click(screen.getByTestId('send-blocked-clear'));
     expect(onClear).toHaveBeenCalledTimes(1);
+  });
+  it('a tx still waiting on the network: NEVER offers the unsafe resume, only cancel, and says why', async () => {
+    const onCancel = vi.fn().mockResolvedValue(undefined);
+    render(<SendBlockedBanner block={{ ...base, pendingOnNetwork: true }} onClear={vi.fn()} onCancel={onCancel} />);
+    expect(screen.queryByTestId('send-blocked-clear')).toBeNull();
+    expect(screen.getByTestId('send-blocked-pending')).toHaveTextContent('could still go through');
+    await userEvent.setup().click(screen.getByTestId('send-blocked-cancel'));
+    expect(onCancel).toHaveBeenCalledTimes(1);
   });
 });

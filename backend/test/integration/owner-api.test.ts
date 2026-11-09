@@ -634,24 +634,45 @@ describe('beta 3b — GET /api/agents/:id carries the goal asset for a token age
   });
 });
 
-describe('AQ-FND S1 — a blocked send key is visible to the owner and clearable only by the owner', () => {
-  it('GET shows sendBlock; POST /sending/clear retires it for the owner, not for anyone else', async () => {
+describe('AQ-FND S1 — a blocked send key is visible to the owner; clearing can never unlock a second payment', () => {
+  let pending = true;
+  const stubLane = {
+    getReviewState: async () => ({ intentId: 'i1', reason: 'stuck after 3 fee bump(s); not auto-retried', txHash: '0x' + 'ab'.repeat(32), pendingOnNetwork: pending }),
+    clearReview: async () => (pending ? { cleared: 0, stillPending: 1 } : { cleared: 1, stillPending: 0 }),
+    cancelBlocked: async () => ({ cancelled: pending ? 1 : 0 }),
+  };
+  const app2 = () =>
+    buildTestApp(db.pool, {
+      chainRegistry: { has: () => true, listChains: () => [], getChainOps: () => t.chain, getChainConfig: () => ({}), getSessionChain: () => stubLane } as never,
+    });
+
+  it('GET shows the block and whether the tx is still pending; clear is REFUSED (409) while it could still mine; allowed once it cannot', async () => {
+    const t2 = app2();
     const a = await createAgent();
     await db.pool.query(
       `INSERT INTO tx_intents (intent_id, agent_id, chain_id, key_addr, account_addr, kind, idem_key, payload, status, nonce, tx_hash, error_text)
-       VALUES (gen_random_uuid(), $1, 16602, $2, $3, 'transfer', 'blk', '{}'::jsonb, 'needs_review', 3, $4, 'nonce consumed without a receipt for our tx')`,
+       VALUES (gen_random_uuid(), $1, 16602, $2, $3, 'transfer', 'blk', '{}'::jsonb, 'needs_review', 3, $4, 'stuck after 3 fee bump(s); not auto-retried')`,
       [a.id, '0x' + '11'.repeat(20), '0x' + '22'.repeat(20), '0x' + 'ab'.repeat(32)],
     );
-    const before = await request(t.app).get(`/api/agents/${a.id}`).set('authorization', ownerAuth(OWNER));
-    expect(before.body.sendBlock).toMatchObject({ reason: 'nonce consumed without a receipt for our tx', txHash: '0x' + 'ab'.repeat(32) });
+    pending = true;
+    const got = await request(t2.app).get(`/api/agents/${a.id}`).set('authorization', ownerAuth(OWNER));
+    expect(got.body.sendBlock).toMatchObject({ reason: expect.stringMatching(/stuck/), pendingOnNetwork: true });
 
-    const stranger = await request(t.app).post(`/api/agents/${a.id}/sending/clear`).set('authorization', ownerAuth('0x' + 'f9'.repeat(20)));
+    const refused = await request(t2.app).post(`/api/agents/${a.id}/sending/clear`).set('authorization', ownerAuth(OWNER));
+    expect(refused.status).toBe(409); // could still mine: clearing would unlock a second payment
+    expect(refused.body.error.reason).toBe('still_pending');
+
+    const stranger = await request(t2.app).post(`/api/agents/${a.id}/sending/clear`).set('authorization', ownerAuth('0x' + 'f9'.repeat(20)));
     expect([403, 404]).toContain(stranger.status);
-    expect((await request(t.app).get(`/api/agents/${a.id}`).set('authorization', ownerAuth(OWNER))).body.sendBlock).toBeTruthy();
+    const strangerCancel = await request(t2.app).post(`/api/agents/${a.id}/sending/cancel`).set('authorization', ownerAuth('0x' + 'f9'.repeat(20)));
+    expect([403, 404]).toContain(strangerCancel.status);
 
-    const ok = await request(t.app).post(`/api/agents/${a.id}/sending/clear`).set('authorization', ownerAuth(OWNER));
+    const cancelled = await request(t2.app).post(`/api/agents/${a.id}/sending/cancel`).set('authorization', ownerAuth(OWNER));
+    expect(cancelled.body).toMatchObject({ ok: true, cancelled: 1 });
+
+    pending = false;
+    const ok = await request(t2.app).post(`/api/agents/${a.id}/sending/clear`).set('authorization', ownerAuth(OWNER));
     expect(ok.status).toBe(200);
     expect(ok.body.cleared).toBe(1);
-    expect((await request(t.app).get(`/api/agents/${a.id}`).set('authorization', ownerAuth(OWNER))).body.sendBlock).toBeUndefined();
   });
 });

@@ -60,7 +60,7 @@ import {
 import { decodeCall, presetKeys, type CallRule, type PresetKey, type TargetCatalog } from '../governed-call/index.js';
 import { describeDecodedCall, type CallLabeler } from '../asset/describe-call.js';
 import { makeCallLabeler } from '../asset/labeler.js';
-import { clearSendBlock, getSendBlock } from '../runtime/tx-intents/store.js';
+import { getSendBlock } from '../runtime/tx-intents/store.js';
 import {
   decideToolRequest,
   recordToolPresetGrants,
@@ -152,6 +152,12 @@ export interface OwnerChainRegistry {
   /** SE-8 (carry #2): the grant surface reads the chain's protocol/bridge allowlists. */
   /** AQ-FND M-3 inc-2: the read-only surface GET /gas-survey needs (absent ⇒ 503). */
   getGasRouteSurface?(): GasRouteSurface;
+  /** AQ-FND S1: the session chain of an agent's home chain (its send lane resolves a blocked key). */
+  getSessionChain?(chainId: number): {
+    getReviewState?(agentId: string): Promise<{ intentId: string; reason: string; txHash: string | null; pendingOnNetwork: boolean } | null>;
+    clearReview?(agentId: string): Promise<{ cleared: number; stillPending: number }>;
+    cancelBlocked?(agentId: string): Promise<{ cancelled: number }>;
+  };
   getChainConfig(chainId: number): {
     protocolAllowlist?: readonly string[] | undefined;
     bridgeAllowlist?: readonly string[] | undefined;
@@ -1358,6 +1364,10 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       chainForAgent(agent).getBalance(agent.accountAddr),
     ]);
     const goalAsset = goalToken ? await readGoalAssetView(chainForAgent(agent), goalToken, agent.accountAddr, policy) : null;
+    // AQ-FND S1: a blocked send key, and whether the stuck tx could still mine (decides clear vs cancel in the cockpit).
+    const blocked = await getSendBlock(deps.pool, agent.id);
+    const reviewState = blocked ? await deps.chainRegistry?.getSessionChain?.(agent.chainId)?.getReviewState?.(agent.id).catch(() => null) : null;
+    const sendBlock = blocked ? { ...blocked, pendingOnNetwork: reviewState?.pendingOnNetwork ?? false } : null;
     // Shape = FE AgentDetail (web/lib/types.ts): running|paused|revoked, wei-string
     // policy fields, live balances, addresses, and the blind audit-key blob.
     const status =
@@ -1378,7 +1388,7 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
       accountBalance: accountBalance.toString(),
       ...(goalAsset ? { goalAsset } : {}),
       // AQ-FND S1: when sending is blocked until a human reviews a transaction, say so (and why).
-      ...((await getSendBlock(deps.pool, agent.id)) ? { sendBlock: await getSendBlock(deps.pool, agent.id) } : {}),
+      ...(sendBlock ? { sendBlock } : {}),
       sessionExpiry: policy.expiresAt,
       addresses: { account: agent.accountAddr, sessionKey: agent.sessionKeyAddr, owner: agent.ownerAddr },
       // M-03: the guardian LEASH revokes with — the FE warns when the live
@@ -2004,8 +2014,24 @@ export function ownerRouter(deps: OwnerApiDeps): Router {
   router.post('/api/agents/:id/sending/clear', asyncRoute(async (req: OwnerRequest, res) => {
     const agent = await requireOwnedAgent(req, res);
     if (!agent) return;
-    const cleared = await clearSendBlock(deps.pool, agent.id);
-    res.json({ ok: true, cleared });
+    const lane = deps.chainRegistry?.getSessionChain?.(agent.chainId);
+    if (!lane?.clearReview) { res.status(503).json({ error: { message: 'send lane unavailable' } }); return; }
+    const r = await lane.clearReview(agent.id);
+    if (r.stillPending > 0) {
+      // clearing now could unlock a SECOND payment: the original tx is still waiting on the network and could mine later
+      res.status(409).json({ error: { message: 'That transaction is still waiting on the network and could still go through. Cancel it (it is replaced by a harmless no-op) or wait for it to finish.', reason: 'still_pending' }, ...r });
+      return;
+    }
+    res.json({ ok: true, ...r });
+  }));
+
+  // AQ-FND S1: cancel a still-waiting blocked tx by replacing it, at the same nonce, with a no-op. Owner-scoped.
+  router.post('/api/agents/:id/sending/cancel', asyncRoute(async (req: OwnerRequest, res) => {
+    const agent = await requireOwnedAgent(req, res);
+    if (!agent) return;
+    const lane = deps.chainRegistry?.getSessionChain?.(agent.chainId);
+    if (!lane?.cancelBlocked) { res.status(503).json({ error: { message: 'send lane unavailable' } }); return; }
+    res.json({ ok: true, ...(await lane.cancelBlocked(agent.id)) });
   }));
 
   router.post('/api/agents/:id/stop', asyncRoute(async (req: OwnerRequest, res) => {
